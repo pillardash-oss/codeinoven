@@ -78,6 +78,14 @@ During creation the source checkout's current branch, HEAD commit, and
 uncommitted changes are surfaced, together with a warning that dirty changes
 will not be included in the new worktree.
 
+A checkout that is **re-created after its setup already ran** (a repair
+restoring it from the managed branch) no longer contains what the recorded
+results describe. Repair therefore resets every command record to `pending`
+and marks the scope's setup `stale`; the scope then offers **Re-run setup**
+and the run replays the persisted commands from the first one, exactly like a
+creation run. `stale` is a factual statement about the working tree, not a
+failure.
+
 ## 5. Environment files
 
 During creation the service discovers **untracked, regular, root-level** `.env`
@@ -172,7 +180,13 @@ Managed scopes expose a typed health result:
 
 Resolution fails closed for every non-`healthy` category. Repair, unlock,
 restore, adopt, or detach actions appear in the UI; unhealthy scopes show
-recovery guidance instead of operating on the project root.
+recovery guidance instead of operating on the project root. Detection is
+passive but live: nothing polls the filesystem, and every surface that has a
+reason to touch a scope (entering the board or the scoped sidebar, switching
+the docked scope, attaching the Git panel, opening the scope's actions menu, or
+any failed operation in it) re-reads that scope's health asynchronously,
+throttled per scope. Every scope-root error message ends with the action that
+resolves it, so a surface that can only render text still says how to fix it.
 
 ### 7a. Repair and adoption
 
@@ -183,7 +197,24 @@ checkouts are restored from their `cio/` branch, relocated checkouts are
 moved back under the config root with `git worktree move`, switched branches
 are re-checked out, and unregistered directories get a best-effort
 `git worktree repair`. The resulting health state is surfaced afterwards;
-repair never silently falls back to the project directory.
+repair never silently falls back to the project directory. A step Git refuses
+(unlocking, moving, re-checking out, relinking, re-creating) fails with the
+recovery the user has to perform, never with a silent no-op.
+
+A restored checkout contains only what the managed branch committed, so repair
+**reconciles** it: the untracked root `.env` files are propagated again
+(section 5), and the recorded setup is marked `stale` so the scope offers
+**Re-run setup** (section 4). Work that was never committed is gone with the
+directory and is never presented as recovered. When the managed branch itself
+no longer exists, the restore cannot be done and the failure says so, naming
+delete-scope as the way to clear the record.
+
+The board and the scoped sidebar also render the cause and the fix for an
+unhealthy scope next to a **Repair worktree** button, and the Git panel
+replaces its generic error with the same banner when the checkout it is
+attached to is the reason its operations fail. Rendered guidance and thrown
+error text come from the same source (`src/lib/scope-worktree-health.ts`), so
+they cannot drift apart.
 
 **Adoption** registers an existing raw Git worktree (for example one created
 manually with `git worktree add`) as a managed scope root. Adoption requires
@@ -207,7 +238,10 @@ stale or mismatched IDs are rejected.
 - **Remove worktree (keep scope):** removes the worktree checkout and
   re-points the scope to the project directory. The scope, its threads and the
   branch are all kept   only the isolated checkout is gone. Refused when the
-  worktree is dirty or unpushed.
+  worktree is dirty or unpushed unless the dialog's forced second confirmation
+  is enabled, and the confirmed force is passed to Git so a forced detach can
+  never leave the directory behind while the scope claims it is gone. A
+  checkout whose directory was already deleted externally detaches cleanly.
 - **Delete scope:** full cleanup for a managed scope   removes the worktree
   checkout, deletes the scope bucket and the `cio/` branch in one confirmed
   action. The dialog also offers to permanently delete the scope's threads
