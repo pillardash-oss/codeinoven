@@ -16,6 +16,7 @@
  */
 
 import { SvelteMap } from 'svelte/reactivity'
+import type { Attachment } from 'svelte/attachments'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
 
 function intersects(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
@@ -48,3 +49,41 @@ class NativeViewOcclusionState {
 }
 
 export const nativeViewOcclusion = new NativeViewOcclusionState()
+
+let overlaySequence = 0
+
+/**
+ * Attachment that publishes an anchored overlay element's rectangle for as long
+ * as it is mounted, re-measuring when the element resizes or the window does.
+ *
+ * Use it for overlays whose geometry is CSS-driven (dock chip rows, sheets,
+ * anchored panels). A surface the user can drag   the dockable panel, the
+ * computer-use PiP   must publish from its position state instead, because
+ * moving an element does not resize it and no observer would fire.
+ */
+export const trackNativeViewOverlay: Attachment<HTMLElement> = (element) => {
+  const key = `overlay-${++overlaySequence}`
+  const measure = (): void => {
+    const rect = element.getBoundingClientRect()
+    if (rect.width >= 1 && rect.height >= 1) {
+      nativeViewOcclusion.setOverlayRect(key, {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height
+      })
+    } else {
+      // An empty dock slot renders a zero-size anchor; it covers nothing.
+      nativeViewOcclusion.clearOverlayRect(key)
+    }
+  }
+  measure()
+  const observer = new ResizeObserver(measure)
+  observer.observe(element)
+  window.addEventListener('resize', measure)
+  return () => {
+    observer.disconnect()
+    window.removeEventListener('resize', measure)
+    nativeViewOcclusion.clearOverlayRect(key)
+  }
+}

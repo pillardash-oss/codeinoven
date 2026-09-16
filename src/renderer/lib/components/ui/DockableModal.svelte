@@ -3,9 +3,11 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { nativeViewOcclusion } from '$lib/stores/native-view-occlusion.svelte'
+  import {
+    nativeViewOcclusion,
+    trackNativeViewOverlay
+  } from '$lib/stores/native-view-occlusion.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
-  import type { BrowserViewBounds } from '$shared/ipc-contract'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -232,56 +234,23 @@
   })
 
   let panelEl = $state<HTMLElement | null>(null)
-  let dockEl = $state<HTMLElement | null>(null)
 
   const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
 
   // The in-app browser renders a native WebContentsView that the compositor
   // paints above every DOM surface, so a panel floating over the browser frame
   // would be hidden behind the page and unclickable. Publish this panel's
-  // on-screen rectangle (the floating panel, or the bottom-right dock chip
-  // while minimized) and let the browser panel detach its native view while it
-  // is covered   a panel dragged off the browser leaves the browser usable.
+  // on-screen rectangle and let the browser panel detach its native view while
+  // it is covered   a panel dragged off the browser leaves the browser usable.
+  // The minimized dock chip registers itself through `trackNativeViewOverlay`.
   $effect(() => {
-    if (!open) return
+    if (!open || minimized) return
     const key = occlusionKey
-    const publish = (rect: BrowserViewBounds | null): void => {
-      if (rect && rect.width >= 1 && rect.height >= 1) {
-        nativeViewOcclusion.setOverlayRect(key, rect)
-      } else {
-        nativeViewOcclusion.clearOverlayRect(key)
-      }
-    }
-    const clear = (): void => nativeViewOcclusion.clearOverlayRect(key)
-
-    if (minimized) {
-      // The dock chip sizes itself to its content, so measure it instead of
-      // deriving a rectangle from the panel geometry.
-      const measure = (): void => {
-        const element = dockEl
-        if (!element) {
-          publish(null)
-          return
-        }
-        const rect = element.getBoundingClientRect()
-        publish({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-      }
-      measure()
-      const observer = new ResizeObserver(measure)
-      if (dockEl) observer.observe(dockEl)
-      window.addEventListener('resize', measure)
-      return () => {
-        observer.disconnect()
-        window.removeEventListener('resize', measure)
-        clear()
-      }
-    }
-
     // The floating panel is positioned and sized from state, so reading those
     // values here re-publishes on drag, resize, and viewport clamping without a
     // DOM measurement.
-    publish({ x: position.x, y: position.y, width, height })
-    return clear
+    nativeViewOcclusion.setOverlayRect(key, { x: position.x, y: position.y, width, height })
+    return () => nativeViewOcclusion.clearOverlayRect(key)
   })
 
   // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
@@ -383,6 +352,6 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50" bind:this={dockEl}>{@render dock()}</div>
+    <div class="fixed right-4 bottom-4 z-50" {@attach trackNativeViewOverlay}>{@render dock()}</div>
   {/if}
 {/if}

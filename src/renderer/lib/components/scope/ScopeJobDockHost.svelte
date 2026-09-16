@@ -3,6 +3,7 @@
   import ScopeJobPanel from './ScopeJobPanel.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobStageLabel, scopeJobs, type ScopeJob } from '$lib/stores/scope-jobs.svelte'
+  import { trackNativeViewOverlay } from '$lib/stores/native-view-occlusion.svelte'
 
   const minimized = $derived(scopeJobs.jobs.filter((job) => job.minimized))
 
@@ -39,6 +40,7 @@
 {#if minimized.length > 0}
   <div
     class="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+    {@attach trackNativeViewOverlay}
     role="group"
     aria-label="Docked worktree runs"
   >
