@@ -1256,7 +1256,7 @@
                   log={checkLogs[key] ?? null}
                   loading={loadingCheckLogs[key] === true}
                   error={checkLogErrors[key] ?? ''}
-                  class="max-h-72 overflow-auto px-3 py-2"
+                  class="px-3 py-2"
                 />
                 {#if runId !== null}
                   <div class="border-t border-border/40 px-3 py-1.5">

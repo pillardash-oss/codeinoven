@@ -9,7 +9,11 @@
     error?: string
     /** The job's failed steps, so its steps can be matched to the log's own sections. */
     failedSteps?: readonly string[]
-    /** Height and padding for the pane, which each surface sizes to its own column. */
+    /**
+     * Padding and decoration for the pane (`rounded-md bg-black/5 p-2`). The log
+     * brings its own height budget and scroll, and its own utility is emitted after
+     * any named one, so a `max-h-*` passed here would not take effect.
+     */
     class?: string
   }
 
@@ -70,7 +74,16 @@
   {/if}
 {/snippet}
 
-<div class={paneClass}>
+<!--
+    The pane sizes itself from the window rather than from a caller-chosen cap:
+    a fixed `max-h-64` cut a ten-step log off mid-list while the panel below it
+    was half empty. It is tall enough to hold a job's whole step list at the
+    default window, and bounded so a very long log scrolls here instead of taking
+    the job and its steps off screen. `dvh` matches the other panes in the app
+    (`max-h-[90dvh]`, `max-h-[60dvh]`), and the rem half keeps it a reading pane
+    on a tall display instead of a full-column wall of text.
+  -->
+<div class="max-h-[min(60dvh,36rem)] overflow-auto {paneClass}">
   {#if loading}
     <div class="flex items-center gap-2 text-[0.625rem] text-dimmed">
       <Loader2 size={11} class="shrink-0 animate-spin" />

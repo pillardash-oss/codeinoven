@@ -276,7 +276,7 @@
                         loading={loadingLog[job.id] === true}
                         error={logErrors[job.id] ?? ''}
                         failedSteps={failedJobStepNames(job)}
-                        class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 dark:bg-black/30"
+                        class="rounded-md bg-black/5 p-2 dark:bg-black/30"
                       />
                     {/if}
                   </div>
