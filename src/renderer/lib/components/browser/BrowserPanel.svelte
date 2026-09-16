@@ -14,6 +14,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
+  import { nativeViewOcclusion } from '$lib/stores/native-view-occlusion.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
@@ -61,10 +62,19 @@
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
+  /** The panel's current on-screen content rectangle, refreshed by the same
+   *  observers that align the native view. */
+  let contentRect = $state<BrowserViewBounds | null>(null)
+  /** True while a floating DOM overlay (the dockable modal, or its dock chip)
+   *  covers this panel. The native view composites above every DOM surface, so
+   *  it must detach while covered   otherwise the overlay is painted behind the
+   *  page and cannot be seen or clicked. */
+  let coveredByOverlay = $derived(nativeViewOcclusion.isCovered(contentRect))
   let panelVisible = $derived(
     !suppressed &&
       !contextSidebarState.fullscreenSuppression &&
       !contextSidebarState.browserSwitcherSuspendsView &&
+      !coveredByOverlay &&
       (fullscreen ||
         (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId))
   )
@@ -133,12 +143,16 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
+    const bounds = contentBounds()
+    // Publish the frame before the visibility check: the occlusion test needs
+    // the current rectangle even while the native view is detached, so the
+    // panel notices as soon as an overlay stops covering it.
+    contentRect = bounds
     // Read deriveds outside the async continuation so Svelte doesn't flag
     // `derived_inert` when this is called from ResizeObserver/rAF after
     // the owning render effect has been torn down.
     const visible = untrack(() => panelVisible)
     if (!visible) return
-    const bounds = contentBounds()
     if (!bounds) return
     try {
       const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
