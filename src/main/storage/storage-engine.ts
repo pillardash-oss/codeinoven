@@ -92,6 +92,16 @@ export interface RawFileTail {
 export class StorageEngine {
   private root: string
   private readonly allowOrphanProjectArtifacts: boolean
+  /**
+   * Per-file append chains. `appendRaw` is called fire-and-forget from hot
+   * stream paths (every working-trace event persists one line), so without a
+   * queue the callers' appends race: each one awaits `ensureDir` and then
+   * `appendFile`, and libuv's threadpool decides which write lands first, not
+   * the call order. That shuffled the durable append-only logs line by line and
+   * made the streamed working trace render scrambled reasoning. Entries are
+   * dropped as soon as their chain drains, so an idle file holds no queue.
+   */
+  private readonly appendQueues = new Map<string, Promise<void>>()
 
   constructor(rootPath?: string) {
     this.root = rootPath ?? getConfigRoot()
@@ -454,11 +464,32 @@ export class StorageEngine {
     }
   }
 
-  /** Append raw text to a file (creates it if missing). Used for append-only logs like history. */
+  /**
+   * Append raw text to a file (creates it if missing). Used for append-only logs
+   * like history. Appends to one file are strictly serialized in call order so a
+   * concurrent caller can never overtake an earlier one - append-only JSONL logs
+   * (the working-trace stream, driver events, history) are only readable if
+   * their line order is the order the events happened in.
+   */
   async appendRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
-    await ensureDir(join(fullPath, '..'))
-    await appendFile(fullPath, content, 'utf-8')
+    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
+    const write = previous.then(async () => {
+      await ensureDir(join(fullPath, '..'))
+      await appendFile(fullPath, content, 'utf-8')
+    })
+    // The queue only ever advances on a settled link: a failed append must not
+    // wedge every later write to the same file. Callers still receive the real
+    // outcome through `write`.
+    const queued = write.then(
+      () => undefined,
+      () => undefined
+    )
+    this.appendQueues.set(fullPath, queued)
+    void queued.then(() => {
+      if (this.appendQueues.get(fullPath) === queued) this.appendQueues.delete(fullPath)
+    })
+    return write
   }
 
   /** List entries in a directory relative to config root */

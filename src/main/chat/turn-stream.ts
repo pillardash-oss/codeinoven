@@ -1,17 +1,5 @@
 import type { AgentPart } from '../../lib/types'
-
-function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): AgentPart {
-  if (incoming.id !== existing.id || incoming.type !== existing.type) return incoming
-  if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
-  if (existing.type !== 'text' && existing.type !== 'reasoning') return incoming
-  if (
-    (incoming.text.length < existing.text.length && existing.text.startsWith(incoming.text)) ||
-    (incoming.type === 'reasoning' && !incoming.text.startsWith(existing.text))
-  ) {
-    return { ...incoming, text: existing.text }
-  }
-  return incoming
-}
+import { mergeStreamedPart } from '../../lib/agent-part-merge'
 
 /**
  * Durable, append-only per-thread SSE stream log.

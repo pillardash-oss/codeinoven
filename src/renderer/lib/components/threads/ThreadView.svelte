@@ -5,7 +5,7 @@
     mergeWorkingParts,
     shouldMountWorkingTrace
   } from '$lib/working-trace-parts'
-  import { mergeStreamedPart } from '$lib/agent-part-merge'
+  import { mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'

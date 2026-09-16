@@ -17,7 +17,7 @@
   import SubagentModeBadge from './SubagentModeBadge.svelte'
   import SubagentStatusIcon from './SubagentStatusIcon.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
-  import { mergeStreamedPart } from '$lib/agent-part-merge'
+  import { mergeStreamedPart } from '$shared/agent-part-merge'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import {

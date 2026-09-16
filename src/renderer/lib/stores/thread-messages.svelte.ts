@@ -8,7 +8,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
-import { mergeStreamedPart } from '$lib/agent-part-merge'
+import { mergeStreamedPart } from '$shared/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
