@@ -41,11 +41,9 @@
     FolderTree,
     GitBranch,
     GitCommit,
-    GitCompareArrows,
     GitFork,
     GitMerge,
     GitPullRequest,
-    GitPullRequestArrow,
     Loader2,
     MoreHorizontal,
     Plus,
@@ -73,6 +71,7 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import SyncMainButton from './SyncMainButton.svelte'
   import FindInBar from '../files/FindInBar.svelte'
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -1459,6 +1458,24 @@
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync-main']))
+  /** Commits the remote does not have yet, according to the last fetch. */
+  const commitsAhead = $derived(status?.ahead ?? 0)
+  /**
+   * Whether the Push slot has anything to do. A branch whose upstream is simply
+   * missing has no `ahead` count to show   the push is what creates the tracking
+   * branch   so it qualifies as soon as the repository is known to have commits.
+   * Rendering the button on an empty repository would only offer a push that git
+   * must reject.
+   */
+  const hasWorkToPush = $derived(
+    commitsAhead > 0 || (needsUpstreamPush && commitHistory.length > 0)
+  )
+  /** Push copy: a count when there is one, otherwise what the push sets up. */
+  const pushTitle = $derived(
+    commitsAhead > 0
+      ? `Push ${String(commitsAhead)} commit(s) to the remote`
+      : 'Push this branch and track it on the remote'
+  )
 
   /**
    * The active scope's bucket. Managed worktree scopes are the only ones that
@@ -2063,6 +2080,19 @@
   {/each}
 {/snippet}
 
+{#snippet refreshStatusButton()}
+  <button
+    type="button"
+    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label="Refresh git status"
+    title="Refresh git status"
+    disabled={busy}
+    onclick={() => void refreshStatus()}
+  >
+    <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
+  </button>
+{/snippet}
+
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
   {#if findNavState.gitFindOpen}
     <div data-find-exclude class="absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]">
@@ -2128,8 +2158,13 @@
 
   <!-- Header: branch picker + tabs + actions -->
   <div class="flex shrink-0 flex-col border-b border-border">
-    <!-- Top row: branch + tabs + actions -->
-    <div class="flex h-9 items-center gap-1 px-2">
+    <!--
+      Top row: the branch, its working-tree badge, and the remote actions that
+      act on it. It scrolls horizontally rather than spilling when it is full:
+      the sidebar can be dragged down to 200px, and a clipped Push button would
+      be worse than a row that scrolls.
+    -->
+    <div class="flex h-9 items-center gap-1 overflow-x-auto px-2">
       {#if repoState === 'git'}
         <GitHubAccountMenu
           github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
@@ -2179,7 +2214,7 @@
 
       <span class="flex-1"></span>
 
-      {#if repoState === 'git' && status && (remotes.length > 0 || worktreeScope)}
+      {#if repoState === 'git' && status && remotes.length > 0}
         <!--
           Every remote action that is needed right now carries its own count,
           so it is never worth a click into the menu to find out how much is
@@ -2193,7 +2228,7 @@
             type="button"
             class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
             title={`Pull ${String(status.behind)} commit(s) from the remote`}
-            disabled={remotes.length === 0 || syncBusy}
+            disabled={syncBusy}
             onclick={() => void pullAction()}
           >
             {#if gitState.isBusy('pull')}
@@ -2204,12 +2239,12 @@
             Pull {status.behind}
           </button>
         {/if}
-        {#if status.ahead > 0}
+        {#if hasWorkToPush}
           <button
             type="button"
             class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-            title={`Push ${String(status.ahead)} commit(s) to the remote`}
-            disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
+            title={pushTitle}
+            disabled={syncBusy || gitState.isBusy('push')}
             onclick={() => void pushAction()}
           >
             {#if gitState.isBusy('push')}
@@ -2217,168 +2252,143 @@
             {:else}
               <ArrowUpFromLine size={11} />
             {/if}
-            Push {status.ahead}
+            Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
           </button>
         {/if}
       {/if}
-      {#if repoState === 'git'}
-        <button
-          type="button"
-          class={[
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
-            findNavState.gitFindOpen
-              ? 'bg-elevated text-foreground'
-              : 'text-dimmed hover:bg-elevated hover:text-foreground'
-          ]}
-          aria-label="Search commits"
-          title="Search commits"
-          aria-pressed={findNavState.gitFindOpen}
-          onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
-        >
-          <Search size={12} aria-hidden="true" />
-        </button>
+      {#if repoState === 'git' && worktreeScope}
+        <SyncMainButton
+          busy={gitState.isBusy('sync-main')}
+          blocked={syncBusy || conflicted.length > 0}
+          onSync={(direction) => void syncMainAction(direction)}
+        />
       {/if}
-      <button
-        type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-        aria-label="Refresh git status"
-        title="Refresh git status"
-        disabled={busy}
-        onclick={() => void refreshStatus()}
-      >
-        <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
-      </button>
-
-      {#if repoState === 'git'}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-            aria-label="Git actions"
-            title="Git actions"
-          >
-            {#if syncBusy}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <MoreHorizontal size={13} />
-            {/if}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-            >
-              <!--
-                Remote sync and the working-tree actions share one menu. Fetch,
-                pull and push used to live in a second dropdown beside this one,
-                which meant two menus for one job.
-              -->
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                disabled={remotes.length === 0 || syncBusy}
-                onSelect={() => void gitState.fetch(projectId)}
-              >
-                <Download size={12} class="shrink-0 text-dimmed" />
-                Fetch
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                disabled={remotes.length === 0 || syncBusy}
-                onSelect={() => void pullAction()}
-              >
-                <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
-                Pull{status && status.behind > 0 ? ` ${String(status.behind)}` : ''}
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                disabled={remotes.length === 0 || syncBusy}
-                onSelect={() => void pushAction()}
-              >
-                <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
-                Push{status && status.ahead > 0 ? ` ${String(status.ahead)}` : ''}
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator class="my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-              >
-                <GitPullRequest size={12} class="shrink-0 text-dimmed" />
-                Create pull request…
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={localBranches.length < 2}
-                onSelect={() => (showIntegrateModal = true)}
-              >
-                <GitMerge size={12} class="shrink-0 text-dimmed" />
-                Merge or rebase…
-              </DropdownMenu.Item>
-              {#if worktreeScope}
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                  disabled={syncBusy || conflicted.length > 0}
-                  onSelect={() => void syncMainAction('from-main')}
-                >
-                  <GitCompareArrows size={12} class="shrink-0 text-dimmed" />
-                  Sync from main
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                  disabled={syncBusy || conflicted.length > 0}
-                  onSelect={() => void syncMainAction('to-main')}
-                >
-                  <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" />
-                  Sync to main
-                </DropdownMenu.Item>
-              {/if}
-              <DropdownMenu.Separator class="my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={status?.clean ?? true}
-                onSelect={() => (showStashModal = true)}
-              >
-                <Archive size={12} class="shrink-0 text-dimmed" />
-                Stash changes…
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+      {#if repoState !== 'git'}
+        <!-- Off-git states render no tab row, so the refresh control stays on this one. -->
+        {@render refreshStatusButton()}
       {/if}
     </div>
 
     {#if repoState === 'git'}
-      <!-- Tab row   never wraps; scrolls horizontally when the tabs overflow -->
-      <div class="flex items-center gap-0.5 overflow-x-auto px-2 pb-1">
-        {#each tabs as tab (tab.id)}
+      <!--
+        Tab row   never wraps. The tabs scroll horizontally on their own, while
+        the tool buttons beside them hold the right edge, so a long tab list can
+        never push Search, Refresh or the Git actions menu out of reach. Those
+        three live here rather than on the branch row: this line has the room,
+        and that row belongs to the branch and to the remote actions acting on
+        it.
+      -->
+      <div class="flex items-center gap-1 px-2 pb-1">
+        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+          {#each tabs as tab (tab.id)}
+            <button
+              type="button"
+              class={[
+                'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-[0.625rem] font-medium transition-colors',
+                activeTab === tab.id
+                  ? 'bg-elevated text-foreground'
+                  : 'text-dimmed hover:bg-elevated/60 hover:text-foreground'
+              ]}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
+              onclick={() => {
+                activeTab = tab.id
+                if (tab.id === 'history') void loadHistory()
+              }}
+            >
+              {tab.label}
+              {#if tab.count !== null}
+                <span
+                  class={[
+                    'rounded-sm px-1 text-[0.5rem] font-semibold tabular-nums',
+                    activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-app text-dimmed'
+                  ]}
+                >
+                  {tab.count}
+                </span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+        <div class="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
             class={[
-              'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-[0.625rem] font-medium transition-colors',
-              activeTab === tab.id
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
+              findNavState.gitFindOpen
                 ? 'bg-elevated text-foreground'
-                : 'text-dimmed hover:bg-elevated/60 hover:text-foreground'
+                : 'text-dimmed hover:bg-elevated hover:text-foreground'
             ]}
-            aria-current={activeTab === tab.id ? 'page' : undefined}
-            onclick={() => {
-              activeTab = tab.id
-              if (tab.id === 'history') void loadHistory()
-            }}
+            aria-label="Search commits"
+            title="Search commits"
+            aria-pressed={findNavState.gitFindOpen}
+            onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
           >
-            {tab.label}
-            {#if tab.count !== null}
-              <span
-                class={[
-                  'rounded-sm px-1 text-[0.5rem] font-semibold tabular-nums',
-                  activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-app text-dimmed'
-                ]}
-              >
-                {tab.count}
-              </span>
-            {/if}
+            <Search size={12} aria-hidden="true" />
           </button>
-        {/each}
+          {@render refreshStatusButton()}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+              aria-label="Git actions"
+              title="Git actions"
+            >
+              {#if gitState.isBusy('fetch')}
+                <Loader2 size={12} class="animate-spin" />
+              {:else}
+                <MoreHorizontal size={13} />
+              {/if}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={4}
+                collisionPadding={8}
+                class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+              >
+                <!--
+                  Fetch is the one remote action with no button of its own   it
+                  advertises no drift   so it stays here with the working-tree
+                  actions. Pull, Push and the main-worktree sync each own a
+                  header control now, so the menu does not repeat them.
+                -->
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                  disabled={remotes.length === 0 || syncBusy}
+                  onSelect={() => void gitState.fetch(projectId)}
+                >
+                  <Download size={12} class="shrink-0 text-dimmed" />
+                  Fetch
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+                >
+                  <GitPullRequest size={12} class="shrink-0 text-dimmed" />
+                  Create pull request…
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                  disabled={localBranches.length < 2}
+                  onSelect={() => (showIntegrateModal = true)}
+                >
+                  <GitMerge size={12} class="shrink-0 text-dimmed" />
+                  Merge or rebase…
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                  disabled={status?.clean ?? true}
+                  onSelect={() => (showStashModal = true)}
+                >
+                  <Archive size={12} class="shrink-0 text-dimmed" />
+                  Stash changes…
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
       </div>
     {/if}
   </div>
