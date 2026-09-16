@@ -126,6 +126,20 @@ const PR_ERROR_COOLDOWN_MS = 120_000
 /** How long a positive GitHub connection probe is trusted without re-probing. */
 const GITHUB_PROBE_TTL_MS = 30_000
 
+/**
+ * How stale the remote-tracking refs may be when the git panel is opened
+ * before it fetches on its own.
+ *
+ * `ahead` and `behind` are read from local remote-tracking refs, which only
+ * move on a fetch, so without this the Pull and Push counts can sit stale for a
+ * whole session. The panel-open hook fires on every refocus of the panel's rail
+ * icon (files, then notifications, then back to git), so an unthrottled fetch
+ * would hit the network on each flip. Five minutes keeps the counts honest at
+ * the moment the user looks, without turning icon switching into network
+ * traffic.
+ */
+const PANEL_FETCH_STALE_MS = 5 * 60_000
+
 /** How fresh a successful PR conflict check is before it is refetched. */
 const PR_ISSUE_FRESHNESS_MS = 60_000
 
@@ -188,6 +202,20 @@ export class GitState {
   prConflictsByRepo: Record<string, PullRequestSummary[]> = $state(GitState.loadPrConflicts())
   /** When the conflict check last SUCCEEDED per repo — set only on success. */
   private prIssueFetchedAt: Record<string, number> = {}
+  /**
+   * When a fetch was last attempted, keyed by project, recorded whether it
+   * succeeded or not. A remote that is refusing or unreachable is then retried
+   * on the next window instead of on every panel open, which would otherwise
+   * stall the panel behind a network timeout each time the user came back to
+   * it.
+   *
+   * The key is the project rather than the scope bucket: managed scopes are
+   * worktrees of one repository, and worktrees share `refs/remotes`, so a
+   * fetch started from one of them already refreshes the refs every sibling
+   * scope reads. Keying by scope would refetch on each scope switch inside the
+   * same five minutes for no new information.
+   */
+  private fetchAttempts: Record<string, number> = {}
   /** In-flight conflict checks per project, so concurrent refreshes share one. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private readonly prIssueChecks = new Map<string, Promise<void>>()
@@ -357,7 +385,11 @@ export class GitState {
   /**
    * Panel-open hook: opening the git panel refreshes local status and the
    * connection-gated PR indicators immediately, so what the user sees is
-   * never older than the moment they asked for it.
+   * never older than the moment they asked for it. When the remote-tracking
+   * refs have gone stale it also fetches, because `ahead` and `behind` come
+   * from those local refs: without that fetch a branch could sit behind the
+   * server, or ahead of it, with nothing in the panel saying so until the user
+   * went looking for Fetch in the menu.
    *
    * The git tool opens from its own rail icon rather than a tab strip, so
    * this fires on every refocus (files → git, notifications → git …). It
@@ -369,7 +401,35 @@ export class GitState {
    */
   notifyGitPanelOpened(projectId: string): void {
     if (this.activeProjectId !== projectId) return
-    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
+    queueMicrotask(() => {
+      // Local state first: it is what the panel paints, and it is also what
+      // says whether there is a remote worth fetching from. The fetch re-reads
+      // that state when it finishes, so the second read only happens on the
+      // opens the stale gate lets through.
+      void this.refresh(projectId)
+        .then(() => {
+          if (this.activeProjectId !== projectId) return
+          if (!this.fetchIsDue(projectId)) return
+          return this.fetch(projectId)
+        })
+        .catch(() => {})
+    })
+  }
+
+  /**
+   * Whether the age-gated panel-open fetch is due. A repository without a
+   * remote has nothing to fetch, and anything already attempted inside the
+   * window is left alone, which is what keeps repeated panel opens from
+   * becoming repeated network round trips.
+   */
+  private fetchIsDue(projectId: string): boolean {
+    if (this.remotes.length === 0) return false
+    return Date.now() - (this.fetchAttempts[projectId] ?? 0) >= PANEL_FETCH_STALE_MS
+  }
+
+  /** Record that a fetch was tried, so the panel-open gate can throttle it. */
+  private noteFetchAttempt(projectId: string): void {
+    this.fetchAttempts[projectId] = Date.now()
   }
 
   /**
@@ -908,6 +968,7 @@ export class GitState {
   async fetch(projectId: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke('git:fetch', ...this.scopedGitArgs(projectId))
       // Branch tracking (ahead/behind) changes with every fetch — refresh it so
@@ -925,6 +986,7 @@ export class GitState {
   async fetchBranch(projectId: string, remote: string, branch: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke(
         'git:fetchBranch',
@@ -941,6 +1003,9 @@ export class GitState {
   async pull(projectId: string): Promise<void> {
     this.markBusy('pull', true)
     this.error = null
+    // A pull fetches the upstream before it integrates, so the refs it moved
+    // count towards the panel-open gate.
+    this.noteFetchAttempt(projectId)
     try {
       this.status = await invoke('git:pull', ...this.scopedGitArgs(projectId))
       // A pull moves remote-tracking refs, so re-read branches and their
