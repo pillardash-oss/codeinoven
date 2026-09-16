@@ -34,6 +34,8 @@
     ChevronDown,
     ChevronLeft,
     ChevronRight,
+    Circle,
+    CircleCheck,
     Download,
     ExternalLink,
     Folder,
@@ -50,6 +52,7 @@
     RefreshCw,
     Search,
     Trash2,
+    TriangleAlert,
     Unplug
   } from '@lucide/svelte'
   import { AlertDialog, ContextMenu, DropdownMenu } from 'bits-ui'
@@ -1484,6 +1487,30 @@
   const activeScopeBucket = $derived(scopeState.bucketFor(projectId, scopeBucketId))
   const worktreeScope = $derived(activeScopeBucket?.root.kind === 'worktree')
 
+  /** Commits waiting on the remote, according to the last fetch. */
+  const commitsBehind = $derived(status?.behind ?? 0)
+  const hasRemote = $derived(remotes.length > 0)
+  /**
+   * Which remote actions have work, and therefore whether the header's second row
+   * exists at all. The row and its buttons read the same three flags, so they can
+   * never disagree about whether there is anything to do.
+   */
+  const showsPull = $derived(repoState === 'git' && hasRemote && commitsBehind > 0)
+  const showsPush = $derived(repoState === 'git' && hasRemote && hasWorkToPush)
+  const showsSync = $derived(repoState === 'git' && worktreeScope)
+  const showsRemoteActions = $derived(showsPull || showsPush || showsSync)
+
+  /**
+   * Working-tree state as the branch picker's leading glyph, in the order the
+   * states ask for attention: conflicts first, then uncommitted changes, then
+   * clean. Null while there is no status to describe.
+   */
+  const worktreeState = $derived.by((): 'clean' | 'dirty' | 'conflicted' | null => {
+    if (!status) return null
+    if (conflicted.length > 0) return 'conflicted'
+    return status.clean ? 'clean' : 'dirty'
+  })
+
   $effect(() => {
     // The board may not be in memory yet when the panel mounts first (remote
     // shell, deep link). Loading it is idempotent and never blocks rendering.
@@ -2080,6 +2107,34 @@
   {/each}
 {/snippet}
 
+{#snippet branchStatusIcon()}
+  {#if worktreeState === 'conflicted'}
+    <TriangleAlert
+      size={12}
+      class="shrink-0 text-danger"
+      role="img"
+      aria-label="Conflicts to resolve"
+      title="Conflicts to resolve"
+    />
+  {:else if worktreeState === 'dirty'}
+    <Circle
+      size={12}
+      class="shrink-0 text-warning"
+      role="img"
+      aria-label="Uncommitted changes"
+      title="Uncommitted changes"
+    />
+  {:else}
+    <CircleCheck
+      size={12}
+      class="shrink-0 text-success"
+      role="img"
+      aria-label="Working tree clean"
+      title="Working tree clean"
+    />
+  {/if}
+{/snippet}
+
 {#snippet refreshStatusButton()}
   <button
     type="button"
@@ -2156,15 +2211,14 @@
     </div>
   {/if}
 
-  <!-- Header: branch picker + tabs + actions -->
+  <!-- Header: one row of context and tools, plus the remote actions when they have work -->
   <div class="flex shrink-0 flex-col border-b border-border">
     <!--
-      Top row: the branch, its working-tree badge, and the remote actions that
-      act on it. It scrolls horizontally rather than spilling when it is full:
-      the sidebar can be dragged down to 200px, and a clipped Push button would
-      be worse than a row that scrolls.
+      Header: identity, branch, navigation and tools on one line, with the remote
+      actions dropping to a second line only while one of them has work to do
+      (`showsRemoteActions`).
     -->
-    <div class="flex h-9 items-center gap-1 overflow-x-auto px-2">
+    <div class="flex h-9 items-center gap-1 px-2">
       {#if repoState === 'git'}
         <GitHubAccountMenu
           github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
@@ -2184,6 +2238,7 @@
           onDelete={(name) => void deleteBranchAction(name)}
           onAddOrigin={openAddOrigin}
           onReplaceOrigin={openReplaceOrigin}
+          statusIcon={worktreeState ? branchStatusIcon : undefined}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
@@ -2194,92 +2249,16 @@
         </div>
       {/if}
 
-      {#if repoState === 'git' && status}
+      {#if repoState === 'git'}
         <!--
-          Working tree state belongs to the branch it describes, so the badge
-          sits against the branch name instead of being spread across the row
-          against the action buttons. The ahead/behind counts live on the Pull
-          and Push buttons themselves   a second pair of drift chips beside the
-          branch name only repeated the numbers already printed there.
+          The branch name is the anchor of this row, so it gives way first: the
+          tab strip keeps 8rem (two or three tabs at any width) and the branch
+          truncates into what is left, which is what its own tooltip and the
+          picker dropdown are for. The divider keeps navigation from reading as
+          part of the branch control.
         -->
-        <span
-          class={[
-            'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide',
-            status.clean ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-          ]}
-        >
-          {status.clean ? 'Clean' : 'Dirty'}
-        </span>
-      {/if}
-
-      <span class="flex-1"></span>
-
-      {#if repoState === 'git' && status && remotes.length > 0}
-        <!--
-          Every remote action that is needed right now carries its own count,
-          so it is never worth a click into the menu to find out how much is
-          waiting. Pull and Push are independent: a diverged branch needs both,
-          and hiding one behind the other left the second reachable only from
-          that menu. Fetch advertises no drift, so it stays in the menu rather
-          than taking a permanent button slot.
-        -->
-        {#if status.behind > 0}
-          <button
-            type="button"
-            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-            title={`Pull ${String(status.behind)} commit(s) from the remote`}
-            disabled={syncBusy}
-            onclick={() => void pullAction()}
-          >
-            {#if gitState.isBusy('pull')}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <ArrowDownToLine size={11} />
-            {/if}
-            Pull {status.behind}
-          </button>
-        {/if}
-        {#if hasWorkToPush}
-          <button
-            type="button"
-            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-            title={pushTitle}
-            disabled={syncBusy || gitState.isBusy('push')}
-            onclick={() => void pushAction()}
-          >
-            {#if gitState.isBusy('push')}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <ArrowUpFromLine size={11} />
-            {/if}
-            Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
-          </button>
-        {/if}
-      {/if}
-      {#if repoState === 'git' && worktreeScope}
-        <SyncMainButton
-          busy={gitState.isBusy('sync-main')}
-          blocked={syncBusy || conflicted.length > 0}
-          onSync={(direction) => void syncMainAction(direction)}
-        />
-      {/if}
-      {#if repoState !== 'git'}
-        <!-- Off-git states render no tab row, so the refresh control stays on this one. -->
-        {@render refreshStatusButton()}
-      {/if}
-    </div>
-
-    {#if repoState === 'git'}
-      <!--
-        Tab row   never wraps. The tabs scroll horizontally on their own, while
-        the tool buttons beside them hold the right edge, so a long tab list can
-        never push Search, Refresh or the Git actions menu out of reach. Those
-        three live here rather than on the branch row: this line has the room,
-        and that row belongs to the branch and to the remote actions acting on
-        it.
-      -->
-      <div class="flex items-center gap-1 px-2 pb-1">
-        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <div class="flex min-w-32 flex-1 items-center gap-0.5 overflow-x-auto">
           {#each tabs as tab (tab.id)}
             <button
               type="button"
@@ -2389,6 +2368,62 @@
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
         </div>
+      {:else}
+        <span class="flex-1"></span>
+        <!-- Off-git states render no tabs, so the refresh control stays on this row. -->
+        {@render refreshStatusButton()}
+      {/if}
+    </div>
+
+    {#if showsRemoteActions}
+      <!--
+        The remote actions earn a row of their own only while one of them has
+        work, so the header is a single line in the common case. Pull and Push
+        are independent: a diverged branch needs both, and hiding one behind the
+        other left the second reachable only from the menu. Each carries its own
+        count, and Fetch advertises no drift, so it stays in the menu instead of
+        taking a slot here.
+      -->
+      <div class="flex h-8 items-center justify-end gap-1 overflow-x-auto px-2">
+        {#if showsPull}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
+            disabled={syncBusy}
+            onclick={() => void pullAction()}
+          >
+            {#if gitState.isBusy('pull')}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <ArrowDownToLine size={11} />
+            {/if}
+            Pull {commitsBehind}
+          </button>
+        {/if}
+        {#if showsPush}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            title={pushTitle}
+            disabled={syncBusy || gitState.isBusy('push')}
+            onclick={() => void pushAction()}
+          >
+            {#if gitState.isBusy('push')}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <ArrowUpFromLine size={11} />
+            {/if}
+            Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+          </button>
+        {/if}
+        {#if showsSync}
+          <SyncMainButton
+            busy={gitState.isBusy('sync-main')}
+            blocked={syncBusy || conflicted.length > 0}
+            onSync={(direction) => void syncMainAction(direction)}
+          />
+        {/if}
       </div>
     {/if}
   </div>
