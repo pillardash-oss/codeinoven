@@ -42,7 +42,7 @@
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
-  import type { PrDetailTabId } from './pr-view'
+  import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
     mentionHandle,
@@ -326,31 +326,12 @@
    * dropdown in the header instead of a row of tabs, because the rail is too
    * narrow to hold both the tabs and the actions comfortably.
    */
-  const tabs = $derived([
-    {
-      id: 'conversation' as const,
-      label: 'Conversation',
-      icon: MessagesSquare,
-      count: conversation.length
-    },
-    {
-      id: 'commits' as const,
-      label: 'Commits',
-      icon: GitCommitHorizontal,
-      count: bundle?.commits.length ?? 0
-    },
-    { id: 'files' as const, label: 'Files', icon: FileDiff, count: bundle?.files.length ?? 0 },
-    {
-      id: 'checks' as const,
-      label: 'Checks',
-      icon: ShieldCheck,
-      count: checks?.checks.length ?? 0
-    },
-    { id: 'agent' as const, label: 'Agent', icon: Bot, count: agentReport?.content ? 1 : 0 }
-  ])
-  /** The tab the header's dropdown button names while it is closed. */
-  const activeTabEntry = $derived(tabs.find((entry) => entry.id === tab) ?? null)
-
+  const tabs = $derived(
+    PR_DETAIL_VIEWS.map((view) => ({
+      ...view,
+      count: prViewCount(view.id, bundle, (agentReport?.content ?? '').trim().length > 0)
+    }))
+  )
   type EntryKind = 'description' | 'comment' | 'review' | 'inline'
 
   /** Human label for a conversation entry's badge. */
@@ -816,54 +797,6 @@
   {/each}
 {/snippet}
 
-{#snippet viewMenu()}
-  <!--
-    One definition of the view switcher: the full screen rail draws it in its
-    header row, and the dock draws it beside the title. Its classes and
-    behaviour are unchanged.
-  -->
-  <DropdownMenu.Root>
-    <DropdownMenu.Trigger
-      class="flex h-6 min-w-0 shrink cursor-pointer items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-      title="Switch pull request view"
-      aria-label="Switch pull request view"
-    >
-      {#if activeTabEntry}
-        {@const ActiveIcon = activeTabEntry.icon}
-        <ActiveIcon size={12} class="shrink-0" />
-      {/if}
-      <span class="min-w-0 truncate">{activeTabEntry?.label ?? 'View'}</span>
-      <ChevronDown size={10} class="shrink-0 text-dimmed" />
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Portal>
-      <DropdownMenu.Content
-        side="bottom"
-        align="end"
-        sideOffset={4}
-        collisionPadding={8}
-        class="z-90 w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
-      >
-        {#each tabs as entry (entry.id)}
-          {@const EntryIcon = entry.icon}
-          <DropdownMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-            onSelect={() => (tab = entry.id)}
-          >
-            <EntryIcon size={12} class="shrink-0 text-dimmed" />
-            <span class="min-w-0 flex-1 truncate">{entry.label}</span>
-            {#if entry.count > 0}
-              <span class="shrink-0 tabular-nums text-dimmed">{entry.count}</span>
-            {/if}
-            {#if tab === entry.id}
-              <Check size={12} class="shrink-0 text-primary" />
-            {/if}
-          </DropdownMenu.Item>
-        {/each}
-      </DropdownMenu.Content>
-    </DropdownMenu.Portal>
-  </DropdownMenu.Root>
-{/snippet}
-
 {#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
@@ -918,19 +851,15 @@
       <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
     {:else}
       <!--
-        Dock only. The Git panel's action row owns the identity row above, so
-        the title and the view menu share this line and the meta line sits
-        underneath.
+        Dock only. The panel's action row carries the identity row, the view
+        switcher and the remote actions, so this line is the title alone.
       -->
-      <div class="flex min-w-0 items-center gap-1.5">
-        <p
-          class="min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-snug text-foreground"
-          title={summary.title}
-        >
-          {summary.title}
-        </p>
-        {@render viewMenu()}
-      </div>
+      <p
+        class="min-w-0 truncate text-[0.75rem] font-medium leading-snug text-foreground"
+        title={summary.title}
+      >
+        {summary.title}
+      </p>
     {/if}
     <!--
       One meta line instead of two: the refs, the author, the age and the change

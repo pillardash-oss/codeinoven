@@ -35,7 +35,6 @@
     ChevronDown,
     ChevronLeft,
     ChevronRight,
-    Circle,
     CircleCheck,
     Download,
     ExternalLink,
@@ -84,7 +83,9 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import PrViewSwitcher from './PrViewSwitcher.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
+  import { PR_DETAIL_VIEWS, prViewCount } from './pr-view'
   import SyncMainButton from './SyncMainButton.svelte'
   import GitViewMenu from './GitViewMenu.svelte'
   import PrIdentityRow from './PrIdentityRow.svelte'
@@ -365,6 +366,12 @@
   )
   const untracked = $derived(changes.filter((change) => change.status === 'untracked'))
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
+  /**
+   * Selected paths in the order they were picked. Read by the batch actions and by
+   * the row's own flags, so it is declared with the other view deriveds rather
+   * than beside the actions that consume it.
+   */
+  const selectedPathList = $derived(Object.keys(selectedPaths))
   const commitTree = $derived(buildCommitTree(commitDiffChanges))
   /** Local commits not yet on the upstream remote, oldest-first-among-them   matches history order. */
   const unpushedCount = $derived(status?.upstream ? Math.max(0, status.ahead) : 0)
@@ -492,9 +499,10 @@
   async function toggleStage(change: GitFileChange): Promise<void> {
     if (change.staged) {
       await gitState.unstage(projectId, [change.path])
-    } else {
-      await gitState.stage(projectId, [change.path])
+      return
     }
+    await gitState.stage(projectId, [change.path])
+    if (!gitState.error) requestCommitMessageFocus()
   }
 
   async function stageAll(): Promise<void> {
@@ -506,6 +514,7 @@
     ].filter((path) => !(gitState.status?.conflicted ?? []).includes(path))
     if (allPaths.length === 0) return
     await gitState.stage(projectId, allPaths)
+    if (!gitState.error) requestCommitMessageFocus()
   }
 
   async function unstageAll(): Promise<void> {
@@ -1561,6 +1570,26 @@
     return { url: `${repository}/actions`, title: 'View these workflow runs on GitHub' }
   })
   /**
+   * The reader's views with their counts, for the switcher in the action row. The
+   * counts come from the same bundle the reader renders, so the switcher and the
+   * rail agree.
+   */
+  const prDetailViews = $derived(
+    PR_DETAIL_VIEWS.map((view) => ({
+      ...view,
+      count: prViewCount(
+        view.id,
+        pullRequestBundle,
+        (
+          (selectedPullRequest
+            ? gitState.prAgentReports[String(selectedPullRequest.number)]?.content
+            : '') ?? ''
+        ).trim().length > 0
+      )
+    }))
+  )
+
+  /**
    * The open pull request's fetched record. The reader reads the same bundle
    * from the store, so the panel's identity row and its pills cannot show one
    * thing while the reader shows another.
@@ -1618,16 +1647,34 @@
    * on the branch you are standing on, one each, and they fill the row between
    * them. Sync main is a menu, so it sits with the other header tools.
    */
-  const showsRemoteActions = $derived(showsPull || showsPush)
+  /**
+   * The Deploys view reads runs and deployments, not the branch you are standing
+   * on, so Pull and Push have nothing to say there and do not appear.
+   */
+  const showsRemoteActions = $derived(activeTab !== 'deployments' && (showsPull || showsPush))
+
+  /**
+   * The working tree's staging controls: whatever the changes view can do to the
+   * index right now. They used to sit in a bar of their own inside that view, and
+   * they share this row with Pull and Push instead.
+   */
+  const showsStageControls = $derived(
+    conflicted.length > 0 ||
+      unstaged.length + untracked.length > 0 ||
+      staged.length > 0 ||
+      (changes.length > 0 && selectedPathList.length > 0)
+  )
 
   /**
    * The row under the header belongs to the view in focus: the commit or stash
-   * being read, the pull request's identity, the PR list's filter, or the remote
-   * actions. It exists only while at least one of those has something to say, so
-   * the common case is still one line.
+   * being read, the pull request's identity and views, the PR list's filter, the
+   * deployment being read, the staging controls, or the remote actions. It exists
+   * only while at least one of those has something to say, so the common case is
+   * still one line.
    */
   const showsViewContext = $derived(
-    (activeTab === 'changes' && selectedCommit !== null) ||
+    (activeTab === 'changes' &&
+      (selectedCommit !== null || (status !== null && showsStageControls))) ||
       (activeTab === 'pulls' && githubConnected && githubIdentity !== null) ||
       (activeTab === 'deployments' && (selectedDeployment !== null || selectedRun !== null)) ||
       (activeTab === 'stashes' && selectedStash !== null)
@@ -2052,13 +2099,14 @@
     selectedPaths = {}
   }
 
-  const selectedPathList = $derived(Object.keys(selectedPaths))
-
   async function stageSelectedAction(stage: boolean): Promise<void> {
     const paths = selectedPathList
     if (paths.length === 0) return
     await stagePathsAction(paths, stage)
-    if (!gitState.error) clearSelection()
+    if (gitState.error) return
+    clearSelection()
+    // Staging is followed by writing the message, never by the reverse.
+    if (!stage) requestCommitMessageFocus()
   }
 
   async function ignoreSelectedAction(): Promise<void> {
@@ -2117,6 +2165,15 @@
     restoreWorktreeConfirm = null
     await gitState.restoreFiles(projectId, pending.source, [pending.path], 'worktree')
     if (!gitState.error) void refreshStatus()
+  }
+
+  /**
+   * Staging ends with the commit message, so the box takes the caret: the next
+   * thing a user does after staging is type. The effect above waits for the pinned
+   * composer to render, so this is a flag rather than a focus call.
+   */
+  function requestCommitMessageFocus(): void {
+    commitSelection = true
   }
 
   function requestCommitSelected(): void {
@@ -2221,7 +2278,12 @@
    * shares the panel's single scroll region instead of nesting up to three
    * scrollbars inside it.
    */
-  const paneClass = 'flex flex-col'
+  /**
+   * Each pane carries a little padding of its own, so the staged and unstaged
+   * cards read as separate containers instead of two halves of one block. The
+   * wrapper's inset is what lines their outer edge up with the rows above.
+   */
+  const paneClass = 'flex flex-col p-1'
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -2273,13 +2335,15 @@
       title="Conflicts to resolve"
     />
   {:else if worktreeState === 'dirty'}
-    <Circle
-      size={12}
-      class="shrink-0 text-warning"
-      role="img"
-      aria-label="Uncommitted changes"
-      title="Uncommitted changes"
-    />
+    <!--
+      A badge rather than a ring: at 12px an outlined circle reads as a bullet,
+      where the amber chip reads as the state it names. The same snippet marks the
+      dirty branch in the picker's own list.
+    -->
+    <span
+      class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
+      title="Uncommitted changes in this branch">dirty</span
+    >
   {:else}
     <CircleCheck
       size={12}
@@ -2455,7 +2519,122 @@
   for "where am I" and one for "what can I do here".
 -->
 {#snippet viewContext()}
-  {#if activeTab === 'changes' && selectedCommit !== null}
+  {#if activeTab === 'changes' && selectedCommit === null}
+    {#if conflicted.length > 0}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-danger/40 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+        disabled={integrateBusy || conflictState === 'none'}
+        onclick={requestAbortConflict}
+      >
+        {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <Trash2 size={11} />
+        {/if}
+        Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+      </button>
+      <span
+        class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
+      >
+        {conflicted.length}
+        {conflicted.length === 1 ? 'conflict' : 'conflicts'}
+      </span>
+    {:else if unstaged.length + untracked.length > 0}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        disabled={gitState.isBusy('stage')}
+        onclick={() => void stageAll()}
+      >
+        Stage all
+      </button>
+    {:else if staged.length > 0}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center rounded-xs border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+        disabled={gitState.isBusy('unstage')}
+        onclick={() => void unstageAll()}
+      >
+        Unstage all
+      </button>
+    {/if}
+    {#if changes.length > 0 && selectedPathList.length > 0}
+      <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
+        {selectedPathList.length} selected
+      </span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={batchBusy}
+          aria-label="Selected actions"
+          title="Selected actions"
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+          >
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void stageSelectedAction(false)}
+            >
+              <Check size={12} class="text-success" />
+              Stage
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void stageSelectedAction(true)}
+            >
+              <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
+              Unstage
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={requestCommitSelected}
+            >
+              <GitCommit size={12} class="text-dimmed" />
+              Commit…
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestStashFor(selectedPathList)}
+            >
+              <Archive size={12} class="text-dimmed" />
+              Stash…
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void ignoreSelectedAction()}
+            >
+              <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
+              Add to gitignore
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestDiscard(selectedPathList)}
+            >
+              <Trash2 size={12} />
+              Discard changes
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    {/if}
+  {:else if activeTab === 'changes' && selectedCommit !== null}
     {@const commit = selectedCommit}
     <button
       type="button"
@@ -2491,7 +2670,7 @@
         <ChevronRight size={12} />
       </button>
     </div>
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 grow-2 basis-0">
       <p class="truncate text-[0.6875rem] font-medium text-foreground" title={commit.message}>
         {commit.message.split('\n')[0]}
       </p>
@@ -2514,7 +2693,7 @@
     >
       <ArrowLeft size={12} />
     </button>
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 grow-2 basis-0">
       <p class="truncate text-[0.6875rem] font-medium text-foreground" title={stash.message}>
         {stash.message}
       </p>
@@ -2537,6 +2716,16 @@
         onBack={() => (selectedPullRequest = null)}
         onOpenChecks={() => (prDetailTab = 'checks')}
       />
+      <!--
+        Which part of the pull request you are reading, immediately ahead of the
+        remote actions. The sidebar cannot hold a list of views of its own, and the
+        row has the room the title row no longer needs.
+      -->
+      <PrViewSwitcher
+        views={prDetailViews}
+        active={prDetailTab}
+        onSelect={(id) => (prDetailTab = id)}
+      />
     {:else}
       <PrStateFilter state={prListState} onSelect={selectPrListState} />
     {/if}
@@ -2551,7 +2740,7 @@
     >
       <ArrowLeft size={12} />
     </button>
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 grow-2 basis-0">
       <p
         class="truncate text-[0.6875rem] font-medium text-foreground"
         title={selectedDeployment.environment}
@@ -2567,12 +2756,15 @@
       </div>
     </div>
     <span
-      class="flex shrink-0 items-center {stateGlyphClass(openDeploymentState)}"
+      class="flex shrink-0 items-center gap-1 {stateGlyphClass(openDeploymentState)}"
       role="img"
       title="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
       aria-label="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
     >
       <DeploymentGlyph size={13} />
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide">
+        {stateLabel(openDeploymentState)}
+      </span>
     </span>
   {:else if activeTab === 'deployments' && selectedRun !== null}
     {@const RunGlyph = stateGlyph(openRunState)}
@@ -2585,7 +2777,7 @@
     >
       <ArrowLeft size={12} />
     </button>
-    <div class="min-w-0 flex-1">
+    <div class="min-w-0 grow-2 basis-0">
       <p
         class="truncate text-[0.6875rem] font-medium text-foreground"
         title={selectedRun.displayTitle}
@@ -2603,12 +2795,15 @@
       </div>
     </div>
     <span
-      class="flex shrink-0 items-center {stateGlyphClass(openRunState)}"
+      class="flex shrink-0 items-center gap-1 {stateGlyphClass(openRunState)}"
       role="img"
       title="Run {stateLabel(openRunState).toLowerCase()}"
       aria-label="Run {stateLabel(openRunState).toLowerCase()}"
     >
       <RunGlyph size={13} />
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide">
+        {stateLabel(openRunState)}
+      </span>
     </span>
   {/if}
 {/snippet}
@@ -2724,6 +2919,7 @@
           onAddOrigin={openAddOrigin}
           onReplaceOrigin={openReplaceOrigin}
           statusIcon={worktreeState ? branchStatusIcon : undefined}
+          statusBadge={worktreeState === 'dirty' ? branchStatusIcon : undefined}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
@@ -2883,48 +3079,41 @@
       -->
       <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
         {@render viewContext()}
-        {#if showsPull}
-          <button
-            type="button"
-            class={[
-              'flex h-6 min-w-0 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40',
-              // The view's own context outranks the remote actions it shares this
-              // row with, so beside one they hold their width and give way first,
-              // down to the icon alone. Alone on the row they fill it.
-              showsViewContext ? 'shrink' : 'flex-1'
-            ]}
-            title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
-            disabled={syncBusy}
-            onclick={() => void pullAction()}
-          >
-            {#if gitState.isBusy('pull')}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <ArrowDownToLine size={11} />
-            {/if}
-            <span class="min-w-0 truncate">Pull {commitsBehind}</span>
-          </button>
-        {/if}
-        {#if showsPush}
-          <button
-            type="button"
-            class={[
-              'flex h-6 min-w-0 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40',
-              showsViewContext ? 'shrink' : 'flex-1'
-            ]}
-            title={pushTitle}
-            disabled={syncBusy || gitState.isBusy('push')}
-            onclick={() => void pushAction()}
-          >
-            {#if gitState.isBusy('push')}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <ArrowUpFromLine size={11} />
-            {/if}
-            <span class="min-w-0 truncate">
-              Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
-            </span>
-          </button>
+        {#if showsRemoteActions}
+          {#if showsPull}
+            <button
+              type="button"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
+              disabled={syncBusy}
+              onclick={() => void pullAction()}
+            >
+              {#if gitState.isBusy('pull')}
+                <Loader2 size={11} class="animate-spin" />
+              {:else}
+                <ArrowDownToLine size={11} />
+              {/if}
+              <span class="min-w-0 truncate">Pull {commitsBehind}</span>
+            </button>
+          {/if}
+          {#if showsPush}
+            <button
+              type="button"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              title={pushTitle}
+              disabled={syncBusy || gitState.isBusy('push')}
+              onclick={() => void pushAction()}
+            >
+              {#if gitState.isBusy('push')}
+                <Loader2 size={11} class="animate-spin" />
+              {:else}
+                <ArrowUpFromLine size={11} />
+              {/if}
+              <span class="min-w-0 truncate">
+                Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+              </span>
+            </button>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -3132,131 +3321,14 @@
                 </p>
               </div>
             {:else if status}
-              <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
-              <div
-                class="sticky top-0 z-10 flex shrink-0 items-center gap-1.5 border-b border-border bg-app px-2.5 py-1"
-              >
-                {#if conflicted.length > 0}
-                  <button
-                    type="button"
-                    class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-                    disabled={integrateBusy || conflictState === 'none'}
-                    onclick={requestAbortConflict}
-                  >
-                    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-                      <Loader2 size={11} class="animate-spin" />
-                    {:else}
-                      <Trash2 size={11} />
-                    {/if}
-                    Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-                  </button>
-                  <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
-                  >
-                    {conflicted.length}
-                    {conflicted.length === 1 ? 'conflict' : 'conflicts'}
-                  </span>
-                {:else if unstaged.length + untracked.length > 0}
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-                    disabled={gitState.isBusy('stage')}
-                    onclick={() => void stageAll()}
-                  >
-                    Stage all
-                  </button>
-                {:else if staged.length > 0}
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-                    disabled={gitState.isBusy('unstage')}
-                    onclick={() => void unstageAll()}
-                  >
-                    Unstage all
-                  </button>
-                {/if}
-                {#if changes.length > 0 && selectedPathList.length > 0}
-                  <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
-                    {selectedPathList.length} selected
-                  </span>
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                      disabled={batchBusy}
-                      aria-label="Selected actions"
-                      title="Selected actions"
-                    >
-                      <ChevronDown size={12} />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                        side="bottom"
-                        align="start"
-                        sideOffset={4}
-                        collisionPadding={8}
-                      >
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void stageSelectedAction(false)}
-                        >
-                          <Check size={12} class="text-success" />
-                          Stage
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void stageSelectedAction(true)}
-                        >
-                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger"
-                            >−</span
-                          >
-                          Unstage
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={requestCommitSelected}
-                        >
-                          <GitCommit size={12} class="text-dimmed" />
-                          Commit…
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => requestStashFor(selectedPathList)}
-                        >
-                          <Archive size={12} class="text-dimmed" />
-                          Stash…
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void ignoreSelectedAction()}
-                        >
-                          <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
-                          Add to gitignore
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => requestDiscard(selectedPathList)}
-                        >
-                          <Trash2 size={12} />
-                          Discard changes
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
-                {/if}
-                <span class="flex-1"></span>
-              </div>
-
-              <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
-              <div class="flex flex-col gap-1.5 px-1.5 pb-1.5">
+              <!--
+                Staged / working panes   conflicts sit on top; each pane shares the
+                height. Each pane carries a little padding of its own (see
+                `paneClass`) so the staged and unstaged cards read as separate
+                containers, and the wrapper's own inset is what lines their outer
+                edge up with the rows above.
+              -->
+              <div class="flex flex-col gap-1 px-1 pb-1">
                 {#if conflictSections.length > 0}
                   <div class={paneClass}>
                     {#if changesView === 'tree'}

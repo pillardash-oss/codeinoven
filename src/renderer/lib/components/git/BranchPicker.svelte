@@ -25,6 +25,12 @@
      * status it comes from.
      */
     statusIcon?: Snippet
+    /**
+     * Badge for the branch that is checked out, drawn at the end of its row. The
+     * panel owns it for the same reason it owns `statusIcon`: the working tree's
+     * state comes from the status, not from the branch list.
+     */
+    statusBadge?: Snippet
   }
 
   let {
@@ -37,7 +43,8 @@
     onDelete,
     onAddOrigin,
     onReplaceOrigin,
-    statusIcon
+    statusIcon,
+    statusBadge
   }: Props = $props()
 
   let open = $state(false)
@@ -220,6 +227,9 @@
                 </span>
               {/if}
               {#if branch.current}
+                {#if statusBadge}
+                  {@render statusBadge()}
+                {/if}
                 <Check size={12} class="shrink-0 text-primary" />
               {:else if onDelete}
                 <button
