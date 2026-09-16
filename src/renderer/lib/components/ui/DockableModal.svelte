@@ -30,8 +30,19 @@
     dock: Snippet
     children: Snippet
     footer?: Snippet
-    /** LocalStorage key used to persist the panel's position/size. */
+    /**
+     * LocalStorage key used to persist the panel's position/size.
+     */
     storageKey?: string
+    /**
+     * Stacking layer. `surface` sits with the app's other floating panels at
+     * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
+     * browser, file editor and the pull request reader are all `z-50`), which
+     * the pull request sheet needs because it can be opened from the full
+     * screen reader. Portaled menus and confirms inside a `top` panel belong at
+     * `z-90` so they still clear the panel itself.
+     */
+    layer?: 'surface' | 'top'
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -63,6 +74,7 @@
     children,
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    layer = 'surface',
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerPrefix,
@@ -288,7 +300,9 @@
     the bottom-right dock keeps the run badges live. The dock renders as a sibling.
   -->
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
+    class="fixed {layer === 'top'
+      ? 'z-80'
+      : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
       : ''}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
@@ -349,6 +363,11 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50" {@attach trackBrowserOcclusion}>{@render dock()}</div>
+    <div
+      class="fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
+      {@attach trackBrowserOcclusion}
+    >
+      {@render dock()}
+    </div>
   {/if}
 {/if}

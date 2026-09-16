@@ -861,6 +861,7 @@
   dragLabel="Drag to move the pull request panel"
   storageKey={effectiveStorageKey}
   defaultHeight={680}
+  layer="top"
 >
   {#snippet headerPrefix()}
     {#if dockProjectName}
@@ -989,7 +990,7 @@
                   align="end"
                   sideOffset={6}
                   collisionPadding={8}
-                  class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+                  class="z-90 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
                     <div>
