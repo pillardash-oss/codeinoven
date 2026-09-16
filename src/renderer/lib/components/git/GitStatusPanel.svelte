@@ -86,6 +86,7 @@
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import ScopeHealthNotice from '../scope/ScopeHealthNotice.svelte'
   import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -95,6 +96,14 @@
   }
 
   let { projectId, threadId, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID }: Props = $props()
+
+  /**
+   * Health of the scope this panel is attached to. A managed checkout that is
+   * gone (or otherwise unhealthy) is why every Git operation here fails, so the
+   * panel offers the repair instead of the raw failure text.
+   */
+  let scopeHealth = $derived(scopeState.healthFor(scopeBucketId, projectId))
+  let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
@@ -1211,6 +1220,16 @@
     // worktree at a time, so switching threads must retarget it even though
     // this component stays mounted.
     gitState.activate(projectId, scopeBucketId)
+    // Attaching the panel to a scope is an interaction with it, so re-read the
+    // checkout's live state (throttled) for the banner below.
+    void scopeState.revalidateWorktreeHealth(projectId, scopeBucketId).catch(() => undefined)
+  })
+
+  // A Git failure in a scope-backed panel usually means the checkout is gone:
+  // re-read the scope's health so the repair banner replaces the bare error.
+  $effect(() => {
+    if (!gitState.error) return
+    void scopeState.revalidateWorktreeHealth(projectId, scopeBucketId, { force: true })
   })
 
   /** Project-scope bootstrap. Runs on mount and when the panel is aimed at a
@@ -2289,6 +2308,15 @@
           >
             Update GitHub access
           </button>
+        </div>
+      {:else if scopeUnhealthy}
+        <div class="mx-2 mt-2">
+          <ScopeHealthNotice
+            {projectId}
+            {scopeBucketId}
+            variant="panel"
+            onRepaired={() => void refreshStatus()}
+          />
         </div>
       {:else if gitState.error}
         <div class="mx-2 mt-2">

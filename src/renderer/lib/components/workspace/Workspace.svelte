@@ -2219,10 +2219,18 @@
   // menu offers "Repair worktree" exactly when the board would (deduped in the store).
   $effect(() => {
     const projectId = scopeState.sidebarContext?.projectId
-    scopeState.syncBoardWorktreeHealth(
-      projectId,
-      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
-    )
+    const buckets = projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    scopeState.syncBoardWorktreeHealth(projectId, buckets)
+  })
+
+  // Switching the docked scope is an interaction with it: re-read that scope's
+  // health so a checkout that changed on disk is reported right away.
+  $effect(() => {
+    const context = scopeState.sidebarContext
+    if (!context) return
+    void scopeState
+      .revalidateWorktreeHealth(context.projectId, context.bucketId)
+      .catch(() => undefined)
   })
 
   // While a thread is selected, keep its row (and project) in focus in the
