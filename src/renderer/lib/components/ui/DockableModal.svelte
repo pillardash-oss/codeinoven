@@ -299,12 +299,19 @@
     its embedded terminal PTYs are never torn down   minimize only hides it while
     the bottom-right dock keeps the run badges live. The dock renders as a sibling.
   -->
+  <!--
+    `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog
+    (the full screen reader, terminal, browser, file editor) sets
+    `body { pointer-events: none }` while it is open, and pointer events inherit,
+    so a panel that does not opt back in is visible above that surface at z-80 but
+    completely dead to the mouse. That is the whole reason `layer="top"` exists.
+  -->
   <div
     class="fixed {layer === 'top'
       ? 'z-80'
       : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
-      : ''}"
+      : 'pointer-events-auto'}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
     bind:this={panelEl}
     role="dialog"
@@ -364,7 +371,7 @@
 
   {#if minimized}
     <div
-      class="fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
+      class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
       {@attach trackBrowserOcclusion}
     >
       {@render dock()}
