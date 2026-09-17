@@ -23,6 +23,13 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- A capability installed without explicit harness targeting now applies to every harness,
+  present and future. A missing `harnessBindings` used to normalize to an empty list, which
+  `resolve` reads as "no harness", so the setup contract had to make the agent enumerate
+  harnesses. It now stores a single `{"harnessId":"*"}` binding and the contract treats the
+  field as optional, so a global install reaches every harness and a harness added later
+  resolves it with no reinstall.
+
 - Replaced the 1–5 per-turn feedback ledger with a 0–10 conversation-grading
   model-ranking system. Rankings are keyed by harness + provider + model +
   thinking level and split into separate **one-shot** and **multi-shot**

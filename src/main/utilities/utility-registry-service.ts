@@ -282,7 +282,10 @@ export class UtilityRegistryService {
   }
 
   async create(input: UtilityDefinitionInput): Promise<UtilityDefinition> {
-    const normalized = normalizeInput(input, { acceptMissingScope: true })
+    const normalized = normalizeInput(input, {
+      acceptMissingScope: true,
+      acceptMissingBindings: true
+    })
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -302,7 +305,9 @@ export class UtilityRegistryService {
     if (!Array.isArray(inputs) || inputs.length === 0) {
       throw new TypeError('Utility bundle must contain at least one utility')
     }
-    const normalized = inputs.map((input) => normalizeInput(input, { acceptMissingScope: true }))
+    const normalized = inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -337,7 +342,9 @@ export class UtilityRegistryService {
     if (!Array.isArray(inputs) || inputs.length === 0) {
       throw new TypeError('Utility bundle must contain at least one utility')
     }
-    const normalized = inputs.map((input) => normalizeInput(input, { acceptMissingScope: true }))
+    const normalized = inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -618,12 +625,13 @@ function parseStoredUtility(value: unknown, index: number): UtilityDefinition {
   } as UtilityDefinition
 }
 
-/** Write-path options. A missing scope is tolerated only for input the app is about to
- *  persist, where the global default applies. A stored entry must still carry an explicit
- *  scope, so a corrupted registry file keeps failing loudly instead of silently turning an
- *  entry into a global capability. */
+/** Write-path options. A missing scope or harness binding is tolerated only for input the app
+ *  is about to persist, where the app defaults apply: global scope, and one all-harness binding.
+ *  A stored entry must still carry an explicit scope, so a corrupted registry file keeps failing
+ *  loudly instead of silently turning an entry into a global capability. */
 interface NormalizeOptions {
   acceptMissingScope?: boolean
+  acceptMissingBindings?: boolean
 }
 
 function normalizeInput(value: unknown, options: NormalizeOptions = {}): UtilityDefinitionInput {
@@ -648,7 +656,7 @@ function normalizeInput(value: unknown, options: NormalizeOptions = {}): Utility
     scope: normalizeScope(value['scope'], options),
     config: parseConfig(kind as UtilityKind, value['config']),
     credentials: parseCredentials(value['credentials']),
-    harnessBindings: parseBindings(value['harnessBindings'])
+    harnessBindings: normalizeBindings(kind as UtilityKind, value['harnessBindings'], options)
   }
 }
 
@@ -742,6 +750,43 @@ function parseWebToolProvider(value: unknown): WebToolProviderId {
 function normalizeScope(value: unknown, options: NormalizeOptions): UtilityScope {
   if (value === undefined && options.acceptMissingScope === true) return { level: 'global' }
   return parseScope(value)
+}
+
+/**
+ * App-owned harness default. A definition that names no harness is stored with a single `*`
+ * binding, which `resolve` reads as "every harness, present and future". That is what
+ * "installed globally" means here: the capability lives in the app's one global store, and a
+ * harness added later resolves it with no reinstall. Naming individual harnesses stays an
+ * explicit, narrower choice.
+ */
+function normalizeBindings(
+  kind: UtilityKind,
+  value: unknown,
+  options: NormalizeOptions
+): HarnessUtilityBinding[] {
+  if (value === undefined && options.acceptMissingBindings === true) {
+    return [{ harnessId: ALL_HARNESSES_BINDING_ID, ...defaultBinding(kind) }]
+  }
+  return parseBindings(value)
+}
+
+/** Strategy the all-harness default uses for one kind, matching the app-owned seeds. */
+function defaultBinding(kind: UtilityKind): Omit<HarnessUtilityBinding, 'harnessId'> {
+  switch (kind) {
+    case 'skill':
+      return { strategy: 'skill' }
+    case 'mcp':
+      return { strategy: 'mcp' }
+    case 'image_descriptor':
+      return { strategy: 'native', nativeCapability: 'image_descriptor' }
+    case 'computer_use':
+      return { strategy: 'native', nativeCapability: 'browser' }
+    case 'web_search':
+    case 'web_fetch':
+      return { strategy: 'environment', nativeCapability: kind }
+    case 'provider':
+      return { strategy: 'provider' }
+  }
 }
 
 /**
