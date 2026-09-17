@@ -453,6 +453,16 @@ body {
 }
 
 .markdown-body img {
+  /* Preflight makes every replaced element a block box so a lone screenshot
+     takes the width it needs. Provider prose puts pictures *inside* its
+     sentences too: a bot's footer leads with `<a href><picture><img>` before
+     its text, and a block box there spends a whole line on a 9px logo and
+     pushes the sentence that follows onto the next one. An inline box keeps
+     the picture in the flow, which is how github.com renders the same source.
+     The favicon, emoji and pending-image rules around this one already state
+     the same for their own cases; this is the base case each was working
+     around. */
+  display: inline-block;
   max-width: 100%;
   border-radius: 8px;
 }
