@@ -1,0 +1,603 @@
+import type {
+  GitBranchInfo,
+  GitCommitInfo,
+  GitConflictAnalysis,
+  GitConflictSide,
+  GitConflictWorkFile,
+  GitCredentialStatus,
+  GitDiff,
+  GitFileChange,
+  GitHubAuthStatus,
+  GitHubDeploymentDetail,
+  GitHubDeploymentJobLog,
+  GitHubDeploymentOverviewResult,
+  GitHubDeviceCode,
+  GitHubMutationResult,
+  GitHubPollResult,
+  GitHubWorkflowRunDetail,
+  GitIdentity,
+  GitIdentityInput,
+  GitMainSyncResult,
+  GitRebaseAction,
+  GitRemoteInfo,
+  GitStashEntry,
+  GitStatus,
+  MergeSummary,
+  PrAgentReport,
+  PrComposeReport,
+  PrCreateInput,
+  PrMergeMethod,
+  PrResolveOptions,
+  PrReviewEvent,
+  PrState,
+  PullRequestBundle,
+  PullRequestComment,
+  PullRequestCompare,
+  PullRequestDetail,
+  PullRequestFile,
+  PullRequestPage,
+  PullRequestReference,
+  PullRequestReviewResult,
+  RepositoryMentionUser,
+  ThreadSettings
+} from '../types'
+import type { Contract } from './contract-helpers'
+
+export const invokeGitContract = {
+  'git:defaultClonePath': {} as Contract<[url: string], string>,
+  'git:cloneHandoff': {} as Contract<
+    [input: { url: string; destination?: string }],
+    { command: string; args: string[]; destination: string; repoName: string }
+  >,
+  'remotePush:getPublicKey': {} as Contract<[], string>,
+  'remotePush:subscribe': {} as Contract<
+    [
+      subscription: {
+        endpoint: string
+        expirationTime: number | null
+        keys: { p256dh: string; auth: string }
+      }
+    ],
+    void
+  >,
+  'remotePush:unsubscribe': {} as Contract<[endpoint: string], void>,
+  'git:status': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:diff': {} as Contract<
+    [projectId: string, relativePath: string, staged: boolean, scopeBucketId?: string],
+    GitDiff
+  >,
+  'git:analyzeConflict': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    GitConflictAnalysis
+  >,
+  'git:prepareConflictWorkFile': {} as Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    GitConflictWorkFile
+  >,
+  'git:saveConflictDraft': {} as Contract<
+    [
+      projectId: string,
+      relativePath: string,
+      content: string,
+      stateJson: string,
+      scopeBucketId?: string
+    ],
+    void
+  >,
+  'git:saveConflictResolution': {} as Contract<
+    [projectId: string, relativePath: string, content: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:stage': {} as Contract<
+    [projectId: string, paths: string[], scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:resolveConflicted': {} as Contract<
+    [projectId: string, path: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  /** Take one side of every unresolved conflict wholesale, then stage it. */
+  'git:acceptConflictSide': {} as Contract<
+    [projectId: string, side: GitConflictSide, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:unstage': {} as Contract<
+    [projectId: string, paths: string[], scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:restoreFiles': {} as Contract<
+    [
+      projectId: string,
+      source: string,
+      paths: string[],
+      target: import('../types').GitRestoreTarget,
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >,
+  'git:commit': {} as Contract<
+    [projectId: string, message: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:init': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:branches': {} as Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>,
+  'git:defaultBranch': {} as Contract<[projectId: string, scopeBucketId?: string], string | null>,
+  'git:checkout': {} as Contract<
+    [projectId: string, branch: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:createBranch': {} as Contract<
+    [projectId: string, name: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:createTrackingBranch': {} as Contract<
+    [projectId: string, remote: string, branch: string, localName: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:deleteBranch': {} as Contract<
+    [projectId: string, name: string, force?: boolean, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:deleteRemoteBranch': {} as Contract<
+    [projectId: string, remote: string, name: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:log': {} as Contract<
+    [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
+    GitCommitInfo[]
+  >,
+  'git:commitDiff': {} as Contract<
+    [projectId: string, hash: string, scopeBucketId?: string],
+    GitFileChange[]
+  >,
+  'git:commitFileDiff': {} as Contract<
+    [projectId: string, hash: string, path: string, scopeBucketId?: string],
+    GitDiff
+  >,
+  'git:amend': {} as Contract<
+    [projectId: string, message: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:reset': {} as Contract<
+    [
+      projectId: string,
+      mode: import('../types').GitResetMode,
+      target?: string,
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >,
+  'git:deleteCommit': {} as Contract<
+    [projectId: string, target: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:getIdentity': {} as Contract<[projectId: string, scopeBucketId?: string], GitIdentity>,
+  'git:setIdentity': {} as Contract<
+    [projectId: string, identity: GitIdentityInput, scopeBucketId?: string],
+    GitIdentity
+  >,
+  'git:remotes': {} as Contract<[projectId: string, scopeBucketId?: string], GitRemoteInfo[]>,
+  'git:addRemote': {} as Contract<
+    [projectId: string, name: string, url: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >,
+  'git:setRemoteUrl': {} as Contract<
+    [projectId: string, name: string, url: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >,
+  'git:removeRemote': {} as Contract<
+    [projectId: string, name: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >,
+  'git:fetch': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:fetchBranch': {} as Contract<
+    [projectId: string, remote: string, branch: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:pull': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:pullIntegrate': {} as Contract<
+    [
+      projectId: string,
+      options: {
+        remote?: string
+        branch?: string
+        strategy: import('../types').GitPullStrategy
+      },
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >,
+  /** Integrate the project's main worktree branch into a worktree checkout. */
+  'git:syncFromMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('../types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
+  >,
+  /** Fold a worktree checkout's branch into the project's main worktree branch. */
+  'git:syncToMain': {} as Contract<
+    [
+      projectId: string,
+      options: { strategy: import('../types').GitPullStrategy },
+      scopeBucketId?: string
+    ],
+    GitMainSyncResult
+  >,
+  'git:push': {} as Contract<
+    [
+      projectId: string,
+      options: { setUpstream: boolean; remote?: string; branch?: string },
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >,
+  'git:getCredentialStatus': {} as Contract<[projectId: string], GitCredentialStatus>,
+  'git:setCredential': {} as Contract<[projectId: string, token: string], GitCredentialStatus>,
+  'git:removeCredential': {} as Contract<[projectId: string], GitCredentialStatus>,
+  'git:merge': {} as Contract<
+    [projectId: string, target: string, scopeBucketId?: string],
+    MergeSummary
+  >,
+  'git:rebase': {} as Contract<
+    [projectId: string, target: string, scopeBucketId?: string],
+    MergeSummary
+  >,
+  'git:preparePrResolve': {} as Contract<
+    [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:finishPrResolve': {} as Contract<
+    [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:stash': {} as Contract<
+    [projectId: string, message?: string, paths?: string[], scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:ignore': {} as Contract<
+    [projectId: string, paths: string[], scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:discard': {} as Contract<
+    [projectId: string, paths: string[], scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:stashList': {} as Contract<[projectId: string, scopeBucketId?: string], GitStashEntry[]>,
+  'git:stashPop': {} as Contract<
+    [projectId: string, id?: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:stashDrop': {} as Contract<
+    [projectId: string, id?: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  'git:stashDiff': {} as Contract<
+    [projectId: string, id: string, scopeBucketId?: string],
+    GitFileChange[]
+  >,
+  'git:stashFileDiff': {} as Contract<
+    [projectId: string, id: string, path: string, scopeBucketId?: string],
+    GitDiff
+  >,
+  'git:abortMerge': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:abortRebase': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  /** Continue a stopped rebase, or drop the commit it stopped on. */
+  'git:rebaseAction': {} as Contract<
+    [projectId: string, action: GitRebaseAction, scopeBucketId?: string],
+    GitStatus
+  >,
+  'pr:create': {} as Contract<
+    [projectId: string, input: PrCreateInput, scopeBucketId?: string],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:list': {} as Contract<
+    [projectId: string, owner: string, repo: string, state?: string],
+    PullRequestReference[]
+  >,
+  'pr:merge': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      method: PrMergeMethod,
+      commitTitle?: string,
+      commitMessage?: string
+    ],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:ready': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:compare': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      base: string,
+      head: string,
+      scopeBucketId?: string
+    ],
+    PullRequestCompare
+  >,
+  'pr:reopen': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:close': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:update': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      title: string | undefined,
+      body: string | undefined
+    ],
+    GitHubMutationResult<PullRequestReference>
+  >,
+  'pr:page': {} as Contract<
+    [projectId: string, owner: string, repo: string, state: PrState, page: number],
+    PullRequestPage
+  >,
+  /**
+   * Read one pull request's detail. Hitting the detail endpoint forces GitHub
+   * to compute mergeability, so it is used as the authoritative mergeability
+   * probe when a list payload reported `mergeable`/`mergeable_state` as null.
+   */
+  'pr:detail': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    /** null when the provider request fails (timeout, rate limit, network). */
+    PullRequestDetail | null
+  >,
+  'deployment:overview': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    GitHubDeploymentOverviewResult
+  >,
+  'deployment:detail': {} as Contract<
+    [projectId: string, owner: string, repo: string, deploymentId: number],
+    GitHubDeploymentDetail
+  >,
+  'deployment:runDetail': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number],
+    GitHubWorkflowRunDetail
+  >,
+  'deployment:jobLog': {} as Contract<
+    [projectId: string, owner: string, repo: string, jobId: number],
+    GitHubDeploymentJobLog
+  >,
+  /**
+   * Read a project's cloud deployment config, or null when none exists. The
+   * config is persisted by main under the CodeInOven config directory; the
+   * renderer never touches the filesystem or Node APIs for it.
+   */
+  'cloudDeploy:getConfig': {} as Contract<
+    [projectId: string],
+    import('../types').CloudDeploymentConfig | null
+  >,
+  /**
+   * Persist a project's cloud deployment config (selected providers + labelled
+   * containers with credential references) and refresh the project's
+   * has-deployments flag for panel visibility. Returns the stored config.
+   */
+  'cloudDeploy:saveConfig': {} as Contract<
+    [projectId: string, config: import('../types').CloudDeploymentConfig],
+    import('../types').CloudDeploymentConfig
+  >,
+  /** Remove a project's cloud deployment config and clear its has-deployments flag. */
+  'cloudDeploy:clearConfig': {} as Contract<[projectId: string], void>,
+  /** Update a container's label/id in a project's config. Returns the stored config. */
+  'cloudDeploy:updateContainer': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string,
+      patch: { label?: string; id?: string }
+    ],
+    import('../types').CloudDeploymentConfig
+  >,
+  /** Remove a container from a project's config. Returns the stored config. */
+  'cloudDeploy:removeContainer': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('../types').CloudDeploymentConfig
+  >,
+  /** List every provider account in the global registry. */
+  'cloudDeploy:listAccounts': {} as Contract<[], import('../types').CloudDeploymentAccountRegistry>,
+  /**
+   * Create a new provider account in the GLOBAL registry and vault its token by
+   * account id. The account is reusable across every project that attaches it.
+   * The plaintext token is vaulted by main via `safeStorage` and never crosses
+   * back to the renderer. Returns the sanitized account (no secret).
+   */
+  'cloudDeploy:createAccount': {} as Contract<
+    [
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      accountLabel: string,
+      token: string,
+      baseUrl?: string
+    ],
+    import('../types').CloudDeploymentProviderAccount
+  >,
+  /** Update a global provider account's metadata (label, base URL, enabled). */
+  'cloudDeploy:updateAccount': {} as Contract<
+    [
+      accountId: string,
+      patch: {
+        label?: string
+        baseUrl?: string
+        enabled?: boolean
+      }
+    ],
+    import('../types').CloudDeploymentProviderAccount
+  >,
+  /**
+   * Rotate a global provider account's secret. Update-only: the token is vaulted
+   * and the current secret is never returned to the renderer. Returns the
+   * sanitized account (secretRef cleared).
+   */
+  'cloudDeploy:rotateAccountSecret': {} as Contract<
+    [accountId: string, token: string],
+    import('../types').CloudDeploymentProviderAccount
+  >,
+  /** Remove a global provider account and its vaulted token. */
+  'cloudDeploy:removeAccount': {} as Contract<[accountId: string], void>,
+  /** Attach a global provider account to a project for a provider kind. */
+  'cloudDeploy:attachAccount': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('../types').CloudDeploymentConfig
+  >,
+  /** Detach a global provider account from a project for a provider kind. */
+  'cloudDeploy:detachAccount': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('../types').CloudDeploymentConfig
+  >,
+  /** Set which attached account is active for a provider within a project. */
+  'cloudDeploy:setActiveAccount': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('../types').CloudDeploymentConfig
+  >,
+  /**
+   * Fetch a provider-agnostic snapshot of a configured provider's containers.
+   * The adapter is resolved by kind via the registry; `hasDeployments` drives
+   * whether the Cloud Deployments panel is shown at all. Provider/credential
+   * failures are returned as `accessError` rather than rejecting IPC.
+   */
+  'cloudDeploy:overview': {} as Contract<
+    [projectId: string, providerKind: import('../types').CloudDeploymentProviderKind],
+    import('../types').CloudDeploymentResult
+  >,
+  /**
+   * List every container the account can see on the provider (not filtered to
+   * this project's mappings), so the add-container flow can offer a picker.
+   * Provider/credential failures are returned as `{ accessError }`.
+   */
+  'cloudDeploy:availableContainers': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      /** Browse a specific attached account's containers instead of the
+       *  project's active one (multi-account same-kind support). */
+      accountId?: string
+    ],
+    import('../types').CloudDeploymentContainer[] | { accessError: string }
+  >,
+  /**
+   * Latest snapshot for one configured container, or null when the provider
+   * cannot resolve it.
+   */
+  'cloudDeploy:containerStatus': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
+    ],
+    import('../types').CloudDeploymentContainer | null
+  >,
+  /**
+   * List the most recent deployments/builds for a container, newest first
+   * (bounded to a UI window such as the last ten).
+   */
+  'cloudDeploy:deployments': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
+    ],
+    import('../types').CloudDeploymentDeployment[]
+  >,
+  /** Capped raw log text for a container's latest deployment. */
+  'cloudDeploy:containerLog': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string,
+      deploymentId?: string,
+      /** Resolve through the container's bound account when present. */
+      accountId?: string
+    ],
+    { containerId: string; deploymentId: string | null; log: string }
+  >,
+  /** Everything the PR detail view needs, fetched in parallel in one round trip. */
+  'pr:bundle': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestBundle
+  >,
+  'pr:commitFiles': {} as Contract<
+    [projectId: string, owner: string, repo: string, sha: string],
+    PullRequestFile[]
+  >,
+  /** Assignable repository accounts, for @-mention autocomplete in PR conversations. */
+  'pr:mentionUsers': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    RepositoryMentionUser[]
+  >,
+  /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
+  'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,
+  'pr:comment': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
+    GitHubMutationResult<PullRequestComment>
+  >,
+  'pr:review': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      event: PrReviewEvent,
+      body: string
+    ],
+    PullRequestReviewResult
+  >,
+  /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
+  'pr:reviewWorkspace': {} as Contract<
+    [projectId: string, pullNumber: number, threadId?: string],
+    string
+  >,
+  /** Run the PR-compose agent virtually and consume its temporary report. */
+  'pr:composeWithAgent': {} as Contract<
+    [
+      projectId: string,
+      scopeBucketId: string,
+      virtualTaskId: string,
+      settings: ThreadSettings,
+      input: import('../types').PrComposeInput
+    ],
+    PrComposeReport
+  >,
+  'github:authStatus': {} as Contract<[], GitHubAuthStatus>,
+  'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
+  'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
+  'github:logout': {} as Contract<[], GitHubAuthStatus>,
+  /**
+   * Resolve account avatars for a list of GitHub logins, as `data:` URLs (the
+   * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
+   * comes back as null, which the UI draws as its monogram.
+   */
+  'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>
+}
