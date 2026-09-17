@@ -278,6 +278,16 @@
     turnStartPromptsBefore,
     type SubagentPart
   } from './thread-turn-parts'
+  import {
+    applyResponseHighlights,
+    captureResponseSelection,
+    measureResponseBubblePositions,
+    responseRangeFor,
+    RESPONSE_BUBBLE_SIZE,
+    RESPONSE_HIGHLIGHT_NAME,
+    type ResponseBubblePosition,
+    type ResponseSelectionCandidate
+  } from './thread-response-ranges'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -1948,26 +1958,13 @@
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
 
-  interface ResponseSelectionCandidate {
-    text: string
-    messageId: string
-    range: Range
-    startOffset: number
-    endOffset: number
-    x: number
-    y: number
-  }
-
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
-  const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
   /** Viewport position for the comment bubble of each reference anchor. */
-  let responseBubblePositions = $state<Record<string, { x: number; y: number; visible: boolean }>>(
-    {}
-  )
+  let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
@@ -1978,134 +1975,18 @@
     )
   }
 
-  function responseElementFor(node: Node | null): HTMLElement | null {
-    const element = node instanceof Element ? node : node?.parentElement
-    const response = element?.closest<HTMLElement>('[data-assistant-response]')
-    return response ?? null
+  function handleResponsePointerUp(): void {
+    responseSelection = captureResponseSelection()
   }
 
-  function textOffsetWithin(root: HTMLElement, node: Node, offset: number): number | null {
-    try {
-      const prefix = document.createRange()
-      prefix.selectNodeContents(root)
-      prefix.setEnd(node, offset)
-      return prefix.toString().length
-    } catch {
-      return null
-    }
-  }
-
-  function textPointAtOffset(
-    root: HTMLElement,
-    requestedOffset: number
-  ): { node: Node; offset: number } {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let remaining = Math.max(0, requestedOffset)
-    let node = walker.nextNode()
-    while (node) {
-      const length = node.textContent?.length ?? 0
-      if (remaining <= length) return { node, offset: remaining }
-      remaining -= length
-      node = walker.nextNode()
-    }
-    return { node: root, offset: root.childNodes.length }
-  }
-
-  function responseRangeFor(reference: ResponseReferenceAnchor): Range | null {
-    const response = Array.from(
-      scrollEl?.querySelectorAll<HTMLElement>('[data-assistant-response]') ?? []
-    ).find((element) => element.dataset.messageId === reference.messageId)
-    if (!response) return null
-    const start = textPointAtOffset(response, reference.startOffset)
-    const end = textPointAtOffset(response, reference.endOffset)
-    try {
-      const range = document.createRange()
-      range.setStart(start.node, start.offset)
-      range.setEnd(end.node, end.offset)
-      return range
-    } catch {
-      return null
-    }
-  }
-
-  function captureResponseSelection(): void {
-    const selection = document.getSelection()
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      responseSelection = null
-      return
-    }
-    const anchorResponse = responseElementFor(selection.anchorNode)
-    const focusResponse = responseElementFor(selection.focusNode)
-    if (!anchorResponse || anchorResponse !== focusResponse) {
-      responseSelection = null
-      return
-    }
-    const text = selection.toString().trim()
-    const messageId = anchorResponse.dataset.messageId
-    if (!text || !messageId) {
-      responseSelection = null
-      return
-    }
-    const range = selection.getRangeAt(0).cloneRange()
-    const startOffset = textOffsetWithin(anchorResponse, range.startContainer, range.startOffset)
-    const endOffset = textOffsetWithin(anchorResponse, range.endContainer, range.endOffset)
-    if (startOffset === null || endOffset === null) {
-      responseSelection = null
-      return
-    }
-    const rect = range.getBoundingClientRect()
-    const estimatedWidth = 430
-    const x = Math.max(12, Math.min(rect.left, window.innerWidth - estimatedWidth - 12))
-    // Anchor the actions bubble above the selection so the native right-click
-    // menu (which appears at the cursor, usually below the selection) opens
-    // beneath it without colliding. Fall back below when there is no room above.
-    const estimatedHeight = 48
-    const y =
-      rect.top - estimatedHeight >= 12
-        ? rect.top - estimatedHeight
-        : Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - estimatedHeight - 8))
-    responseSelection = { text, messageId, range, startOffset, endOffset, x, y }
-  }
-
+  /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    if (typeof Highlight === 'undefined' || !CSS.highlights) return
-    if (responseReferenceRanges.size === 0) {
-      CSS.highlights.delete(RESPONSE_HIGHLIGHT_NAME)
-      return
-    }
-    CSS.highlights.set(RESPONSE_HIGHLIGHT_NAME, new Highlight(...responseReferenceRanges.values()))
+    applyResponseHighlights(responseReferenceRanges)
   }
 
-  const RESPONSE_BUBBLE_SIZE = 44
-  const RESPONSE_BUBBLE_HEIGHT = 24
-
-  /** Recompute the viewport position of each reference's comment bubble from
-   *  the live highlight ranges so the bubbles track scroll and layout. */
+  /** Re-measure where each annotation's comment bubble belongs in the viewport. */
   function updateResponseBubblePositions(): void {
-    const next: Record<string, { x: number; y: number; visible: boolean }> = {}
-    const containerRect = scrollEl?.getBoundingClientRect()
-    for (const [id, range] of responseReferenceRanges) {
-      const rect = range.getBoundingClientRect()
-      if (rect.width === 0 && rect.height === 0) continue
-      const visible = containerRect
-        ? rect.top < containerRect.bottom - 8 && rect.bottom > containerRect.top + 8
-        : true
-      const x = Math.max(
-        8,
-        Math.min(
-          Math.round(rect.left + rect.width / 2 - RESPONSE_BUBBLE_SIZE / 2),
-          window.innerWidth - RESPONSE_BUBBLE_SIZE - 8
-        )
-      )
-      const above = rect.top - RESPONSE_BUBBLE_HEIGHT - 1
-      const below = rect.bottom + 6
-      const y = Math.max(
-        8,
-        Math.min(above >= 8 ? above : below, window.innerHeight - RESPONSE_BUBBLE_HEIGHT - 8)
-      )
-      next[id] = { x, y, visible }
-    }
-    responseBubblePositions = next
+    responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
   }
 
   let responseBubblePositionFrame = 0
@@ -2121,7 +2002,7 @@
   function restoreResponseHighlights(references: ResponseReferenceAnchor[]): void {
     responseReferenceRanges.clear()
     for (const reference of references) {
-      const range = responseRangeFor(reference)
+      const range = responseRangeFor(scrollEl, reference)
       if (range) responseReferenceRanges.set(reference.id, range)
     }
     refreshResponseHighlights()
@@ -10466,7 +10347,7 @@
         : ''}"
       onscroll={onScroll}
       onwheel={onWheel}
-      onpointerup={captureResponseSelection}
+      onpointerup={handleResponsePointerUp}
       role="log"
       aria-label="Conversation"
       data-region="conversation"
