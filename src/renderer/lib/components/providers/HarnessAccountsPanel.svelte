@@ -156,6 +156,19 @@
   )
   let usageTotal = $derived(harnessAccountUsageCache.probingTotal)
 
+  /** Drop one row in place. Reloading the whole list swaps the table for the
+   *  loading state, which collapses the page height and throws the user's
+   *  scroll position away; removing the single entry leaves the rest untouched. */
+  function dropAccount(accountId: string): void {
+    accounts = accounts.filter((account) => account.id !== accountId)
+    harnessAccountUsageCache.prune(accounts.map((account) => account.id))
+  }
+
+  /** Swap one row's payload in place, preserving its position and scroll offset. */
+  function replaceAccount(updated: HarnessAccount): void {
+    accounts = accounts.map((account) => (account.id === updated.id ? updated : account))
+  }
+
   async function loadStoredAccounts(): Promise<void> {
     loading = true
     error = ''
@@ -261,10 +274,10 @@
     saving = true
     error = ''
     try {
-      await invoke('providerAccounts:rename', editTarget.id, label)
-      harnessAccountCache.invalidate(editTarget.harnessId)
+      const updated = await invoke('providerAccounts:rename', editTarget.id, label)
+      harnessAccountCache.invalidate(updated.harnessId)
+      replaceAccount(updated)
       editTarget = null
-      await loadStoredAccounts()
     } catch (saveError) {
       error = saveError instanceof Error ? saveError.message : 'The account label was not saved.'
     } finally {
@@ -303,8 +316,8 @@
       )
       await invoke('providerAccounts:remove', account.id)
       harnessAccountCache.invalidate(account.harnessId)
+      dropAccount(account.id)
       disconnectTarget = null
-      await loadStoredAccounts()
     } catch (disconnectError) {
       error =
         disconnectError instanceof Error
