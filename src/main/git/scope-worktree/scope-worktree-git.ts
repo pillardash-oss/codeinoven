@@ -1,6 +1,6 @@
 import { rm } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { runGit, runGitChecked } from '../scope-worktree-process'
 import type { WorktreeRegistration } from '../../workspaces/scope-root-resolver'
 import { ensureParentDir } from './scope-worktree-environment'
@@ -159,6 +159,100 @@ export async function runRepairStep(
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause)
     throw new Error(`${failure} (${detail})`, { cause })
+  }
+}
+
+/** Which managed checkout to remove, and whether the user confirmed the discard. */
+export interface WorktreeRemoval {
+  /** Project repository root; every removal step runs from here. */
+  repoPath: string
+  /** Absolute path of the managed checkout to remove. */
+  worktreePath: string
+  /** Confirmed force: uncommitted and untracked work in the checkout may be discarded. */
+  force: boolean
+}
+
+/**
+ * Remove a managed checkout and guarantee that its directory is gone.
+ *
+ * `git worktree remove` is the primary path because it keeps the repository's
+ * `.git/worktrees` bookkeeping exact, but it is never trusted alone: Git refuses
+ * a locked registration, and a checkout whose registration was pruned earlier (or
+ * whose directory was deleted by hand) leaves a tree that Git no longer knows
+ * about. Either way the folder can survive while the caller reports the removal
+ * as done and deletes the scope record, which is the orphan this function exists
+ * to prevent. So a forced removal retries through `unlock`, reclaims the
+ * directory from the filesystem, prunes whatever registration is left, and then
+ * verifies that nothing remains. A refused unforced removal changes nothing and
+ * throws instead.
+ *
+ * The checkout must never be the project root: removing it would delete the
+ * user's own working tree, so that case is refused outright.
+ */
+export async function removeWorktreeCheckout(removal: WorktreeRemoval): Promise<void> {
+  const { repoPath, worktreePath, force } = removal
+  if (resolve(repoPath) === resolve(worktreePath)) {
+    throw new Error('Refusing to remove the project root as a managed worktree checkout')
+  }
+
+  if (!existsSync(worktreePath)) {
+    // Registered but already gone: drop the stale entry so the repository stops
+    // advertising a checkout that does not exist.
+    await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 120_000 }).catch(
+      () => undefined
+    )
+    return
+  }
+
+  // Only the two steps that decide the outcome report their failure: lock and
+  // prune probes routinely fail for healthy checkouts and would only add noise
+  // to the error the user has to read.
+  const failures: string[] = []
+  const attemptRemove = async (): Promise<void> => {
+    try {
+      await runGitChecked(['worktree', 'remove', '--force', worktreePath], {
+        cwd: repoPath,
+        timeoutMs: 120_000
+      })
+    } catch (cause) {
+      failures.push(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  if (!force) {
+    await runRepairStep(
+      ['worktree', 'remove', worktreePath],
+      repoPath,
+      `The checkout at ${worktreePath} could not be removed because it still holds uncommitted or untracked work`,
+      120_000
+    )
+    return
+  }
+
+  await attemptRemove()
+  if (!existsSync(worktreePath)) return
+
+  // A locked registration rejects `--force` until it is unlocked, so the
+  // removal is retried once under that condition before the directory is
+  // reclaimed directly.
+  await runGit(['worktree', 'unlock', worktreePath], {
+    cwd: repoPath,
+    timeoutMs: 60_000
+  }).catch(() => undefined)
+  await attemptRemove()
+  if (!existsSync(worktreePath)) return
+
+  await rm(worktreePath, { recursive: true, force: true }).catch((cause: unknown) => {
+    failures.push(cause instanceof Error ? cause.message : String(cause))
+  })
+  // Pruning clears the registration the reclaimed directory was pointing at.
+  await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 120_000 }).catch(() => undefined)
+
+  if (existsSync(worktreePath)) {
+    const detail = failures.length > 0 ? ` (${failures.join('; ')})` : ''
+    throw new Error(
+      `The checkout at ${worktreePath} could not be removed, so the scope was left attached to it. Close anything using that directory, delete it by hand, then retry.${detail}`
+    )
   }
 }
 

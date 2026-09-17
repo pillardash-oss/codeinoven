@@ -37,7 +37,7 @@ import {
   hasTrackedSubmodules,
   isGitRepository,
   managedBranchRegisteredAt,
-  runRepairStep,
+  removeWorktreeCheckout,
   unpushedCount
 } from './scope-worktree/scope-worktree-git'
 import { listWorktreeRegistrations } from './scope-worktree/scope-worktree-git'
@@ -755,14 +755,15 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
           'Cannot detach a worktree with uncommitted or unpushed work; confirm the forced detach first'
         )
       }
-      await runRepairStep(
-        force
-          ? ['worktree', 'remove', '--force', worktreePath]
-          : ['worktree', 'remove', worktreePath],
-        repoPath ?? worktreePath,
-        'The worktree directory could not be removed, so the scope was left attached to it.',
-        120_000
-      )
+      if (!repoPath) {
+        throw new Error(
+          'The project\u2019s local repository is required to remove its managed worktree checkout'
+        )
+      }
+      // A detach that cannot remove the directory must fail: re-pointing the
+      // scope at the project directory while the checkout is still on disk would
+      // orphan it exactly like an unremoved delete would.
+      await removeWorktreeCheckout({ repoPath, worktreePath, force })
       this.scopes.detachManagedRoot(target.projectId, target.scopeBucketId)
     })
   }
@@ -785,10 +786,12 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         }
       }
 
-      await runGit(['worktree', 'remove', '--force', worktreePath], {
-        cwd: repoPath ?? worktreePath,
-        timeoutMs: 120_000
-      })
+      if (!repoPath) {
+        throw new Error(
+          'The project\u2019s local repository is required to remove its managed worktree checkout'
+        )
+      }
+      await removeWorktreeCheckout({ repoPath, worktreePath, force })
       this.scopes.deleteBucket(target.projectId, target.scopeBucketId)
     })
   }
@@ -811,12 +814,16 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const descriptor = this.requireManaged(target)
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path
-      await removeManagedWorktree(
-        target,
-        descriptor,
-        repoPath ?? getScopeRootPath(target.projectId, descriptor.directoryName)
-      )
-      if (deleteBranch && repoPath) {
+      if (!repoPath) {
+        throw new Error(
+          'The project\u2019s local repository is required to remove its managed worktree checkout'
+        )
+      }
+      // The checkout goes first and its failure is fatal on purpose: dropping the
+      // scope record while the directory is still on disk would leave a checkout
+      // no surface can reach again.
+      await removeManagedWorktree(target, descriptor, repoPath)
+      if (deleteBranch) {
         await runGit(['branch', '-D', descriptor.branch], {
           cwd: repoPath,
           timeoutMs: 60_000
@@ -838,19 +845,18 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
 
       // Git refuses `branch -D` while the branch is checked out in a worktree,
       // so remove the owning worktree first; deletion is one confirmed action.
+      // The removal is unforced and its refusal is fatal: pruning a registration
+      // whose directory still exists is what turns a checkout into an orphan.
       const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
-      try {
-        await runGitChecked(['worktree', 'remove', worktreePath], {
-          cwd: project.path,
-          timeoutMs: 120_000
-        })
-      } catch {
-        // The directory is already gone or the registration is stale   prune
-        // clears dead metadata; a live dirty worktree keeps blocking below.
-        await runGit(['worktree', 'prune'], { cwd: project.path, timeoutMs: 60_000 }).catch(
-          () => undefined
-        )
-      }
+      await removeWorktreeCheckout({ repoPath: project.path, worktreePath, force: false }).catch(
+        (cause: unknown) => {
+          const detail = cause instanceof Error ? cause.message : String(cause)
+          throw new Error(
+            `Branch deletion needs its worktree removed first, and that checkout could not be removed. (${detail})`,
+            { cause }
+          )
+        }
+      )
 
       try {
         await runGitChecked(['branch', '-D', descriptor.branch], {
@@ -878,16 +884,19 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const board = this.scopes.getBoard(projectId)
       const managed = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
       const project = await this.projects.getProject(projectId)
+      const repoPath = project?.path
+      if (managed.length > 0 && !repoPath) {
+        throw new Error(
+          'The project\u2019s local repository is required to remove its managed worktree checkouts'
+        )
+      }
+      if (!repoPath) return
       for (const bucket of managed) {
         if (bucket.root.kind !== 'worktree') continue
-        const worktreePath = getScopeRootPath(projectId, bucket.root.directoryName)
-        await runGit(['worktree', 'remove', '--force', worktreePath], {
-          cwd: project?.path ?? worktreePath,
-          timeoutMs: 120_000
-        }).catch((error) => {
-          Logger.error(
-            `Worktree removal during project deletion failed: ${error instanceof Error ? error.message : String(error)}`
-          )
+        await removeWorktreeCheckout({
+          repoPath,
+          worktreePath: getScopeRootPath(projectId, bucket.root.directoryName),
+          force: true
         })
       }
     })
@@ -1000,13 +1009,24 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         return { merged: true, conflicted: [] }
       }
 
+      // The checkout is removed before anything else is undone, because it is the
+      // one step that can still fail. A removal that cannot complete therefore
+      // leaves the scope, its threads and its branch exactly as the merge found
+      // them, instead of deleting a conversation for a worktree that is still on
+      // disk.
+      if (!repoPath) {
+        throw new Error(
+          'The project\u2019s local repository is required to remove the merged scope\u2019s worktree checkout'
+        )
+      }
+      await removeManagedWorktree(target, descriptor, repoPath)
+
       if (mode === 'merge-delete') {
         await this.scopeThreads?.deleteThreadsInScope(target.projectId, target.scopeBucketId)
       } else {
         await this.scopeThreads?.moveThreadsOutOfScope(target.projectId, target.scopeBucketId)
       }
 
-      await removeManagedWorktree(target, descriptor, repoPath)
       await runGit(['branch', '-D', descriptor.branch], {
         cwd: repoPath,
         timeoutMs: 60_000

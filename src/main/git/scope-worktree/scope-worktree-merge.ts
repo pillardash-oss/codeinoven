@@ -1,9 +1,8 @@
 import type { ManagedWorktreeDescriptor, ScopeMergeOutcome, ScopeTarget } from '../../../lib/types'
 import { getScopeRootPath } from '../../../lib/utils'
 import type { ScopeManager } from '../../../lib/engines/scope-manager'
-import { Logger } from '../../system/logger'
 import { runGit, runGitChecked } from '../scope-worktree-process'
-import { unmergedFiles } from './scope-worktree-git'
+import { removeWorktreeCheckout, unmergedFiles } from './scope-worktree-git'
 
 /** Run `git merge <sourceBranch>` in `root`; reports conflicts without failing. */
 export async function runIntoMerge(root: string, sourceBranch: string): Promise<ScopeMergeOutcome> {
@@ -20,20 +19,22 @@ export async function runIntoMerge(root: string, sourceBranch: string): Promise<
   return { merged: true, conflicted: [] }
 }
 
-/** Remove the managed worktree and prune stale registrations (best-effort). */
+/**
+ * Remove the managed checkout behind a scope, for the destructive lifecycle
+ * actions that are meant to end with nothing on disk: delete-scope, and the
+ * delete modes of a scope merge. The removal is guaranteed to leave no
+ * directory behind, and a removal that cannot complete **throws** so its caller
+ * never drops the scope record for a checkout that still exists.
+ */
 export async function removeManagedWorktree(
   target: ScopeTarget,
   descriptor: ManagedWorktreeDescriptor,
   repoPath: string
 ): Promise<void> {
-  const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
-  await runGit(['worktree', 'remove', '--force', worktreePath], {
-    cwd: repoPath,
-    timeoutMs: 120_000
-  }).catch(async (cause) => {
-    const detail = cause instanceof Error ? cause.message : String(cause)
-    Logger.error(`Managed worktree removal after merge failed: ${detail}`)
-    await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 60_000 }).catch(() => undefined)
+  await removeWorktreeCheckout({
+    repoPath,
+    worktreePath: getScopeRootPath(target.projectId, descriptor.directoryName),
+    force: true
   })
 }
 
