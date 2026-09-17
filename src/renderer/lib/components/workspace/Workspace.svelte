@@ -982,17 +982,28 @@
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
-    if (!tab || !('projectId' in tab)) return
+    const openProjectId = activeProject?.id ?? null
+    if (!tab || !('projectId' in tab)) {
+      // No panel is claiming the keep-mounted host right now (the sidebar is
+      // hidden, or a tab without a project is active). Hold the open project's
+      // panel across thread switches, but drop it once the user has moved to
+      // another project: a host left behind would bootstrap the repository the
+      // user just left the moment the sidebar shows again.
+      if (gitPanelProjectId !== null && gitPanelProjectId !== openProjectId) {
+        gitPanelProjectId = null
+      }
+      return
+    }
     if (tab.kind !== 'git') {
       if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
-    const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
-    const thread = allThreads.find(
-      (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
-    )
+    // Scope comes from the store's resolved bucket for that project (the open
+    // thread's scope, else the project's last one). Reading it off the bounded
+    // thread list missed a thread that was not hydrated yet and fell back to
+    // the project root, so the panel swapped scopes twice on open.
     gitPanelProjectId = tab.projectId
-    gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    gitPanelScopeBucketId = workspaceState.activeScopeBucketIdFor(tab.projectId)
   })
 
   // A full-window DOM surface (fullscreen terminal, media previews, fullscreen

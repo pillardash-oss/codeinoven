@@ -19,6 +19,18 @@ export interface TerminalAttachOptions {
   focus?: boolean
 }
 
+/**
+ * Where a respawned shell must start. The panel that attached the session owns
+ * this and keeps it current, and the session *reads* it rather than copying it,
+ * so a project-scoped terminal can follow the open thread and scope for its
+ * next respawn without ever re-attaching (a re-attach would refit the grid and
+ * repaint a canvas whose session never moved).
+ */
+export interface TerminalSpawnBinding {
+  threadId: string
+  scopeBucketId?: string
+}
+
 export interface TerminalSession {
   id: string
   term: Terminal
@@ -32,6 +44,10 @@ export interface TerminalSession {
   threadId: string | null
   /** Scope bucket captured with the thread binding, or null for the project root. */
   scopeBucketId: string | null
+  /** Live spawn binding from the owning panel, when it supplied one. Read at
+   *  respawn time so a thread switch retargets the next shell without the
+   *  panel having to detach and re-attach the session. */
+  binding?: TerminalSpawnBinding
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
@@ -158,18 +174,27 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
-    threadId: string,
-    scopeBucketId?: string,
+    binding: TerminalSpawnBinding,
     options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     fitSession(session)
-    session.threadId = threadId
-    session.scopeBucketId = scopeBucketId ?? null
-    await this.ensurePty(session, projectId, threadId, scopeBucketId)
+    session.binding = binding
+    session.threadId = binding.threadId
+    session.scopeBucketId = binding.scopeBucketId ?? null
+    await this.ensurePty(session, projectId, binding.threadId, binding.scopeBucketId)
     this.focusIfRequested(session, options)
+  }
+
+  /** Where a respawn must start: the live binding its panel keeps current, else
+   *  what the session captured when it attached. */
+  private spawnTargetOf(session: TerminalSession): TerminalSpawnBinding {
+    return {
+      threadId: session.binding?.threadId ?? session.threadId ?? '',
+      scopeBucketId: session.binding?.scopeBucketId ?? session.scopeBucketId ?? undefined
+    }
   }
 
   async attachAction(
@@ -369,12 +394,8 @@ class TerminalSessionManager {
       session.respawnCount += 1
       session.ptySpawned = false
       try {
-        await this.ensurePty(
-          session,
-          session.projectId,
-          session.threadId ?? '',
-          session.scopeBucketId ?? undefined
-        )
+        const target = this.spawnTargetOf(session)
+        await this.ensurePty(session, session.projectId, target.threadId, target.scopeBucketId)
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.
         respawnTimer = setTimeout(() => {

@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import { terminalSessions, type TerminalSession } from '$lib/terminal/sessions'
+  import {
+    terminalSessions,
+    type TerminalSession,
+    type TerminalSpawnBinding
+  } from '$lib/terminal/sessions'
 
   interface Props {
     terminalId: string
@@ -17,9 +21,22 @@
   let loading = $state(true)
   let retrySequence = $state(0)
   /** Whether the panel has attached before: the first attach counts as a
-   *  user-initiated open, later prop-driven re-attaches do not. */
+   *  user-initiated open, later attaches do not. */
   let firstAttach = true
   let lastRetrySequence = 0
+
+  /** Where a respawned shell must start. Held in a plain (non-reactive) object
+   *  so the attachment below never depends on it: this panel is project-scoped,
+   *  so a thread switch may only retarget the *next* respawn. Re-running the
+   *  attachment instead would refit the grid and repaint the canvas on every
+   *  switch, for a session that never went anywhere. */
+  // svelte-ignore state_referenced_locally
+  const spawnTarget: TerminalSpawnBinding = { threadId, scopeBucketId }
+
+  $effect(() => {
+    spawnTarget.threadId = threadId
+    spawnTarget.scopeBucketId = scopeBucketId
+  })
 
   function retry(): void {
     retrySequence += 1
@@ -28,15 +45,12 @@
   function attachTerminal(
     currentTerminalId: string,
     currentProjectId: string,
-    currentThreadId: string,
-    currentScopeBucketId: string | undefined,
+    binding: TerminalSpawnBinding,
     retry: number
   ): Attachment<HTMLDivElement> {
     // Focus only when the attach is user-initiated: the first mount (the user
-    // opened or selected the terminal tab) or an explicit retry. Prop-driven
-    // re-attaches (thread switches rebinding the terminal's thread) must never
-    // steal focus from the chat composer — the session layer also drops focus
-    // requests inside the thread-switch guard window.
+    // opened or selected the terminal tab) or an explicit retry. The session
+    // layer also drops focus requests inside the thread-switch guard window.
     const focus = firstAttach || retry !== lastRetrySequence
     firstAttach = false
     lastRetrySequence = retry
@@ -49,14 +63,7 @@
         .getOrCreate(currentTerminalId)
         .then(async (session: TerminalSession) => {
           if (cancelled) return
-          await terminalSessions.attach(
-            session,
-            container,
-            currentProjectId,
-            currentThreadId,
-            currentScopeBucketId,
-            { focus }
-          )
+          await terminalSessions.attach(session, container, currentProjectId, binding, { focus })
           if (!cancelled) loading = false
         })
         .catch((error: unknown) => {
@@ -80,7 +87,7 @@
 >
   <div
     class="h-full w-full overflow-hidden py-1 pl-2"
-    {@attach attachTerminal(terminalId, projectId, threadId, scopeBucketId, retrySequence)}
+    {@attach attachTerminal(terminalId, projectId, spawnTarget, retrySequence)}
   ></div>
   {#if loading}
     <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">

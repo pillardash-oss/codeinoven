@@ -137,12 +137,26 @@ export class SidebarTabContexts {
     }
     // Panels bound to live thread-scoped sessions/content (temporary chat,
     // sub-agents, coordinator) cannot be produced with meaningful data for a
-    // thread that never opened them, so there is no tab to focus here. Instead
-    // of leaving an empty-looking panel open, hide the sidebar in the new
-    // thread; returning to a thread that does own one restores it via the
-    // `existing` branch above.
+    // thread that never opened them, so there is no tab to focus here. Activate
+    // the project's own panel in place instead: clearing `visible` would unmount
+    // the whole region and every project-scoped panel it hosts (the keep-mounted
+    // Git panel above all) for a thread that has nothing to do with them, and
+    // the region would then rebuild from scratch on the way back. Assigning the
+    // project panel directly also leaves the browser and notifications regions
+    // exactly as the user had them   only `visible` without a project panel to
+    // show actually closes the sidebar. Returning to a thread that owns the
+    // thread-scoped panel restores it via the `existing` branch above.
     if (kind === 'coordinator' || kind === 'temporary-chat' || kind === 'subagent') {
-      project.visible = false
+      const projectTab = project.tabs
+        .filter((tab) => tab.kind !== 'terminal' || this.host.terminalPlacement() !== 'bottom')
+        .at(-1)
+      if (!projectTab) {
+        project.visible = false
+        return
+      }
+      project.activeKind = projectTab.kind
+      project.activeTabIds[projectTab.kind] = projectTab.id
+      project.visible = true
       return
     }
     if (kind === 'diff') this.openDiff(projectId, threadId)

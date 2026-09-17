@@ -10,11 +10,7 @@
   } from '$shared/types'
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
-  import {
-    managedScopesFor,
-    planMemorySaveGroups,
-    type MemoryLocation
-  } from './memory-routing'
+  import { managedScopesFor, planMemorySaveGroups, type MemoryLocation } from './memory-routing'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
@@ -69,6 +65,11 @@
   let loadedChatEnabled = $state(true)
   let proposalBusyIds = $state<string[]>([])
   let loadRequest = 0
+  /** Which context (`variant:scope:project`) and thread the panel state was read
+   *  for, so a thread switch can be served by re-reading only that thread's own
+   *  memory instead of the whole panel. */
+  let loadedContextKey = ''
+  let loadedThreadId = ''
   let searchQuery = $state('')
   let filterCategory = $state<MemoryCategory | ''>('')
   let filterPriority = $state<MemoryPriority | ''>('')
@@ -204,6 +205,8 @@
 
   async function load(): Promise<void> {
     const request = ++loadRequest
+    const contextKey = `${variant}:${scope}:${projectId ?? ''}`
+    const thread = threadId ?? ''
     loading = true
     error = ''
     try {
@@ -277,6 +280,8 @@
       }
       nextEntries = [...nextEntries].sort((a, b) => b.updatedAt - a.updatedAt)
       if (request !== loadRequest) return
+      loadedContextKey = contextKey
+      loadedThreadId = thread
       entries = nextEntries
       loadedEntries = nextEntries
       proposals = nextProposals
@@ -294,8 +299,7 @@
     saved = false
     try {
       if (variant === 'settings' || (projectId && threadId)) {
-        const fallback: MemoryLocation =
-          variant === 'sidebar' ? { projectId, threadId } : {}
+        const fallback: MemoryLocation = variant === 'sidebar' ? { projectId, threadId } : {}
         await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(contextKind))
         saved = true
         if (savedTimeout) clearTimeout(savedTimeout)
@@ -466,16 +470,56 @@
     activeSection = 'proposed'
   }
 
+  /** Re-read only the given thread's own memory and splice it into the panel
+   *  state. Global, project and proposal state stay exactly as they were, so an
+   *  unsaved edit made before the switch is still there afterwards   which a
+   *  full reload would have discarded along with five unnecessary reads. */
+  async function loadThreadEntries(contextKey: string, thread: string): Promise<void> {
+    const project = projectId
+    if (!project) return
+    const request = ++loadRequest
+    try {
+      const threadEntries = await invoke('memory:getEntries', project, thread)
+      if (request !== loadRequest) return
+      if (projectId !== project || threadId !== thread) return
+      // What this read replaces: the thread-scoped memory this project showed
+      // for the thread the user just left.
+      const isShownThreadMemory = (entry: MemoryEntry): boolean =>
+        entry.scope === 'thread' && entry.projectId === project
+      const sortByRecency = (list: MemoryEntry[]): MemoryEntry[] =>
+        [...list].sort((a, b) => b.updatedAt - a.updatedAt)
+      entries = sortByRecency([
+        ...entries.filter((entry) => !isShownThreadMemory(entry)),
+        ...threadEntries
+      ])
+      loadedEntries = [
+        ...loadedEntries.filter((entry) => !isShownThreadMemory(entry)),
+        ...threadEntries
+      ]
+      loadedContextKey = contextKey
+      loadedThreadId = thread
+    } catch {
+      // A thread-scoped read must never blank a panel that already shows the
+      // project's memory: keep what is on screen and let the next switch retry.
+    }
+  }
+
   $effect(() => {
-    const contextKey = `${variant}:${scope}:${projectId ?? ''}:${threadId ?? ''}`
-    if (contextKey) void load()
+    const contextKey = `${variant}:${scope}:${projectId ?? ''}`
+    if (!contextKey) return
+    const thread = threadId ?? ''
+    // A thread switch inside one project changes that thread's memory and
+    // nothing else, so it is served by the thread-scoped read alone.
+    if (thread && contextKey === loadedContextKey && thread !== loadedThreadId) {
+      void loadThreadEntries(contextKey, thread)
+      return
+    }
+    void load()
   })
 </script>
 
 <div
-  class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings'
-    ? 'w-full p-6'
-    : 'p-5'}"
+  class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings' ? 'w-full p-6' : 'p-5'}"
 >
   <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->
   <div class="shrink-0">
@@ -681,7 +725,8 @@
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
                     <p class="mt-1.5 text-[0.6875rem] capitalize text-dimmed">
-                      {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal.priority}
+                      {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal
+                        .priority}
                     </p>
                   </div>
                   <div class="flex shrink-0 items-center gap-1">
