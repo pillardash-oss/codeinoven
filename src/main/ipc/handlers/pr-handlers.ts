@@ -159,12 +159,17 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
       // advisory and never allowed to block the compare itself.
       let existing = null
       try {
+        // The advisory duplicate check wants the plainest listing there is: every
+        // open pull request, newest first, no relationship filter.
         const openPrs = await provider.listPullRequestPage({
           owner: input.owner,
           repo: input.repo,
           state: 'open',
           page: 1,
-          perPage: 100
+          perPage: 100,
+          filter: 'all',
+          sort: 'updated',
+          cursor: null
         })
         const match = openPrs.items.find(
           (pr) =>
