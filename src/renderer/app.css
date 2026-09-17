@@ -275,6 +275,22 @@ body {
   font-family: var(--font-app);
 }
 
+/*
+ * Card-scale markdown.
+ *
+ * Composer cards (an agent's question prompt and its description) carry their
+ * own type step   `text-sm` for the prompt, `text-xs` for the description. A
+ * plain text utility cannot express that here: `.markdown-body` sets an
+ * explicit size and it is emitted unlayered, so it outranks every layered
+ * Tailwind utility. This modifier gives the size and leading back to the
+ * surrounding surface while every other `.markdown-body` rule   link colour,
+ * favicon sizing, code, lists, tables   still applies.
+ */
+.markdown-body.markdown-body-card {
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .markdown-body > * {
   max-width: 100%;
 }

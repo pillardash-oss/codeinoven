@@ -9,7 +9,7 @@
     ShieldCheck,
     X
   } from '@lucide/svelte'
-  import { blockHtml, lexMarkdown } from '../markdown/markdown'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import type { AgentSecretSubmission, PendingAgentQuestionRequest } from '$shared/types'
 
@@ -139,22 +139,14 @@
   {#if !folded}
     <div class="space-y-3 p-4">
       <div class="space-y-1">
+        <!-- Card-scale markdown: the same renderer the transcript uses, sized by
+             the text utility on the surface around it. -->
         <div class="text-sm text-foreground">
-          {#each lexMarkdown(question.prompt) as token (token.raw)}
-            {#if token.type !== 'space'}
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-              {@html blockHtml(token)}
-            {/if}
-          {/each}
+          <MarkdownView text={question.prompt} class="markdown-body-card" />
         </div>
         {#if question.description}
           <div class="text-xs text-muted">
-            {#each lexMarkdown(question.description) as token (token.raw)}
-              {#if token.type !== 'space'}
-                <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-                {@html blockHtml(token)}
-              {/if}
-            {/each}
+            <MarkdownView text={question.description} class="markdown-body-card" />
           </div>
         {/if}
       </div>
