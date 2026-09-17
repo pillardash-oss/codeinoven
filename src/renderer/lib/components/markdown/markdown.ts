@@ -562,12 +562,25 @@ function injectContentImages(html: string): string {
     const dataUrl = githubImageState.imageFor(src)
     if (dataUrl) return tag.replace(IMAGE_ATTR_SRC_ANY, `src="${dataUrl}"`)
 
-    return `<span class="markdown-image-pending" role="img" aria-label="${escapeHtml(alt)}" title="${escapeHtml(alt)}">${escapeHtml(alt)}</span>`
+    const label = escapeHtmlAttribute(alt)
+    return `<span class="markdown-image-pending" role="img" aria-label="${label}" title="${label}">${escapeHtml(alt)}</span>`
   })
 }
 
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Escape a value that lands inside a double-quoted attribute.
+ *
+ * Distinct from `escapeHtml` on purpose: a quote in text content is harmless and
+ * `&quot;` there is noise, but a quote in an attribute value breaks out of it. The
+ * alt this escapes comes from third-party markdown, and the markup below is
+ * inserted after sanitizing, so nothing else would catch it.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtml(value).replace(/"/g, '&quot;')
 }
 
 /**
