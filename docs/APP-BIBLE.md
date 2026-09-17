@@ -90,7 +90,22 @@ over `src/renderer/lib/threads/checkpoint-matching.ts`,
 `StashesView`, `CommitComposer`, `CommitSearch`, `Dialogs`, `Notices`, and
 `RepoStates`. `stores/git.svelte.ts` is the composition root over
 `git-store-{deployments,pull-requests,pr-conflicts,pr-operations,local-operations,github}.svelte.ts`
-plus `git-store-helpers.ts`.
+plus `git-store-helpers.ts`. `GitPullRequestDetail.svelte` composes the
+`GitPullRequestDetail*` section components (Conversation, Changes, Checks,
+AgentReport, MergeDialogs) and `GitPullRequestDetailCommentDialogs`, with its
+pure presentation in `git-pull-request-detail-format.ts`.
+
+**GitHub-authored content** (`src/main/git/`, `src/renderer/lib/components/markdown/`)
+The renderer CSP allows images only from `data:` and local sources, so remote
+pictures are inlined in main: `github-avatars.ts` for the accounts a conversation
+names, `github-images.ts` for the images a provider-authored body embeds. Both
+cache by URL and treat the URL as untrusted input. The renderer reaches them
+through `stores/avatars.svelte.ts` and `stores/github-images.svelte.ts`, which
+batch, cache, and bump a reactive version so the picture replaces the placeholder
+in place. `markdown-remote-images.ts` holds the URL rules the renderer and the
+store both need, so they cannot drift apart. Comment text itself is rendered by
+`markdown/github-emoji.ts` (shortcodes) and `github-references.ts` (pull requests,
+cross-repo issues, commits, mentions), both layered into `markdown/markdown.ts`.
 
 **Workspace and shell** (`src/renderer/lib/components/workspace/`, `.../layout/`)
 `Workspace.svelte` composes `WorkspaceSidebar`, `WorkspaceConversationPane`,
