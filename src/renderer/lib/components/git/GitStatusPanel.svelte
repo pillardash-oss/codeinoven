@@ -3,6 +3,10 @@
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import {
+    invalidateRepositoryPreflight,
+    loadRepositoryPreflight
+  } from '$lib/repository-preflight-cache'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
@@ -410,7 +414,10 @@
    * every view renders from, so reloading it is enough.
    */
   async function refreshPanel(): Promise<void> {
-    await refreshStatus()
+    // The button exists to make the panel trustworthy again, and the one thing a
+    // cache can be wrong about is whether the directory is still a repository at
+    // all, so this re-asks instead of trusting the stored answer.
+    await loadRepoState(true)
     await refreshFocusedView()
   }
 
@@ -454,27 +461,27 @@
     if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
   }
 
-  async function loadRepoState(): Promise<void> {
-    repoState = 'loading'
+  async function loadRepoState(force = false): Promise<void> {
+    // Re-checking in place must not blank a panel that is already showing data:
+    // the "Checking repository" takeover belongs to the first answer, not to a
+    // refresh of one.
+    if (!force) repoState = 'loading'
     try {
-      const project = await invoke('project:get', projectId)
-      if (project?.hasDeployments !== undefined) {
+      // Cached per project, so re-opening the panel does not spawn git again to
+      // ask a question whose answer has not changed.
+      const snapshot = await loadRepositoryPreflight(projectId, force)
+      if (snapshot.hasDeployments !== undefined) {
         // Authoritative database value; reconcile the fast-render cache with it.
-        hasDeployments = project.hasDeployments
-        cacheHasDeployments(projectId, project.hasDeployments)
+        hasDeployments = snapshot.hasDeployments
+        cacheHasDeployments(projectId, snapshot.hasDeployments)
       }
-      if (!project?.path) {
+      if (!snapshot.path || snapshot.preflight.status === 'not_git') {
         repoState = 'not_git'
         return
       }
-      const preflight = await invoke('repository:preflight', project.path)
-      if (preflight.status === 'git_unavailable') {
+      if (snapshot.preflight.status === 'git_unavailable') {
         repoState = 'git_unavailable'
-        preflightDetail = preflight.detail ?? ''
-        return
-      }
-      if (preflight.status === 'not_git') {
-        repoState = 'not_git'
+        preflightDetail = snapshot.preflight.detail ?? ''
         return
       }
       repoState = 'git'
@@ -486,6 +493,9 @@
 
   async function initializeRepository(): Promise<void> {
     await gitState.initialize(projectId)
+    // The cached preflight still says "not a repository". Without this the panel
+    // would keep reporting that for the rest of the cache's life.
+    invalidateRepositoryPreflight(projectId)
     if (gitState.status) repoState = 'git'
   }
 

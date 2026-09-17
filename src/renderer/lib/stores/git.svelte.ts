@@ -1,5 +1,6 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { loadRepositoryPreflight } from '$lib/repository-preflight-cache'
 import {
   GITHUB_PROBE_TTL_MS,
   deploymentDetailKey,
@@ -64,6 +65,17 @@ export {
  * traffic.
  */
 const PANEL_FETCH_STALE_MS = 5 * 60_000
+
+/**
+ * How recently the working tree state must have been read for a hover warm-up to
+ * leave it alone.
+ *
+ * The header chip is small and sits next to the account controls, so a pointer
+ * crossing the header can enter it several times in a second. Each warm-up is six
+ * repository reads with a git process spawn behind some of them, which is not
+ * something a hover may repeat per pass.
+ */
+const GIT_WARM_TTL_MS = 15_000
 
 /**
  * Per-project git runtime state, refreshed on panel activation, after every
@@ -135,6 +147,13 @@ export class GitState {
    * same five minutes for no new information.
    */
   private fetchAttempts: Record<string, number> = {}
+
+  /**
+   * When the working tree state was last read for the active target. Plain, not
+   * `$state`: only the hover warm-up's staleness gate reads it, and publishing
+   * it would re-run the very effects that trigger a refresh.
+   */
+  private statusReadAt = 0
 
   /** Local git state and operations: status, branches, remotes, stashes, conflicts. */
   private readonly local = new GitLocalOperations({
@@ -483,6 +502,29 @@ export class GitState {
   }
 
   /**
+   * Warm the Git panel from outside it, for a pointer that is about to open it.
+   *
+   * Two things sit on the panel's cold path and neither is data the user asked
+   * for yet: the repository preflight (a git process spawn, behind which the
+   * whole panel hides as "Checking repository"), and the working tree read. The
+   * first is filled unconditionally because it is cached per project and shared
+   * with the panel, so the panel's own mount finds it already answered. The
+   * second is left alone unless it has gone stale, because a hover is a guess and
+   * six repository reads is too much to repeat on every pass over the chip.
+   *
+   * The refresh it does run is a real one and marks Git busy like any other. That
+   * is invisible from here because the only caller warms a panel that is closed,
+   * and the refresh button is the only thing in the app that reads that flag; a
+   * warm-up would otherwise spin it for a click that never came.
+   */
+  warmGitPanel(projectId: string): void {
+    if (!projectId || projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
+    void loadRepositoryPreflight(projectId).catch(() => undefined)
+    if (Date.now() - this.statusReadAt < GIT_WARM_TTL_MS) return
+    void this.refresh(projectId).catch(() => undefined)
+  }
+
+  /**
    * Whether the age-gated panel-open fetch is due. A repository without a
    * remote has nothing to fetch, and anything already attempted inside the
    * window is left alone, which is what keeps repeated panel opens from
@@ -547,6 +589,7 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     this.conflictsMode = false
+    this.statusReadAt = 0
   }
 
   /**
@@ -632,33 +675,58 @@ export class GitState {
     // never be written.
     const targetProject = this.activeProjectId
     const targetScope = this.activeScopeBucketId
+    const stillCurrent = (): boolean =>
+      targetProject === this.activeProjectId &&
+      targetScope === this.activeScopeBucketId &&
+      generation === this.activationGeneration &&
+      projectId === this.activeProjectId
+    /** Whether this round has already published working tree state. */
+    let publishedStatus = false
     this.error = null
     try {
-      const branchesRequest = invoke('git:branches', projectId, targetScope ?? undefined)
-      const remotesRequest = invoke('git:remotes', projectId, targetScope ?? undefined)
-      const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
-        this.readStatus(projectId),
-        branchesRequest,
+      // The chrome reads are started first so they overlap the status read, but
+      // nothing downstream waits on them. Staging and committing are local
+      // operations on the working tree and must never be held behind a branch
+      // listing, a remote listing, or the OS keychain probe that answers
+      // whether a credential is stored. A single `Promise.all` over all six
+      // reads did exactly that: `status` was only published once the slowest of
+      // them had answered, which is what made a local operation look like it was
+      // waiting on the network.
+      const chrome = Promise.all([
+        invoke('git:branches', projectId, targetScope ?? undefined),
         invoke('git:getIdentity', projectId),
-        remotesRequest.catch(() => [] as GitRemoteInfo[]),
+        invoke('git:remotes', projectId, targetScope ?? undefined).catch(
+          () => [] as GitRemoteInfo[]
+        ),
         invoke('git:getCredentialStatus', projectId).catch(
           () => null as GitCredentialStatus | null
         ),
         invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
-      if (
-        targetProject !== this.activeProjectId ||
-        targetScope !== this.activeScopeBucketId ||
-        generation !== this.activationGeneration ||
-        projectId !== this.activeProjectId
-      )
-        return
+      // Every read here is best-effort, and a failed status read returns above
+      // without ever awaiting this: without a handler attached now, a chrome
+      // failure would surface as an unhandled rejection for an error the panel
+      // has already reported.
+      void chrome.catch(() => undefined)
+
+      const status = await this.readStatus(projectId)
+      if (!stillCurrent()) return
       if (!status) {
         this.error = 'Git status could not be loaded'
         this.status = null
         return
       }
       this.status = status
+      publishedStatus = true
+      this.statusReadAt = Date.now()
+      // Conflicts mode is only meaningful while actual conflicts exist - once
+      // they are all resolved the filter auto-closes, like the last-turn one.
+      // Decided here, off the status alone, so the filter settles without
+      // waiting for the chrome reads below.
+      if (status.conflicted.length === 0) this.conflictsMode = false
+
+      const [branches, identity, remotes, credentialStatus, stashes] = await chrome
+      if (!stillCurrent()) return
       this.branches = branches
       // A recorded PR-conflict session is only real while its temporary
       // `pr-<n>` branch still exists: once the branch is gone (finished, or
@@ -677,22 +745,16 @@ export class GitState {
       this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
       this.stashes = stashes
-      // Conflicts mode is only meaningful while actual conflicts exist - once
-      // they are all resolved the filter auto-closes, like the last-turn one.
-      if (status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId).catch(() => {})
     } catch (reason) {
-      if (
-        targetProject !== this.activeProjectId ||
-        targetScope !== this.activeScopeBucketId ||
-        generation !== this.activationGeneration ||
-        projectId !== this.activeProjectId
-      )
-        return
+      if (!stillCurrent()) return
       this.error = errorMessage(reason, 'Git status could not be loaded')
-      this.status = null
+      // A chrome read is what failed here when status has already landed, and a
+      // failed branch listing is not a reason to stop staging files: the
+      // published status is left in place and only its own failure clears it.
+      if (!publishedStatus) this.status = null
     } finally {
       this.markBusy('refresh', false)
     }
