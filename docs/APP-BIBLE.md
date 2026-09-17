@@ -115,7 +115,7 @@ github, cloud, paths, cua, utility and the base-url provider). The IPC contract
 lives in `src/lib/ipc/` as one partial contract per channel group plus `events.ts`.
 Every consumer keeps importing `$shared/types` and `$shared/ipc-contract`.
 
-**Common-process services** (`src/main/`)
+**Main-process services** (`src/main/`)
 - `chat/chat-engine.ts` keeps the `ChatEngine` class and composes
   `chat-engine/chat-engine-{prompts,changes,errors,constants,types,pure,message-merge,message-text,generated-artifacts,images}.ts`.
 - `ipc/ipc-handlers.ts` is the composition root over one registrar per domain in
