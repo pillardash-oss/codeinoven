@@ -1,0 +1,74 @@
+<script lang="ts">
+  import { ChevronDown, GitCompareArrows, GitPullRequestArrow, Loader2 } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
+  import type { GitMainSyncDirection } from '$shared/types'
+
+  interface Props {
+    /** A `sync-main` operation is in flight, so the button reports the wait. */
+    busy: boolean
+    /** Another remote operation is running, or the worktree has conflicts to resolve first. */
+    blocked: boolean
+    onSync: (direction: GitMainSyncDirection) => void
+  }
+
+  let { busy, blocked, onSync }: Props = $props()
+
+  const itemClass =
+    'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40'
+</script>
+
+<!--
+  Worktree scopes are the only checkouts with a main worktree to trade commits
+  with, so this button only ever renders for them. Both directions live in one
+  menu because they are one job seen from two sides, and the branch row has room
+  for a single slot.
+-->
+<DropdownMenu.Root>
+  <DropdownMenu.Trigger
+    class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-raised"
+    disabled={blocked}
+    title="Sync this worktree with main"
+    aria-label="Sync this worktree with main"
+  >
+    {#if busy}
+      <Loader2 size={11} class="animate-spin" aria-hidden="true" />
+    {:else}
+      <GitCompareArrows size={11} aria-hidden="true" />
+    {/if}
+    <span class="sync-label">Sync main</span>
+    <ChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Portal>
+    <DropdownMenu.Content
+      side="bottom"
+      align="end"
+      sideOffset={4}
+      collisionPadding={8}
+      class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+    >
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from-main')}>
+        <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync from main
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to-main')}>
+        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync to main
+      </DropdownMenu.Item>
+    </DropdownMenu.Content>
+  </DropdownMenu.Portal>
+</DropdownMenu.Root>
+
+<style>
+  /*
+    The Git panel's header row is the query container
+    (`container: git-header / inline-size` in GitStatusPanel.svelte), and it
+    declares the breakpoint its own view actions compress at. The word goes first
+    here too: the glyph, the tooltip and the menu items all still say what this
+    is, and the panel is at its narrowest exactly when the row has no room.
+  */
+  @container git-header (max-width: 520px) {
+    .sync-label {
+      display: none;
+    }
+  }
+</style>

@@ -1,9 +1,11 @@
 import { BrowserWindow, nativeImage } from 'electron'
 import type {
+  ComputerUseActivity,
   ComputerUsePipCursor,
   ComputerUsePipFrame,
   ComputerUsePipState
 } from '../../lib/types'
+import type { CuaOperationEvent } from './utility-orchestration-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -14,7 +16,15 @@ const TARGET_FRAME_RATE = 15
 const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FRAME_RATE)
 const MAX_MISSES = TARGET_FRAME_RATE
 const AUTO_DISMISS_GRACE_MS = 3_000
-const MAX_FRAME_DIMENSION = 448
+/** The default capture ceiling. The overlay's default preview is 224 CSS px
+ *  wide, which is exactly this many device pixels on a 2x display, so the
+ *  default footprint stays pixel-perfect without paying for anything larger. */
+const BASE_FRAME_DIMENSION = 448
+/** Hard ceiling for the capture. Measured against real screen frames, going
+ *  past this buys no visible fidelity (896 = 39.25 dB, 1344 = 39.44 dB against
+ *  a native-resolution reference at the same display size) while quadrupling
+ *  both the per-frame encode cost and the bytes streamed over IPC. */
+const MAX_FRAME_DIMENSION = 896
 const JPEG_QUALITY = 78
 const MAX_CURSOR_POINT_NODES = 32
 const CURSOR_POINT_CONTAINER_KEYS = [
@@ -52,6 +62,12 @@ interface CursorPosition {
  * notifies this service whenever an agent drives an app through the Cua
  * driver; the service then latches onto that pid, polls its frontmost window,
  * and streams bounded JPEG frames to the renderer for an always-visible overlay.
+ *
+ * It also owns the per-thread computer-use activity mirror that thread rows
+ * consume. That mirror is deliberately independent of the overlay: the overlay
+ * needs a capturable window, while a desktop-scoped run (`get_desktop_state`,
+ * `escalate_session`, a desktop `hotkey`) has no pid at all and must still be
+ * visible in the thread list.
  */
 export class ComputerUsePipService {
   private readonly cuaBridge: CuaBridgeService
@@ -67,14 +83,63 @@ export class ComputerUsePipService {
   private targetSessionId: string | null = null
   private cursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
+  /** Device pixels of preview the renderer is about to paint, as reported by
+   *  the overlay. The capture is scaled to cover it so a scaled-up preview is
+   *  never a magnified small frame. Null until the overlay reports. */
+  private requestedFrameWidth: number | null = null
   private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
+  /** Threads whose agent is currently driving the computer, keyed by thread id.
+   *  Bounded by the threads running computer use right now: an entry is dropped
+   *  as soon as that thread's turn ends. */
+  private readonly activityByThread = new Map<string, ComputerUseActivity>()
 
   constructor(private readonly storage: StorageEngine) {
     this.cuaBridge = new CuaBridgeService(storage)
   }
 
+  /**
+   * Called for every computer-use operation an agent performs. The activity
+   * mirror is updated unconditionally; window tracking only starts when the
+   * operation named a target process.
+   */
+  onActivity(event: CuaOperationEvent): void {
+    this.recordActivity(event)
+    if (event.pid !== null) void this.track(event.pid, event.threadId, event.sessionId)
+  }
+
+  /** Every thread whose agent is currently driving the computer. */
+  getActivitySnapshot(): ComputerUseActivity[] {
+    return [...this.activityByThread.values()]
+  }
+
+  private recordActivity(event: CuaOperationEvent): void {
+    const activity: ComputerUseActivity = {
+      threadId: event.threadId,
+      active: true,
+      at: Date.now(),
+      operation: event.operation,
+      ...(event.pid !== null ? { pid: event.pid } : {})
+    }
+    this.activityByThread.set(event.threadId, activity)
+    this.broadcast('computerUse:activity', activity)
+  }
+
+  /** Mark a thread's computer-use activity over and tell the renderer to drop
+   *  its row indicator. */
+  private clearActivity(threadId: string): void {
+    const existing = this.activityByThread.get(threadId)
+    if (!existing) return
+    this.activityByThread.delete(threadId)
+    this.broadcast('computerUse:activity', {
+      threadId,
+      active: false,
+      at: existing.at,
+      ...(existing.operation ? { operation: existing.operation } : {})
+    } satisfies ComputerUseActivity)
+  }
+
   /** Latch onto the app (pid) a thread's agent is currently driving. */
-  async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
+  private async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
     // The user closed the overlay this turn   keep it hidden for the rest of
@@ -94,24 +159,60 @@ export class ComputerUsePipService {
     this.ensureLoop()
   }
 
-  /** Bring the tracked app to the foreground (used by the PiP click). */
+  /**
+   * Bring the tracked app to the foreground (used by the PiP click).
+   *
+   * Activation alone does NOT raise the window. Measured against the driver:
+   * `bring_to_front` takes the foreground (the target pid does become the
+   * frontmost app, which is the focus flicker users report) while the window
+   * stays exactly where it was. The target app's own `Window > Bring All to
+   * Front` menu item is what orders its windows front, so the click runs both
+   * and then verifies the result through the driver's frontmost flag.
+   *
+   * The window id is re-resolved here instead of trusted from the capture loop:
+   * the driver fronts the OWNER of whatever window id it is given, so a stale id
+   * (a failed capture for a new target leaves the previous target's id in place)
+   * would raise a different app than the one this preview is showing.
+   */
   async bringToFront(): Promise<void> {
     const pid = this.targetPid
     if (pid === null || !this.active) return
     const client = await this.ensureClient()
-    // The driver refuses pid-only activation when the app owns multiple
-    // windows (ambiguous_window_target)   always front the exact tracked
-    // window, falling back to the latest frontmost one.
-    const windowId = this.windowId
-    try {
-      await client.callTool('bring_to_front', {
+    const windows = await this.listWindows(client, pid)
+    const target =
+      windows.find((window) => window.window_id === this.windowId) ??
+      rankWindows(windows)[0] ??
+      null
+    const windowId = target?.window_id ?? null
+    const activation = await this.callOutcome(client, 'bring_to_front', {
+      pid,
+      ...(windowId !== null ? { window_id: windowId } : {})
+    })
+    const raise =
+      windowId === null
+        ? 'skipped: no window to name'
+        : await this.callOutcome(client, 'invoke_menu', {
+            pid,
+            window_id: windowId,
+            path: ['Window', 'Bring All to Front']
+          })
+    const frontmost = await this.isFrontmost(client, pid)
+    Logger.dev('Computer-use PiP bring-to-front', {
+      pid,
+      windowId,
+      windowOnScreen: target?.is_on_screen ?? null,
+      windowOnCurrentSpace: target?.on_current_space ?? null,
+      activation,
+      raise,
+      frontmost
+    })
+    if (frontmost === false) {
+      Logger.error('Computer-use PiP could not bring the tracked app to the front:', {
         pid,
-        ...(windowId !== null ? { window_id: windowId } : {})
+        windowId,
+        activation,
+        raise
       })
-    } catch {
-      // windowId can be stale (window closed)   retry with pid-only app-level
-      // activation so the click still pulls the app forward.
-      await client.callTool('bring_to_front', { pid })
     }
   }
 
@@ -124,18 +225,22 @@ export class ComputerUsePipService {
   /**
    * Called when a thread's agent turn begins (a user message was accepted).
    * Clears the user's close so the next turn may show the PiP again if CUA is
-   * used, and cancels a pending auto-dismiss from a just-finished turn.
+   * used, cancels a pending auto-dismiss from a just-finished turn, and drops
+   * any computer-use activity a crashed previous turn never cleared.
    */
   notifyTurnStarted(threadId: string): void {
     if (this.dismissedThreadId === threadId) this.dismissedThreadId = null
     if (this.ownerThreadId === threadId) this.clearAutoDismiss()
+    this.clearActivity(threadId)
   }
 
   /**
-   * Called when a thread's utility turn ends. If that thread owns the PiP,
-   * hide the overlay shortly after so it never lingers past the run.
+   * Called when a thread's utility turn ends. The thread's computer-use
+   * activity ends with it, and if that thread owns the PiP the overlay is
+   * hidden shortly after so it never lingers past the run.
    */
   notifyTurnEnded(threadId: string): void {
+    this.clearActivity(threadId)
     if (!this.active || this.ownerThreadId !== threadId) return
     this.clearAutoDismiss()
     this.autoDismissTimer = setTimeout(() => {
@@ -227,19 +332,22 @@ export class ComputerUsePipService {
       const client = await this.ensureClient()
       const window = await this.frontmostWindow(client, pid)
       if (!window) {
-        this.misses += 1
-        if (this.misses >= MAX_MISSES) this.hide()
+        this.missFrame(`pid ${pid} has no capturable top-level window`)
         return
       }
-      this.misses = 0
       this.appName = window.app_name || this.appName || 'App'
       this.windowId = window.window_id
+      // The window capture deliberately runs WITHOUT the agent's session. The
+      // driver refuses window-scope tools on a session the agent escalated to
+      // desktop scope ("window-scope tool 'get_window_state' is disabled while
+      // session '<id>' is in desktop scope"), which silently killed every frame
+      // of a desktop-scope run. The agent cursor is still read from that session
+      // below, and `get_agent_cursor_state` works in either scope.
       const screenshotRequest = client.callTool('get_window_state', {
         pid,
         window_id: window.window_id,
         include_screenshot: true,
-        max_elements: 1,
-        ...(sessionId ? { session: sessionId } : {})
+        max_elements: 1
       })
       const cursorRequest = sessionId
         ? client.callTool('get_agent_cursor_state', { session: sessionId })
@@ -250,8 +358,19 @@ export class ComputerUsePipService {
       ])
       const image =
         screenshotResult.status === 'fulfilled' ? extractImage(screenshotResult.value) : null
-      if (!image) return
-      const optimizedImage = optimizeImage(image)
+      if (!image) {
+        // A refused capture resolves with `isError: true` instead of rejecting,
+        // so this has to be accounted for here   returning quietly left the
+        // overlay latched as active with no frame to show, and the UI is gated
+        // on having a frame.
+        this.missFrame(
+          `the driver returned no screenshot for window ${window.window_id}`,
+          screenshotResult
+        )
+        return
+      }
+      this.misses = 0
+      const optimizedImage = optimizeImage(image, this.frameCap())
       if (cursorResult.status === 'fulfilled') {
         const cursorPosition = extractCursorPosition(cursorResult.value)
         if (cursorPosition) {
@@ -287,19 +406,77 @@ export class ComputerUsePipService {
     }
   }
 
+  /**
+   * Account for one frame the monitor could not render. The overlay only mounts
+   * once it has a frame, so a capture that keeps failing must age out exactly
+   * like a missing window does   otherwise the service reports itself active
+   * with nothing to show and the user is left with no PiP and no explanation.
+   * The reason is logged once per run of failures, never per frame (the loop
+   * runs at 15 fps).
+   */
+  private missFrame(reason: string, failure?: PromiseSettledResult<unknown>): void {
+    this.misses += 1
+    if (this.misses === 1) {
+      const detail = failure ? settledFailureText(failure) : null
+      Logger.dev(`Computer-use PiP frame unavailable: ${reason}.${detail ? ` ${detail}` : ''}`)
+    }
+    if (this.misses >= MAX_MISSES) this.hide()
+  }
+
+  /**
+   * Renderer-reported demand: how many device pixels wide the preview is about
+   * to be painted. The capture is sized to cover it, clamped between the default
+   * footprint and the measured ceiling, so scaling the preview up adds real
+   * pixels instead of magnifying the default frame.
+   */
+  setRequestedFrameWidth(deviceWidth: number): void {
+    this.requestedFrameWidth = deviceWidth
+  }
+
+  /** The resize ceiling for the next capture. */
+  private frameCap(): number {
+    return frameCapFor(this.requestedFrameWidth)
+  }
+
   private async frontmostWindow(client: McpClient, pid: number): Promise<WindowRecord | null> {
-    const result = await client.callTool('list_windows', { pid })
-    const windows = extractWindows(result)
-    if (windows.length === 0) return null
-    const visible = windows.filter((window) => window.is_on_screen !== false)
-    const candidates = visible.length > 0 ? visible : windows
-    const ranked = [...candidates].sort((left, right) => {
-      const leftIndex = typeof left.z_index === 'number' ? left.z_index : -1
-      const rightIndex = typeof right.z_index === 'number' ? right.z_index : -1
-      if (leftIndex !== rightIndex) return rightIndex - leftIndex
-      return Number(Boolean(left.is_on_screen)) - Number(Boolean(right.is_on_screen))
-    })
-    return ranked[0] ?? null
+    return rankWindows(await this.listWindows(client, pid))[0] ?? null
+  }
+
+  /** The tracked pid's current top-level windows, freshly resolved. */
+  private async listWindows(client: McpClient, pid: number): Promise<WindowRecord[]> {
+    return extractWindows(await client.callTool('list_windows', { pid }))
+  }
+
+  /**
+   * Run one driver tool call and describe its outcome for the click log. A
+   * refused call RESOLVES with `isError: true` instead of rejecting, so both
+   * shapes have to be read here.
+   */
+  private async callOutcome(
+    client: McpClient,
+    name: string,
+    input: Record<string, unknown>
+  ): Promise<string> {
+    try {
+      const refusal = refusalText(await client.callTool(name, input))
+      return refusal ?? 'ok'
+    } catch (error) {
+      return `failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
+  /**
+   * Whether the driver reports this pid as the system-frontmost app. The only
+   * trustworthy activation read the driver exposes: `bring_to_front` answers
+   * `activated: true` even for a window id that no longer exists.
+   */
+  private async isFrontmost(client: McpClient, pid: number): Promise<boolean | null> {
+    try {
+      return extractAppActive(await client.callTool('list_apps', {}), pid)
+    } catch (error) {
+      Logger.dev('Computer-use PiP frontmost check failed:', error)
+      return null
+    }
   }
 
   private broadcastState(): void {
@@ -307,7 +484,7 @@ export class ComputerUsePipService {
   }
 
   private broadcast(
-    channel: 'computerUse:pipFrame' | 'computerUse:pipState',
+    channel: 'computerUse:pipFrame' | 'computerUse:pipState' | 'computerUse:activity',
     payload: unknown
   ): void {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -316,6 +493,52 @@ export class ComputerUsePipService {
       }
     }
   }
+}
+
+/**
+ * The driver's own explanation when a tool call resolves with `isError: true`,
+ * or null when the call succeeded. Bounded: the text can be an AX-tree dump.
+ */
+function refusalText(result: unknown): string | null {
+  if (!isRecord(result) || result['isError'] !== true) return null
+  const content = result['content']
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (!isRecord(item) || item['type'] !== 'text') continue
+      const text = item['text']
+      if (typeof text === 'string' && text.length > 0) {
+        return text.length > 200 ? `${text.slice(0, 200)}...` : text
+      }
+    }
+  }
+  return 'refused without a reason'
+}
+
+/** `active` for one pid from a `list_apps` result, or null when it is absent. */
+function extractAppActive(result: unknown, pid: number): boolean | null {
+  const apps = recordValue(recordValue(result)['structuredContent'])['apps']
+  if (!Array.isArray(apps)) return null
+  for (const value of apps) {
+    if (!isRecord(value) || value['pid'] !== pid) continue
+    return value['active'] === true
+  }
+  return null
+}
+
+/**
+ * A pid's windows frontmost-first. On-screen windows win over off-screen ones
+ * and the driver's z-order breaks the tie; the driver refuses pid-only
+ * activation for a multi-window app, so callers must name one of these.
+ */
+function rankWindows(windows: WindowRecord[]): WindowRecord[] {
+  const visible = windows.filter((window) => window.is_on_screen !== false)
+  const candidates = visible.length > 0 ? visible : windows
+  return [...candidates].sort((left, right) => {
+    const leftIndex = typeof left.z_index === 'number' ? left.z_index : -1
+    const rightIndex = typeof right.z_index === 'number' ? right.z_index : -1
+    if (leftIndex !== rightIndex) return rightIndex - leftIndex
+    return Number(Boolean(left.is_on_screen)) - Number(Boolean(right.is_on_screen))
+  })
 }
 
 function extractWindows(result: unknown): WindowRecord[] {
@@ -364,7 +587,25 @@ function extractImage(result: unknown): { dataUrl: string; width: number; height
   return null
 }
 
-function optimizeImage(image: { dataUrl: string; width: number; height: number }): {
+/**
+ * The capture ceiling for a renderer-requested device width. Exported because it
+ * is the whole of the sharpness policy: the overlay reports the device pixels it
+ * paints and this clamps that into the range worth encoding. Unknown demand keeps
+ * the default footprint, which is already exact on a 2x display.
+ */
+export function frameCapFor(requestedFrameWidth: number | null): number {
+  if (requestedFrameWidth === null || !Number.isFinite(requestedFrameWidth)) {
+    return BASE_FRAME_DIMENSION
+  }
+  return Math.round(
+    Math.min(MAX_FRAME_DIMENSION, Math.max(BASE_FRAME_DIMENSION, requestedFrameWidth))
+  )
+}
+
+function optimizeImage(
+  image: { dataUrl: string; width: number; height: number },
+  cap: number
+): {
   dataUrl: string
   width: number
   height: number
@@ -376,7 +617,7 @@ function optimizeImage(image: { dataUrl: string; width: number; height: number }
     const width = sourceSize.width || image.width
     const height = sourceSize.height || image.height
     if (width <= 0 || height <= 0) return image
-    const scale = Math.min(1, MAX_FRAME_DIMENSION / Math.max(width, height))
+    const scale = Math.min(1, cap / Math.max(width, height))
     const resized =
       scale < 1
         ? source.resize({
@@ -395,6 +636,29 @@ function optimizeImage(image: { dataUrl: string; width: number; height: number }
     Logger.dev('Computer-use PiP frame optimization failed; using source image:', error)
     return image
   }
+}
+
+/**
+ * Human-readable reason a driver call produced no frame: the rejection
+ * message, or the driver's own explanation on a resolved `isError` result
+ * (refused window captures arrive that way rather than as a rejection).
+ * Bounded because an AX-tree text block can be very large.
+ */
+function settledFailureText(result: PromiseSettledResult<unknown>): string | null {
+  if (result.status === 'rejected') {
+    const reason = result.reason
+    return reason instanceof Error ? reason.message : String(reason)
+  }
+  const content = recordValue(result.value)['content']
+  if (!Array.isArray(content)) return null
+  for (const item of content) {
+    if (!isRecord(item) || item['type'] !== 'text') continue
+    const text = item['text']
+    if (typeof text === 'string' && text.length > 0) {
+      return text.length > 240 ? `${text.slice(0, 240)}...` : text
+    }
+  }
+  return null
 }
 
 function extractCursorPosition(result: unknown): CursorPosition | null {

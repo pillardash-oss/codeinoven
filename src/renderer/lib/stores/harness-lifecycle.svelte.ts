@@ -158,7 +158,7 @@ class HarnessLifecycleStore {
 
       for (const provider of providerStore.providers) {
         if (enabledIds.includes(provider.id) && this.updateAvailableFor(provider.id)) {
-          // Docked: the panel stays collapsed to the bottom-right chip so a
+          // Docked: the panel stays collapsed to its dock chip so a
           // quiet background update never opens a modal over the workspace.
           await this.startUpdate(provider.id, provider.name, { docked: true })
         }

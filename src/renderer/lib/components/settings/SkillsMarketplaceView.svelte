@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { BookOpen, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
+  import { BookOpen, Bookmark, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -8,13 +8,17 @@
     preloadSkillMarketDetails,
     refreshSkillMarketLeaderboard
   } from '$lib/skill-market-cache'
+  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
+  import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
 
   interface Props {
     onOpenSkill: (entry: SkillMarketEntry) => void
+    /** Leaves the marketplace for the bookmarked-skills list. */
+    onOpenBookmarks: () => void
   }
 
-  let { onOpenSkill }: Props = $props()
+  let { onOpenSkill, onOpenBookmarks }: Props = $props()
 
   const views: Array<{ id: SkillMarketView; label: string; icon: typeof BookOpen }> = [
     { id: 'all-time', label: 'All Time', icon: BookOpen },
@@ -37,6 +41,19 @@
 
   function warmDetail(id: string): void {
     void loadSkillMarketDetail(id).catch(() => undefined)
+  }
+
+  /** Warm the results either side of the opened skill, so the next one is instant. */
+  function warmNeighbours(index: number): void {
+    const neighbourIds = [entries[index + 1], entries[index + 2], entries[index - 1]]
+      .filter((candidate): candidate is SkillMarketEntry => candidate !== undefined)
+      .map((candidate) => candidate.id)
+    void preloadSkillMarketDetails(neighbourIds)
+  }
+
+  function openSkill(entry: SkillMarketEntry, index: number): void {
+    warmNeighbours(index)
+    onOpenSkill(entry)
   }
 
   async function loadLeaderboard(view: SkillMarketView): Promise<void> {
@@ -118,11 +135,25 @@
             app.
           </p>
         </div>
-        <span
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
-        >
-          Top 100
-        </span>
+        <div class="flex items-center gap-2">
+          <button
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            type="button"
+            title="Open your bookmarked skills"
+            onclick={onOpenBookmarks}
+          >
+            <Bookmark size={13} />
+            Bookmarks
+            {#if skillBookmarkState.count > 0}
+              <span class="tabular-nums text-dimmed">{skillBookmarkState.count}</span>
+            {/if}
+          </button>
+          <span
+            class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
+          >
+            Top 100
+          </span>
+        </div>
       </div>
 
       <p class="mt-3 rounded-lg bg-raised px-3 py-2 text-[0.625rem] leading-relaxed text-muted">
@@ -202,41 +233,47 @@
       {:else}
         <div class="divide-y rounded-xl border bg-surface">
           {#each entries as entry, index (entry.id)}
-            <button
-              class="grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-              type="button"
-              title="Open {entry.name}"
-              onpointerenter={() => warmDetail(entry.id)}
-              onfocus={() => warmDetail(entry.id)}
-              onclick={() => onOpenSkill(entry)}
-            >
-              <span class="text-center font-mono text-xs tabular-nums text-dimmed">
-                {searchMode ? ' ' : index + 1}
-              </span>
-              <span class="min-w-0">
-                <span class="flex items-center gap-2">
-                  <span class="truncate font-mono text-sm font-semibold">{entry.name}</span>
-                  {#if entry.isOfficial}
-                    <span
-                      class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
-                    >
-                      Official
-                    </span>
-                  {/if}
+            <div class="flex items-center gap-1 pr-2 transition-colors hover:bg-elevated">
+              <button
+                class="grid min-w-0 flex-1 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 py-3 pl-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                type="button"
+                title="Open {entry.name}"
+                onpointerenter={() => warmDetail(entry.id)}
+                onfocus={() => warmDetail(entry.id)}
+                onclick={() => openSkill(entry, index)}
+              >
+                <span class="text-center font-mono text-xs tabular-nums text-dimmed">
+                  {searchMode ? ' ' : index + 1}
                 </span>
-                <span class="mt-0.5 block truncate text-xs text-muted">{entry.source}</span>
-              </span>
-              <span class="text-right">
-                <span class="block font-mono text-xs font-semibold tabular-nums">
-                  {entry.installs.toLocaleString()}
+                <span class="min-w-0">
+                  <span class="flex items-center gap-2">
+                    <span class="truncate font-mono text-sm font-semibold">{entry.name}</span>
+                    {#if entry.isOfficial}
+                      <span
+                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
+                      >
+                        Official
+                      </span>
+                    {/if}
+                  </span>
+                  <span class="mt-0.5 block truncate text-xs text-muted">{entry.source}</span>
                 </span>
-                <span class="block text-[0.625rem] text-dimmed">
-                  {activeView === 'hot' && entry.change !== undefined
-                    ? `+${entry.change} now`
-                    : 'installs'}
+                <span class="text-right">
+                  <span class="block font-mono text-xs font-semibold tabular-nums">
+                    {entry.installs.toLocaleString()}
+                  </span>
+                  <span class="block text-[0.625rem] text-dimmed">
+                    {activeView === 'hot' && entry.change !== undefined
+                      ? `+${entry.change} now`
+                      : 'installs'}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+              <SkillBookmarkButton
+                {entry}
+                title={skillBookmarkTitle(entry.name, skillBookmarkState.isBookmarked(entry.id))}
+              />
+            </div>
           {/each}
         </div>
       {/if}

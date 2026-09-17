@@ -40,10 +40,6 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 else
   DRY_RUN=0
 fi
-if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
-  die "The 'gh' CLI is required to verify the nightly prerelease and open the stable-promotion pull request (run: brew install gh / gh auth login)."
-fi
-
 C_RED=$'\033[31m'
 C_GREEN=$'\033[32m'
 C_YELLOW=$'\033[33m'
@@ -54,6 +50,12 @@ say()  { printf '%s\n' "$*"; }
 ok()   { printf '%s%s%s\n' "$C_GREEN" "$*" "$C_RESET"; }
 warn() { printf '%s%s%s\n' "$C_YELLOW" "$*" "$C_RESET"; }
 die()  { printf '%sERROR: %s%s\n' "$C_RED" "$*" "$C_RESET" >&2; exit 1; }
+
+# After `die` is defined: calling it below must not happen before the helper
+# exists, which is what a `die: command not found` failure looks like.
+if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
+  die "The 'gh' CLI is required to verify the nightly prerelease and open the stable-promotion pull request (run: brew install gh / gh auth login)."
+fi
 
 pkg_version() {
   git show "${1}:package.json" 2>/dev/null | node -e \

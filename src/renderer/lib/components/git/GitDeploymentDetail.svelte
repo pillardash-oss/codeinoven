@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    ArrowLeft,
     Bot,
     CircleDot,
     CircleX,
@@ -8,14 +7,16 @@
     GitBranch,
     Loader2,
     PackageCheck,
-    RefreshCw,
-    Rocket,
     Terminal
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
+  import GitJobLogView from './GitJobLogView.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
+  import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import type {
     GitHubDeployment,
     GitHubDeploymentJob,
@@ -28,7 +29,6 @@
     projectId: string
     identity: { owner: string; repo: string }
     deployment: GitHubDeployment
-    onBack: () => void
     onAgentDiagnose: (
       deployment: GitHubDeployment,
       run: GitHubWorkflowRun | null,
@@ -37,17 +37,13 @@
     ) => void
   }
 
-  let { projectId, identity, deployment, onBack, onAgentDiagnose }: Props = $props()
+  let { projectId, identity, deployment, onAgentDiagnose }: Props = $props()
 
   let error = $state('')
   let expandedLog = $state<Record<number, boolean>>({})
   let loadingLog = $state<Record<number, boolean>>({})
   let logErrors = $state<Record<number, string>>({})
   let preparingAgent = $state(false)
-
-  const htmlUrl = $derived(
-    `https://github.com/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.repo)}/deployments/${deployment.id}`
-  )
 
   /** Detail is served from the store cache so re-entering the view is instant. */
   const cached = $derived(
@@ -58,21 +54,8 @@
   const detail = $derived(cached?.detail ?? null)
   const loading = $derived(gitState.isBusy('deployment-detail'))
 
-  const latestStatus = $derived(detail?.deployment.latestStatus ?? deployment.latestStatus)
   /** GitHub returns newest-first; the current status is the first entry. */
   const statusHistory = $derived(detail?.statuses ?? [])
-
-  function isFailedJob(job: GitHubDeploymentJob): boolean {
-    return (
-      job.status === 'completed' &&
-      job.conclusion !== 'success' &&
-      job.conclusion !== 'neutral' &&
-      job.conclusion !== 'skipped' &&
-      job.conclusion !== 'cancelled'
-    )
-  }
-
-  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -80,6 +63,9 @@
         ?.log ?? null
     )
   }
+
+  /** The job whose failure the agent button acts on, when the deployment has one. */
+  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   /** Cached logs for the jobs currently expanded   non-null for markup safety. */
   const logs = $derived.by(() => {
@@ -186,45 +172,6 @@
     return run.conclusion ?? 'completed'
   }
 
-  function jobTone(job: GitHubDeploymentJob): string {
-    if (job.status !== 'completed') return 'bg-warning/10 text-warning'
-    if (job.conclusion === 'success') return 'bg-success/10 text-success'
-    if (
-      job.conclusion === 'skipped' ||
-      job.conclusion === 'neutral' ||
-      job.conclusion === 'cancelled'
-    ) {
-      return 'bg-elevated text-dimmed'
-    }
-    return 'bg-danger/10 text-danger'
-  }
-
-  function stepTone(step: { status: string; conclusion: string | null }): string {
-    if (step.status !== 'completed') return 'text-warning'
-    if (step.conclusion === 'success') return 'text-success'
-    if (
-      step.conclusion === 'skipped' ||
-      step.conclusion === 'neutral' ||
-      step.conclusion === 'cancelled'
-    ) {
-      return 'text-dimmed'
-    }
-    return 'text-danger'
-  }
-
-  function stepGlyph(step: { status: string; conclusion: string | null }): string {
-    if (step.status !== 'completed') return '•'
-    if (step.conclusion === 'success') return '✓'
-    if (
-      step.conclusion === 'skipped' ||
-      step.conclusion === 'neutral' ||
-      step.conclusion === 'cancelled'
-    ) {
-      return '·'
-    }
-    return '✕'
-  }
-
   function jobSummary(job: GitHubDeploymentJob): string {
     const started = Date.parse(job.startedAt)
     const completed = job.completedAt ? Date.parse(job.completedAt) : null
@@ -243,77 +190,16 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
-  <!-- Header -->
-  <div class="shrink-0 border-b border-border px-3 py-2">
-    <div class="flex items-center gap-1">
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to deployments"
-        aria-label="Back to deployments"
-        onclick={onBack}
-      >
-        <ArrowLeft size={13} />
-      </button>
-      <Rocket size={12} class="shrink-0 text-muted" />
-      <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
-        {deployment.environment}
-      </span>
-      <span
-        class={[
-          'shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide',
-          statusTone(latestStatus?.state ?? 'unknown')
-        ]}
-      >
-        {latestStatus?.state ?? 'unknown'}
-      </span>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-        title="Refresh deployment"
-        aria-label="Refresh deployment"
-        disabled={loading}
-        onclick={() => void loadDetail(true)}
-      >
-        <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open deployment on GitHub"
-        aria-label="Open deployment on GitHub"
-        onclick={() => void openInBrowser(htmlUrl)}
-      >
-        <ExternalLink size={13} />
-      </button>
-    </div>
-    <div class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.5625rem] text-dimmed">
-      <span class="max-w-32 truncate font-mono">{deployment.ref}</span>
-      <span>·</span>
-      <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
-      <span>·</span>
-      <span>{relativeTime(deployment.updatedAt)}</span>
-      {#if failedJob}
-        <button
-          type="button"
-          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-          title={`Review failed job ${failedJob.name} with an agent`}
-          disabled={preparingAgent || loading}
-          onclick={() => void reviewWithAgent(failedJob)}
-        >
-          {#if preparingAgent}
-            <Loader2 size={11} class="animate-spin" />
-          {:else}
-            <Bot size={11} />
-          {/if}
-          Review
-        </button>
-      {/if}
-    </div>
-    {#if deployment.description}
-      <p class="mt-1 truncate text-[0.625rem] text-muted">{deployment.description}</p>
-    {/if}
-  </div>
+  <!--
+    No header row: the panel's action row carries the back control and names this
+    deployment, and its own refresh and external link cover the two this page used
+    to repeat.
+  -->
+  {#if deployment.description}
+    <p class="shrink-0 border-b border-border px-3 py-1.5 text-[0.625rem] text-muted">
+      {deployment.description}
+    </p>
+  {/if}
 
   {#if loading && !detail}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
@@ -341,10 +227,14 @@
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Status history
           </h3>
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{statusHistory.length}</span>
+          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed"
+            >{statusHistory.length}</span
+          >
         </div>
         {#if statusHistory.length === 0}
-          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">No status updates recorded.</p>
+          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
+            No status updates recorded.
+          </p>
         {:else}
           <div class="divide-y divide-border">
             {#each statusHistory as status, index (index)}
@@ -376,7 +266,9 @@
       <section class="border-b border-border">
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
           <PackageCheck size={11} class="text-dimmed" />
-          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Workflow run</h3>
+          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Workflow run
+          </h3>
         </div>
         {#if detail.workflowRun}
           {@const run = detail.workflowRun}
@@ -405,7 +297,9 @@
                 </button>
               {/if}
             </div>
-            <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.5625rem] text-dimmed">
+            <div
+              class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.5625rem] text-dimmed"
+            >
               <span>{run.name} #{run.runNumber}</span>
               <span>{run.event}</span>
               {#if run.branch}
@@ -421,7 +315,9 @@
             </div>
           </div>
         {:else}
-          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">No linked workflow run found.</p>
+          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
+            No linked workflow run found.
+          </p>
         {/if}
       </section>
 
@@ -430,37 +326,71 @@
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
           <Terminal size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span>
+          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span
+          >
+          {#if failedJob}
+            <!--
+              The failed job's handoff lives with the jobs it is about: it used to
+              sit in the header row, which this page no longer has.
+            -->
+            <button
+              type="button"
+              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+              title={`Review failed job ${failedJob.name} with an agent`}
+              disabled={preparingAgent || loading}
+              onclick={() => void reviewWithAgent(failedJob)}
+            >
+              {#if preparingAgent}
+                <Loader2 size={11} class="animate-spin" />
+              {:else}
+                <Bot size={11} />
+              {/if}
+              Review failed job
+            </button>
+          {/if}
+          {#if detail.workflowRun}
+            <RerunRunMenu
+              {projectId}
+              {identity}
+              runId={detail.workflowRun.id}
+              runStatus={detail.workflowRun.status}
+              hasFailedJobs={failedJob !== null}
+              onRerun={() => void loadDetail(true)}
+            />
+          {/if}
         </div>
         {#if detail.jobs.length === 0}
-          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">No job details are available.</p>
+          <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
+            No job details are available.
+          </p>
         {:else}
           <div class="divide-y divide-border">
             {#each detail.jobs as job (job.id)}
+              {@const jobState = job.conclusion ?? job.status}
+              {@const JobGlyph = stateGlyph(jobState)}
               <div class="px-3 py-2">
                 <button
                   type="button"
                   class="flex w-full cursor-pointer items-center gap-2 text-left"
                   onclick={() => toggleJobLog(job)}
                 >
+                  <!--
+                    The status leads the row, the way the Changes view leads a file
+                    with its status mark: one icon before the name, rather than a
+                    badge holding its own space at the end of the row.
+                  -->
+                  <JobGlyph
+                    size={12}
+                    class="shrink-0 {stateGlyphClass(jobState)}"
+                    role="img"
+                    aria-label={stateLabel(jobState)}
+                    title={stateLabel(jobState)}
+                  />
                   <span
-                    class="shrink-0 text-[0.5625rem] font-bold leading-none {stepTone(job)}"
-                    aria-hidden="true"
+                    class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+                    title={job.name}
                   >
-                    {job.status !== 'completed' ? '•' : job.conclusion === 'success' ? '✓' : stepGlyph(job)}
-                  </span>
-                  <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
                     {job.name}
-                  </span>
-                  <span
-                    class={[
-                      'shrink-0 rounded px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase',
-                      jobTone(job)
-                    ]}
-                  >
-                    {job.status !== 'completed'
-                      ? job.status.replace('_', ' ')
-                      : (job.conclusion ?? 'completed')}
                   </span>
                   <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
                     {jobSummary(job)}
@@ -470,19 +400,17 @@
                 {#if job.steps.length > 0}
                   <ul class="mt-1.5 space-y-0.5 border-l border-border pl-3">
                     {#each job.steps as step (step.number)}
+                      {@const stepState = step.conclusion ?? step.status}
+                      {@const StepGlyph = stateGlyph(stepState)}
                       <li class="flex items-center gap-1.5 text-[0.5625rem]">
-                        <span
-                          class="w-2 shrink-0 text-center text-[0.5rem] leading-none {stepTone(step)}"
-                          aria-hidden="true"
-                        >
-                          {stepGlyph(step)}
-                        </span>
-                        <span class="truncate text-muted">{step.name}</span>
-                        <span class="ml-auto shrink-0 text-dimmed">
-                          {step.status !== 'completed'
-                            ? step.status.replace('_', ' ')
-                            : (step.conclusion ?? 'completed')}
-                        </span>
+                        <StepGlyph
+                          size={10}
+                          class="shrink-0 {stateGlyphClass(stepState)}"
+                          role="img"
+                          aria-label={stateLabel(stepState)}
+                          title={stateLabel(stepState)}
+                        />
+                        <span class="truncate text-muted" title={step.name}>{step.name}</span>
                       </li>
                     {/each}
                   </ul>
@@ -507,27 +435,14 @@
                           </button>
                         {/if}
                       </div>
-                    {:else if loadingLog[job.id]}
-                      <div class="flex items-center gap-2 py-2 text-[0.625rem] text-dimmed">
-                        <Loader2 size={11} class="animate-spin" />
-                        Loading log…
-                      </div>
-                    {:else if logErrors[job.id]}
-                      <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">
-                        {logErrors[job.id]}
-                      </p>
-                    {:else if logs[job.id]}
-                      <div class="relative">
-                        <pre
-                          class="max-h-64 overflow-auto rounded-md bg-black/5 p-2 font-mono text-[0.5625rem] leading-relaxed text-muted dark:bg-black/30">{logs[
-                            job.id
-                          ].log}</pre>
-                        {#if logs[job.id].truncated}
-                          <p class="mt-1 text-[0.5625rem] text-dimmed">
-                            Log truncated   {job.name} may exceed the in-app limit.
-                          </p>
-                        {/if}
-                      </div>
+                    {:else if loadingLog[job.id] || logErrors[job.id] || logs[job.id]}
+                      <GitJobLogView
+                        log={logs[job.id] ?? null}
+                        loading={loadingLog[job.id] === true}
+                        error={logErrors[job.id] ?? ''}
+                        failedSteps={failedJobStepNames(job)}
+                        class="rounded-md bg-black/5 p-2 dark:bg-black/30"
+                      />
                     {/if}
                   </div>
                 {/if}

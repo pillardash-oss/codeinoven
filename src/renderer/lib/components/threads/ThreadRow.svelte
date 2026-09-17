@@ -26,8 +26,10 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
-  import WaveBars from '$lib/components/speech/WaveBars.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
@@ -355,16 +357,50 @@
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  /** The thread's agent is driving the computer right now   window-scoped or
+   *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
+  let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
   /** TTS playing on this thread   shares the recorder's indicator slot. */
-  // Last action wins between ASR and TTS: recording start cancels playback, so
-  // a transcription can only overlap a TTS that began after it   in that case
-  // the newer TTS takes the slot; otherwise the transcription waveform shows.
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
   /** The mic has closed but the transcript has not landed yet   same indicator
    *  slot, distinct label, shown only when neither recording nor speaking. */
   let isTranscribing = $derived(
     !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
   )
+  /** Armed delivery of the transcription in flight: the user has told the app to
+   *  send (or steer) the transcript the moment it lands. */
+  let voiceSendStage = $derived(
+    isTranscribing ? speechController.voiceSendStageForThread(thread.id) : null
+  )
+  /**
+   * The row has one indicator slot and this is what owns it. Last action wins:
+   * of listening, speaking, transcribing, and the agent using the computer, the
+   * action that began most recently is shown. Recording start already cancels
+   * playback, so the speech candidates cannot both be live; the speech
+   * controller reports when each began and computer use reports the agent's
+   * most recent action.
+   */
+  let indicator = $derived.by((): ThreadIndicator | null => {
+    const candidates: Array<{ indicator: ThreadIndicator; at: number }> = []
+    const speechAt = speechController.threadIndicatorActionAt(thread.id) ?? 0
+    if (isRecording) candidates.push({ indicator: 'recording', at: speechAt })
+    if (isSpeaking) candidates.push({ indicator: 'speaking', at: speechAt })
+    if (isTranscribing) {
+      candidates.push({
+        indicator:
+          voiceSendStage === 'steer'
+            ? 'transcribing-steer'
+            : voiceSendStage === 'send'
+              ? 'transcribing-send'
+              : 'transcribing',
+        at: speechAt
+      })
+    }
+    if (isUsingComputerUse) {
+      candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
+    }
+    return resolveThreadIndicator(candidates)
+  })
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -665,12 +701,8 @@
         {displayTitle}
       </span>
       {#if !showBottomRow}
-        {#if isRecording}
-          <RecordingIndicator label="Listening" />
-        {:else if isSpeaking}
-          <RecordingIndicator label="Speaking" tone="speech" />
-        {:else if isTranscribing}
-          <WaveBars label="Transcribing" />
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -740,12 +772,8 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          {#if isRecording}
-            <RecordingIndicator label="Listening" />
-          {:else if isSpeaking}
-            <RecordingIndicator label="Speaking" tone="speech" />
-          {:else if isTranscribing}
-            <WaveBars label="Transcribing" />
+          {#if indicator}
+            <ThreadIndicatorSlot {indicator} />
           {:else}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {relativeTime(thread.lastActivity)}
@@ -892,12 +920,8 @@
       <!-- Single-line default: time rides on the top line, swapped for the
            working model's provider icon while the thread is working -->
       {#if !showBottomRow}
-        {#if isRecording}
-          <RecordingIndicator label="Listening" />
-        {:else if isSpeaking}
-          <RecordingIndicator label="Speaking" tone="speech" />
-        {:else if isTranscribing}
-          <WaveBars label="Transcribing" />
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
         {:else if isBusyIndicator && currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -992,12 +1016,8 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          {#if isRecording}
-            <RecordingIndicator label="Listening" />
-          {:else if isSpeaking}
-            <RecordingIndicator label="Speaking" tone="speech" />
-          {:else if isTranscribing}
-            <WaveBars label="Transcribing" />
+          {#if indicator}
+            <ThreadIndicatorSlot {indicator} />
           {:else}
             <span
               class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered

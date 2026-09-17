@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, CheckCheck, CornerDownRight, ShieldAlert, X } from '@lucide/svelte'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -16,6 +17,7 @@
 
   let { request, onAllowOnce, onAllowAlways, onReject, onAlternative, scope }: Props = $props()
 
+  let folded = $state(false)
   let showingAlternative = $state(false)
   let alternative = $state('')
   let working = $state(false)
@@ -106,162 +108,171 @@
           {request.policy.risk}
         </span>
       {/if}
-    </div>
-    <button
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-30"
-      disabled={working}
-      onclick={() => void reject()}
-      aria-label="Reject and close permission request"
-      title="Reject and close"
-    >
-      <X size={15} />
-    </button>
-  </div>
-
-  <div class="max-h-80 space-y-4 overflow-y-auto p-4">
-    <div>
-      <p class="text-sm font-semibold text-foreground">{request.permission}</p>
-      {#if request.policy}
-        <p class="mt-1 text-xs leading-relaxed text-muted">{request.policy.reason}</p>
+      <!-- Folded, the header carries what is being asked for, like the task card. -->
+      {#if folded}
+        <span class="min-w-0 truncate text-xs text-muted">{request.permission}</span>
       {/if}
     </div>
+    <div class="flex shrink-0 items-center gap-1">
+      <button
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-30"
+        disabled={working}
+        onclick={() => void reject()}
+        aria-label="Reject and close permission request"
+        title="Reject and close"
+      >
+        <X size={15} />
+      </button>
+      <CardFoldToggle bind:folded label="permission request" />
+    </div>
+  </div>
 
-    {#if request.patterns.length > 0}
+  {#if !folded}
+    <div class="max-h-80 space-y-4 overflow-y-auto p-4">
       <div>
-        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
-          Requested resources
-        </p>
-        <div class="space-y-1">
-          {#each request.patterns as pattern, index (`${pattern}-${index}`)}
-            <p
-              class="break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
-            >
-              {pattern}
-            </p>
-          {/each}
-        </div>
+        <p class="text-sm font-semibold text-foreground">{request.permission}</p>
+        {#if request.policy}
+          <p class="mt-1 text-xs leading-relaxed text-muted">{request.policy.reason}</p>
+        {/if}
       </div>
-    {/if}
 
-    {#if request.policy && request.policy.scopedPaths.length > 0}
-      <div>
-        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
-          Resolved scope
-        </p>
-        <div class="space-y-1">
-          {#each request.policy.scopedPaths as path, index (`${path}-${index}`)}
-            <p class="break-all font-mono text-[0.6875rem] text-muted">{path}</p>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    {#if metadataEntries.length > 0}
-      <div>
-        <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
-          Request details
-        </p>
-        <dl class="space-y-2">
-          {#each metadataEntries as [key, value] (key)}
-            <div class="grid gap-1">
-              <dt class="text-[0.6875rem] font-semibold text-muted">{key}</dt>
-              <dd
-                class="whitespace-pre-wrap break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
+      {#if request.patterns.length > 0}
+        <div>
+          <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+            Requested resources
+          </p>
+          <div class="space-y-1">
+            {#each request.patterns as pattern, index (`${pattern}-${index}`)}
+              <p
+                class="break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
               >
-                {formatMetadata(value)}
-              </dd>
-            </div>
-          {/each}
-        </dl>
-      </div>
-    {/if}
-
-    {#if showingAlternative}
-      <div>
-        <label for={alternativeSpeechTargetId} class="text-xs font-semibold text-foreground">
-          Alternative instruction
-        </label>
-        <div class="mt-1.5 flex items-start gap-2">
-          <RichMarkdownEditor
-            bind:this={alternativeEditor}
-            id={alternativeSpeechTargetId}
-            bind:value={alternative}
-            autofocus
-            disabled={working}
-            placeholder="Describe what the agent should do instead…"
-            class="w-full resize-y rounded-lg border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-            containerClass="min-w-0 flex-1"
-            ariaLabel="Alternative instruction"
-            onSubmit={() => void submitAlternative()}
-          />
-          <VoiceInputButton
-            targetId={alternativeSpeechTargetId}
-            getTarget={alternativeSpeechTarget}
-            {scope}
-            disabled={working}
-          />
+                {pattern}
+              </p>
+            {/each}
+          </div>
         </div>
-        <p class="mt-1 text-[0.6875rem] text-dimmed">
-          The requested action will be rejected and this instruction will steer the current run.
-        </p>
-      </div>
-    {/if}
+      {/if}
 
-    {#if actionError}
-      <p class="text-xs text-danger" role="alert">{actionError}</p>
-    {/if}
-  </div>
+      {#if request.policy && request.policy.scopedPaths.length > 0}
+        <div>
+          <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+            Resolved scope
+          </p>
+          <div class="space-y-1">
+            {#each request.policy.scopedPaths as path, index (`${path}-${index}`)}
+              <p class="break-all font-mono text-[0.6875rem] text-muted">{path}</p>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
-  <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-    <button
-      class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
-      disabled={working}
-      onclick={() => void reject()}
-    >
-      Reject
-    </button>
-    <div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+      {#if metadataEntries.length > 0}
+        <div>
+          <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+            Request details
+          </p>
+          <dl class="space-y-2">
+            {#each metadataEntries as [key, value] (key)}
+              <div class="grid gap-1">
+                <dt class="text-[0.6875rem] font-semibold text-muted">{key}</dt>
+                <dd
+                  class="whitespace-pre-wrap break-all rounded-lg bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-foreground"
+                >
+                  {formatMetadata(value)}
+                </dd>
+              </div>
+            {/each}
+          </dl>
+        </div>
+      {/if}
+
       {#if showingAlternative}
-        <button
-          class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-          disabled={working}
-          onclick={() => (showingAlternative = false)}
-        >
-          Cancel
-        </button>
-        <button
-          class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-          disabled={!canSubmitAlternative}
-          onclick={() => void submitAlternative()}
-        >
-          Send alternative
-          <CornerDownRight size={13} />
-        </button>
-      {:else}
-        <button
-          class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-          disabled={working}
-          onclick={() => void allowOnce()}
-        >
-          Allow once
-          <Check size={13} />
-        </button>
-        <button
-          class="flex min-h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-          disabled={working}
-          onclick={() => void allowAlways()}
-        >
-          Allow always
-          <CheckCheck size={13} />
-        </button>
-        <button
-          class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-          disabled={working}
-          onclick={() => void showAlternative()}
-        >
-          Provide alternative
-        </button>
+        <div>
+          <label for={alternativeSpeechTargetId} class="text-xs font-semibold text-foreground">
+            Alternative instruction
+          </label>
+          <div class="mt-1.5 flex items-start gap-2">
+            <RichMarkdownEditor
+              bind:this={alternativeEditor}
+              id={alternativeSpeechTargetId}
+              bind:value={alternative}
+              autofocus
+              disabled={working}
+              placeholder="Describe what the agent should do instead…"
+              class="w-full resize-y rounded-lg border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+              containerClass="min-w-0 flex-1"
+              ariaLabel="Alternative instruction"
+              onSubmit={() => void submitAlternative()}
+            />
+            <VoiceInputButton
+              targetId={alternativeSpeechTargetId}
+              getTarget={alternativeSpeechTarget}
+              {scope}
+              disabled={working}
+            />
+          </div>
+          <p class="mt-1 text-[0.6875rem] text-dimmed">
+            The requested action will be rejected and this instruction will steer the current run.
+          </p>
+        </div>
+      {/if}
+
+      {#if actionError}
+        <p class="text-xs text-danger" role="alert">{actionError}</p>
       {/if}
     </div>
-  </div>
+
+    <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
+      <button
+        class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+        disabled={working}
+        onclick={() => void reject()}
+      >
+        Reject
+      </button>
+      <div class="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+        {#if showingAlternative}
+          <button
+            class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            disabled={working}
+            onclick={() => (showingAlternative = false)}
+          >
+            Cancel
+          </button>
+          <button
+            class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+            disabled={!canSubmitAlternative}
+            onclick={() => void submitAlternative()}
+          >
+            Send alternative
+            <CornerDownRight size={13} />
+          </button>
+        {:else}
+          <button
+            class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+            disabled={working}
+            onclick={() => void allowOnce()}
+          >
+            Allow once
+            <Check size={13} />
+          </button>
+          <button
+            class="flex min-h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            disabled={working}
+            onclick={() => void allowAlways()}
+          >
+            Allow always
+            <CheckCheck size={13} />
+          </button>
+          <button
+            class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+            disabled={working}
+            onclick={() => void showAlternative()}
+          >
+            Provide alternative
+          </button>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </section>

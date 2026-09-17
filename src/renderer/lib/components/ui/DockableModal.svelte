@@ -14,7 +14,7 @@
   interface Props {
     open: boolean
     title: string
-    /** Whether the panel is collapsed into the bottom-right dock. */
+    /** Whether the panel is collapsed into its dock row. */
     minimized: boolean
     /**
      * Whether the close (X) affordance is available. When false the header shows
@@ -26,12 +26,28 @@
     onClose: () => void
     /** Restore the panel from the dock. */
     onExpand: () => void
-    /** Content rendered inside the bottom-right dock while minimized. */
+    /**
+     * Content rendered in the dock while minimized. Each dock wraps its chips in
+     * `DockRow`, which owns the row's edge placement and its drag head, so a
+     * docked panel can be dragged to any screen edge; a dock whose host renders
+     * the shared chip row (e.g. the PR or worktree dock) renders nothing here.
+     */
     dock: Snippet
     children: Snippet
     footer?: Snippet
-    /** LocalStorage key used to persist the panel's position/size. */
+    /**
+     * LocalStorage key used to persist the panel's position/size.
+     */
     storageKey?: string
+    /**
+     * Stacking layer. `surface` sits with the app's other floating panels at
+     * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
+     * browser, file editor and the pull request reader are all `z-50`), which
+     * the pull request sheet needs because it can be opened from the full
+     * screen reader. Portaled menus and confirms inside a `top` panel belong at
+     * `z-90` so they still clear the panel itself.
+     */
+    layer?: 'surface' | 'top'
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -63,6 +79,7 @@
     children,
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    layer = 'surface',
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerPrefix,
@@ -239,7 +256,7 @@
   // would be hidden behind the page and unclickable. Publish this panel's
   // on-screen rectangle and let the browser panel detach its native view while
   // it is covered   a panel dragged off the browser leaves the browser usable.
-  // The minimized dock chip registers itself through `trackBrowserOcclusion`.
+  // The minimized dock row publishes its own rectangle through `DockRow`.
   $effect(() => {
     if (!open || minimized) return
     const key = occlusionKey
@@ -285,12 +302,22 @@
   <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
     its embedded terminal PTYs are never torn down   minimize only hides it while
-    the bottom-right dock keeps the run badges live. The dock renders as a sibling.
+    the dock row keeps the run badges live. The dock renders as a sibling, outside
+    this panel, so the panel's `invisible` state cannot hide it.
+  -->
+  <!--
+    `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog
+    (the full screen reader, terminal, browser, file editor) sets
+    `body { pointer-events: none }` while it is open, and pointer events inherit,
+    so a panel that does not opt back in is visible above that surface at z-80 but
+    completely dead to the mouse. That is the whole reason `layer="top"` exists.
   -->
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
+    class="fixed {layer === 'top'
+      ? 'z-80'
+      : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
-      : ''}"
+      : 'pointer-events-auto'}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
     bind:this={panelEl}
     role="dialog"
@@ -349,6 +376,11 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50" {@attach trackBrowserOcclusion}>{@render dock()}</div>
+    <div
+      class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
+      {@attach trackBrowserOcclusion}
+    >
+      {@render dock()}
+    </div>
   {/if}
 {/if}

@@ -7,58 +7,54 @@
 
   interface Props {
     attemptId: string
-    mimeType?: string
     label?: string
   }
 
-  let { attemptId, mimeType, label = 'Recording' }: Props = $props()
+  let { attemptId, label = 'Recording' }: Props = $props()
 
   let url = $state<string | null>(null)
+  let downloadName = $state('')
   let audioEl = $state<HTMLAudioElement | null>(null)
-  let loading = $state(false)
+  let preparing = $state(false)
   let error = $state<string | null>(null)
   let isPlaying = $state(false)
   let unregister: (() => void) | null = null
 
-  function mimeToExt(mime?: string): string {
-    if (!mime) return 'webm'
-    if (mime.includes('wav')) return 'wav'
-    if (mime.includes('ogg')) return 'ogg'
-    if (mime.includes('mp3') || mime.includes('mpeg')) return 'mp3'
-    if (mime.includes('webm')) return 'webm'
-    return 'webm'
+  function describe(cause: unknown): string {
+    return cause instanceof Error ? cause.message : String(cause)
   }
 
-  function mimeToType(mime?: string): string {
-    if (!mime) return 'audio/webm'
-    if (mime.startsWith('audio/')) return mime
-    return 'audio/webm'
-  }
-
-  const downloadName = $derived(`recording-${attemptId}.${mimeToExt(mimeType)}`)
-
-  async function ensureUrl(): Promise<string | null> {
-    if (url) return url
-    loading = true
+  /**
+   * Load the recording and turn it into a playable blob URL. The main process
+   * returns media that the audio element can actually decode, together with the
+   * media type and extension describing those exact bytes: the macOS capture
+   * worker stores Core Audio Format, which is converted on demand for playback.
+   */
+  async function prepare(): Promise<boolean> {
+    if (url) return true
+    if (preparing) return false
+    preparing = true
     error = null
     try {
       const result = await invoke('speech:readAudio', attemptId)
       if (!result.ok) throw new Error(result.error.message)
-      const blob = new Blob([result.value as unknown as ArrayBuffer], { type: mimeToType(mimeType) })
-      const next = URL.createObjectURL(blob)
+      const next = URL.createObjectURL(
+        new Blob([result.value.bytes], { type: result.value.mimeType })
+      )
       url = next
-      return next
+      downloadName = `recording-${attemptId}${result.value.extension}`
+      return true
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause)
-      return null
+      error = describe(cause)
+      return false
     } finally {
-      loading = false
+      preparing = false
     }
   }
 
-  async function handleLoadAndPlay(): Promise<void> {
-    const next = await ensureUrl()
-    if (!next) return
+  async function handlePlay(): Promise<void> {
+    if (!(await prepare())) return
+    // The src is applied by the same flush that set `url`.
     await tick()
     if (!audioEl) return
     await speechController.cancelPlayback()
@@ -66,11 +62,19 @@
     try {
       await audioEl.play()
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause)
+      error = describe(cause)
     }
   }
 
-  function handlePlay(): void {
+  function handleMediaError(): void {
+    const failure = audioEl?.error
+    isPlaying = false
+    error = failure?.message
+      ? `The recording could not be played: ${failure.message}`
+      : 'The recording could not be played.'
+  }
+
+  function handlePlaybackStarted(): void {
     isPlaying = true
     if (audioEl) setCurrentHistoryAudio(audioEl)
     void speechController.cancelPlayback()
@@ -99,42 +103,52 @@
     if (url) URL.revokeObjectURL(url)
     if (audioEl && !audioEl.paused) audioEl.pause()
   })
-
-  let prevAttempt: string | null = null
-  $effect(() => {
-    const currentId = attemptId
-    if (prevAttempt === null) {
-      prevAttempt = currentId
-      return
-    }
-    if (currentId !== prevAttempt) {
-      if (url) URL.revokeObjectURL(url)
-      url = null
-      error = null
-      isPlaying = false
-      prevAttempt = currentId
-    }
-  })
 </script>
 
 <div class="rounded-lg border bg-elevated p-2">
-  {#if url}
-    <audio
-      bind:this={audioEl}
-      src={url}
-      controls
-      preload="metadata"
-      class="h-8 w-full"
-      aria-label="{label} audio player"
-      onplay={handlePlay}
-      onpause={handlePause}
-      onended={handleEnded}
-    ></audio>
+  <!-- One stable element: play() always targets the element carrying the src. -->
+  <audio
+    bind:this={audioEl}
+    src={url ?? undefined}
+    controls={url !== null}
+    preload={url === null ? 'none' : 'metadata'}
+    hidden={url === null}
+    class="h-8 w-full"
+    aria-label="{label} audio player"
+    onplay={handlePlaybackStarted}
+    onpause={handlePause}
+    onended={handleEnded}
+    onerror={handleMediaError}
+  ></audio>
+
+  {#if url === null}
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
+        title="Load and play recording with seek and download"
+        aria-label="Play recording {attemptId}"
+        disabled={preparing}
+        onclick={() => void handlePlay()}
+      >
+        {#if preparing}
+          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+          Preparing…
+        {:else}
+          <Play size={12} aria-hidden="true" />
+          Play
+        {/if}
+      </button>
+      <span class="text-[0.625rem] text-dimmed">Loaded once · seek and download on player</span>
+    </div>
+  {:else}
     <div class="mt-1.5 flex items-center justify-between gap-2">
-      <span class="text-[0.625rem] text-dimmed">{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player · download below</span>
+      <span class="text-[0.625rem] text-dimmed"
+        >{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player · download below</span
+      >
       <a
         href={url}
-        download={downloadName}
+        download={downloadName || `recording-${attemptId}`}
         class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground"
         title="Download recording"
         aria-label="Download recording {attemptId}"
@@ -142,41 +156,9 @@
         <Download size={11} aria-hidden="true" /> Download
       </a>
     </div>
-    {#if error}
-      <p class="mt-1 text-[0.6875rem] text-danger" role="alert">{error}</p>
-    {/if}
-  {:else}
-    <div class="flex items-center gap-2">
-      <button
-        type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
-        title="Load and play recording with seek and download"
-        aria-label="Play recording {attemptId}"
-        disabled={loading}
-        onclick={() => void handleLoadAndPlay()}
-      >
-        {#if loading}
-          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
-          Loading…
-        {:else}
-          <Play size={12} aria-hidden="true" />
-          Play
-        {/if}
-      </button>
-      <span class="text-[0.625rem] text-dimmed">Regular player with seek · download after load</span>
-    </div>
-    {#if error}
-      <p class="mt-1.5 text-[0.6875rem] text-danger" role="alert">{error}</p>
-    {/if}
-    <!-- Keep audio element mounted even before url so handleLoadAndPlay can play immediately -->
-    <audio
-      bind:this={audioEl}
-      preload="metadata"
-      class="hidden"
-      aria-hidden="true"
-      onplay={handlePlay}
-      onpause={handlePause}
-      onended={handleEnded}
-    ></audio>
+  {/if}
+
+  {#if error}
+    <p class="mt-1.5 text-[0.6875rem] text-danger" role="alert">{error}</p>
   {/if}
 </div>

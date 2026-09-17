@@ -17,6 +17,8 @@ import type {
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRecordingAttempt,
+  SpeechAudioBytes,
+  SpeechPlaybackAudio,
   SpeechPreparedPlayback,
   SpeechRefinementFlags,
   SpeechSynthesizedSegment,
@@ -644,12 +646,12 @@ export class SpeechService {
   }
 
   /** Read staged playground audio so the renderer can build a playback URL. */
-  async readPlaygroundAudio(token: string): Promise<Uint8Array> {
+  async readPlaygroundAudio(token: string): Promise<SpeechAudioBytes> {
     const staged = this.playgroundAudio.get(token)
     if (!staged) {
       throw new Error('The playground audio is no longer available. Record or import it again.')
     }
-    return new Uint8Array(await readFile(staged.path))
+    return { bytes: new Uint8Array(await readFile(staged.path)), mimeType: staged.mimeType }
   }
 
   /**
@@ -816,8 +818,12 @@ export class SpeechService {
     await this.storage.deleteAllAttempts()
   }
 
-  readAudio(attemptId: string): Promise<Uint8Array<ArrayBuffer>> {
-    return this.storage.readAudio(attemptId)
+  /**
+   * Read a stored recording as playable audio: containers Chromium can demux
+   * are returned as stored, everything else is converted once and cached.
+   */
+  readPlaybackAudio(attemptId: string): Promise<SpeechPlaybackAudio> {
+    return this.storage.readPlaybackAudio(attemptId)
   }
 
   async deleteArtifact(artifactId: string, token: string): Promise<void> {

@@ -32,11 +32,13 @@ import type {
 import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
+import { readAntigravityAccountUsage } from '../usage/antigravity-quota'
 import { Logger } from '../system/logger'
 import { parseBrainTraceLine } from './antigravity-brain-trace'
+import { presentProviderError } from '../../lib/provider-issue'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without
@@ -101,6 +103,20 @@ function brainTranscriptPath(conversationId: string): string {
     'logs',
     'transcript.jsonl'
   )
+}
+
+/**
+ * Current transcript size, used to skip a resumed conversation's history. The
+ * transcript is append-only across turns of a conversation, so a resumed turn
+ * must start reading at the end of the bytes that predate it rather than
+ * replaying every earlier turn's thinking into the new message.
+ */
+function brainTranscriptSize(conversationId: string): number {
+  try {
+    return statSync(brainTranscriptPath(conversationId)).size
+  } catch {
+    return 0
+  }
 }
 
 /**
@@ -185,7 +201,7 @@ function antigravityIssue(error: string): AgentProviderIssue {
   const authentication = normalized.includes('auth') || normalized.includes('sign in')
   return {
     kind: quota ? 'quota' : authentication ? 'authentication' : 'unknown',
-    message: error,
+    message: presentProviderError(error).message,
     rawError: error,
     harnessId: 'antigravity',
     retryable: quota || retryAt !== undefined,
@@ -368,6 +384,13 @@ interface AntigravityTurnState {
   conversationId: string | undefined
   /** Thinking text per streamed step already merged from the brain transcript. */
   brainThinking: Map<number, string>
+  /**
+   * Lowest step index this turn's stream reported. agy numbers steps per
+   * conversation, so a resumed turn starts above every previous turn's index;
+   * brain entries below this floor belong to an earlier turn and must never be
+   * merged into this turn's message.
+   */
+  firstStepIndex: number | undefined
   turnIndex: number
   messageId: string
   createdAt: number
@@ -409,7 +432,13 @@ function reasoningPart(
     type: 'reasoning',
     id: `${state.messageId}:thinking:${stepIndex ?? state.parts.length}`,
     messageID: state.messageId,
-    text: '',
+    // agy persists a step's thinking to its brain transcript while the model
+    // step settles, which is routinely before the CLI streams that step's
+    // `step_update`. The brain tail can therefore have already filled this
+    // step's text; a streamed timed part must carry that text forward instead
+    // of clobbering it with an empty string, because the dedupe map will not
+    // re-apply a brain entry it has already merged.
+    text: stepIndex === undefined ? '' : (state.brainThinking.get(stepIndex) ?? ''),
     time: { start, end }
   }
 }
@@ -598,6 +627,12 @@ export function mapAntigravityRecord(
   const stepType = stringValue(step['step_type'])
   const terminal = step['state'] === 'DONE' || step['state'] === 'ERROR'
   const stepIndex = numberValue(step['step_index'])
+  if (
+    stepIndex !== undefined &&
+    (state.firstStepIndex === undefined || stepIndex < state.firstStepIndex)
+  ) {
+    state.firstStepIndex = stepIndex
+  }
   const stepUsage = usageEvent(state, step['usage'], context.sessionId)
   // Each DONE/ERROR step reports the wall-clock time that step alone consumed.
   // Accumulating them in arrival order reconstructs a per-step timeline so
@@ -748,6 +783,17 @@ export class AntigravityDriver extends PersistentCliDriver {
     const parsed = parseAntigravityModels(result.stdout)
     this.modelVariants = parsed.variants
     return parsed.catalogs
+  }
+
+  /**
+   * Antigravity's plan quota is not readable from `agy` itself: the CLI has no
+   * usage command, and its streamed turn payload only carries quota when a turn
+   * happens to report one. So an on-demand read goes to Google Cloud Code with
+   * the account's own OAuth token and works with the CLI idle and with no
+   * OpenUsage companion app installed.
+   */
+  async readAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    return readAntigravityAccountUsage()
   }
 
   /** Cheapest available catalog model, shared by title and grading runs. */
@@ -901,6 +947,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       started: false,
       conversationId: session.nativeSessionId,
       brainThinking: new Map(),
+      firstStepIndex: undefined,
       timelineAnchor: 0,
       elapsedMs: 0
     }
@@ -917,7 +964,10 @@ export class AntigravityDriver extends PersistentCliDriver {
         turnState,
         session,
         projectPath,
-        turnState.conversationId
+        turnState.conversationId,
+        // A resumed conversation's transcript already holds every earlier
+        // turn, so this turn tails only what agy appends from here on.
+        true
       )
     }
     return {
@@ -957,7 +1007,9 @@ export class AntigravityDriver extends PersistentCliDriver {
     turnState: AntigravityTurnState,
     session: PersistentCliSession,
     projectPath: string,
-    conversationId: string
+    conversationId: string,
+    /** True when the transcript already holds earlier turns that must be skipped. */
+    skipExistingEntries = false
   ): void {
     this.stopBrainTraceWatcher(sessionId)
     const watcher: AntigravityBrainTraceWatcher = {
@@ -965,7 +1017,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       session,
       projectPath,
       conversationId,
-      offset: 0,
+      offset: skipExistingEntries ? brainTranscriptSize(conversationId) : 0,
       pending: '',
       giveUpAfter: Date.now() + ANTIGRAVITY_BRAIN_FIND_TIMEOUT_MS,
       timer: null,
@@ -1029,6 +1081,12 @@ export class AntigravityDriver extends PersistentCliDriver {
       for (const line of lines) {
         const parsed = parseBrainTraceLine(line)
         if (!parsed) continue
+        // agy numbers steps per conversation, so a resumed turn starts above
+        // the previous turn's range. Anything below this turn's first streamed
+        // step belongs to an earlier turn and is dropped before it can surface
+        // as a phantom thinking card in the current message.
+        const floor = watcher.turnState.firstStepIndex
+        if (floor !== undefined && parsed.stepIndex < floor) continue
         // A later brain entry for the same step is an agy-side revision; the
         // merge helper dedupes identical text and re-emits revised text.
         const part = mergeBrainThinking(watcher.turnState, parsed.stepIndex, parsed.thinking)

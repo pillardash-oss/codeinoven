@@ -25,7 +25,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import { classifyProviderIssue, presentProviderError } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
@@ -2487,7 +2487,7 @@ function codexUsageLimitIssue(
   const retryAt = codexUsageLimitResetAt(message)
   return {
     kind: 'quota',
-    message,
+    message: presentProviderError(message).message,
     rawError: message,
     harnessId: 'codex',
     retryable: true,

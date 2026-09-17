@@ -41,9 +41,23 @@
     onEditCustom: (provider: BaseUrlProvider) => void
     /** Tab shown on open   e.g. 'custom' when returning here via the editor's Back button. */
     initialTab?: AddTab
+    /** Provider search the connect list opens with. Non-empty opens that list
+     *  straight away with the filter applied, which is how the first-run setup
+     *  card lands a new user on OpenAI instead of an empty connect screen. */
+    initialSearch?: string
+    /** Fired once a provider finished connecting and its account was saved. */
+    onProviderConnected?: () => void
   }
 
-  let { harness, onClose, onAddCustom, onEditCustom, initialTab = 'connect' }: Props = $props()
+  let {
+    harness,
+    onClose,
+    onAddCustom,
+    onEditCustom,
+    initialTab = 'connect',
+    initialSearch = '',
+    onProviderConnected
+  }: Props = $props()
 
   /** The component is mounted per-open, so the initial prop value is authoritative. */
   function startingTab(): AddTab {
@@ -392,6 +406,7 @@
       await checkAuth()
       await loadOffered()
       providerCatalog.invalidateAll()
+      onProviderConnected?.()
     } catch (finalizeError) {
       actionError =
         finalizeError instanceof Error ? finalizeError.message : 'The account could not be saved.'
@@ -605,9 +620,17 @@
 
   onMount(() => {
     void baseUrlProviderStore.load()
-    void checkAuth()
     void loadHidden()
-    void loadOffered()
+    // A caller that names a provider search wants the provider list on screen
+    // with that filter applied, so wait for the sign-in probe and the offered
+    // list before opening it   otherwise the step would be decided from an
+    // auth state that has not landed yet.
+    void Promise.all([checkAuth(), loadOffered()]).then(() => {
+      const query = initialSearch.trim()
+      if (!query || !canSignIn || pickerLogin) return
+      search = query
+      step = 'picking'
+    })
     const unsubscribeOAuth = subscribe('providerAccounts:oauthEvent', (payload) =>
       handleOAuthPayload(payload)
     )
@@ -901,12 +924,14 @@
               size={13}
               class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
             />
+            <!-- svelte-ignore a11y_autofocus -->
             <input
               class="h-9 w-full rounded-lg border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
               placeholder="Search providers"
               autocomplete="off"
               spellcheck="false"
               bind:value={search}
+              autofocus
             />
           </div>
 

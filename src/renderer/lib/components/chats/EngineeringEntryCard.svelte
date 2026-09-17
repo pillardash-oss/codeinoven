@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FileText, Lightbulb, PenLine } from '@lucide/svelte'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
   interface Props {
@@ -40,6 +41,8 @@
     onReorderFavorite
   }: Props = $props()
 
+  let folded = $state(false)
+
   const label = $derived(target === 'prd' ? 'PRD' : 'Spec')
 </script>
 
@@ -47,53 +50,58 @@
   class="rounded-2xl border bg-surface p-4 shadow-sm"
   aria-labelledby="engineering-entry-title"
 >
-  <h2 id="engineering-entry-title" class="text-sm font-semibold text-foreground">
-    Engineer this message
-  </h2>
-  <p class="mt-1 text-xs leading-5 text-muted">
-    Explore the direction with a Brainstorm first, or jump straight into the {label} using the message
-    you typed.
-  </p>
-  <div class="mt-4 grid gap-2 sm:grid-cols-2">
-    <button
-      type="button"
-      class="rounded-xl bg-thread-spec px-3 py-2.5 text-left text-xs font-medium text-foreground disabled:opacity-50"
-      disabled={busy}
-      onclick={() => void onBrainstormFirst()}
-    >
-      <span class="flex items-center gap-2">
-        <Lightbulb size={14} class="shrink-0" />
-        Brainstorm first
-      </span>
-    </button>
-    <button
-      type="button"
-      class="rounded-xl border px-3 py-2.5 text-left text-xs font-medium text-foreground hover:bg-elevated disabled:opacity-50"
-      disabled={busy}
-      onclick={() => void onJumpIn()}
-    >
-      <span class="flex items-center gap-2">
-        <PenLine size={14} class="shrink-0" />
-        {target === 'prd' ? 'Start PRD' : 'Jump into Spec'}
-      </span>
-    </button>
+  <div class="flex items-start justify-between gap-2">
+    <h2 id="engineering-entry-title" class="text-sm font-semibold text-foreground">
+      Engineer this message
+    </h2>
+    <CardFoldToggle bind:folded label="engineering entry" />
   </div>
-  <div class="mt-3 flex items-center justify-between gap-2">
-    <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted">
-      <FileText size={12} class="shrink-0" />
-      Jumping in still lets the Sr. Engineer ask alignment questions   it just skips the Brainstorm
-      document.
+  {#if !folded}
+    <p class="mt-1 text-xs leading-5 text-muted">
+      Explore the direction with a Brainstorm first, or jump straight into the {label} using the message
+      you typed.
     </p>
-    <EngineeringModelSwitch
-      {settings}
-      {providers}
-      {projectId}
-      {favoriteModels}
-      {recentModels}
-      {onRemoveRecent}
-      {onModelChange}
-      {onToggleFavorite}
-      {onReorderFavorite}
-    />
-  </div>
+    <div class="mt-4 grid gap-2 sm:grid-cols-2">
+      <button
+        type="button"
+        class="rounded-xl bg-thread-spec px-3 py-2.5 text-left text-xs font-medium text-foreground disabled:opacity-50"
+        disabled={busy}
+        onclick={() => void onBrainstormFirst()}
+      >
+        <span class="flex items-center gap-2">
+          <Lightbulb size={14} class="shrink-0" />
+          Brainstorm first
+        </span>
+      </button>
+      <button
+        type="button"
+        class="rounded-xl border px-3 py-2.5 text-left text-xs font-medium text-foreground hover:bg-elevated disabled:opacity-50"
+        disabled={busy}
+        onclick={() => void onJumpIn()}
+      >
+        <span class="flex items-center gap-2">
+          <PenLine size={14} class="shrink-0" />
+          {target === 'prd' ? 'Start PRD' : 'Jump into Spec'}
+        </span>
+      </button>
+    </div>
+    <div class="mt-3 flex items-center justify-between gap-2">
+      <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted">
+        <FileText size={12} class="shrink-0" />
+        Jumping in still lets the Sr. Engineer ask alignment questions   it just skips the Brainstorm
+        document.
+      </p>
+      <EngineeringModelSwitch
+        {settings}
+        {providers}
+        {projectId}
+        {favoriteModels}
+        {recentModels}
+        {onRemoveRecent}
+        {onModelChange}
+        {onToggleFavorite}
+        {onReorderFavorite}
+      />
+    </div>
+  {/if}
 </section>

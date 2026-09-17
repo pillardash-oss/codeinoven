@@ -52,7 +52,8 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import {
   classifyProviderIssue,
   extractProviderErrorEnvelope,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
@@ -251,6 +252,10 @@ function openCodeIssue(
   // "code":"RATE_LIMITED"}`) instead of a plain sentence. Unwrap it so the UI
   // never has to render the JSON blob as the "friendly" message.
   const envelope = extractProviderErrorEnvelope(rawMessage)
+  // A crash inside OpenCode's own runtime is reported as the exception text,
+  // trace and all. `presentProviderError` keeps the header line as the card
+  // body and hands the trace to the Raw Error view only.
+  const presentation = presentProviderError(rawMessage)
   const statusCode = numberValue(data?.['statusCode']) ?? numberValue(error?.['statusCode'])
   const kind = classifyProviderIssue(rawMessage, statusCode)
   // A genuine usage/quota reset date embedded in the message is authoritative
@@ -261,8 +266,8 @@ function openCodeIssue(
     kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(envelope.message) : undefined
   return {
     kind,
-    message: envelope.message,
-    ...(envelope.message === rawMessage ? {} : { rawError: rawMessage }),
+    message: presentation.message,
+    ...(presentation.rawError === undefined ? {} : { rawError: presentation.rawError }),
     harnessId: 'opencode',
     retryable:
       overrides.retryable ??

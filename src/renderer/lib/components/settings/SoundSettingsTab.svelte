@@ -948,7 +948,6 @@
                 <div class="mt-2">
                   <HistoryAudioPlayer
                     attemptId={attempt.id}
-                    mimeType={attempt.mimeType}
                     label="Recording {new Date(attempt.createdAt).toLocaleString()}"
                   />
                 </div>

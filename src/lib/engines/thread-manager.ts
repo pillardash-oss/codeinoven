@@ -1577,10 +1577,37 @@ export class ThreadManager {
       1
     )
     if (!upper.ok) throw new Error(upper.error ?? 'Cannot read fork boundary')
-    if (messageId && upper.rows.length === 0) {
-      throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
+    let cutoff = upper.rows[0]
+    if (messageId && !cutoff) {
+      // `agent_messages` is written when a turn settles, so a running turn's
+      // messages are addressable from the renderer (they stream into its live
+      // cache) before the durable transcript holds them. A fork copies stored
+      // history, so the boundary of such a message is the newest stored
+      // message: the whole of that history. An id that is stored anywhere but
+      // is not a canonical row of this thread (another thread, or a
+      // session-scoped trace row) is a stale boundary and must still fail, so
+      // a bad id can never silently fork the wrong history.
+      const storedElsewhere = await this.db.queryViaWorker(
+        'SELECT thread_id FROM agent_messages WHERE id = ? LIMIT 1',
+        [messageId],
+        1
+      )
+      if (!storedElsewhere.ok) throw new Error(storedElsewhere.error ?? 'Cannot read fork boundary')
+      if (storedElsewhere.rows.length > 0) {
+        throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
+      }
+      const newest = await this.db.queryViaWorker(
+        `SELECT id, created_at FROM agent_messages WHERE thread_id = ? AND session_id IS NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [threadId],
+        1
+      )
+      if (!newest.ok) throw new Error(newest.error ?? 'Cannot read fork boundary')
+      cutoff = newest.rows[0]
+      if (!cutoff) {
+        throw new Error(`Cannot fork from message ${messageId}: this turn has not been saved yet`)
+      }
     }
-    const cutoff = upper.rows[0]
     const boundary = cutoff
       ? await this.db.queryViaWorker(
           `SELECT CASE WHEN json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL THEN '' ELSE m.id END AS id,

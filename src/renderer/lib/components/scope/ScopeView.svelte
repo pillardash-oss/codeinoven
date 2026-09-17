@@ -45,13 +45,14 @@
   })
 
   // Keep the typed health of every managed worktree on the active board fresh so
-  // unhealthy scopes surface repair actions immediately (deduped in the store).
+  // unhealthy scopes surface repair actions immediately (deduped in the store),
+  // and re-read it on entry so switching to a project or scope always reports the
+  // live checkout state (throttled per scope, so it never polls).
   $effect(() => {
     const projectId = scopeState.activeProjectId
-    scopeState.syncBoardWorktreeHealth(
-      projectId,
-      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
-    )
+    const buckets = projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    scopeState.syncBoardWorktreeHealth(projectId, buckets)
+    scopeState.revalidateBoardWorktreeHealth(projectId, buckets)
   })
 
   $effect(() => {

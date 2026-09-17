@@ -30,6 +30,8 @@ import { GitService, type PullRequestComposeContext } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
+import { resolveAvatars } from '../git/github-avatars'
+import { resolveImages } from '../git/github-images'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
 import { resolveDeploymentProvider } from '../providers/registry'
@@ -95,6 +97,8 @@ import {
   validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateGitIdentity,
+  validateGitConflictSide,
+  validateGitRebaseAction,
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
@@ -109,7 +113,13 @@ import {
   validatePrNumber,
   validatePrState,
   validatePrPage,
+  validatePrCommentKind,
+  validatePrCommentId,
+  validatePrMinimizeReason,
+  validateGraphqlNodeId,
   validatePrReviewEvent,
+  validateRemoteImageUrls,
+  validateWorkflowRerunMode,
   validatePrCommentBody,
   validatePushOptions,
   validatePullIntegrateOptions,
@@ -119,6 +129,7 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
+  validateGitHubAvatarRequests,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -145,6 +156,8 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
+import type { ScopeThreadLifecycle } from '../git/scope-worktree-service'
+import { ScopeToolService } from '../workspaces/scope-tool-service'
 import {
   ScopeRootResolver,
   scopeRootProvider,
@@ -238,6 +251,7 @@ import type {
   CloudDeploymentProviderKind,
   CloudDeploymentStatus,
   ScopeTarget,
+  ScopeAgentConfirmationRequest,
   ScopeWorktreeProgress,
   ScopeWorktreeProgressEvent,
   UtilityDefinitionInput
@@ -455,7 +469,8 @@ function canonicalGitHubBranch(branch: string): string {
 function githubPermissionRequired(
   error: unknown,
   owner: string,
-  repo: string
+  repo: string,
+  accessLabel = 'Pull requests read and write access'
 ): GitHubPermissionRequired | null {
   if (
     !(error instanceof ProviderHttpError) ||
@@ -467,7 +482,7 @@ function githubPermissionRequired(
   return {
     status: 'permission_required',
     message:
-      `CodeInOven needs Pull requests read and write access for ${owner}/${repo}. ` +
+      `CodeInOven needs ${accessLabel} for ${owner}/${repo}. ` +
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
@@ -813,12 +828,13 @@ async function resolveDragIcon(firstPath?: string): Promise<Electron.NativeImage
 async function runGitHubMutation<T>(
   owner: string,
   repo: string,
-  mutation: () => Promise<T>
+  mutation: () => Promise<T>,
+  accessLabel?: string
 ): Promise<GitHubMutationResult<T>> {
   try {
     return { status: 'completed', value: await mutation() }
   } catch (error) {
-    const permission = githubPermissionRequired(error, owner, repo)
+    const permission = githubPermissionRequired(error, owner, repo, accessLabel)
     if (permission) return permission
     throw error
   }
@@ -2310,7 +2326,7 @@ export function registerIpcHandlers(
     | 'abort'
     | 'recordUserFileSave'
   > &
-    Partial<Pick<ChatEngine, 'runVirtualTask'>>,
+    Partial<Pick<ChatEngine, 'runVirtualTask' | 'setScopeToolService'>>,
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
@@ -2345,6 +2361,7 @@ export function registerIpcHandlers(
       const payload: ScopeWorktreeProgressEvent = {
         projectId: target.projectId,
         scopeBucketId: target.scopeBucketId,
+        origin: 'user',
         ...progress
       }
       sendToRenderer(event.sender, 'scope:worktree:progress', payload)
@@ -2373,15 +2390,20 @@ export function registerIpcHandlers(
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,
-  // so the service receives it here.
-  scopeWorktreeService.attachThreadLifecycle({
+  // so the service receives it here. The agent-facing scope tool shares this
+  // same lifecycle object, so both routes dispose of scope threads identically.
+  const scopeThreadLifecycle: ScopeThreadLifecycle = {
     countThreadsInScope: (projectId, bucketId) =>
       threadManager.countThreadsInScope(projectId, bucketId),
     deleteThreadsInScope: (projectId, bucketId) =>
       threadManager.deleteThreadsInScope(projectId, bucketId),
     moveThreadsOutOfScope: (projectId, fromBucketId) =>
-      threadManager.moveThreadsOutOfScope(projectId, fromBucketId)
-  })
+      threadManager.moveThreadsOutOfScope(projectId, fromBucketId),
+    moveThreadIntoScope: async (projectId, threadId, bucketId) => {
+      await threadManager.updateThread(projectId, threadId, { scopeBucketId: bucketId })
+    }
+  }
+  scopeWorktreeService.attachThreadLifecycle(scopeThreadLifecycle)
   const historyEngine = new HistoryEngine(database)
   const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -2402,6 +2424,86 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = new SecretVault(storage)
+  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
+
+  // ─── Agent-facing scope management (`cio:scope`) ──────────────────────────
+  /**
+   * Destructive scope actions an agent asked for, awaiting a user decision.
+   * Only an `auto_review` turn creates one: the agent's tool call is parked on
+   * this promise until the dialog is answered or the request expires, and an
+   * unanswered request denies rather than destroys.
+   */
+  const pendingScopeConfirmations = new Map<string, (approved: boolean) => void>()
+
+  const requestScopeConfirmation = async (
+    request: ScopeAgentConfirmationRequest
+  ): Promise<boolean> => {
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
+    )
+    if (windows.length === 0) return false
+    // Held in a local because the executor's `resolve` is not in scope where the
+    // expiry timer fires; this file already has a path `resolve` helper.
+    let settle: ((approved: boolean) => void) | null = null
+    const answer = new Promise<boolean>((resolve) => {
+      settle = resolve
+      pendingScopeConfirmations.set(request.requestId, resolve)
+    })
+    for (const window of windows) {
+      sendToRenderer(window.webContents, 'scope:agentConfirmation', request)
+    }
+    // The dialog removes its own entry when answered; the timeout is what keeps
+    // a closed or reloaded renderer from parking the agent's turn forever.
+    const timeout = setTimeout(
+      () => {
+        if (pendingScopeConfirmations.delete(request.requestId)) settle?.(false)
+      },
+      Math.max(0, request.expiresAt - Date.now())
+    )
+    try {
+      return await answer
+    } finally {
+      clearTimeout(timeout)
+      pendingScopeConfirmations.delete(request.requestId)
+    }
+  }
+
+  const scopeToolService = new ScopeToolService(
+    scopeWorktreeService,
+    scopeManager,
+    projectManager,
+    {
+      getStatus: (projectPath) => gitService.getStatus(projectPath),
+      syncMain: (projectPath, options) => gitService.syncMain(projectPath, options)
+    },
+    {
+      scopeThreads: scopeThreadLifecycle,
+      requestConfirmation: requestScopeConfirmation,
+      /** Agent-made scopes appear on the board without a manual reload. */
+      onBoardChanged: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendToRenderer(window.webContents, 'scope:boardChanged', event)
+        }
+      },
+      /** An agent's worktree run streams into the same docked job panel. */
+      onProgress: (event) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          sendToRenderer(window.webContents, 'scope:worktree:progress', event)
+        }
+      },
+      resolveGitToken: async (projectId) => {
+        const ref = gitCredentialRef(projectId)
+        return (await vault.exists(ref)) ? await vault.resolve(ref) : undefined
+      },
+      // An agent has no strategy chooser, so the configured `ask` resolves to
+      // the safe, non-history-rewriting default.
+      defaultPullStrategy: async () => {
+        const preference = (await storage.getConfig()).defaultPullStrategy
+        return preference === 'ask' ? 'merge' : preference
+      }
+    }
+  )
+  chatEngine?.setScopeToolService?.((input, context) => scopeToolService.execute(input, context))
   const githubAuthService = new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>
     memoryService.auxiliaryUsageByFeature()
@@ -4567,6 +4669,22 @@ export function registerIpcHandlers(
     return resolveFavicons(hostnames)
   })
 
+  // Avatars for the logins a pull request conversation names. Same reason as the
+  // favicons above: the renderer's `img-src` allows `data:` and nothing remote, so
+  // the picture is downloaded here and handed over inlined.
+  ipcMain.handle('github:avatars', async (_event, rawAccounts: unknown) => {
+    const accounts = validateGitHubAvatarRequests(rawAccounts)
+    return resolveAvatars(accounts)
+  })
+
+  // Images embedded in provider-authored markdown (a pull request body, a comment
+  // with a pasted screenshot). Same CSP constraint again, and the URLs come from
+  // third-party content, so the resolver re-validates every one of them itself
+  // rather than trusting the renderer's filtering.
+  ipcMain.handle('github:image', async (_event, rawUrls: unknown) => {
+    return resolveImages(validateRemoteImageUrls(rawUrls))
+  })
+
   // Reveal a chat artifact (uploaded or agent-created file) in the system file
   // manager. The path must resolve inside a registered project, the config root,
   // or a user-selected scope.
@@ -5077,6 +5195,20 @@ export function registerIpcHandlers(
       validateWorktreeDefaults(defaults)
     )
   )
+  // The user's answer to a destructive scope action an agent asked for. The
+  // agent's tool call is parked until this lands, so an unknown or already
+  // expired request is a no-op rather than an error the renderer has to handle.
+  ipcMain.handle('scope:agentConfirmationRespond', (_, requestId: unknown, approved: unknown) => {
+    // Both inputs are validated before the map is touched: a rejected payload
+    // must leave the entry in place so the request's own expiry can still deny
+    // it, instead of orphaning the resolver and parking the agent's call.
+    const id = validateEntityId(requestId, 'Confirmation ID')
+    const decision = validateBoolean(approved, 'Approval')
+    const settle = pendingScopeConfirmations.get(id)
+    if (!settle) return
+    pendingScopeConfirmations.delete(id)
+    settle(decision)
+  })
   ipcMain.handle('scope:worktree:create', (event, target: unknown, input: unknown) => {
     const validatedTarget = validateScopeTarget(target)
     const validatedInput = validateScopeWorktreeCreateInput(input)
@@ -5116,11 +5248,14 @@ export function registerIpcHandlers(
       validateScopeTarget(target)
     )
   )
-  ipcMain.handle('scope:worktree:confirmDetach', (_, target: unknown, confirmationId: unknown) =>
-    scopeWorktreeService.confirmDetach(
-      validateScopeTarget(target),
-      validateConfirmationToken(confirmationId)
-    )
+  ipcMain.handle(
+    'scope:worktree:confirmDetach',
+    (_, target: unknown, confirmationId: unknown, force: unknown) =>
+      scopeWorktreeService.confirmDetach(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(force, 'Force detach')
+      )
   )
   ipcMain.handle(
     'scope:worktree:confirmRemove',
@@ -5875,6 +6010,19 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'git:acceptConflictSide',
+    async (_, projectId: unknown, side: unknown, scopeBucketId?: unknown) =>
+      gitService.acceptConflictSide(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitConflictSide(side)
+      )
+  )
+  ipcMain.handle(
     'git:unstage',
     async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
       gitService.unstage(
@@ -6199,7 +6347,6 @@ export function registerIpcHandlers(
     }
   )
   // ─── Git remotes, sync & credentials ────────────────────────────────────
-  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
   const gitCredentialStatus = async (projectId: string) => ({
     configured: await vault.exists(gitCredentialRef(projectId)),
     secureStorageAvailable: vault.isAvailable()
@@ -6429,16 +6576,24 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:finishPrResolve',
-    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      gitService.finishPrResolve(
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePrResolveOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC. The
+      // finish step pushes the resolution back to the PR, so it needs the same
+      // credential the panel's own push uses.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.finishPrResolve(
         await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
+          safeProjectId,
           scopeBucketId === undefined
             ? undefined
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
-        validatePrResolveOptions(options)
+        { ...safeOptions, token }
       )
+    }
   )
   ipcMain.handle(
     'git:stash',
@@ -6556,6 +6711,19 @@ export function registerIpcHandlers(
         scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     )
+  )
+  ipcMain.handle(
+    'git:rebaseAction',
+    async (_, projectId: unknown, action: unknown, scopeBucketId?: unknown) =>
+      gitService.rebaseAction(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRebaseAction(action)
+      )
   )
 
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────
@@ -6911,6 +7079,31 @@ export function registerIpcHandlers(
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
         jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:rerunRun',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown, mode: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to re-run workflow runs')
+      const target = {
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+      }
+      return runGitHubMutation(
+        target.owner,
+        target.repo,
+        async () => {
+          await provider.rerunWorkflowRun({
+            ...target,
+            runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID),
+            mode: validateWorkflowRerunMode(mode)
+          })
+          return null
+        },
+        'Actions read and write access'
+      )
     }
   )
 
@@ -7554,6 +7747,18 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
+    'pr:mentionUsers',
+    async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.listRepositoryMentionUsers({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128)
+      })
+    }
+  )
+
+  ipcMain.handle(
     'pr:detail',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const {
@@ -7625,6 +7830,83 @@ export function registerIpcHandlers(
           body: validatePrCommentBody(body)
         })
       )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentEdit',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      const text = validatePrCommentBody(body)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        if (comment.kind === 'review') {
+          await provider.updatePullRequestReviewComment({ ...comment, body: text })
+        } else {
+          await provider.updatePullRequestComment({ ...comment, body: text })
+        }
+        // The reader refetches the bundle either way, so the edited entity is not
+        // worth serializing   only whether the write landed.
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentDelete',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.deletePullRequestComment(comment)
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentMinimize',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      nodeId: unknown,
+      reason: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const id = validateGraphqlNodeId(nodeId)
+      const classifier = validatePrMinimizeReason(reason)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.minimizePullRequestComment({ nodeId: id, reason: classifier })
+        return true
+      })
     }
   )
 

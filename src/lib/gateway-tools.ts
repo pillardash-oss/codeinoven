@@ -188,8 +188,3 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     sentWhen: 'Only an explicit @cio-utility debugging turn'
   }
 ]
-
-/** Map every gateway tool route to its MCP tool name. */
-export const GATEWAY_ROUTES: ReadonlyMap<string, string> = new Map(
-  GATEWAY_TOOLS.map(({ route, name }) => [route, name])
-)

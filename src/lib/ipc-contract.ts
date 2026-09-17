@@ -70,11 +70,14 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictSide,
   GitConflictWorkFile,
+  GitRebaseAction,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
   GitHubAuthStatus,
+  GitHubAvatarRequest,
   GitHubDeviceCode,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
@@ -92,8 +95,10 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrCommentKind,
   PrComposeReport,
   PrMergeMethod,
+  PrMinimizeReason,
   PrReviewEvent,
   PrResolveOptions,
   PrState,
@@ -130,6 +135,7 @@ import type {
   HarnessUninstallHandoff,
   OfferedProvider,
   AdoptableWorktreeInfo,
+  RepositoryMentionUser,
   RepositoryPreflightResult,
   ScopeBoard,
   ScopeBucket,
@@ -188,7 +194,10 @@ import type {
   SkillMarketView,
   CuaBridgeStatus,
   ComputerUsePipFrame,
-  ComputerUsePipState
+  ComputerUsePipState,
+  ComputerUseActivity,
+  WorkflowRerunMode,
+  WorkflowRerunResult
 } from './types'
 import type { WorkerNameSettings } from './assignment/worker-names'
 import type { CioPromptId, CioPromptSetting } from './cio-prompts'
@@ -1368,7 +1377,7 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'speech:readAudio': {} as Contract<
     [attemptId: string],
-    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechPlaybackAudio>
   >,
   'speech:retryTranscription': {} as Contract<
     [
@@ -1413,7 +1422,7 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'speech:playgroundReadAudio': {} as Contract<
     [token: string],
-    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechAudioBytes>
   >,
   'speech:playgroundTranscribe': {} as Contract<
     [
@@ -1479,6 +1488,11 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'git:resolveConflicted': {} as Contract<
     [projectId: string, path: string, scopeBucketId?: string],
+    GitStatus
+  >,
+  /** Take one side of every unresolved conflict wholesale, then stage it. */
+  'git:acceptConflictSide': {} as Contract<
+    [projectId: string, side: GitConflictSide, scopeBucketId?: string],
     GitStatus
   >,
   'git:unstage': {} as Contract<
@@ -1664,6 +1678,11 @@ export const IPC_INVOKE_CONTRACT = {
   >,
   'git:abortMerge': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
   'git:abortRebase': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  /** Continue a stopped rebase, or drop the commit it stopped on. */
+  'git:rebaseAction': {} as Contract<
+    [projectId: string, action: GitRebaseAction, scopeBucketId?: string],
+    GitStatus
+  >,
   'pr:create': {} as Contract<
     [projectId: string, input: PrCreateInput, scopeBucketId?: string],
     GitHubMutationResult<PullRequestReference>
@@ -1747,6 +1766,15 @@ export const IPC_INVOKE_CONTRACT = {
   'deployment:jobLog': {} as Contract<
     [projectId: string, owner: string, repo: string, jobId: number],
     GitHubDeploymentJobLog
+  >,
+  /**
+   * Replay a workflow run's jobs (all, or only the failed ones). Returns the
+   * mutation envelope so a read-only grant surfaces its permission prompt
+   * instead of a bare failure.
+   */
+  'deployment:rerunRun': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number, mode: WorkflowRerunMode],
+    WorkflowRerunResult
   >,
   /**
    * Read a project's cloud deployment config, or null when none exists. The
@@ -1928,11 +1956,57 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, owner: string, repo: string, sha: string],
     PullRequestFile[]
   >,
+  /** Assignable repository accounts, for @-mention autocomplete in PR conversations. */
+  'pr:mentionUsers': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    RepositoryMentionUser[]
+  >,
   /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
   'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,
   'pr:comment': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     GitHubMutationResult<PullRequestComment>
+  >,
+  /**
+   * Rewrite a comment you authored. `kind` picks the collection: GitHub files
+   * conversation comments and inline diff comments in two unrelated endpoints
+   * with independent id sequences.
+   */
+  'pr:commentEdit': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number,
+      body: string
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Permanently delete a comment you authored. */
+  'pr:commentDelete': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Hide a comment behind GitHub's minimised treatment, by GraphQL node id. */
+  'pr:commentMinimize': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      nodeId: string,
+      reason: PrMinimizeReason
+    ],
+    GitHubMutationResult<boolean>
   >,
   'pr:review': {} as Contract<
     [
@@ -1965,6 +2039,29 @@ export const IPC_INVOKE_CONTRACT = {
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
+  /**
+   * Resolve account avatars for a list of GitHub logins, as `data:` URLs (the
+   * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
+   * comes back as null, which the UI draws as its monogram.
+   */
+  /**
+   * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
+   * image hosts). Each account carries the URL its provider declared, which wins
+   * over the login-derived guess   a bot account's login alone resolves to
+   * GitHub's generated identicon rather than the app's real picture. A login
+   * GitHub has no picture for comes back as null, which the UI draws as its
+   * monogram.
+   */
+  'github:avatars': {} as Contract<
+    [accounts: GitHubAvatarRequest[]],
+    Record<string, string | null>
+  >,
+  /**
+   * Resolve images embedded in provider-authored markdown, as `data:` URLs, for
+   * the same CSP reason. Only `https:` is accepted, and main additionally refuses
+   * literal private hosts because it is the side that opens the connection.
+   */
+  'github:image': {} as Contract<[urls: string[]], Record<string, string | null>>,
   'history:search': {} as Contract<
     [query: string, projectId?: string, limit?: number],
     HistoryEntry[]
@@ -2034,9 +2131,9 @@ export const IPC_INVOKE_CONTRACT = {
     [action: ScopeLifecycleAction, target: ScopeTarget, options?: { scopeBucketId?: string }],
     ScopeLifecyclePreflight
   >,
-  /** Consume a confirmation token to detach a managed worktree. */
+  /** Consume a confirmation token to detach a managed worktree (optionally forced). */
   'scope:worktree:confirmDetach': {} as Contract<
-    [target: ScopeTarget, confirmationId: string],
+    [target: ScopeTarget, confirmationId: string, force: boolean],
     void
   >,
   /** Consume a confirmation token to remove a managed worktree (optionally forced). */
@@ -2074,6 +2171,11 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, defaults: ScopeWorktreeDefaults],
     ScopeBoard
   >,
+  /**
+   * Answer a destructive scope action an agent asked for. Only an `auto_review`
+   * turn sends the request; the agent's tool call is waiting on this decision.
+   */
+  'scope:agentConfirmationRespond': {} as Contract<[requestId: string, approved: boolean], void>,
   'history:load': {} as Contract<
     [projectId: string, threadId: string, limit?: number],
     HistoryEntry[]
@@ -2411,6 +2513,12 @@ export const IPC_INVOKE_CONTRACT = {
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   'computerUse:pipGetState': {} as Contract<[], ComputerUsePipState>,
+  /** Every thread whose agent is currently driving the computer, so a renderer
+   *  that reloads mid-run re-seeds its row indicators. */
+  'computerUse:activityGet': {} as Contract<[], ComputerUseActivity[]>,
+  /** Device pixels of preview the overlay is about to paint, so the captured
+   *  frame is never upscaled. Sent whenever the preview footprint changes. */
+  'computerUse:pipSetFrameWidth': {} as Contract<[deviceWidth: number], void>,
   'computerUse:pipBringToFront': {} as Contract<[], void>,
   'computerUse:pipDismiss': {} as Contract<[], void>,
   'pty:create': {} as Contract<
@@ -2792,8 +2900,8 @@ export const IPC_INVOKE_CONTRACT = {
     UserMessageSummary[]
   >,
   'thread:loadStreamParts': {} as Contract<
-    [projectId: string, threadId: string],
-    import('./types').AgentPart[]
+    [projectId: string, threadId: string, query?: import('./types').TurnStreamPartsQuery],
+    import('./types').TurnStreamPartsPage | import('./types').TurnStreamPartsChange
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */
@@ -3145,6 +3253,13 @@ export const IPC_EVENT_CONTRACT = {
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * Emitted for every computer-use operation an agent performs, and again with
+   * `active: false` when that thread's turn ends. Thread rows use this (not the
+   * PiP state) so a row still signals desktop-scoped computer use, which has no
+   * tracked window and therefore no PiP.
+   */
+  'computerUse:activity': [] as unknown as [activity: ComputerUseActivity],
   'browser:state': [] as unknown as [state: BrowserPageState],
   'gateway:state': [] as unknown as [status: import('./gateway-types').GatewayStatus],
   /** Live provider connection health/status snapshot. */
@@ -3179,6 +3294,20 @@ export const IPC_EVENT_CONTRACT = {
    */
   'scope:worktree:progress': [] as unknown as [
     progress: import('./types').ScopeWorktreeProgressEvent
+  ],
+  /**
+   * An agent changed scope state (created, renamed, archived, deleted, synced
+   * or merged a scope). The board reloads so agent-made scopes never hide
+   * behind a stale snapshot.
+   */
+  'scope:boardChanged': [] as unknown as [event: import('./types').ScopeBoardChangedEvent],
+  /**
+   * A destructive scope action an agent asked for, awaiting the user's decision
+   * in the app. Rendered as a confirmation dialog; the agent's tool call blocks
+   * until it is answered or expires.
+   */
+  'scope:agentConfirmation': [] as unknown as [
+    request: import('./types').ScopeAgentConfirmationRequest
   ],
   /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
   'providerAccounts:oauthEvent': [] as unknown as [

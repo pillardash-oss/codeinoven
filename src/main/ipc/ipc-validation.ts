@@ -2,7 +2,13 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
-import type { GitRestoreTarget } from '../../lib/types'
+import type {
+  GitConflictSide,
+  GitRebaseAction,
+  GitRestoreTarget,
+  GitHubAvatarRequest
+} from '../../lib/types'
+import { isLocalDevelopmentUrl } from '../../lib/local-development-url'
 import { toPosixPath } from '../../lib/paths'
 import { Logger } from '../system/logger'
 import type {
@@ -188,7 +194,8 @@ const SCOPE_SETUP_STATES = new Set<import('../../lib/types').ScopeSetupStatusSta
   'running',
   'succeeded',
   'failed',
-  'interrupted'
+  'interrupted',
+  'stale'
 ])
 const SCOPE_SETUP_COMMAND_STATES = new Set<import('../../lib/types').ScopeSetupCommandState>([
   'pending',
@@ -648,6 +655,22 @@ export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' 
   return value as 'soft' | 'mixed' | 'hard'
 }
 
+/** Validate which side of a conflict to take wholesale. */
+export function validateGitConflictSide(value: unknown): GitConflictSide {
+  if (value !== 'incoming' && value !== 'current') {
+    throw new TypeError('Conflict side must be one of: incoming, current')
+  }
+  return value
+}
+
+/** Validate how to move a stopped rebase along. */
+export function validateGitRebaseAction(value: unknown): GitRebaseAction {
+  if (value !== 'continue' && value !== 'skip') {
+    throw new TypeError('Rebase action must be one of: continue, skip')
+  }
+  return value
+}
+
 /** Validate a restore target: the index only, or the index and working tree. */
 export function validateGitRestoreTarget(value: unknown): GitRestoreTarget {
   if (value !== 'staged' && value !== 'worktree') {
@@ -717,6 +740,17 @@ const PR_REVIEW_EVENTS = new Set<import('../../lib/types').PrReviewEvent>([
   'REQUEST_CHANGES',
   'COMMENT'
 ])
+/** Which collection a comment mutation addresses. */
+const PR_COMMENT_KINDS = new Set<import('../../lib/types').PrCommentKind>(['issue', 'review'])
+/** GitHub's own minimisation classifiers, and the only values it accepts. */
+const PR_MINIMIZE_REASONS = new Set<import('../../lib/types').PrMinimizeReason>([
+  'ABUSE',
+  'OFF_TOPIC',
+  'OUTDATED',
+  'RESOLVED',
+  'SPAM'
+])
+const WORKFLOW_RERUN_MODES = new Set<import('../../lib/types').WorkflowRerunMode>(['all', 'failed'])
 
 /** Validate a PR merge method (merge|squash|rebase). */
 export function validateMergeMethod(value: unknown): import('../../lib/types').PrMergeMethod {
@@ -871,6 +905,46 @@ export function validatePrState(value: unknown): import('../../lib/types').PrSta
 /** Validate a PR review verdict. */
 export function validatePrReviewEvent(value: unknown): import('../../lib/types').PrReviewEvent {
   return assertEnum(value, PR_REVIEW_EVENTS, 'PR review event')
+}
+
+/** Validate which comment collection a mutation addresses (issue|review). */
+export function validatePrCommentKind(value: unknown): import('../../lib/types').PrCommentKind {
+  return assertEnum(value, PR_COMMENT_KINDS, 'PR comment kind')
+}
+
+/** Validate a comment id, which GitHub issues as a positive integer. */
+export function validatePrCommentId(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError('Invalid PR comment id')
+  }
+  return value
+}
+
+/** Validate why a comment is being hidden (GitHub's classifier values). */
+export function validatePrMinimizeReason(
+  value: unknown
+): import('../../lib/types').PrMinimizeReason {
+  return assertEnum(value, PR_MINIMIZE_REASONS, 'PR minimise reason')
+}
+
+/**
+ * Validate a GraphQL global node id.
+ *
+ * GitHub hands these out as base64, so it is opaque here   but it is not a
+ * capability, and rejecting anything that is not the expected base64 alphabet
+ * keeps an arbitrary string from being smuggled into a GraphQL document.
+ */
+export function validateGraphqlNodeId(value: unknown): string {
+  const id = validateBoundedString(value, 'Node id', 8, 256)
+  if (!/^[A-Za-z0-9+/=_-]+$/u.test(id)) throw new TypeError('Invalid Node id')
+  return id
+}
+
+/** Validate which jobs a workflow re-run replays (all|failed). */
+export function validateWorkflowRerunMode(
+  value: unknown
+): import('../../lib/types').WorkflowRerunMode {
+  return assertEnum(value, WORKFLOW_RERUN_MODES, 'workflow re-run mode')
 }
 
 /** Validate a 1-based PR listing page number. */
@@ -1437,6 +1511,12 @@ const IPV6_HOST_PATTERN = /^\[[0-9a-f:.]+:[0-9a-f:.]*\](?::\d{1,5})?$/iu
 /** Max entries the renderer may ask for in a single favicon resolution call. */
 const MAX_FAVICON_HOSTNAMES = 64
 
+/** Matches the renderer store's batch size, so one batch is never truncated. */
+const MAX_REMOTE_IMAGE_URLS = 32
+
+/** Longer than any real image URL; the resolver only needs the origin and path. */
+const MAX_REMOTE_IMAGE_URL_LENGTH = 2_048
+
 /** Absolute upper bound of a host entry, including brackets and an optional port. */
 const MAX_FAVICON_HOSTNAME_LENGTH = 253 + 6 + 8
 
@@ -1493,6 +1573,106 @@ export function validateFaviconHostnames(value: unknown): string[] {
     if (!hostnames.includes(normalized)) hostnames.push(normalized)
   }
   return hostnames
+}
+
+/** How many logins one avatar request may carry, matching the favicon batch cap. */
+const MAX_AVATAR_LOGINS = 64
+/** A GitHub login is at most 39 characters, and the `[bot]` suffix adds five. */
+const MAX_GITHUB_LOGIN_LENGTH = 44
+/** Letters, digits and single hyphens, optionally GitHub's `[bot]` app form. */
+const GITHUB_LOGIN_PATTERN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/iu
+
+/**
+ * Validate the accounts an avatar request carries.
+ *
+ * Each entry has to be login-shaped, `[bot]` accounts included, so nothing but a
+ * GitHub account name can reach the avatar host. The optional declared URL arrives
+ * from the provider rather than from user content, but it is still checked before
+ * main fetches it: HTTPS only, plus the local-development exception the provider
+ * base URL already allows, so a self-hosted or test server can serve a picture.
+ * Entries that fail are dropped rather than failing the batch, the way favicon
+ * hostnames are, because a provider writes `unknown` for a comment whose user
+ * record is missing and that should not cost a request.
+ */
+export function validateGitHubAvatarRequests(value: unknown): GitHubAvatarRequest[] {
+  if (!Array.isArray(value)) throw new TypeError('Avatar accounts must be an array')
+  if (value.length === 0 || value.length > MAX_AVATAR_LOGINS) {
+    throw new TypeError(`Avatar accounts must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
+  }
+  const accounts: GitHubAvatarRequest[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      Logger.dev(`Skipping non-object avatar entry at index ${index}`)
+      continue
+    }
+    const record = entry as Record<string, unknown>
+    const login = typeof record['login'] === 'string' ? record['login'].trim() : ''
+    if (login.length === 0 || login.length > MAX_GITHUB_LOGIN_LENGTH) {
+      Logger.dev(`Skipping invalid avatar login at index ${index}`)
+      continue
+    }
+    if (!GITHUB_LOGIN_PATTERN.test(login)) {
+      Logger.dev(`Skipping non-login avatar entry at index ${index}`)
+      continue
+    }
+    accounts.push({ login, avatarUrl: validateDeclaredAvatarUrl(record['avatarUrl'], index) })
+  }
+  return accounts
+}
+
+/** The provider-declared picture URL, or null when absent or not fetchable. */
+function validateDeclaredAvatarUrl(value: unknown, index: number): string | null {
+  if (typeof value !== 'string') return null
+  const candidate = value.trim()
+  if (candidate.length === 0) return null
+  let url: URL
+  try {
+    url = new URL(candidate)
+  } catch {
+    Logger.dev(`Skipping malformed avatar URL at index ${index}`)
+    return null
+  }
+  if (url.protocol !== 'https:' && !isLocalDevelopmentUrl(candidate)) {
+    Logger.dev(`Skipping non-HTTPS avatar URL at index ${index}`)
+    return null
+  }
+  return url.href
+}
+
+/**
+ * Validate the image URLs found inside provider-authored markdown.
+ *
+ * Only `https:` survives. The resolver re-checks this and additionally refuses
+ * literal private hosts, because it is the side that actually opens the
+ * connection; this pass exists so an obviously unusable URL never reaches the
+ * network layer at all. Malformed entries are skipped rather than failing the
+ * batch: the list is derived from arbitrary comment text, and one bad URL must
+ * not blank out every other picture in the same message.
+ */
+export function validateRemoteImageUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Image URLs must be an array')
+  if (value.length === 0 || value.length > MAX_REMOTE_IMAGE_URLS) {
+    throw new TypeError(`Image URLs must contain between 1 and ${MAX_REMOTE_IMAGE_URLS} entries`)
+  }
+  const urls: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > MAX_REMOTE_IMAGE_URL_LENGTH
+    ) {
+      Logger.dev(`Skipping invalid image URL at index ${index}`)
+      continue
+    }
+    if (!entry.startsWith('https://')) {
+      Logger.dev(`Skipping non-HTTPS image URL at index ${index}`)
+      continue
+    }
+    if (!urls.includes(entry)) urls.push(entry)
+  }
+  return urls
 }
 
 // ─── Privileged-IPC validation wrapper ──────────────────────────────────────

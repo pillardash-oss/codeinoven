@@ -649,6 +649,22 @@ export interface ModelPathValidationResult {
 
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }
 
+/** Audio bytes together with the media type they were captured or imported as. */
+export interface SpeechAudioBytes {
+  bytes: Uint8Array<ArrayBuffer>
+  mimeType: string
+}
+
+/**
+ * A stored recording prepared for a renderer media element. `bytes` are
+ * guaranteed to be a container Chromium can demux (the macOS capture worker
+ * stores Core Audio Format, which it cannot), so `mimeType` and `extension`
+ * always describe the bytes actually returned.
+ */
+export interface SpeechPlaybackAudio extends SpeechAudioBytes {
+  extension: string
+}
+
 export interface SpeechCaptureSessionInfo {
   sessionId: string
   attemptId: string

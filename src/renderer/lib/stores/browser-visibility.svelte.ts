@@ -174,10 +174,10 @@ let occlusionSequence = 0
  * Attachment that publishes a floating overlay's rectangle for as long as it is
  * mounted, re-measuring when the element resizes or the window does.
  *
- * Use it for overlays whose geometry is CSS-driven (dock chip rows, sheets,
- * anchored panels). A surface the user can drag, such as the dockable panel or
- * the computer-use PiP, must publish from its position state instead, because
- * moving an element does not resize it and no observer would fire.
+ * Use it for overlays whose geometry is CSS-driven and anchored in the layout
+ * (sheets, side panels). A surface the user can drag   the dockable panel, a
+ * minimized dock row, the computer-use PiP   must publish from its position state
+ * instead, because moving an element does not resize it and no observer would fire.
  */
 export const trackBrowserOcclusion: Attachment<HTMLElement> = (element) => {
   const key = `occlusion-${++occlusionSequence}`

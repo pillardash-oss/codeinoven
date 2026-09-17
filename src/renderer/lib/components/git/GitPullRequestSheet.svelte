@@ -4,6 +4,7 @@
   import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import Switch from '../ui/Switch.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { APP_SLUG } from '$shared/brand'
@@ -178,7 +179,7 @@
   /** True while a prepared divergence-resolution thread is being opened. */
   let openingResolveThread = $state(false)
   let resolveThreadError = $state('')
-  /** True while the panel is collapsed into the bottom-right dock (local fallback). */
+  /** True while the panel is collapsed into its dock row (local fallback). */
   let localMinimized = $state(false)
   const minimized = $derived(minimizedProp ?? localMinimized)
 
@@ -195,6 +196,17 @@
   const effectiveStorageKey = $derived(
     storageKeyProp ? `${storageKeyProp}.tall-v2` : `${APP_SLUG}.pullRequestSheet.tall-v2`
   )
+
+  /**
+   * One sheet stays mounted per draft (PrDockHost renders one per draft id), so
+   * fixed ids would collide across drafts: a form label resolves `for` to the
+   * first match in the document, which may be a different, minimized sheet whose
+   * input is `visibility: hidden` and therefore unfocusable. Clicking the label
+   * then does nothing at all. Deriving the ids from the draft keeps every label
+   * pointing at its own fields.
+   */
+  const titleFieldId = $derived(`pr-title-${draftId ?? 'default'}`)
+  const bodyFieldId = $derived(`pr-body-${draftId ?? 'default'}`)
 
   // ─── Compose with agent ────────────────────────────────────────────────────
   /** True while the compose dropdown is open. */
@@ -861,6 +873,7 @@
   dragLabel="Drag to move the pull request panel"
   storageKey={effectiveStorageKey}
   defaultHeight={680}
+  layer="top"
 >
   {#snippet headerPrefix()}
     {#if dockProjectName}
@@ -884,44 +897,48 @@
   {#snippet dock()}
     {#if !draftId}
       <!-- When the host drives the dock, PrDockHost renders the unified chip row. -->
-      <button
-        class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
-        title="Show pull request creation"
-        aria-label="Show pull request creation"
-        onclick={handleExpand}
-      >
-        {#if result}
-          <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
-          >
-            <CheckCircle2 size={10} aria-hidden="true" />
-            Created
-          </span>
-          <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
-        {:else if dockDetail || creating || submitting}
-          <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-          <span class="text-[0.6875rem] font-medium">{dockDetail || 'Creating pull request…'}</span>
-        {:else if dockHasIssue}
-          <span
-            class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
-          >
-            <TriangleAlert size={10} aria-hidden="true" />
-            Needs attention
-          </span>
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {:else if composeSucceeded}
-          <span
-            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
-          >
-            <CircleCheck size={10} aria-hidden="true" />
-            Composed
-          </span>
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {:else}
-          <GitPullRequest size={14} class="shrink-0 text-dimmed" />
-          <span class="text-[0.6875rem] font-medium">New pull request</span>
-        {/if}
-      </button>
+      <DockRow storageKey={effectiveStorageKey} label="Move docked pull request draft">
+        <button
+          class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
+          title="Show pull request creation"
+          aria-label="Show pull request creation"
+          onclick={handleExpand}
+        >
+          {#if result}
+            <span
+              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+            >
+              <CheckCircle2 size={10} aria-hidden="true" />
+              Created
+            </span>
+            <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
+          {:else if dockDetail || creating || submitting}
+            <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+            <span class="text-[0.6875rem] font-medium"
+              >{dockDetail || 'Creating pull request…'}</span
+            >
+          {:else if dockHasIssue}
+            <span
+              class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
+            >
+              <TriangleAlert size={10} aria-hidden="true" />
+              Needs attention
+            </span>
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {:else if composeSucceeded}
+            <span
+              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+            >
+              <CircleCheck size={10} aria-hidden="true" />
+              Composed
+            </span>
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {:else}
+            <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+            <span class="text-[0.6875rem] font-medium">New pull request</span>
+          {/if}
+        </button>
+      </DockRow>
     {/if}
   {/snippet}
 
@@ -989,7 +1006,7 @@
                   align="end"
                   sideOffset={6}
                   collisionPadding={8}
-                  class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+                  class="z-90 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
                     <div>
@@ -1301,12 +1318,12 @@
       <div>
         <label
           class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-          for="pr-title"
+          for={titleFieldId}
         >
           Title
         </label>
         <input
-          id="pr-title"
+          id={titleFieldId}
           class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
@@ -1315,12 +1332,12 @@
       <div>
         <label
           class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-          for="pr-body"
+          for={bodyFieldId}
         >
           Description
         </label>
         <textarea
-          id="pr-body"
+          id={bodyFieldId}
           class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
           bind:value={body}></textarea>

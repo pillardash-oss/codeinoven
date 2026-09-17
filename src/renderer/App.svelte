@@ -72,9 +72,11 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { showOpenedFiles, standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+  import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
@@ -1627,6 +1629,20 @@
       temporaryChatUnread.clearThread(projectId, threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
+    // An agent created, renamed, archived, deleted, synced or merged a scope:
+    // reload the board it changed so the user sees the worktree it made instead
+    // of a stale snapshot.
+    const unsubscribeScopeBoardChanged = subscribe('scope:boardChanged', (event) => {
+      void scopeState.handleBoardChangedEvent(event)
+    })
+    // A destructive scope action an agent asked for waits on this dialog; its
+    // answer is what releases the agent's parked tool call.
+    const unsubscribeScopeConfirmation = subscribe('scope:agentConfirmation', (request) => {
+      scopeConfirmations.enqueue(request)
+    })
+    // Listen from app start (not from the first local job): an agent-run
+    // worktree has no renderer-owned job until its first progress event.
+    scopeJobs.listen()
     const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
       handleCloseShortcut()
     })
@@ -1661,6 +1677,8 @@
       unsubscribeConfirmClose()
       unsubscribeThreadUpdated()
       unsubscribeThreadDeleted()
+      unsubscribeScopeBoardChanged()
+      unsubscribeScopeConfirmation()
       unsubscribeCloseShortcut()
       unsubscribeNewTerminalShortcut()
       unsubscribeHistoryBack()
@@ -2151,6 +2169,13 @@
   <Toaster />
   <TextSelectionContextMenu />
   <TooltipHost />
+  {#if scopeConfirmations.current}
+    <!-- An agent's destructive scope action is parked in main until this dialog
+         is answered, so it floats above every view until the user decides. -->
+    {#await import('$lib/components/scope/ScopeAgentConfirmDialog.svelte') then { default: ScopeAgentConfirmDialog }}
+      <ScopeAgentConfirmDialog />
+    {/await}
+  {/if}
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
       <PipOverlay />
@@ -2162,6 +2187,15 @@
          operations, nothing indexed). -->
     {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
       <StandaloneFileViewer />
+    {/await}
+  {/if}
+
+  {#if providerConnectFlow.request}
+    <!-- The provider connect flow floats above every view: a surface with no AI
+         account connected (the first-run setup card, the empty model picker)
+         opens the harness's provider list without navigating away. -->
+    {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
+      <ProviderConnectHost />
     {/await}
   {/if}
 

@@ -1,15 +1,19 @@
 <script lang="ts">
   import { CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import type { PullRequestSummary } from '$shared/types'
+  import DockRow from '$lib/components/ui/DockRow.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
 
   const store = prLifecycleStore
+
+  /** One placement for the whole unified row, remembered across restarts. */
+  const DOCK_STORAGE_KEY = `${APP_SLUG}.pullRequestDock.v1`
 
   async function revealPullRequest(
     projectId: string,
@@ -66,62 +70,65 @@
   reported by each sheet's `updateDock`.
 -->
 {#if store.drafts.some((draft) => draft.minimized)}
-  <div
-    class="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
-    {@attach trackBrowserOcclusion}
-    role="group"
-    aria-label="Docked pull request drafts"
-  >
-    {#each store.drafts as draft (draft.id)}
-      {@const dock = draft.dock}
-      {#if draft.minimized}
-        <!-- While the work runs, the chip names the current step (commit, push,
+  <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked pull request drafts">
+    <div
+      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+      role="group"
+      aria-label="Docked pull request drafts"
+    >
+      {#each store.drafts as draft (draft.id)}
+        {@const dock = draft.dock}
+        {#if draft.minimized}
+          <!-- While the work runs, the chip names the current step (commit, push,
              create) so a docked draft always states what is happening. -->
-        {@const detail = dock.status === 'working' ? dock.detail : ''}
-        {@const chipLabel = [dock.projectName, dock.title, detail]
-          .filter((part) => part.length > 0)
-          .join('   ')}
-        <button
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={chipLabel}
-          aria-label={`Expand ${chipLabel}`}
-          onclick={() => store.expand(draft.id)}
-        >
-          {#if dock.iconUrl}
-            <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
-          {:else}
-            <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
-          {/if}
-          <span class="flex min-w-0 flex-col">
-            {#if dock.projectName}
-              <span class="max-w-36 truncate text-[0.5625rem] font-medium leading-tight text-muted">
-                {dock.projectName}
-              </span>
+          {@const detail = dock.status === 'working' ? dock.detail : ''}
+          {@const chipLabel = [dock.projectName, dock.title, detail]
+            .filter((part) => part.length > 0)
+            .join('   ')}
+          <button
+            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            title={chipLabel}
+            aria-label={`Expand ${chipLabel}`}
+            onclick={() => store.expand(draft.id)}
+          >
+            {#if dock.iconUrl}
+              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+            {:else}
+              <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
             {/if}
-            <span
-              class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
-              >{dock.title}</span
-            >
-            {#if detail}
-              <span class="max-w-36 truncate text-[0.5625rem] leading-tight text-info"
-                >{detail}</span
+            <span class="flex min-w-0 flex-col">
+              {#if dock.projectName}
+                <span
+                  class="max-w-36 truncate text-[0.5625rem] font-medium leading-tight text-muted"
+                >
+                  {dock.projectName}
+                </span>
+              {/if}
+              <span
+                class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
+                >{dock.title}</span
               >
+              {#if detail}
+                <span class="max-w-36 truncate text-[0.5625rem] leading-tight text-info"
+                  >{detail}</span
+                >
+              {/if}
+            </span>
+            {#if dock.status === 'working'}
+              <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            {:else if dock.status === 'attention'}
+              <TriangleAlert
+                size={12}
+                class="shrink-0 text-warning"
+                title="Needs attention"
+                aria-hidden="true"
+              />
+            {:else if dock.status === 'composed' || dock.status === 'created'}
+              <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
             {/if}
-          </span>
-          {#if dock.status === 'working'}
-            <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
-          {:else if dock.status === 'attention'}
-            <TriangleAlert
-              size={12}
-              class="shrink-0 text-warning"
-              title="Needs attention"
-              aria-hidden="true"
-            />
-          {:else if dock.status === 'composed' || dock.status === 'created'}
-            <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
-          {/if}
-        </button>
-      {/if}
-    {/each}
-  </div>
+          </button>
+        {/if}
+      {/each}
+    </div>
+  </DockRow>
 {/if}

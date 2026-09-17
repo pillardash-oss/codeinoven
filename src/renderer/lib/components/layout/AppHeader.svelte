@@ -24,6 +24,7 @@
   import { preloadScopeChunk } from '$lib/page-preload'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
+  import { isLongScheduledRetryWait } from '$shared/provider-issue'
   import type { EditorId, Project, Thread } from '$shared/types'
   import {
     AppWindow,
@@ -67,7 +68,7 @@
     isThreadRetryPaused,
     isThreadWorking
   } from '$shared/types'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteSet, createSubscriber } from 'svelte/reactivity'
 
   type View = MainView
 
@@ -80,7 +81,22 @@
 
   let { activeView, navigate, goBack, goForward }: Props = $props()
 
-  function threadWorkingForIndicator(thread: Thread): boolean {
+  /** How often a parked retry wait is re-checked so a reset that falls back
+   *  inside the wake window rejoins the working count. */
+  const RETRY_WINDOW_RECHECK_MS = 60_000
+  const subscribeToRetryClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, RETRY_WINDOW_RECHECK_MS)
+    return () => window.clearInterval(timer)
+  })
+
+  /**
+   * True while the thread belongs in the working-activity count. A scheduled
+   * auto-retry parked beyond the shared wake window is not "working": the
+   * badge drops it so the user can tell the thread left the active pool.
+   */
+  function threadWorkingForIndicator(thread: Thread, now = Date.now()): boolean {
+    const retryAt = agentRuns.retryAt(thread.projectId, thread.id)
+    if (retryAt !== null && isLongScheduledRetryWait(retryAt, now)) return false
     return agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)
@@ -465,15 +481,19 @@
    */
   let workingThreadCounts = $derived.by(() => {
     const threads = scopeState.allScopeThreads
+    // Re-check on a coarse clock only while a retry deadline is tracked, so a
+    // 6h+ parked wait rejoins the count once its reset gets close.
+    if (agentRuns.hasPendingRetry) subscribeToRetryClock()
+    const now = Date.now()
     const working = threads.filter(
-      (thread) => !thread.archived && threadWorkingForIndicator(thread)
+      (thread) => !thread.archived && threadWorkingForIndicator(thread, now)
     )
     let projects = 0
     let chats = 0
     for (const thread of threads) {
       if (thread.archived || isOrchestrationChildThread(thread)) continue
       const isWorking =
-        threadWorkingForIndicator(thread) || coordinatorHasActiveDelegates(thread, working)
+        threadWorkingForIndicator(thread, now) || coordinatorHasActiveDelegates(thread, working)
       if (!isWorking) continue
       if (thread.projectId === INBOX_PROJECT_ID) chats += 1
       else projects += 1

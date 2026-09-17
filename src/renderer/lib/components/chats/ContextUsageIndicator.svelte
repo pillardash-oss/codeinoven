@@ -17,10 +17,11 @@
     AgentBankedResets,
     AgentContextUsage,
     AgentHarnessUsage,
-    AgentRateLimitWindow,
     HarnessModelUsage,
     UsageEfficiencyKpis
   } from '$shared/types'
+  import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import { compactCount, creditsLabel, formatExpiry, formatMoney } from '$lib/format/usage'
 
   interface Props {
     usage?: AgentContextUsage
@@ -104,140 +105,7 @@
   function harnessKey(entry: AgentHarnessUsage): string {
     return entry.harnessId
   }
-
-  function compactNumber(value: number): string {
-    const absolute = Math.abs(value)
-    if (absolute < 1_000) return Math.round(value).toLocaleString()
-    const divisor = absolute >= 1_000_000 ? 1_000_000 : 1_000
-    const suffix = divisor === 1_000_000 ? 'm' : 'k'
-    const scaled = value / divisor
-    const precision = Math.abs(scaled) < 100 ? 1 : 0
-    return `${scaled.toFixed(precision).replace(/\.0$/, '')}${suffix}`
-  }
-
-  function formatMoney(value: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
-      maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2
-    }).format(value)
-  }
-
-  function formatReset(value: number | undefined): string {
-    if (!value) return 'Reset time unavailable'
-    const date = new Intl.DateTimeFormat(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(value)
-    const now = Date.now()
-    if (value <= now) return `Reset ${date}`
-    const minutes = Math.max(1, Math.round((value - now) / 60_000))
-    const duration =
-      minutes >= 1_440
-        ? `${Math.round(minutes / 1_440)}d ${Math.round((minutes % 1_440) / 60)}h`
-        : minutes >= 60
-          ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-          : `${minutes}m`
-    return `Resets in ${duration} · ${date}`
-  }
-
-  const expiryFormatter = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  })
-
-  function formatExpiry(value: number | null | undefined): string {
-    if (value === null) return 'Does not expire'
-    if (value === undefined || !Number.isFinite(new Date(value).getTime())) {
-      return 'Expiry time unavailable'
-    }
-    return `Expires ${expiryFormatter.format(value)}`
-  }
-
-  function readableStatus(value: string | undefined): string {
-    if (!value) return 'Status unavailable'
-    const normalized = value.replaceAll('_', ' ')
-    return normalized.charAt(0).toUpperCase() + normalized.slice(1)
-  }
-
-  function quotaPercent(limit: AgentRateLimitWindow): number | undefined {
-    const reported = limit.usedPercent
-    const calculated =
-      limit.remaining !== undefined && limit.limit !== undefined && limit.limit > 0
-        ? ((limit.limit - limit.remaining) / limit.limit) * 100
-        : undefined
-    const percent = reported ?? calculated
-    return percent === undefined ? undefined : Math.max(0, Math.min(100, percent))
-  }
-
-  function overageLabel(limit: AgentRateLimitWindow): string | undefined {
-    if (limit.isUsingOverage) return 'Using extra usage'
-    if (!limit.overageStatus && !limit.overageDisabledReason) return undefined
-    const status = limit.overageStatus
-      ? `Extra usage: ${readableStatus(limit.overageStatus).toLowerCase()}`
-      : 'Extra usage unavailable'
-    return limit.overageDisabledReason
-      ? `${status} · ${readableStatus(limit.overageDisabledReason).toLowerCase()}`
-      : status
-  }
-
-  function creditsLine(usage: AgentContextUsage | AgentHarnessUsage): string | undefined {
-    const credits = usage.credits
-    if (!credits) return undefined
-    if (credits.unlimited) return 'Unlimited'
-    if (credits.balance !== undefined) return `${formatMoney(credits.balance)} credits`
-    if (credits.hasCredits) return 'Credits active'
-    return undefined
-  }
 </script>
-
-{#snippet limitRows(limits: AgentRateLimitWindow[])}
-  {#each limits as limit (limit.id)}
-    {@const percent = quotaPercent(limit)}
-    {@const overage = overageLabel(limit)}
-    <div transition:slide={{ duration: 300 }} class="overflow-hidden">
-      <div class="mb-1 flex items-center justify-between gap-3 text-[0.625rem]">
-        <span class="font-medium text-muted">{limit.label}</span>
-        <span class="tabular-nums text-dimmed">
-          {#if limit.remaining !== undefined && limit.limit !== undefined}
-            {compactNumber(limit.remaining)} of {compactNumber(limit.limit)} left
-          {:else if percent !== undefined}
-            {Math.round(percent)}% used
-          {:else}
-            {readableStatus(limit.status)}
-          {/if}
-        </span>
-      </div>
-      {#if percent !== undefined}
-        <div
-          class="h-1.5 overflow-hidden rounded-full bg-overlay"
-          role="progressbar"
-          aria-label={`${limit.label} usage`}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow={Math.round(percent)}
-        >
-          <div
-            class="h-full rounded-full bg-info transition-[width] duration-700 ease-out"
-            style={`width: ${percent}%`}
-          ></div>
-        </div>
-      {/if}
-      <p class="mt-1 text-[0.5625rem] text-dimmed">{formatReset(limit.resetsAt)}</p>
-      {#if overage}
-        <p class="mt-0.5 text-[0.5625rem] text-dimmed">{overage}</p>
-      {/if}
-    </div>
-  {/each}
-{/snippet}
 
 {#snippet bankedResetRow(resets: AgentBankedResets)}
   <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
@@ -302,8 +170,8 @@
         </span>
         <span class="shrink-0 tabular-nums text-dimmed">
           {model.costUsd > 0
-            ? `${formatMoney(model.costUsd)} · ${compactNumber(model.tokens.total)} tok`
-            : `${compactNumber(model.tokens.total)} tok`}
+            ? `${formatMoney(model.costUsd)} · ${compactCount(model.tokens.total)} tok`
+            : `${compactCount(model.tokens.total)} tok`}
         </span>
       </div>
     {/each}
@@ -338,7 +206,7 @@
       <div class="space-y-2.5 px-2.5 pb-2.5">
         {#if entry.tokens && entry.tokens.total > 0}
           <p class="text-[0.5625rem] text-dimmed">
-            Consumed {compactNumber(entry.tokens.total)} tokens
+            Consumed {compactCount(entry.tokens.total)} tokens
             {#if entry.messageCount}
               · {entry.messageCount} turn{entry.messageCount === 1 ? '' : 's'}
             {/if}
@@ -348,12 +216,12 @@
           {@render modelRows(entry.models)}
         {/if}
         {#if entry.rateLimits.length > 0}
-          {@render limitRows(entry.rateLimits)}
-        {:else if !creditsLine(entry) && !entry.tokens && !entry.models?.length}
+          <UsageWindowList limits={entry.rateLimits} preferAmount />
+        {:else if !creditsLabel(entry) && !entry.tokens && !entry.models?.length}
           <p class="text-[0.625rem] text-dimmed">No quota reported for this harness.</p>
         {/if}
-        {#if creditsLine(entry)}
-          <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLine(entry)}</p>
+        {#if creditsLabel(entry)}
+          <p class="text-[0.5625rem] text-dimmed">Credits: {creditsLabel(entry)}</p>
         {/if}
         {#if entry.bankedResets?.availableCount}
           {@render bankedResetRow(entry.bankedResets)}
@@ -382,9 +250,9 @@
       </p>
     </div>
     <div class="flex items-center gap-2">
-      {#if usage && creditsLine(usage)}
+      {#if usage && creditsLabel(usage)}
         <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted">
-          {creditsLine(usage)}
+          {creditsLabel(usage)}
         </span>
       {/if}
       <BatteryMedium size={15} class={iconClass} />
@@ -405,7 +273,7 @@
       {#if harnessUsage[0]?.models?.length}
         {@render modelRows(harnessUsage[0].models)}
       {/if}
-      {@render limitRows(harnessUsage[0].rateLimits)}
+      <UsageWindowList limits={harnessUsage[0].rateLimits} preferAmount />
       {#if harnessUsage[0]?.bankedResets?.availableCount}
         {@render bankedResetRow(harnessUsage[0].bankedResets)}
       {/if}
@@ -423,10 +291,10 @@
       <span class="font-medium text-muted">Context (latest request)</span>
       <span class="tabular-nums text-dimmed">
         {usage?.contextUsed !== undefined
-          ? `${usage.contextEstimated ? '≈' : ''}${compactNumber(usage.contextUsed)}`
+          ? `${usage.contextEstimated ? '≈' : ''}${compactCount(usage.contextUsed)}`
           : 'Unavailable'}
         {#if usage?.contextWindow}
-          / {compactNumber(usage.contextWindow)}
+          / {compactCount(usage.contextWindow)}
         {/if}
       </span>
     </div>
@@ -445,9 +313,9 @@
     </div>
     {#if usage?.contextWindow && usage.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
-        <span>Used {compactNumber(usage.contextUsed)}</span>
-        <span>Available {compactNumber(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
-        <span>Window {compactNumber(usage.contextWindow)}</span>
+        <span>Used {compactCount(usage.contextUsed)}</span>
+        <span>Available {compactCount(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
+        <span>Window {compactCount(usage.contextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}
@@ -456,12 +324,12 @@
       </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
-      <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
-      <span>Output {usage?.tokens ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
-      <span>Reasoning {usage?.tokens ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span>
+      <span>Input {usage?.tokens ? compactCount(usage.tokens.input) : 'Unavailable'}</span>
+      <span>Output {usage?.tokens ? compactCount(usage.tokens.output) : 'Unavailable'}</span>
+      <span>Reasoning {usage?.tokens ? compactCount(usage.tokens.reasoning) : 'Unavailable'}</span>
       <span
         >Cache {usage?.tokens
-          ? compactNumber(usage.tokens.cacheRead + usage.tokens.cacheWrite)
+          ? compactCount(usage.tokens.cacheRead + usage.tokens.cacheWrite)
           : 'Unavailable'}{#if cacheHitLabel}
           · {cacheHitLabel}{/if}</span
       >

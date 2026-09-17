@@ -48,6 +48,7 @@
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import AiAccountSetupCard from '../threads/AiAccountSetupCard.svelte'
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
@@ -82,6 +83,7 @@
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
@@ -101,6 +103,11 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    FIRST_RUN_PROVIDER_SEARCH,
+    providerConnectFlow
+  } from '$lib/stores/provider-connect-flow.svelte'
+  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -419,6 +426,31 @@
   /** Effective chat settings   the chat's own model when one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
   let chatComposerSettings = $derived(chatEffectiveSettings())
+
+  /** Harness display name for the chat setup card, straight from the registry. */
+  let chatHarnessName = $derived(
+    providerStore.providers.find((provider) => provider.id === chatComposerSettings.harnessId)
+      ?.name ?? chatComposerSettings.harnessId
+  )
+  /** True while the new-chat composer has a provider and a model to run on. */
+  let chatCanRunTurns = $derived(
+    harnessHasProvider(chatProviders, chatComposerSettings.harnessId) &&
+      selectedModelExists(chatProviders, chatComposerSettings)
+  )
+  /** Armed by the composer refusing a send the chat has no account for. */
+  let chatAiAccountPromptOpen = $state(false)
+  let chatAiAccountPromptVisible = $derived(chatAiAccountPromptOpen && !chatCanRunTurns)
+
+  /** Open the harness's provider list for the chat that has not been created
+   *  yet, then re-probe the inbox catalog so the connected models show up. */
+  function openChatAiAccountSetup(): void {
+    providerConnectFlow.open(chatComposerSettings.harnessId, {
+      search: FIRST_RUN_PROVIDER_SEARCH,
+      onConnected: () => {
+        if (chatInboxId) void providerCatalog.refresh(chatInboxId, true)
+      }
+    })
+  }
 
   /** Live account quota for the not-yet-created "Start a new chat" composer
    *  the exact same provider-level hover-fetch cache the thread battery uses. */
@@ -2217,12 +2249,36 @@
 
   // Keep managed-worktree health fresh for the scoped sidebar too, so the scope
   // menu offers "Repair worktree" exactly when the board would (deduped in the store).
+  //
+  // Worktree health belongs to a *scope*, not to a thread, so this is keyed on
+  // the docked project+bucket values rather than on the sidebar-context object.
+  // `showSidebarForThread` allocates a fresh context object on every thread
+  // switch, so depending on the object made each switch inside one scope look
+  // like a scope change. Depending on the two strings re-runs only when the
+  // scope actually moves or the board changes.
+  const dockedScopeProjectId = $derived(scopeState.sidebarContext?.projectId ?? '')
+  const dockedScopeBucketId = $derived(scopeState.sidebarContext?.bucketId ?? '')
   $effect(() => {
-    const projectId = scopeState.sidebarContext?.projectId
-    scopeState.syncBoardWorktreeHealth(
-      projectId,
-      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    const projectId = dockedScopeProjectId
+    if (!projectId) return
+    const buckets = scopeState.boards.get(projectId)?.buckets
+    scheduleDeferredWork('scope:boardHealth', () =>
+      scopeState.syncBoardWorktreeHealth(projectId, buckets)
     )
+  })
+
+  // Switching the docked scope is an interaction with it: re-read that scope's
+  // health so a checkout that changed on disk is reported right away. Same
+  // value-keyed dependency as above, so a thread switch inside one scope asks
+  // for nothing at all. What does need reading is queued for after the switch
+  // has painted, because discovery shells out to Git.
+  $effect(() => {
+    const projectId = dockedScopeProjectId
+    const bucketId = dockedScopeBucketId
+    if (!projectId || !bucketId) return
+    scheduleDeferredWork('scope:worktreeHealth', () => {
+      void scopeState.revalidateWorktreeHealth(projectId, bucketId).catch(() => undefined)
+    })
   })
 
   // While a thread is selected, keep its row (and project) in focus in the
@@ -4490,6 +4546,7 @@
               <svelte:boundary onerror={handleConversationRenderError}>
                 <ThreadView
                   thread={selectedThread}
+                  {active}
                   chatMode={mode === 'chats'}
                   allowCenteredComposer={mode === 'chats' ||
                     (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
@@ -4540,6 +4597,27 @@
               </p>
             </div>
             <div class="w-full max-w-4xl">
+              {#if chatAiAccountPromptVisible}
+                <div class="mb-3">
+                  <AiAccountSetupCard
+                    harnessName={chatHarnessName}
+                    providers={chatProviders}
+                    settings={chatComposerSettings}
+                    projectId={chatInboxId ?? INBOX_PROJECT_ID}
+                    refreshing={chatInboxId ? providerCatalog.refreshing(chatInboxId) : false}
+                    favoriteModels={rendererRecovery.chatFavoriteModels}
+                    recentModels={rendererRecovery.chatRecentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                    onModelChange={(next) => chatSettings.commit(next)}
+                    onConnect={openChatAiAccountSetup}
+                    onDismiss={() => (chatAiAccountPromptOpen = false)}
+                  />
+                </div>
+              {/if}
               {#key chatsComposerRestoreKey}
                 <ChatComposer
                   bind:this={chatsComposer}
@@ -4589,6 +4667,7 @@
                       files
                     )}
                   onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  onNeedsAiAccount={() => (chatAiAccountPromptOpen = true)}
                   onRevealUsage={revealNewChatUsage}
                   onHideUsage={() => newChatUsage.markStale()}
                   usageRefreshing={newChatUsage.refreshing}

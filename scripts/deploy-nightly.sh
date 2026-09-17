@@ -15,8 +15,16 @@
 #   - Requires a clean working tree (no uncommitted changes) and the `gh` CLI
 #     authenticated.
 #   - Pushes any local `dev` commits to `origin/dev` first (plain push, never
-#     force) so the promotion always reflects what's actually on origin —
-#     refuses instead if local dev and origin/dev have diverged.
+#     force) so the promotion always reflects what's actually on origin,
+#     refusing instead if local dev and origin/dev have diverged.
+#   - Runs from any worktree of the repository, including the scope worktrees
+#     CodeInOven creates per agent, and never switches the branch of the checkout
+#     it runs in. `git checkout dev` cannot do that: it dies with "fatal: 'dev'
+#     is already used by worktree at ..." when dev lives in another worktree, and
+#     it would otherwise yank a scope worktree off its own branch. The checkout
+#     is fast-forwarded to `dev` when it holds nothing dev lacks, and the
+#     promoted commit is pinned before the gate runs, so the gate always
+#     validates exactly what gets pushed.
 #   - If `nightly` has commit(s) not present on `dev` AND the content differs,
 #     the promotion is REFUSED — reconcile manually first. If `nightly`
 #     already contains `dev`'s content (e.g. a promotion already merged),
@@ -59,6 +67,16 @@ pkg_version() {
     "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))"
 }
 
+dev_worktree() {
+  # Path of the worktree that has `dev` checked out, or empty when none does.
+  # The reconciliation commit below has to land on dev itself, and this script
+  # may be running from a scope worktree instead of the dev checkout.
+  git worktree list --porcelain | awk '
+    /^worktree / { path = substr($0, 10) }
+    /^branch refs\/heads\/dev$/ { print path; exit }
+  '
+}
+
 # --- 0. preconditions -------------------------------------------------------
 if [[ "$DRY_RUN" -eq 0 && -n "$(git status --porcelain)" ]]; then
   die "Working tree is not clean. Commit or stash your changes before promoting."
@@ -67,57 +85,86 @@ if [[ "$DRY_RUN" -eq 0 && -z "$(command -v gh)" ]]; then
   die "The 'gh' CLI is required to open the nightly-promotion pull request (run: brew install gh / gh auth login)."
 fi
 
-# --- 0b. local CI gate -------------------------------------------------------
+say "${C_BOLD}Resolving latest remote state...${C_RESET}"
+git fetch origin
+
+# --- 0b. pin the promotion to the commit this checkout validates -------------
+# The gate below runs in THIS checkout, so this checkout must be the commit the
+# promotion pushes: a gate that validates one commit while another one is
+# promoted proves nothing.
+#
+# `git checkout dev` cannot guarantee that here. CodeInOven runs every agent in
+# its own worktree, so this is usually not the dev checkout: a bare checkout
+# dies with "fatal: 'dev' is already used by worktree at ...", and when dev is
+# checked out nowhere it would switch this worktree off its own branch. So
+# refuse when this checkout holds commits dev lacks, and fast-forward it to dev
+# otherwise, which lands a scope worktree with no extra commits exactly on dev.
+CURRENT_BRANCH="$(git branch --show-current)"
+DEV_WORKTREE="$(dev_worktree)"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ "$CURRENT_BRANCH" == "dev" ]]; then
+    git pull --ff-only origin dev
+  elif ! git merge-base --is-ancestor origin/dev dev; then
+    die "local dev is behind origin/dev. Bring dev up to date in its own checkout first (git -C <dev-worktree> pull --ff-only origin dev) and re-run."
+  elif git merge-base --is-ancestor HEAD dev; then
+    say "Fast-forwarding this worktree ($CURRENT_BRANCH) to dev so the gate validates what gets promoted..."
+    git merge --ff-only dev
+    ok "Now at $(git rev-parse --short HEAD)."
+  else
+    die "This checkout ($CURRENT_BRANCH) has commits dev lacks, so it is not what a promotion would push. Run this from the worktree that has dev checked out, or merge this branch into dev first."
+  fi
+else
+  say "(dry-run) git pull --ff-only origin dev (on dev) / git merge --ff-only dev (scope worktree)"
+fi
+
+DEV_SHA="$(git rev-parse dev)"
+if [[ "$DRY_RUN" -eq 0 && "$(git rev-parse HEAD)" != "$DEV_SHA" ]]; then
+  die "This checkout is at $(git rev-parse --short HEAD) but dev is at $(git rev-parse --short "$DEV_SHA"). Refusing to promote a commit the local gate would not validate."
+fi
+
+# --- 0c. local CI gate -------------------------------------------------------
 # Run the full host-OS mirror of the GitHub Actions quality/security/nightly
-# checks BEFORE anything is pushed or promoted. Individual failing stages are
-# NOT fatal mid-run — every stage runs, then failures are reported as one
-# markdown file per failed stage under .cio/git/ci/<unix-ts>/ with the path
-# splashed at the end. Deployment never proceeds until the whole gate passes.
+# checks on the pinned commit BEFORE anything is pushed or promoted. Individual
+# failing stages are NOT fatal mid-run: every stage runs, then failures are
+# reported as one markdown file per failed stage under .cio/git/ci/<unix-ts>/
+# with the path splashed at the end. Deployment never proceeds until the whole
+# gate passes.
 if [[ "$DRY_RUN" -eq 0 ]]; then
   say "${C_BOLD}Local CI gate: running the host-OS mirror of the CI checks...${C_RESET}"
   if ! bun scripts/ci-local.ts --gate; then
     CI_REPORT_DIR="${CI_REPORT_DIR:-$(ls -d .cio/git/ci/* 2>/dev/null | sort | tail -1)}"
     die "Local CI gate failed. Per-failure reports: ${CI_REPORT_DIR:-.cio/git/ci}"
   fi
-  ok "Local CI gate passed — proceeding with promotion."
+  ok "Local CI gate passed, proceeding with promotion."
 else
   say "(dry-run) bun scripts/ci-local.ts --gate"
 fi
 
-say "${C_BOLD}Resolving latest remote state...${C_RESET}"
-git fetch origin
-
-# --- 1. ensure we're on a clean, up-to-date dev ------------------------------
-if [[ "$(git branch --show-current)" != "dev" || "$DRY_RUN" -eq 1 ]]; then
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    say "Checking out dev..."
-    git checkout dev
-  fi
+# --- 1. push the validated dev commit ---------------------------------------
+# The promotion is computed against origin/dev; any commits sitting locally and
+# unpushed are invisible to origin/nightly's ancestry check and to anyone else,
+# so push them up first (never force, refusing on any real divergence). The
+# commit pushed is the pinned one, never a dev that moved while the gate ran.
+if [[ -n "$(git rev-parse dev 2>/dev/null)" && "$(git rev-parse dev)" != "$DEV_SHA" ]]; then
+  warn "dev moved while the gate was running ($(git rev-parse --short "$DEV_SHA") -> $(git rev-parse --short dev)). Promoting the validated commit $(git rev-parse --short "$DEV_SHA"); the newer commits wait for the next nightly."
 fi
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  git pull --ff-only origin dev
-else
-  say "(dry-run) git pull --ff-only origin dev"
-fi
-
-# --- 1b. push local dev ahead of origin/dev before comparing against nightly -
-# The promotion is computed against origin/dev; any commits sitting locally
-# and unpushed are invisible to origin/nightly's ancestry check and to anyone
-# else, so push them up first (never force — refuses on any real divergence).
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  if ! git merge-base --is-ancestor origin/dev dev; then
-    die "local dev and origin/dev have diverged (origin/dev has commits local dev lacks). Pull/rebase manually before promoting."
+  if ! git merge-base --is-ancestor origin/dev "$DEV_SHA"; then
+    die "origin/dev has commits the validated dev commit lacks (someone pushed dev while the gate ran). Re-run the promotion so the gate covers the new tip."
   fi
-  if [[ "$(git rev-parse dev)" != "$(git rev-parse origin/dev)" ]]; then
-    say "Pushing local dev ahead of origin/dev..."
-    git push origin dev
-    ok "Pushed dev at $(git rev-parse --short dev)."
+  if [[ "$(git rev-parse origin/dev)" != "$DEV_SHA" ]]; then
+    say "Pushing dev at $(git rev-parse --short "$DEV_SHA")..."
+    # A refused push is nearly always GitHub secret scanning push protection on
+    # an unpushed commit, which is not something a retry or a force can clear.
+    # Spell out what the remote is asking for instead of leaving a bare git error.
+    if ! git push origin "$DEV_SHA:refs/heads/dev"; then
+      die "The remote refused the push (see the reason printed above). If it is GITHUB PUSH PROTECTION, the pushed commits introduce a credential: allow each credential from the 'unblock-secret' link in its block (right for a published installed-app value), or purge it from the commits being pushed. Then re-run the promotion."
+    fi
+    ok "Pushed dev at $(git rev-parse --short "$DEV_SHA")."
   fi
 else
-  say "(dry-run) git push origin dev (if local dev is ahead)"
+  say "(dry-run) git push origin $DEV_SHA:refs/heads/dev (if origin/dev is behind)"
 fi
-
-DEV_SHA="$(git rev-parse dev)"
 NIGHTLY_BRANCH_SHA="$(git rev-parse origin/nightly)"
 
 if [[ "$DEV_SHA" == "$NIGHTLY_BRANCH_SHA" ]]; then
@@ -131,28 +178,36 @@ fi
 # new commit before the next promotion, neither branch is an ancestor of the
 # other, even though nightly introduced zero unique file content. Handle all
 # three shapes this can take instead of refusing outright.
-if git merge-base --is-ancestor origin/nightly dev; then
+if git merge-base --is-ancestor origin/nightly "$DEV_SHA"; then
   : # normal case: dev has new commits ahead of nightly, PR below.
-elif git merge-base --is-ancestor dev origin/nightly; then
-  if git diff --quiet origin/dev origin/nightly; then
+elif git merge-base --is-ancestor "$DEV_SHA" origin/nightly; then
+  if git diff --quiet "$DEV_SHA" origin/nightly; then
     ok "nightly already contains dev's content at $(git rev-parse --short origin/nightly) (promoted via PR). Nothing to promote."
     exit 0
   else
     die "nightly is ahead of dev but has different file content (likely a PR merged extra changes into nightly). Reconcile manually before promoting."
   fi
 else
-  MERGE_BASE="$(git merge-base dev origin/nightly)"
+  MERGE_BASE="$(git merge-base "$DEV_SHA" origin/nightly)"
   if git diff --quiet "$MERGE_BASE" origin/nightly; then
     # nightly's commits since the merge base are pure promotion-PR merge
-    # commits with no unique file content — safe to fold back into dev so
-    # ancestry realigns for this and future promotions.
+    # commits with no unique file content, so they fold back into dev to
+    # realign ancestry for this and future promotions. The realignment is also
+    # what keeps the promotion PR mergeable: the nightly ruleset requires the
+    # head branch to contain the base branch.
+    if [[ -z "$DEV_WORKTREE" ]]; then
+      die "The ancestry realignment needs 'dev' checked out somewhere. Check out dev and re-run."
+    fi
     say "nightly has promotion-merge commits not yet on dev (no content changes) — reconciling dev automatically..."
     if [[ "$DRY_RUN" -eq 0 ]]; then
-      git merge origin/nightly -m "Merge nightly (promotion merge commits) into dev to reconcile ancestry"
+      # Run in dev's own worktree: this script may be running from a scope
+      # worktree, which must not be switched off its branch. The merge changes
+      # no file content, so it cannot collide with work in progress there.
+      ( cd "$DEV_WORKTREE" && git merge origin/nightly -m "Merge nightly (promotion merge commits) into dev to reconcile ancestry" )
       git push origin dev
       ok "Reconciled dev with nightly's promotion history at $(git rev-parse --short dev) and pushed."
     else
-      say "(dry-run) git merge origin/nightly -m 'Merge nightly ...' && git push origin dev"
+      say "(dry-run) (cd $DEV_WORKTREE && git merge origin/nightly -m 'Merge nightly ...') && git push origin dev"
     fi
   else
     die "dev and nightly have diverged with different file content and no common fast-forward path. Reconcile manually before promoting."
@@ -161,7 +216,7 @@ fi
 
 # --- 3. version gate: dev must be next patch after stable (semver-correct nightly) -----
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
-DEV_VERSION="$(pkg_version dev)"
+DEV_VERSION="$(pkg_version "$DEV_SHA")"
 LAST_STABLE="$(gh release list --limit 1000 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease | not) | .tagName] | max_by(ltrimstr("v"))' 2>/dev/null | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)"
 
 # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
@@ -174,6 +229,9 @@ LAST_STABLE="$(gh release list --limit 1000 --json tagName,isPrerelease --jq '[.
 # dev==nightly equality, which previously left the bump unreachable so
 # deploy:main later rejected 0.5.53 == last stable 0.5.53.
 if [[ "$DEV_VERSION" == "$NIGHTLY_VERSION" && -n "$LAST_STABLE" && "$NIGHTLY_VERSION" == "$LAST_STABLE" ]]; then
+  if [[ "$CURRENT_BRANCH" != "dev" ]]; then
+    die "dev needs the next-cycle version bump (nightly $NIGHTLY_VERSION == last stable v$LAST_STABLE), which has to be committed on dev itself. Run this from the dev checkout."
+  fi
   if [[ "$DRY_RUN" -eq 0 ]]; then
     warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals last published stable v$LAST_STABLE — bumping dev to the next patch for the new stable cycle (stable $LAST_STABLE -> nightly $LAST_STABLE+1)..."
     bun scripts/bump-version.ts
@@ -204,7 +262,7 @@ fi
 
 say ""
 say "${C_BOLD}Promotion summary:${C_RESET}"
-say "  dev      -> ${C_GREEN}$(git rev-parse --short dev)${C_RESET}  (version $DEV_VERSION)"
+say "  dev      -> ${C_GREEN}$(git rev-parse --short "$DEV_SHA")${C_RESET}  (version $DEV_VERSION)"
 say "  nightly  -> ${C_GREEN}$(git rev-parse --short origin/nightly)${C_RESET}  (version $NIGHTLY_VERSION)"
 say ""
 

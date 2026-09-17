@@ -131,6 +131,7 @@ import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
   type BrowserUtilityExecutor,
+  type ScopeToolExecutor,
   type UtilityResultAttribution,
   type UtilityTurnBudgetContext,
   type UtilityTurnGateway
@@ -226,6 +227,9 @@ import type {
   ThreadSettings,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
+  TurnStreamPartsChange,
+  TurnStreamPartsPage,
+  TurnStreamPartsQuery,
   ThinkingLevel,
   ModelRankingSnapshotRow,
   UsageEventDetails,
@@ -239,6 +243,7 @@ import {
 } from '../../lib/types'
 import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
+import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
@@ -246,10 +251,14 @@ import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
 } from '../../lib/agent-behavior'
-import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
+import {
+  registerCioPromptDefault,
+  SKILL_OUTPUT_INSTRUCTION,
+  type CioPromptId
+} from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
-import { OpenUsageClient } from '../usage/openusage-client'
+import { OpenUsageClient, openUsageProviderCandidates } from '../usage/openusage-client'
 import { CustomProviderUsageClient } from '../providers/custom-provider-usage-client'
 import {
   budgetTurnLayers,
@@ -295,7 +304,8 @@ import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
   isUsageResetWaitIssue,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
@@ -461,6 +471,7 @@ const AUDIT_GENERATION_SYSTEM_PROMPT = [
   'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
   CITATION_SYSTEM_INSTRUCTION,
   AUDIT_REPORT_JSON_CONTRACT,
+  SKILL_OUTPUT_INSTRUCTION,
   'Return only the requested structured audit report.'
 ].join(' ')
 
@@ -509,6 +520,7 @@ const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
       .replace('An Assignment audit is an evidence run', 'An independent audit is an evidence run')
       .replace('from the Assignment, task reports and commits,', 'from the transcript and commits,')
   ),
+  SKILL_OUTPUT_INSTRUCTION,
   'Return only the requested structured audit report.'
 ].join(' ')
 
@@ -995,6 +1007,7 @@ const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   'Answer questions and explain findings using the supplied conversation context.',
   'You may inspect project files and use read-only research tools.',
   'Skill instructions are readable: when one of the available skills matches the request, load its SKILL.md with the read tool and follow it.',
+  SKILL_OUTPUT_INSTRUCTION,
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
@@ -1031,7 +1044,8 @@ const CHAT_SYSTEM_PROMPT = [
   'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths. Do not inspect the current working directory for context.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
-  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.'
+  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.',
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 /** Non-editable safety boundary appended even when the user customized Chat prompts. */
@@ -1065,7 +1079,8 @@ const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   'Do not read or exfiltrate sensitive files   credentials, secrets, tokens, private keys, and protected paths such as `.env`, `.config`, `.ssh`, `.aws`, and the user home configuration   unless the user explicitly approves access to that specific file.',
   'Do not modify files unless the user asks you to.',
   'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
-  CITATION_SYSTEM_INSTRUCTION
+  CITATION_SYSTEM_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 /** Tools available to a plain (web-only) chat thread   no file-system tools. */
@@ -1164,7 +1179,8 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
   'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path. When the dispatch also names one or more prototype files to create or rebuild under the feature prototypes directory, write exactly those prototype files too   the same turn owns both writes; do not defer the prototype file to a later turn or only describe it in the report. Never write to any other path than the ones the dispatch names. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
-  MERMAID_OUTPUT_INSTRUCTION
+  MERMAID_OUTPUT_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 const BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT =
@@ -1265,7 +1281,8 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   `During the interview, activate ${BRAINSTORM_ALIGNMENT_UTILITY_ID} and use save_notes with { markdown } to maintain concise cumulative notes for the next document version. Never delay a question to save notes or call another tool: ask first, then save the user's answer and accumulated findings before ending the completed turn. Include the product intent and intended experience, confirmed decisions and their rationale, research findings with sources, rejected alternatives, constraints, and remaining questions. Preserve earlier context when updating notes; never paste the notes or internal instructions into visible chat. No separate report-generation run occurs during the interview.`,
   'For later rounds, build on the existing Brainstorm document, its annotations, review/discuss text, earlier alignment notes, and the current round notes. Treat an existing generic or premature draft as unconfirmed input: research its claims and interview the user about its open choices instead of treating them as decisions. Preserve the purpose and intent so future tasks, PRDs, specifications, and prototypes reflect the same agreed direction.',
   MERMAID_OUTPUT_INSTRUCTION,
-  QUESTION_TOOL_INSTRUCTION
+  QUESTION_TOOL_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 const asEditableTemplate = (prompt: string): string =>
@@ -1374,6 +1391,8 @@ export function composeBrainstormSystemPrompt(input: {
   assignmentMode: boolean
   brainstormDiscussionPrompt?: string
   engineeringSpecPrompt?: string
+  /** Set only on a PRD stage turn, which owns its own generate-or-interview rule. */
+  prdDiscussionPrompt?: string
   revisionPrompt: string
   memoryInstruction: string
   imageDescriptorNote: string
@@ -1381,14 +1400,18 @@ export function composeBrainstormSystemPrompt(input: {
   utilityInstructions: string
   historyRecap: string
 }): string {
+  const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
   return [
+    prdTurnPrompt,
     input.activeBrainstormTurn
       ? (input.brainstormDiscussionPrompt ?? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
       : '',
-    input.activeBrainstormTurn
+    input.activeBrainstormTurn || prdTurnPrompt
       ? ''
       : (input.engineeringSpecPrompt ?? SPEC_GENERATION_SYSTEM_PROMPT),
-    !input.activeBrainstormTurn && input.assignmentMode ? ASSIGNMENT_GENERATION_INSTRUCTION : '',
+    !input.activeBrainstormTurn && input.assignmentMode && !prdTurnPrompt
+      ? ASSIGNMENT_GENERATION_INSTRUCTION
+      : '',
     input.revisionPrompt,
     input.memoryInstruction,
     input.imageDescriptorNote,
@@ -1515,8 +1538,8 @@ interface ActiveBrainstormSession {
 }
 
 interface TurnStreamCacheEntry {
-  /** Raw prefix of the stream log already consumed by this entry. */
-  consumedRaw: string
+  /** Byte offset of the stream log already consumed by this entry. */
+  consumedBytes: number
   /** Every parsed stream event, in log order. */
   events: TurnStreamEvent[]
   /** Turn id of the last event that carried one. */
@@ -1561,6 +1584,17 @@ interface PendingSpecRevision {
   harnessId: string
   providerId: string
   modelId: string
+  createdAt: number
+}
+
+interface PendingPrdTurn {
+  schemaVersion: 1
+  projectId: string
+  threadId: string
+  sessionId: string
+  harnessId: string
+  providerId?: string
+  modelId?: string
   createdAt: number
 }
 
@@ -1966,6 +2000,13 @@ export class ChatEngine {
     }
   >()
   private pendingSpecRevisions = new Map<string, PendingSpecRevision>()
+  /**
+   * A conversational PRD turn. The agent either submits the document or asks the
+   * user product questions, so the submission is captured only when the turn
+   * finally ends without waiting for the user and without an error.
+   */
+  private pendingPrdTurns = new Map<string, PendingPrdTurn>()
+  private prdTurnTasks = new Map<string, Promise<PrdDocument | null>>()
   private pendingBrainstormTurns = new Map<
     string,
     { brainstormId?: string; version?: number; note: string }
@@ -2243,9 +2284,8 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     if (this.computerUsePip) {
-      this.utilityOrchestration.onCuaActivity((pid, threadId, sessionId) => {
-        void this.computerUsePip?.track(pid, threadId, sessionId)
-      })
+      const computerUsePip = this.computerUsePip
+      this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
     }
     this.specEngine = new SpecEngine(storage, database, {
       validateForApproval: validateEngineeringSpec
@@ -2404,6 +2444,15 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
+  /**
+   * Wire the app-owned scope and worktree capability that the utility gateway
+   * exposes. The IPC layer owns the scope and worktree services, so it supplies
+   * the executor the gateway calls.
+   */
+  setScopeToolService(executor: ScopeToolExecutor | null): void {
+    this.utilityOrchestration.setScopeToolExecutor(executor)
   }
 
   setPrototypePreviewRegistrar(
@@ -2570,8 +2619,10 @@ export class ChatEngine {
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.loadSessionMessages(projectId, threadId, sessionId)
     )
-    ipcMain.handle('thread:loadStreamParts', (_, projectId: string, threadId: string) =>
-      this.loadTurnStreamParts(projectId, threadId)
+    ipcMain.handle(
+      'thread:loadStreamParts',
+      (_, projectId: string, threadId: string, query?: TurnStreamPartsQuery) =>
+        this.loadTurnStreamParts(projectId, threadId, query ?? {})
     )
     ipcMain.handle('agent:loadTemporaryChatMessages', async (_, temporaryChatId: string) =>
       (await this.loadTemporaryConversation(temporaryChatId)).map(withoutTransportParts)
@@ -3499,9 +3550,11 @@ export class ChatEngine {
     this.userAbortedBrainstormOperations.clear()
     this.activeBrainstormEntryOperations.clear()
     this.pendingSpecRevisions.clear()
+    this.pendingPrdTurns.clear()
     this.pendingBrainstormTurns.clear()
     this.activeCompactions.clear()
     this.specRevisionTasks.clear()
+    this.prdTurnTasks.clear()
     this.preparedImplementationSessions.clear()
     this.planningSessions.clear()
     this.handledIdleSessions.clear()
@@ -3543,6 +3596,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     threadTitle: string,
+    /** Scope the thread works in; `cio:scope` defaults to it when the agent omits a target. */
+    scopeBucketId?: string,
     skipRuntime = false,
     allowManagement = false,
     brainstormInterview = false,
@@ -3581,6 +3636,7 @@ export class ChatEngine {
         sessionId,
         threadTitle,
         projectPath,
+        ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
         executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
@@ -3723,7 +3779,8 @@ export class ChatEngine {
         projectPath,
         settings,
         budgetContext,
-        auditorThread.title
+        auditorThread.title,
+        auditorThread.scopeBucketId
       )
       return { instructions, runtimeAvailable: Boolean(instructions) }
     } catch (error) {
@@ -3822,12 +3879,16 @@ export class ChatEngine {
     }
     let gateway: UtilityTurnGateway | undefined
     try {
+      const steeringThread = await this.threadManager.getThread(projectId, threadId)
       gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
         threadId,
         sessionId,
-        threadTitle: (await this.threadManager.getThread(projectId, threadId))?.title,
+        threadTitle: steeringThread?.title,
+        ...(steeringThread?.scopeBucketId === undefined
+          ? {}
+          : { scopeBucketId: steeringThread.scopeBucketId }),
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
@@ -4035,11 +4096,14 @@ export class ChatEngine {
       // custom provider can report subscription windows even without a custom
       // usage route. A driver may also return context usage for the live
       // session, which should remain visible alongside quota data.
-      // OpenUsage is keyed by PROVIDER, not harness. A custom provider ID is a
-      // CodeInOven namespace, so also probe the underlying provider ID. Keep
+      // OpenUsage is keyed by PROVIDER, and the candidate order is owned by the
+      // client so a harness-scoped plan (Antigravity, Claude Code, Codex) wins
+      // over the provider its accounts happen to report. A custom provider ID is
+      // a CodeInOven namespace, so also probe the underlying provider ID. Keep
       // the Pi fallback for Pi-backed providers when no provider integration
       // exists in OpenUsage.
       const openUsageProviderIds = [
+        ...openUsageProviderCandidates(harnessId, providerId),
         ...(isCustomProvider ? [underlyingProviderId(providerId)] : []),
         ...(harnessId === 'pi' ? ['pi'] : [])
       ].filter((candidate): candidate is string => Boolean(candidate))
@@ -4047,12 +4111,7 @@ export class ChatEngine {
         driver.readAccountUsage
           ? driver.readAccountUsage(projectPath, providerId)
           : Promise.resolve(null),
-        this.openUsage.readProviderUsage(
-          providerId,
-          openUsageProviderIds,
-          accountId,
-          accountEnvironment
-        ),
+        this.openUsage.readProviderUsage(openUsageProviderIds, accountId, accountEnvironment),
         this.readCustomProviderUsage(harnessId, providerId)
       ])
       const nativeTelemetry = nativeAttempt.status === 'fulfilled' ? nativeAttempt.value : null
@@ -4965,6 +5024,16 @@ export class ChatEngine {
         this.broadcastToast(
           `Specification update recovery failed: ${
             error instanceof Error ? error.message : 'The submitted revision was invalid.'
+          }`
+        )
+      })
+      void this.runPendingPrdTurn(sessionId, storedSessionMessages, {
+        projectId,
+        threadId
+      }).catch((error) => {
+        this.broadcastToast(
+          `PRD recovery failed: ${
+            error instanceof Error ? error.message : 'The submitted document was invalid.'
           }`
         )
       })
@@ -6447,6 +6516,7 @@ export class ChatEngine {
     for (const sessionId of this.activeBrainstormOperations) add(sessionId)
     for (const sessionId of this.activeBrainstormSessions.keys()) add(sessionId)
     for (const sessionId of this.pendingSpecRevisions.keys()) add(sessionId)
+    for (const sessionId of this.pendingPrdTurns.keys()) add(sessionId)
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
     return active.size
@@ -7824,7 +7894,23 @@ export class ChatEngine {
       : null
     let activeBrainstormTurn: BrainstormDocument | null = null
     let activeBrainstormSession = false
-    if (planningSpecTurn && !preloadedActiveSpec) {
+    // The PRD stage is conversational, including its `prd_finalization` gate: the
+    // agent writes the PRD when the message, the conversation, and any finalized
+    // Brainstorm are enough, and interviews the user when they are not. A draft
+    // under review is still being discussed, and a review comment must never be
+    // mistaken for the specification turn that finalization unlocks.
+    //
+    // It also owns no Brainstorm entry. "Start PRD" writes only the PRD workflow,
+    // so the Brainstorm block below would find no entry choice, swallow the
+    // message, and answer it with an unrelated Brainstorm card.
+    const prdDiscussionTurn =
+      planningSpecTurn &&
+      specAction === undefined &&
+      !preloadedActiveSpec &&
+      (lifecycleForMode?.activeStage === 'prd' ||
+        lifecycleForMode?.humanGate === 'prd_finalization') &&
+      this.prdEngine.getWorkflowState(projectId, threadId)?.stage === 'drafting'
+    if (planningSpecTurn && !preloadedActiveSpec && !prdDiscussionTurn) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
       if (!brainstormWorkflow) {
         brainstormWorkflow = this.brainstormEngine.ensureWorkflow(projectId, threadId)
@@ -7893,9 +7979,10 @@ export class ChatEngine {
       // The planning-session mark drives terminal-answer suppression at turn
       // finalization and on transcript reloads. It must reflect THIS turn's
       // intent, never stale membership from an earlier planning turn: planning
-      // specification turns suppress their chat prose. Brainstorm interviews
-      // must retain the findings and alignment recap as visible conversation.
-      if (planningSpecTurn && !activeBrainstormSession) {
+      // specification turns suppress their chat prose. Brainstorm interviews and
+      // PRD interviews must retain the findings, the recap, and the questions as
+      // visible conversation.
+      if (planningSpecTurn && !activeBrainstormSession && !prdDiscussionTurn) {
         this.planningSessions.add(sessionId)
       } else {
         this.planningSessions.delete(sessionId)
@@ -8106,6 +8193,7 @@ export class ChatEngine {
       settings,
       utilityBudgetContext,
       targetThread?.title ?? '',
+      targetThread?.scopeBucketId,
       isChatThread &&
         !chatFileSystemEnabled &&
         !utilitySetupAllowed &&
@@ -8186,12 +8274,22 @@ export class ChatEngine {
           .join('\n\n')
       : ''
     const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
+    // This turn is never schema-enforced, because the agent must stay free to ask
+    // product questions instead of submitting. The shape therefore travels in the
+    // prompt, exactly as it does for drivers without structured output.
+    const prdDiscussionPrompt = prdDiscussionTurn
+      ? [
+          await this.cioPrompt('prd-discussion'),
+          `The ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
+        ].join('\n\n')
+      : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
           activeBrainstormTurn: activeBrainstormSession,
           assignmentMode: settings.assignmentMode === true,
           brainstormDiscussionPrompt,
           engineeringSpecPrompt,
+          prdDiscussionPrompt,
           revisionPrompt: '',
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
@@ -8254,7 +8352,8 @@ export class ChatEngine {
             workflow.activeSpecVersion
           )
         : null)
-    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
+    const shouldScheduleInitialSpec =
+      planningSpecTurn && !activeSpec && !activeBrainstormSession && !prdDiscussionTurn
     if (planningSpecTurn) {
       if (!activeBrainstormSession) this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
@@ -8268,6 +8367,20 @@ export class ChatEngine {
           source: text,
           settings
         })
+      }
+      if (prdDiscussionTurn) {
+        const pendingPrdTurn: PendingPrdTurn = {
+          schemaVersion: 1,
+          projectId,
+          threadId,
+          sessionId,
+          harnessId: driverId,
+          ...(settings.providerId ? { providerId: settings.providerId } : {}),
+          ...(settings.modelId ? { modelId: settings.modelId } : {}),
+          createdAt: Date.now()
+        }
+        this.pendingPrdTurns.set(sessionId, pendingPrdTurn)
+        await this.writePendingPrdTurn(pendingPrdTurn)
       }
       this.registerSession(
         sessionId,
@@ -8310,7 +8423,7 @@ export class ChatEngine {
           }
           return publicUserMessage
         }
-        if (activeSpec) {
+        if (activeSpec && !prdDiscussionTurn) {
           const pendingRevision: PendingSpecRevision = {
             schemaVersion: 1,
             projectId,
@@ -8337,16 +8450,17 @@ export class ChatEngine {
             note: origin === 'user' ? text : ''
           })
         }
-        const revisionPrompt = activeSpec
-          ? buildSpecRevisionSystemPrompt(
-              await this.artifactRef(
-                projectId,
-                threadId,
-                join('versions', `${activeSpec.id}-v${activeSpec.version}.md`)
-              ),
-              activeSpec.annotations
-            )
-          : ''
+        const revisionPrompt =
+          activeSpec && !prdDiscussionTurn
+            ? buildSpecRevisionSystemPrompt(
+                await this.artifactRef(
+                  projectId,
+                  threadId,
+                  join('versions', `${activeSpec.id}-v${activeSpec.version}.md`)
+                ),
+                activeSpec.annotations
+              )
+            : ''
         // Expose the engineering_spec contract for real on interactive
         // spec-revision turns: structured-output-capable harnesses (claude-code)
         // enforce the schema on the final response, so the model cannot end the
@@ -8357,6 +8471,7 @@ export class ChatEngine {
         const revisionStructuredOutput =
           activeSpec !== null &&
           !activeBrainstormSession &&
+          !prdDiscussionTurn &&
           driver.capabilities?.structuredOutput === true &&
           !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
             ? {
@@ -8374,6 +8489,7 @@ export class ChatEngine {
             assignmentMode: settings.assignmentMode === true,
             brainstormDiscussionPrompt,
             engineeringSpecPrompt,
+            prdDiscussionPrompt,
             revisionPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
@@ -8408,8 +8524,10 @@ export class ChatEngine {
         await this.cleanupTurnUtilities(sessionId)
         this.clearCompletionWaiter(sessionId)
         this.pendingSpecRevisions.delete(sessionId)
+        this.pendingPrdTurns.delete(sessionId)
         this.pendingBrainstormTurns.delete(sessionId)
         await this.clearPendingSpecRevision(projectId, threadId)
+        await this.clearPendingPrdTurn(projectId, threadId)
         if (shouldScheduleInitialSpec && !promptDispatched) {
           await this.clearPendingInitialSpec(projectId, threadId)
         }
@@ -8863,6 +8981,8 @@ export class ChatEngine {
               parentTurnId: turnId
             },
             title,
+            // A virtual utility-setup task has no thread row, so it owns no scope.
+            undefined,
             false,
             true,
             true
@@ -11009,6 +11129,7 @@ export class ChatEngine {
         waiter.reject(new Error('Thread was deleted'))
       }
       this.pendingSpecRevisions.delete(sessionId)
+      this.pendingPrdTurns.delete(sessionId)
       this.pendingBrainstormTurns.delete(sessionId)
       this.specRevisionTasks.delete(sessionId)
       this.retireSessionState(sessionId)
@@ -13322,6 +13443,59 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * The one place a PRD draft is created from generated content, shared by the
+   * isolated generator and the conversational PRD turn so provenance, the
+   * Brainstorm link, and the finalization gate can never drift apart. A
+   * submission while a draft is open revises it into the next version, so the
+   * review conversation has somewhere to land instead of failing on the engine's
+   * "not ready for a new draft" guard.
+   */
+  private async createPrdDraftFromContent(input: {
+    projectId: string
+    threadId: string
+    content: PrdContent
+    harnessId?: string
+    providerId?: string
+    modelId?: string
+  }): Promise<PrdDocument> {
+    const finalizedBrainstorm = await this.brainstormEngine.getActive(
+      input.projectId,
+      input.threadId
+    )
+    const provenance = {
+      source: 'agent' as const,
+      actor: 'Sr. Engineer',
+      ...(input.harnessId ? { harnessId: input.harnessId } : {}),
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(finalizedBrainstorm?.status === 'finalized'
+        ? {
+            brainstormId: finalizedBrainstorm.id,
+            brainstormVersion: finalizedBrainstorm.version,
+            brainstormInputHash: finalizedBrainstorm.finalizedInputHash
+          }
+        : {})
+    }
+    const active = this.prdEngine.getActive(input.projectId, input.threadId)
+    const created = active
+      ? await this.prdEngine.createVersion(
+          input.projectId,
+          input.threadId,
+          active.id,
+          input.content,
+          provenance
+        )
+      : await this.prdEngine.createDraft(input.projectId, input.threadId, input.content, provenance)
+    const lifecycle = this.engineeringLifecycleEngine.get(input.projectId, input.threadId)
+    if (lifecycle?.activeStage === 'prd') {
+      this.engineeringLifecycleEngine.advance(input.projectId, input.threadId, {
+        gate: 'prd_finalization'
+      })
+    }
+    return created
+  }
+
   async generatePrd(
     projectId: string,
     threadId: string,
@@ -13488,26 +13662,14 @@ export class ChatEngine {
           'The PRD agent returned invalid JSON'
         )
       const content: PrdContent = parseGeneratedPrdContent(raw)
-      const created = await this.prdEngine.createDraft(projectId, threadId, content, {
-        source: 'agent',
-        actor: 'Sr. Engineer',
+      const created = await this.createPrdDraftFromContent({
+        projectId,
+        threadId,
+        content,
         harnessId: settings.harnessId,
         providerId: settings.providerId,
-        modelId: settings.modelId,
-        ...(finalizedBrainstorm?.status === 'finalized'
-          ? {
-              brainstormId: finalizedBrainstorm.id,
-              brainstormVersion: finalizedBrainstorm.version,
-              brainstormInputHash: finalizedBrainstorm.finalizedInputHash
-            }
-          : {})
+        modelId: settings.modelId
       })
-      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-      if (lifecycle?.activeStage === 'prd') {
-        this.engineeringLifecycleEngine.advance(projectId, threadId, {
-          gate: 'prd_finalization'
-        })
-      }
       const completedMessage: AgentMessage = {
         ...startedMessage,
         parts: [
@@ -18395,6 +18557,22 @@ export class ChatEngine {
     return this.storage.remove(this.pendingSpecRevisionPath(projectId, threadId))
   }
 
+  private pendingPrdTurnPath(projectId: string, threadId: string): string {
+    return `projects/${projectId}/threads/${threadId}/prd-turn.json`
+  }
+
+  private readPendingPrdTurn(projectId: string, threadId: string): Promise<PendingPrdTurn | null> {
+    return this.storage.read<PendingPrdTurn>(this.pendingPrdTurnPath(projectId, threadId))
+  }
+
+  private writePendingPrdTurn(pending: PendingPrdTurn): Promise<void> {
+    return this.storage.write(this.pendingPrdTurnPath(pending.projectId, pending.threadId), pending)
+  }
+
+  private clearPendingPrdTurn(projectId: string, threadId: string): Promise<void> {
+    return this.storage.remove(this.pendingPrdTurnPath(projectId, threadId))
+  }
+
   private async getActiveSpec(
     projectId: string,
     threadId: string
@@ -18735,6 +18913,108 @@ export class ChatEngine {
       }
       return null
     }
+  }
+
+  private runPendingPrdTurn(
+    sessionId: string,
+    messages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<PrdDocument | null> {
+    const existing = this.prdTurnTasks.get(sessionId)
+    if (existing) return existing
+    const task = this.persistPendingPrdTurn(sessionId, messages, scope)
+    this.prdTurnTasks.set(sessionId, task)
+    void task.then(
+      () => {
+        if (this.prdTurnTasks.get(sessionId) === task) this.prdTurnTasks.delete(sessionId)
+      },
+      () => {
+        if (this.prdTurnTasks.get(sessionId) === task) this.prdTurnTasks.delete(sessionId)
+      }
+    )
+    return task
+  }
+
+  /**
+   * Capture a PRD the agent submitted inside its own conversational turn. A turn
+   * that ends without a submission is the interview outcome, never a failure: the
+   * agent asked the user product questions and the conversation continues.
+   */
+  private async persistPendingPrdTurn(
+    sessionId: string,
+    loadedMessages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<PrdDocument | null> {
+    const pending =
+      this.pendingPrdTurns.get(sessionId) ??
+      (scope ? await this.readPendingPrdTurn(scope.projectId, scope.threadId) : null)
+    if (!pending || pending.sessionId !== sessionId) return null
+    this.pendingPrdTurns.delete(sessionId)
+    await this.clearPendingPrdTurn(pending.projectId, pending.threadId)
+
+    // Re-derive the turn intent before touching anything. A record retained across
+    // a question-tool turn is consumed by the next finalization for this session,
+    // which may belong to a later stage once the PRD was finalized or cancelled,
+    // and creating a document there would be wrong.
+    const turnLifecycle = this.engineeringLifecycleEngine.get(pending.projectId, pending.threadId)
+    if (turnLifecycle?.activeStage !== 'prd' && turnLifecycle?.humanGate !== 'prd_finalization') {
+      return null
+    }
+    if (
+      this.prdEngine.getWorkflowState(pending.projectId, pending.threadId)?.stage !== 'drafting'
+    ) {
+      return null
+    }
+
+    const driver = this.driverForRuntime(
+      pending.harnessId,
+      this.sessionRegistry.get(sessionId)?.accountId
+    )
+    if (!driver) throw new Error(`Unknown harness: ${pending.harnessId}`)
+    const projectPath =
+      this.sessionRegistry.get(sessionId)?.projectPath ??
+      (await this.resolveThreadPath(pending.projectId, pending.threadId))
+    const messages = loadedMessages ?? (await driver.loadMessages(projectPath, sessionId))
+    const response = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!response) return null
+    if (response.error) throw new Error(response.error)
+    const text = response.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+    // No decodable JSON object in the answer is the interview outcome: the agent
+    // asked its questions or narrated instead of submitting, so nothing is
+    // captured and nothing failed. A decodable object that then fails PRD
+    // validation is a rejected submission and throws below.
+    let submitted: unknown
+    if (response.structuredOutput === undefined) {
+      try {
+        submitted = parseGeneratedJson(text, 'The PRD agent returned invalid JSON')
+      } catch (error) {
+        if (error instanceof GeneratedJsonParseError) return null
+        throw error
+      }
+    } else {
+      submitted = response.structuredOutput
+    }
+    const content = parseGeneratedPrdContent(submitted)
+    const created = await this.createPrdDraftFromContent({
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      content,
+      harnessId: pending.harnessId,
+      providerId: pending.providerId,
+      modelId: pending.modelId
+    })
+    this.broadcast({
+      type: 'prd.ready',
+      sessionId,
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      prdId: created.id,
+      version: created.version
+    })
+    return created
   }
 
   private runPendingSpecRevision(
@@ -20649,14 +20929,18 @@ export class ChatEngine {
     rawError?: string
   ): AgentProviderIssue {
     const kind = classifyProviderIssue(message)
-    const raw = rawError?.trim() || message
+    const detail = rawError?.trim() || message.trim()
+    // `message` is display copy and `rawError` is diagnostic detail: a harness
+    // that crashed inside its own runtime reports its stack trace as an
+    // ordinary error string, which must never become the card body.
+    const presentation = presentProviderError(message)
     return {
       kind,
       message:
         kind === 'authentication'
           ? `${this.drivers.get(harnessId)?.name ?? harnessId} sign-in expired. Sign in again, then retry this message.`
-          : message,
-      rawError: raw,
+          : presentation.message,
+      rawError: detail,
       harnessId,
       retryable: kind !== 'billing'
     }
@@ -20760,15 +21044,21 @@ export class ChatEngine {
     return `projects/${projectId}/threads/${threadId}/stream.jsonl`
   }
 
-  /** Rebuild the working-trace parts from the thread's durable SSE log. Returns
-   *  only the most recent logical turn's parts, so a reopened mid-turn thread
-   *  shows its own streamed work rather than stale parts from earlier turns.
-   *  Parsed events are cached per thread and the log is append-only, so a
-   *  reopen only parses bytes appended since the last load. */
-  async loadTurnStreamParts(projectId: string, threadId: string): Promise<AgentPart[]> {
+  /** Rebuild a bounded window of the working trace from the thread's durable
+   *  SSE log, or report what the log touched since a change cursor. Returns only
+   *  the most recent logical turn's parts, so a reopened mid-turn thread shows
+   *  its own streamed work rather than stale parts from earlier turns. Parsed
+   *  events are cached per thread and the log is append-only, so the log is
+   *  tailed incrementally by byte offset and each call only parses bytes
+   *  appended since the last load. */
+  async loadTurnStreamParts(
+    projectId: string,
+    threadId: string,
+    query: TurnStreamPartsQuery = {}
+  ): Promise<TurnStreamPartsPage | TurnStreamPartsChange> {
     const streamPath = this.turnStreamPath(projectId, threadId)
     const entry = this.turnStreamCache.get(streamPath) ?? {
-      consumedRaw: '',
+      consumedBytes: 0,
       events: [],
       latestTurnId: '',
       foldKey: null,
@@ -20782,57 +21072,51 @@ export class ChatEngine {
       this.turnStreamCache.delete(oldest)
     }
 
-    const raw = await this.storage.readRaw(streamPath)
-    if (!raw) {
+    let tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
+    if (!tail) {
       this.turnStreamCache.delete(streamPath)
-      return []
+      return pageTurnStreamParts([], [], query)
     }
-    // The log is append-only, so a shrink or a diverging prefix means the file
-    // was rewritten underneath us   drop every cached event and re-parse cold.
-    if (raw.length < entry.consumedRaw.length || !raw.startsWith(entry.consumedRaw)) {
-      entry.consumedRaw = ''
+    // The log is append-only, so a shrink means the file was rewritten
+    // underneath us   drop every cached event and re-read once from byte 0.
+    if (tail.size < entry.consumedBytes) {
+      entry.consumedBytes = 0
       entry.events = []
       entry.latestTurnId = ''
       entry.foldKey = null
       entry.folded = null
-    }
-    if (raw.length !== entry.consumedRaw.length) {
-      // Consume only up to the last complete line; a trailing partial line is
-      // left unparsed until its newline lands.
-      const appended = raw.slice(entry.consumedRaw.length)
-      const lastNewline = appended.lastIndexOf('\n')
-      if (lastNewline !== -1) {
-        const consumable = appended.slice(0, lastNewline + 1)
-        for (const line of consumable.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-          try {
-            const parsed = JSON.parse(trimmed) as TurnStreamEvent
-            if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
-              entry.events.push(parsed)
-              if (parsed.turnId) entry.latestTurnId = parsed.turnId
-            }
-          } catch {
-            // A malformed line must not block rehydration of the rest of the stream.
-          }
-        }
-        entry.consumedRaw = raw.slice(0, entry.consumedRaw.length + consumable.length)
+      tail = await this.storage.readRawTail(streamPath, 0)
+      if (!tail) {
+        this.turnStreamCache.delete(streamPath)
+        return pageTurnStreamParts([], [], query)
       }
     }
+    for (const line of tail.content.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const parsed = JSON.parse(trimmed) as TurnStreamEvent
+        if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
+          entry.events.push(parsed)
+          if (parsed.turnId) entry.latestTurnId = parsed.turnId
+        }
+      } catch {
+        // A malformed line must not block rehydration of the rest of the stream.
+      }
+    }
+    entry.consumedBytes = tail.nextByte
 
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
     // skipped entirely when neither the events nor the turn boundary changed.
     const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
     const foldKey = `${entry.events.length}:${entry.latestTurnId}:${turnStartTs ?? ''}`
-    if (entry.foldKey !== foldKey || !entry.folded) {
-      entry.folded = foldTurnStreamEvents(
-        entry.events,
-        entry.latestTurnId || undefined,
-        turnStartTs
-      )
+    let folded = entry.folded
+    if (entry.foldKey !== foldKey || !folded) {
+      folded = foldTurnStreamEvents(entry.events, entry.latestTurnId || undefined, turnStartTs)
+      entry.folded = folded
       entry.foldKey = foldKey
     }
-    return entry.folded
+    return pageTurnStreamParts(folded, entry.events, query)
   }
 
   /** Timestamp of the newest non-activity user message in the mirror   the
@@ -22219,8 +22503,17 @@ export class ChatEngine {
         await this.clearPendingSpecRevision(info.projectId, info.threadId)
       }
       if (failure) this.pendingBrainstormTurns.delete(sessionId)
+      // The PRD turn is captured only on a clean end without a user wait: a turn
+      // that ended on a question keeps its pending record, because the answers
+      // resume the same logical turn and the submission arrives with it.
+      const pendingPrdTurn = this.pendingPrdTurns.get(sessionId)
+      if (failure && pendingPrdTurn) {
+        this.pendingPrdTurns.delete(sessionId)
+        await this.clearPendingPrdTurn(info.projectId, info.threadId)
+      }
       let revisedSpec: EngineeringSpec | null = null
       let revisedBrainstorm: BrainstormDocument | null = null
+      let createdPrd: PrdDocument | null = null
       // Post-turn artifact updates (spec revision, brainstorm report) must
       // stay silent when they fail: the main turn's work is already done, the
       // previous artifact version remains reviewable, and each surface has its
@@ -22287,6 +22580,27 @@ export class ChatEngine {
           this.broadcastToast(`Brainstorm update failed: ${auxiliaryFailure}`)
         }
       }
+      if (!failure && !awaitingUser && pendingPrdTurn) {
+        try {
+          createdPrd = await this.runPendingPrdTurn(sessionId, messages, {
+            projectId: info.projectId,
+            threadId: info.threadId
+          })
+        } catch (error) {
+          // A rejected submission is recoverable: the document is not created, the
+          // PRD stage stays open, and the conversation carries on, so this must
+          // never mark the thread failed or trip the terminal-failure gate.
+          auxiliaryFailure =
+            error instanceof Error ? error.message : 'The PRD submission was invalid.'
+          Logger.error('PRD submission failed after a completed turn', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: auxiliaryFailure
+          })
+          this.broadcastToast(`The PRD was not created: ${auxiliaryFailure}`)
+        }
+      }
       // Race-safe guard: if the persisted thread is already `failed` (an
       // earlier session-error path marked it) and this finalization would
       // otherwise claim success, keep it failed so a terminal "done"
@@ -22310,19 +22624,21 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : auxiliaryFailure
-                ? // An auxiliary artifact update failed: settle on the
-                  // previous artifact's reviewable state instead of `failed`,
-                  // which would fire a misleading error notification.
-                  (await this.getActiveSpec(info.projectId, info.threadId)) ||
-                  (await this.brainstormEngine.getActive(info.projectId, info.threadId))
-                  ? 'spec'
-                  : 'completed'
-                : awaitingUser
-                  ? 'awaiting_approval'
-                  : threadBeforeFinalize?.status === 'failed'
-                    ? 'failed'
+              : createdPrd && threadBeforeFinalize?.status !== 'failed'
+                ? 'awaiting_approval'
+                : auxiliaryFailure
+                  ? // An auxiliary artifact update failed: settle on the
+                    // previous artifact's reviewable state instead of `failed`,
+                    // which would fire a misleading error notification.
+                    (await this.getActiveSpec(info.projectId, info.threadId)) ||
+                    (await this.brainstormEngine.getActive(info.projectId, info.threadId))
+                    ? 'spec'
                     : 'completed'
+                  : awaitingUser
+                    ? 'awaiting_approval'
+                    : threadBeforeFinalize?.status === 'failed'
+                      ? 'failed'
+                      : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })

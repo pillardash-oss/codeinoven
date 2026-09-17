@@ -16,6 +16,20 @@ export function isUsageResetWaitIssue(
 }
 
 /**
+ * Upper bound for an unattended scheduled auto-retry wait. A reset inside this
+ * window is imminent: the power-wake policy keeps the device awake so the retry
+ * can fire on time, and the header keeps counting the thread as working. A
+ * retry parked beyond it is a long wait   treated as not-working so the activity
+ * badge drops the thread and the user sees the state change.
+ */
+export const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
+
+/** True when a scheduled retry deadline falls beyond the keep-awake window. */
+export function isLongScheduledRetryWait(retryAt: number, now = Date.now()): boolean {
+  return retryAt - now > SCHEDULED_RETRY_WAKE_WINDOW_MS
+}
+
+/**
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw
  * JSON error body, e.g. `429: {"message":"You've reached your weekly usage
  * limit...","type":"rate_limit_error","code":"RATE_LIMITED"}`. Surfacing that
@@ -42,12 +56,64 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
       const message = typeof body['message'] === 'string' ? body['message'] : raw
       const type = typeof body['type'] === 'string' ? body['type'] : undefined
       const code = typeof body['code'] === 'string' ? body['code'] : undefined
-      return { message, ...(type === undefined ? {} : { type }), ...(code === undefined ? {} : { code }) }
+      return {
+        message,
+        ...(type === undefined ? {} : { type }),
+        ...(code === undefined ? {} : { code })
+      }
     }
   } catch {
     // Not a JSON envelope (or malformed)   treat the whole string as the message.
   }
   return { message: raw }
+}
+
+/**
+ * A crash-trace frame line, e.g.
+ * `    at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)` or the
+ * `at SessionPrompt.run (definition)` shape a compiled runtime emits. A
+ * harness that crashes inside its own runtime hands its exception text back
+ * as an ordinary message string, so the first frame line is where the
+ * diagnostic detail begins.
+ */
+const STACK_FRAME_LINE = /^\s*at(?:\s|$)/u
+
+export interface ProviderErrorPresentation {
+  /** Short, user-facing message the provider card body may render: the JSON
+   *  body's `message` with any stack trace reduced to its header line. */
+  message: string
+  /** Full diagnostic text (raw transport string, trace included). Present only
+   *  when it says more than `message`; the Raw Error view shows this. */
+  rawError?: string
+}
+
+/**
+ * Split a provider/harness failure string into the short message the provider
+ * error card body may render and the full diagnostic text reserved for the Raw
+ * Error view. A failure reaches the UI as a plain message string, with no
+ * envelope to unwrap, in two shapes that both used to leak a whole stack trace
+ * into the beautified card body:
+ *
+ * ```
+ * TypeError: undefined is not an object (evaluating 'a.name')
+ *     at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)
+ *     at map (native:1:11)
+ * ```
+ *
+ * Cutting at the first frame line keeps the header (`TypeError: ...`) as the
+ * card body and leaves the trace in Raw Error, which is the app-wide contract
+ * for every `AgentProviderIssue`: `message` is display copy, `rawError` is
+ * diagnostic detail.
+ */
+export function presentProviderError(raw: string): ProviderErrorPresentation {
+  const detail = raw.trim()
+  if (!detail) return { message: '' }
+  const body = extractProviderErrorEnvelope(detail).message.trim()
+  const lines = body.split('\n')
+  const frameIndex = lines.findIndex((line) => STACK_FRAME_LINE.test(line))
+  const header = (frameIndex === -1 ? lines : lines.slice(0, frameIndex)).join('\n').trim()
+  const message = header || (lines[0] ?? body).trim() || detail
+  return message === detail ? { message } : { message, rawError: detail }
 }
 
 /**

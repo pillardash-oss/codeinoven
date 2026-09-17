@@ -9,6 +9,7 @@ import type {
   GitRepositoryIdentity,
   GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
+  PrCommentKind,
   PrDraft,
   PullRequestComment,
   PullRequestCommit,
@@ -21,8 +22,11 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '../../lib/types'
+import { capJobLogText } from '../../lib/github-job-log'
 import type {
   CreatePrCommentInput,
   CreatePrReviewInput,
@@ -30,7 +34,10 @@ import type {
   ListPullRequestPageInput,
   ListPullRequestsInput,
   MergePullRequestInput,
-  PullRequestTarget
+  MinimizePrCommentInput,
+  PrCommentTarget,
+  PullRequestTarget,
+  UpdatePrCommentInput
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
 
@@ -43,7 +50,10 @@ export const PROVIDER_API_BASE_URL_ENV = 'CODEINOVEN_GIT_PROVIDER_API_BASE_URL'
 /** Network timeout so a slow provider never hangs the UI. */
 const PROVIDER_FETCH_TIMEOUT_MS = 15_000
 
-/** Cap on the raw job log text streamed into the app (roughly 200 KB). */
+/**
+ * Cap on the raw job log text streamed into the app (roughly 200 KB). An oversized
+ * log loses its middle, never its end: that is where the failing step is.
+ */
 const MAX_JOB_LOG_BYTES = 200_000
 
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
@@ -126,28 +136,11 @@ export class GitHubProvider implements GitProvider {
       throw new Error(`Pull request #${input.pullNumber} has no provider node ID`)
     }
 
-    const response = await this.request('/graphql', {
-      method: 'POST',
-      body: JSON.stringify({
-        query:
-          'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
-        variables: { pullRequestId }
-      })
-    })
-    const responseRecord = Array.isArray(response) ? {} : response
-    const errors = responseRecord['errors']
-    if (Array.isArray(errors)) {
-      const first = errors.find(
-        (entry): entry is Record<string, unknown> =>
-          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-      )
-      const message = first ? this.readString(first, 'message') : null
-      throw new Error(
-        message?.slice(0, 500) ?? 'Provider could not mark this pull request ready for review'
-      )
-    }
-    const data = this.readRecord(responseRecord, 'data')
-    const mutation = data ? this.readRecord(data, 'markPullRequestReadyForReview') : null
+    const response = await this.runGraphqlMutation(
+      'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
+      { pullRequestId }
+    )
+    const mutation = this.readRecord(response, 'markPullRequestReadyForReview')
     const pullRequest = mutation ? this.readRecord(mutation, 'pullRequest') : null
     if (!pullRequest) {
       throw new Error(`Pull request #${input.pullNumber} was not marked ready for review`)
@@ -340,6 +333,75 @@ export class GitHubProvider implements GitProvider {
     return comment
   }
 
+  /**
+   * Where GitHub files a comment of this kind.
+   *
+   * Both collections are repository-scoped   the pull number appears in neither
+   * path   which is why the target still carries one: it keeps every comment
+   * input the same shape as the one that creates them.
+   */
+  private commentCollectionPath(kind: PrCommentKind): string {
+    return kind === 'review' ? '/pulls/comments' : '/issues/comments'
+  }
+
+  async updatePullRequestComment(input: UpdatePrCommentInput): Promise<PullRequestComment> {
+    const response = await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath(input.kind)}/${input.commentId}`,
+      { method: 'PATCH', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toComment(response)
+    if (!comment) throw new Error('The comment was saved but could not be read back')
+    return comment
+  }
+
+  async deletePullRequestComment(input: PrCommentTarget): Promise<void> {
+    await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath(input.kind)}/${input.commentId}`,
+      { method: 'DELETE' }
+    )
+  }
+
+  async updatePullRequestReviewComment(
+    input: UpdatePrCommentInput
+  ): Promise<PullRequestReviewComment> {
+    const response = await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath('review')}/${input.commentId}`,
+      { method: 'PATCH', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toReviewComment(response, {
+      owner: input.owner,
+      repo: input.repo,
+      pullNumber: input.pullNumber
+    })
+    if (!comment) throw new Error('The comment was saved but could not be read back')
+    return comment
+  }
+
+  async deletePullRequestReviewComment(input: PrCommentTarget): Promise<void> {
+    await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath('review')}/${input.commentId}`,
+      { method: 'DELETE' }
+    )
+  }
+
+  /**
+   * Hide a comment behind GitHub's "minimised" treatment.
+   *
+   * GitHub exposes no REST endpoint for this, only the GraphQL mutation, and the
+   * mutation addresses the comment by its global node id rather than its number.
+   */
+  async minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void> {
+    const data = await this.runGraphqlMutation(
+      'mutation MinimizeComment($subjectId: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $subjectId, classifier: $classifier }) { minimizedComment { isMinimized } } }',
+      { subjectId: input.nodeId, classifier: input.reason }
+    )
+    const mutation = this.readRecord(data, 'minimizeComment')
+    const comment = mutation ? this.readRecord(mutation, 'minimizedComment') : null
+    if (!comment || comment['isMinimized'] !== true) {
+      throw new Error('The provider did not hide the comment')
+    }
+  }
+
   async createPullRequestReview(input: CreatePrReviewInput): Promise<void> {
     await this.request(`${this.pullPath(input)}/reviews`, {
       method: 'POST',
@@ -369,14 +431,15 @@ export class GitHubProvider implements GitProvider {
       const state = this.readString(record, 'state') ?? ''
       // A "PENDING" review has not been submitted and is invisible to others.
       if (id <= 0 || state === 'PENDING') return []
-      const user = this.readRecord(record, 'user')
       return [
         {
           id,
-          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+          ...this.toAuthor(this.readRecord(record, 'user')),
           state,
           body: this.readString(record, 'body') ?? '',
-          submittedAt: this.readString(record, 'submitted_at') ?? ''
+          submittedAt: this.readString(record, 'submitted_at') ?? '',
+          url: `${this.pullPermalink(input)}#pullrequestreview-${String(id)}`,
+          nodeId: this.readString(record, 'node_id')
         }
       ]
     })
@@ -390,23 +453,37 @@ export class GitHubProvider implements GitProvider {
     })
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestReviewComment[] => {
-      if (typeof item !== 'object' || item === null) return []
-      const record = item as Record<string, unknown>
-      const id = this.readNumber(record, 'id')
-      if (id <= 0) return []
-      const user = this.readRecord(record, 'user')
-      const line = this.readNumber(record, 'line')
-      return [
-        {
-          id,
-          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
-          body: this.readString(record, 'body') ?? '',
-          path: this.readString(record, 'path') ?? '',
-          line: line > 0 ? line : null,
-          createdAt: this.readString(record, 'created_at') ?? ''
-        }
-      ]
+      const comment = this.toReviewComment(item, input)
+      return comment ? [comment] : []
     })
+  }
+
+  /** Build the permalink GitHub's own site uses for a pull request conversation. */
+  private pullPermalink(input: PullRequestTarget): string {
+    return `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pullNumber)}`
+  }
+
+  /** Map an inline diff comment. GitHub's site links these with `#discussion_r<id>`. */
+  private toReviewComment(
+    payload: unknown,
+    input: PullRequestTarget
+  ): PullRequestReviewComment | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const line = this.readNumber(record, 'line')
+    return {
+      id,
+      ...this.toAuthor(this.readRecord(record, 'user')),
+      body: this.readString(record, 'body') ?? '',
+      path: this.readString(record, 'path') ?? '',
+      line: line > 0 ? line : null,
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at'),
+      nodeId: this.readString(record, 'node_id'),
+      url: `${this.pullPermalink(input)}#discussion_r${String(id)}`
+    }
   }
 
   /**
@@ -444,7 +521,8 @@ export class GitHubProvider implements GitProvider {
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
           url: htmlUrl ?? detailsUrl,
-          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl),
+          jobId: this.jobIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -463,7 +541,8 @@ export class GitHubProvider implements GitProvider {
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
           url: targetUrl,
-          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl),
+          jobId: this.jobIdFromUrls(targetUrl)
         })
       }
     }
@@ -484,6 +563,42 @@ export class GitHubProvider implements GitProvider {
     )
     const record = Array.isArray(response) ? {} : response
     return this.toFiles(record['files'])
+  }
+
+  /**
+   * Assignable repository accounts, for @-mention autocomplete in PR conversations.
+   *
+   * `/assignees` is deliberate: `/collaborators` requires push access and 403s for
+   * a read-only contributor, while `/assignees` is readable with a read token and
+   * is the same list GitHub's own assignee picker uses.
+   */
+  async listRepositoryMentionUsers(input: {
+    owner: string
+    repo: string
+  }): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/assignees?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    const seen = new Set<string>()
+    return items.flatMap((item): RepositoryMentionUser[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const login = this.readString(record, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(record, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(record, 'avatar_url'),
+          bot: this.readString(record, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
+    })
   }
 
   async getDeploymentOverview(input: {
@@ -598,7 +713,7 @@ export class GitHubProvider implements GitProvider {
     return { run, jobs, fetchedAt: Date.now() }
   }
 
-  /** Capped raw log text for one workflow run job, rendered in-app. */
+  /** Raw log text for one workflow run job, capped and sectioned by the renderer. */
   async getDeploymentJobLog(input: {
     owner: string
     repo: string
@@ -606,12 +721,28 @@ export class GitHubProvider implements GitProvider {
   }): Promise<GitHubDeploymentJobLog> {
     const path = `${this.repoPath(input)}/actions/jobs/${input.jobId}/logs`
     const text = await this.requestText(path)
-    const truncated = text.length > MAX_JOB_LOG_BYTES
+    const capped = capJobLogText(text, MAX_JOB_LOG_BYTES)
     return {
       jobId: input.jobId,
-      log: truncated ? text.slice(0, MAX_JOB_LOG_BYTES) : text,
-      truncated
+      log: capped.log,
+      truncated: capped.truncated
     }
+  }
+
+  /**
+   * Replay a workflow run. GitHub spells the two modes as separate endpoints and
+   * answers both with 201 and no body.
+   */
+  async rerunWorkflowRun(input: {
+    owner: string
+    repo: string
+    runId: number
+    mode: WorkflowRerunMode
+  }): Promise<void> {
+    const suffix = input.mode === 'failed' ? '/rerun-failed-jobs' : '/rerun'
+    await this.request(`${this.repoPath(input)}/actions/runs/${input.runId}${suffix}`, {
+      method: 'POST'
+    })
   }
 
   /** Resolve the Actions run behind a deployment: from a status URL first, then by head sha. */
@@ -658,6 +789,22 @@ export class GitHubProvider implements GitProvider {
     for (const url of urls) {
       if (!url) continue
       const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
+  }
+
+  /**
+   * Extract the Actions job id a check points at. Actions puts
+   * `/actions/runs/{runId}/job/{jobId}` in `details_url`, which is the only place
+   * that identifies the individual matrix leg the check represents.
+   */
+  private jobIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/job\/(\d+)/u.exec(url)
       if (!match) continue
       const id = Number.parseInt(match[1] ?? '', 10)
       if (Number.isSafeInteger(id) && id > 0) return id
@@ -776,7 +923,11 @@ export class GitHubProvider implements GitProvider {
         throw new ProviderHttpError(response.status, message)
       }
       if (response.status === 204) return {}
-      return (await response.json()) as Record<string, unknown> | unknown[]
+      // A re-run answers 201 with an empty body, which `json()` cannot parse; a
+      // body-less success is a value-less success, not a malformed response.
+      const text = await response.text()
+      if (!text.trim()) return {}
+      return JSON.parse(text) as Record<string, unknown> | unknown[]
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
         throw new Error('Provider request timed out', { cause: failure })
@@ -1002,6 +1153,36 @@ export class GitHubProvider implements GitProvider {
     return `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`
   }
 
+  /**
+   * Run one GraphQL mutation and return its `data` record.
+   *
+   * A few GitHub operations   promoting a draft, hiding a comment   exist only on
+   * GraphQL, so the transport and its error unwrapping live here once rather than
+   * in each caller. The unwrapping matters: GraphQL answers HTTP 200 with an
+   * `errors` array when a mutation is rejected, so without this a failure would
+   * read as success.
+   */
+  private async runGraphqlMutation(
+    query: string,
+    variables: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const response = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({ query, variables })
+    })
+    const responseRecord = Array.isArray(response) ? {} : response
+    const errors = responseRecord['errors']
+    if (Array.isArray(errors)) {
+      const first = errors.find(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      )
+      const message = first ? this.readString(first, 'message') : null
+      throw new Error(message?.slice(0, 500) ?? 'The provider rejected the request')
+    }
+    return this.readRecord(responseRecord, 'data') ?? {}
+  }
+
   private pullPath(input: PullRequestTarget): string {
     return `${this.repoPath(input)}/pulls/${input.pullNumber}`
   }
@@ -1027,7 +1208,7 @@ export class GitHubProvider implements GitProvider {
         this.readString(record, 'html_url') ?? `https://github.com/${owner}/${repo}/pull/${number}`,
       state,
       draft: record['draft'] === true,
-      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      ...this.toAuthor(user),
       headRef: head ? (this.readString(head, 'ref') ?? '') : '',
       baseRef: base ? (this.readString(base, 'ref') ?? '') : '',
       createdAt: this.readString(record, 'created_at') ?? '',
@@ -1043,13 +1224,38 @@ export class GitHubProvider implements GitProvider {
     const record = payload as Record<string, unknown>
     const id = this.readNumber(record, 'id')
     if (id <= 0) return null
-    const user = this.readRecord(record, 'user')
     return {
       id,
-      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      ...this.toAuthor(this.readRecord(record, 'user')),
       body: this.readString(record, 'body') ?? '',
       createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at'),
+      nodeId: this.readString(record, 'node_id'),
       url: this.readString(record, 'html_url') ?? ''
+    }
+  }
+
+  /**
+   * The author fields every conversation row renders.
+   *
+   * The declared `avatar_url` is what makes an app account's picture correct.
+   * Asking the avatar CDN for a login alone answers with GitHub's meaningless
+   * generated identicon for a `[bot]` account, while this URL is the picture the
+   * app itself published   the one github.com shows next to the same comment.
+   */
+  private toAuthor(user: Record<string, unknown> | null): {
+    authorLogin: string
+    authorAvatarUrl: string | null
+    authorIsBot: boolean
+  } {
+    if (!user) return { authorLogin: 'unknown', authorAvatarUrl: null, authorIsBot: false }
+    const login = this.readString(user, 'login') ?? 'unknown'
+    return {
+      authorLogin: login,
+      authorAvatarUrl: this.readString(user, 'avatar_url'),
+      // `type` is the authoritative signal; the `[bot]` suffix is a fallback for
+      // payloads that omit the user object's type.
+      authorIsBot: this.readString(user, 'type') === 'Bot' || login.endsWith('[bot]')
     }
   }
 

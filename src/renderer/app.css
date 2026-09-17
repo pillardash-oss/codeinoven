@@ -82,11 +82,13 @@
      default family) for a uniform dev-workspace feel with unambiguous
      code glyphs like backticks. --font-app is overridden at runtime by
      the Appearance settings (app-config store). */
-  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
-    'SFMono-Regular', Menlo, monospace;
+  --font-app:
+    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
+    Menlo, monospace;
   --font-sans: var(--font-app);
-  --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
-    'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', monospace;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
+    Menlo, Monaco, 'Cascadia Code', monospace;
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -142,7 +144,10 @@ body {
      dev workspace's prose and composers need every literal character to
      render as typed, not merge into a compact glyph. Disable app-wide. */
   font-variant-ligatures: none;
-  font-feature-settings: 'calt' 0, 'liga' 0, 'dlig' 0;
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0,
+    'dlig' 0;
 }
 
 /* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
@@ -450,6 +455,57 @@ body {
 .markdown-body img {
   max-width: 100%;
   border-radius: 8px;
+}
+
+/*
+ * GitHub emoji.
+ *
+ * A shortcode (`:wave:`) expands to the character itself, and an emoji that
+ * arrives as an image whose alt is already the character is drawn the same way
+ * rather than fetched. Both land here, so a shortcode and a provider emoji look
+ * identical in the same paragraph, at the size of the text around them, the way
+ * GitHub's own `.emoji` rule behaves.
+ */
+.markdown-body .emoji {
+  display: inline-block;
+  font-family:
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', 'EmojiOne Color',
+    sans-serif;
+  font-size: 1.1em;
+  font-style: normal;
+  line-height: 1;
+  vertical-align: -0.15em;
+}
+
+/*
+ * An image the app is still downloading, or could not download at all.
+ *
+ * The renderer's CSP blocks remote hosts, so main fetches every picture and hands
+ * it back inlined. Until that lands, the alt text stands in inside a bordered box
+ * that preserves the height a picture would take: a body with three screenshots
+ * then reads as three pictures rather than three broken-image icons, and nothing
+ * jumps when they arrive.
+ */
+.markdown-body .markdown-image-pending {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 1.75rem;
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 0.25rem 0.5rem;
+  color: var(--color-text-dimmed);
+  font-size: 0.75em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-body .markdown-image-pending::before {
+  content: '🖼';
+  font-size: 1.1em;
+  line-height: 1;
 }
 
 /* Raw-HTML blocks, rendered only for provider-authored markdown (pull

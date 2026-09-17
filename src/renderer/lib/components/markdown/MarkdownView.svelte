@@ -11,6 +11,8 @@
   import { revealCitationFile, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { githubImageState } from '$lib/stores/github-images.svelte'
+  import type { GithubRepoContext } from '$lib/github-references'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 
   interface InlineFileTag {
@@ -36,6 +38,15 @@
      */
     allowHtml?: boolean
     /**
+     * The repository the text was authored in, for provider content.
+     *
+     * Enables GitHub's own reference linkification, so `#150` links to the pull
+     * request and `@login` links to the account, exactly as they do on
+     * github.com. Leave it unset for anything the app or an agent wrote: a `#` in
+     * agent output does not belong to any repository.
+     */
+    repository?: GithubRepoContext | null
+    /**
      * Replace exact `@path` tokens in the source with trusted inline chips.
      * Used for user messages that tag project files/directories so a long
      * project-relative path renders as a compact tag instead of raw text.
@@ -53,6 +64,7 @@
     text,
     class: className = '',
     allowHtml = false,
+    repository = null,
     inlineFileTags = [],
     onCiteFile,
     onOpenLocalFile,
@@ -176,7 +188,7 @@
   const segments = $derived(splitLongLineSegments(lexedText))
 
   function renderBlockHtml(token: Token): string {
-    const html = blockHtml(token, allowHtml)
+    const html = blockHtml(token, allowHtml, repository)
     const { substitutions } = tagSubstitutions
     if (substitutions.size === 0) return html
     let result = html
@@ -194,6 +206,10 @@
   $effect(() => {
     citationPathsState.ensureActiveProjectChecked(extractCitationCandidates(text))
     faviconState.ensureResolved(faviconState.externalUrlsFromText(text))
+    // Images in the source are queued the same way favicons are, from the raw
+    // text: the renderer cannot fetch them itself (the CSP blocks remote hosts),
+    // so main downloads each one and the block re-renders once it lands.
+    githubImageState.ensureResolved(githubImageState.imageUrlsFromText(text))
   })
 
   onDestroy(() => {
@@ -239,7 +255,7 @@
     const citation = citationFromLink(link)
     if (citation) return `${citation.path}${citation.line ? `:${citation.line}` : ''}`
     const href = link.getAttribute('href')
-    // Fragment links (footnotes, section anchors) stay inside the document  
+    // Fragment links (footnotes, section anchors) stay inside the document
     // no external destination to preview, so no tooltip.
     if (!href || href.startsWith('#')) return null
     return href
@@ -403,7 +419,7 @@
       {#if seg.kind === 'long'}
         <LongTextBlock text={seg.text} />
       {:else}
-        {@render renderBlocks(lexMarkdownCached(seg.text, lexedAllowHtml))}
+        {@render renderBlocks(lexMarkdownCached(seg.text, lexedAllowHtml, repository))}
       {/if}
     {/each}
   </div>

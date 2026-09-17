@@ -25,17 +25,23 @@
   const active = $derived(scopeJobActiveStage(job))
 
   const heading = $derived(
-    job.kind === 'create'
+    job.kind === 'agent'
       ? running
-        ? `Creating “${job.title}”…`
+        ? `An agent is preparing “${job.title}”…`
         : done
           ? `“${job.title}” is ready`
-          : `“${job.title}” could not be created`
-      : running
-        ? `Adopting a worktree for “${job.title}”…`
-        : done
-          ? `“${job.title}” has a worktree`
-          : `“${job.title}” could not adopt the worktree`
+          : `“${job.title}” could not be prepared`
+      : job.kind === 'create'
+        ? running
+          ? `Creating “${job.title}”…`
+          : done
+            ? `“${job.title}” is ready`
+            : `“${job.title}” could not be created`
+        : running
+          ? `Adopting a worktree for “${job.title}”…`
+          : done
+            ? `“${job.title}” has a worktree`
+            : `“${job.title}” could not adopt the worktree`
   )
 
   /** Where one checklist step sits relative to the run. */

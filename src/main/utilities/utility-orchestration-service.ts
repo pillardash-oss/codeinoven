@@ -12,13 +12,14 @@ import type {
   UtilityKind,
   PermissionLevel
 } from '../../lib/types'
-import { UTILITY_KIND_VALUES } from '../../lib/types'
+import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
   APP_RETRIEVE_MCP_HOST_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
@@ -32,6 +33,7 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
+import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import {
@@ -62,6 +64,7 @@ import {
   BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
+import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
@@ -106,6 +109,8 @@ export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
+  /** Scope the calling thread works in; the default target of `cio:scope`. */
+  scopeBucketId?: string
   /** Human-readable thread title, used to label Cua agent cursors. */
   threadTitle?: string
   projectPath: string
@@ -142,6 +147,22 @@ export interface UtilityResultAttribution {
   retryCause: string | null
 }
 
+/**
+ * One computer-use operation an agent just ran, reported for every such
+ * operation and not only the ones with a target process. A desktop-scoped run
+ * (`get_desktop_state`, `escalate_session`, a desktop `hotkey`) names no pid,
+ * yet it is still computer use and must still be visible to the user.
+ */
+export interface CuaOperationEvent {
+  threadId: string
+  /** Driver operation name, e.g. `drag`. */
+  operation: string
+  /** Target process, or null when the operation did not name one. */
+  pid: number | null
+  /** Turn-scoped Cua cursor session, when the driver declared one. */
+  sessionId?: string
+}
+
 export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
@@ -162,6 +183,16 @@ export type BrowserUtilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one gateway invocation of the app-owned scope and worktree capability
+ * for the turn that made it. The chat engine supplies it because it owns the
+ * thread's scope, project root and permission tier.
+ */
+export type ScopeToolExecutor = (
+  input: Record<string, unknown>,
+  context: ScopeToolContext
 ) => Promise<unknown>
 
 const BROWSER_UTILITY_TOOLS: McpTool[] = [
@@ -288,10 +319,10 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
-  private cuaActivityListener:
-    ((pid: number, threadId: string, sessionId?: string) => void) | null = null
+  private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private scopeToolExecutor: ScopeToolExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -352,11 +383,24 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid   used by the PiP monitor to latch onto the app a thread's
-   * agent is driving.
+   * Register the executor behind the app-owned `cio:scope` utility. Scope and
+   * worktree management is an ordinary app-owned utility rather than a listed
+   * tool: most turns never touch a worktree, and a turn that does not must not
+   * carry the capability's contract in its context. The chat engine supplies the
+   * executor because it owns the thread's scope, project root and permission
+   * tier.
    */
-  onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
+  setScopeToolExecutor(executor: ScopeToolExecutor | null): void {
+    this.scopeToolExecutor = executor
+  }
+
+  /**
+   * Register a listener invoked for every computer-use operation an agent
+   * performs. The listener sees the whole picture, including desktop-scoped
+   * operations that name no pid: the PiP monitor needs a pid to track a window,
+   * while a thread row only needs to know the thread is using the computer.
+   */
+  onCuaActivity(listener: (event: CuaOperationEvent) => void): void {
     this.cuaActivityListener = listener
   }
 
@@ -417,14 +461,16 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter(
-      ({ name }) =>
-        (name !== UTILITY_MANAGE_TOOL_NAME &&
-          name !== UTILITY_DIAGNOSTICS_TOOL_NAME &&
-          hasOnDemand) ||
-        ((name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) &&
-          request.allowManagement === true)
-    )
+    // The app-owned scope utility is advertised as a one-line pointer, never as
+    // a schema: whether it is offered at all is the registry's call, so
+    // disabling it in Utilities removes the pointer too.
+    const hasScopeCapability = eligible.some(({ utility }) => utility.id === APP_SCOPE_UTILITY_ID)
+    const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
+      if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
+        return request.allowManagement === true
+      }
+      return hasOnDemand
+    })
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -467,6 +513,11 @@ export class UtilityOrchestrationService {
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      ...(hasScopeCapability
+        ? [
+            `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+          ]
+        : []),
       ...(hasOnDemand
         ? [
             "A utility you activate is registered in this thread's utilities bank for the whole thread lifecycle: in later turns you can invoke it directly with " +
@@ -694,6 +745,36 @@ export class UtilityOrchestrationService {
     } catch {
       return new Map()
     }
+  }
+
+  /**
+   * App-owned scope and worktree management for the calling thread, reached
+   * through the gateway's invoke route. The chat engine owns the thread's
+   * scope, project root and permission tier, so the executor receives them
+   * instead of re-deriving them here.
+   */
+  private async runScopeTool(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const execute = this.scopeToolExecutor
+    if (!execute) {
+      throw new Error(
+        'Scope management is unavailable in this session. Ask the user to manage scopes from the project board.'
+      )
+    }
+    const request = state.request
+    const action = typeof input['action'] === 'string' ? input['action'] : 'unknown'
+    // Audited without paths or arguments: that a turn reached for scope
+    // management is the durable fact, the scope contents are user data.
+    await this.audit(state, 'scope.tool', {
+      action,
+      confirmation: input['confirm'] === true
+    })
+    return await execute(input, {
+      projectId: request.projectId,
+      scopeBucketId: request.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
+      threadId: request.threadId,
+      threadTitle: request.threadTitle ?? '',
+      permissionLevel: request.permissionLevel
+    })
   }
 
   /** Read-only app diagnostics, available only on explicit @cio-utility turns. */
@@ -984,6 +1065,9 @@ export class UtilityOrchestrationService {
       return { tools: await client.listTools() }
     }
     if (resolved.utility.kind === 'skill') {
+      // Skills hand back their instructions: the full contract, only now, and
+      // only because this turn asked for the capability. The app-owned scope
+      // utility travels this path.
       return { instructions: resolved.utility.config.instructions }
     }
     if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
@@ -1081,7 +1165,11 @@ export class UtilityOrchestrationService {
     }
 
     let result: unknown
-    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+    if (resolved.utility.id === APP_SCOPE_UTILITY_ID) {
+      // The capability's `operation` is the scope action, and its `input` is
+      // exactly the field set the scope capability accepts.
+      result = await this.runScopeTool(state, { ...operationInput, action: operation })
+    } else if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       if (operation !== 'save_notes' || !state.request.saveBrainstormNotes) {
         throw new Error('Alignment notes are only available during an active Brainstorm interview')
       }
@@ -1103,14 +1191,12 @@ export class UtilityOrchestrationService {
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
       result = await client.callTool(operation, routedInput)
       if (this.isComputerUseUtility(resolved)) {
-        const pid = operationPid(routedInput)
-        if (pid !== null) {
-          this.cuaActivityListener?.(
-            pid,
-            state.request.threadId,
-            state.cuaSessionIds.get(utilityId)
-          )
-        }
+        this.cuaActivityListener?.({
+          threadId: state.request.threadId,
+          operation,
+          pid: operationPid(routedInput),
+          sessionId: state.cuaSessionIds.get(utilityId)
+        })
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
@@ -1475,7 +1561,6 @@ function operationPid(input: Record<string, unknown>): number | null {
     ? targetPid
     : null
 }
-
 function matchesUtilityKinds(
   { utility, binding }: ResolvedUtility,
   kinds: Set<UtilityKind> | null
@@ -1571,6 +1656,11 @@ function utilitySearchConfiguration(utility: UtilityDefinition): string {
 
 function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): string {
   const aliases: string[] = []
+  if (normalizeCapability(nativeCapability ?? '') === 'scope') {
+    aliases.push(
+      'scope worktree work tree checkout isolate isolated separate parallel branch sandbox copy clone git repository working directory'
+    )
+  }
   if (normalizeCapability(nativeCapability ?? '') === 'computer_use') {
     aliases.push(
       'computer desktop screen mouse keyboard click type scroll gui ui application app browser chrome safari firefox visual automation control interact open launch'

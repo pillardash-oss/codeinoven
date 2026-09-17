@@ -106,9 +106,12 @@ const KEPT_DIST_DIRECTORIES: ReadonlySet<string> = new Set([
  * by an observation of the shipped code, so a pruning rule can never silently
  * remove something a Pi session needs:
  *
- *  - `dist/bundle/cli.js` and `dist/bundle/coordinator.js` are the internal
- *    process entrypoints pi spawns; in the bundled runtime `defaultEntryUrl()`
- *    maps every role to a file in `dist/bundle`.
+ *  - `dist/bundle/cli.js` is the internal process entrypoint pi spawns; in the
+ *    bundled runtime `defaultEntryUrl()` maps every role to a file in
+ *    `dist/bundle`. pi 0.85.1 stopped publishing `dist/bundle/coordinator.js`
+ *    along with the rest of its experimental client/server code (the `client`
+ *    and `experimental/plugin` subpaths became source-only and their `dist/`
+ *    trees are excluded from the package), so no role resolves to it any more.
  *  - `vendor/jiti/dist/{jiti.cjs,babel.cjs}` are required by
  *    `vendor/jiti/lib/jiti.cjs`, which is what the bundle requires to compile
  *    the app-owned `.ts` extensions.
@@ -123,7 +126,6 @@ export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
   'package.json',
   PI_HARNESS_RPC_ENTRY,
   'dist/bundle/cli.js',
-  'dist/bundle/coordinator.js',
   'dist/bundle/index.js',
   ...PI_HARNESS_KEPT_DIST_FILES,
   'vendor/jiti/dist/jiti.cjs',

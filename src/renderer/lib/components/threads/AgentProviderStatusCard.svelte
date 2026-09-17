@@ -24,6 +24,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
+  import { presentProviderError } from '$shared/provider-issue'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
@@ -108,6 +109,16 @@
     issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
   )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
+  /**
+   * The card body is display copy, never diagnostic detail. A harness that
+   * crashes inside its own runtime reports its exception text (stack trace
+   * included) as an ordinary error string, so reduce whatever a driver handed
+   * over to that trace's header line. Every provider card in the app renders
+   * through this component, which makes it the one place that guarantees a
+   * trace can never reach the body; the full text stays in `rawError` above,
+   * which the Raw Error view shows.
+   */
+  const displayMessage = $derived(presentProviderError(issue.message).message)
 
   async function copyRawError(): Promise<void> {
     try {
@@ -290,7 +301,7 @@
       {/if}
 
       <p class="mt-1 text-sm leading-relaxed text-muted select-text">
-        {#each messageParts(issue.message) as part, index (index)}
+        {#each messageParts(displayMessage) as part, index (index)}
           {#if part.isLink}
             <a
               href={part.text}

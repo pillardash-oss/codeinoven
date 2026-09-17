@@ -1,6 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
 import { posixBasename } from '$shared/paths'
-import { INBOX_PROJECT_ID } from '$shared/types'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
 import { mobileState } from '$lib/remote/mobile-state.svelte'
@@ -10,6 +9,12 @@ import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-acti
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
 import { pauseCurrentHistoryAudio } from './global-audio'
+import {
+  deliverTranscriptHeadless,
+  sendUnsentComposerContentNow,
+  unsentComposerContent,
+  voiceScopeTarget
+} from './voice-send'
 import { logRendererError } from '../system/renderer-logger'
 import { isRemotePwaRuntime } from '$lib/runtime-context'
 import type {
@@ -44,6 +49,50 @@ export type RendererSpeechState =
     }
   | { state: 'stopping'; targetId: string; attemptId: string }
   | { state: 'failed'; targetId?: string; message: string }
+
+/**
+ * How an armed dictation delivers itself once its transcript lands.
+ *
+ * - `send`: the transcript is dispatched when it arrives (queueing behind a
+ *   running turn, exactly like the send button).
+ * - `steer`: the transcript is forced into the running turn, interrupting it.
+ */
+export type VoiceSendStage = 'send' | 'steer'
+
+/** Escalation level of an armed dictation: 1 send, 2 send after steering the
+ *  box content now, 3 steer the transcript itself. A press at 3 clears the
+ *  intent instead of escalating past it, so the ladder is a cycle. */
+type VoiceSendLevel = 1 | 2 | 3
+
+/** One detached transcription job: the mic has closed, the transcript has not
+ *  landed yet. */
+interface VoiceTranscriptionRecord {
+  attemptId: string
+  targetId: string
+  scope: SpeechScope
+  /**
+   * The editor the transcript will be inserted into. Held so the delivery can
+   * ask the live editor to dispatch itself instead of guessing at its content,
+   * since `autoSend.isLive()` is the aliveness probe for that editor.
+   */
+  target: SpeechEditorTarget
+  /** The recording editor can dispatch its own content as a message (the chat
+   *  composer). Dictation armed on a plain editor has nothing to send for. */
+  autoSend: boolean
+}
+
+/** The user's armed intent for one in-flight transcription. */
+interface VoiceSendIntent {
+  attemptId: string
+  targetId: string
+  target: SpeechEditorTarget
+  scope: SpeechScope
+  level: VoiceSendLevel
+}
+
+function stageForLevel(level: VoiceSendLevel): VoiceSendStage {
+  return level >= 3 ? 'steer' : 'send'
+}
 
 interface ActiveCapture {
   target: SpeechEditorTarget
@@ -245,14 +294,23 @@ class SpeechController {
   private preloadFired = false
   /** In-flight background transcription jobs, keyed by attempt id. */
   private readonly transcriptions = new Map<string, Promise<void>>()
-  /** Target ids with a background transcription job still in flight. */
-  private transcribingTargets = $state<string[]>([])
-  /** Scopes of the in-flight background transcription jobs, keyed by attempt
-   *  id, so consumers can attribute the work to a thread. Entries are removed
-   *  by attempt id — never by object identity, which is unreliable here: Svelte
-   *  5 deep-proxies $state array elements, so a raw scope object never matches
-   *  its proxied copy and an identity filter would keep the entry forever. */
-  private transcribingScopes = $state<{ attemptId: string; scope: SpeechScope }[]>([])
+  /** Level-2 steers still in flight, keyed by attempt id. A transcript that
+   *  lands meanwhile must wait for the box content to leave the composer before
+   *  it reads the mirrored draft, or it delivers the same message twice. */
+  private readonly pendingSteers = new Map<string, Promise<void>>()
+  /**
+   * Detached transcriptions whose transcript has not landed yet, with the
+   * editor and thread they belong to. Rows, mic buttons and the armed-send
+   * shortcut read this to know which dictation is still in flight.
+   *
+   * Entries are removed by attempt id, never by object identity, which is
+   * unreliable here: Svelte 5 deep-proxies $state array elements, so a raw
+   * scope object never matches its proxied copy and an identity filter would
+   * keep the entry forever.
+   */
+  private transcribing = $state<VoiceTranscriptionRecord[]>([])
+  /** Dictations the user armed to deliver themselves (see `armVoiceSend`). */
+  private voiceSends = $state<VoiceSendIntent[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
@@ -271,6 +329,16 @@ class SpeechController {
   private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
   /** Where the spoken response lives, for row-level "Speaking" indicators. */
   private playbackScope = $state<SpeechScope | null>(null)
+  /**
+   * Wall-clock time the speech action currently occupying a thread row's single
+   * indicator slot began, and the thread it belongs to. Rows arbitrate that slot
+   * across speech and computer use by "last action wins", and this controller is
+   * the only place that knows when a speech action started. Claimed at each
+   * start point (mic opens, mic closes into transcription, playback begins).
+   * A stale claim is harmless: rows only read it while one of the
+   * `is*Thread` flags is true for that thread.
+   */
+  private slotClaim = $state<{ threadId: string; at: number } | null>(null)
   /** Whether the read-along border + seek controls are on screen right now. */
   private readAlongVisible = $state(false)
   /** Playhead position in seconds across all retained (played) segments. */
@@ -294,12 +362,31 @@ class SpeechController {
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || event.defaultPrevented) return
-    if (this.state.state !== 'recording') return
-    if (!this.escapeStopsRecording()) return
+    if (event.defaultPrevented) return
+    if (event.key === 'Escape') {
+      if (this.state.state !== 'recording') return
+      if (!this.escapeStopsRecording()) return
+      event.preventDefault()
+      event.stopPropagation()
+      void this.stop()
+      return
+    }
+    if (!this.isVoiceSendShortcut(event)) return
+    // A surface above the thread owns the keyboard (a modal, a sheet, a palette,
+    // or a full-page Settings/Scope view): its own chord meaning must win, the
+    // same way Escape there never reaches the recording behind it.
+    if (isEscapeClaimed(event)) return
+    if (!this.voiceSendCandidate()) return
     event.preventDefault()
     event.stopPropagation()
-    void this.stop()
+    this.armVoiceSend()
+  }
+
+  /** Cmd/Ctrl+Shift+Enter, the send chord, re-aimed at a dictation in flight. */
+  private isVoiceSendShortcut(event: KeyboardEvent): boolean {
+    return (
+      event.key === 'Enter' && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.repeat
+    )
   }
 
   /**
@@ -380,6 +467,27 @@ class SpeechController {
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
+  /**
+   * When the speech action this thread's row slot is showing began (wall
+   * clock), or null when the thread has no speech action in that slot. Callers
+   * compare it against computer-use activity to apply the row's last-action-wins
+   * rule; a live action with no recorded claim reports 0 so it ranks as oldest.
+   */
+  threadIndicatorActionAt(threadId: string): number | null {
+    const active =
+      this.isRecordingThread(threadId) ||
+      this.isTranscribingThread(threadId) ||
+      this.isSpeakingThread(threadId)
+    if (!active) return null
+    return this.slotClaim?.threadId === threadId ? this.slotClaim.at : 0
+  }
+
+  /** Record that a speech action for this scope just started. */
+  private claimThreadSlot(scope: SpeechScope | null | undefined): void {
+    if (!scope || scope.kind === 'global' || !scope.threadId) return
+    this.slotClaim = { threadId: scope.threadId, at: Date.now() }
+  }
+
   isCapturingThread(threadId: string): boolean {
     const scope = this.capturingScope
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
@@ -388,21 +496,180 @@ class SpeechController {
   /** Whether a detached background transcription is still running for this
    *  editor target — the transcript will land in the field when it settles. */
   isTranscribingTarget(targetId: string): boolean {
-    return this.transcribingTargets.includes(targetId)
+    return this.transcribing.some((entry) => entry.targetId === targetId)
   }
 
   /** Whether a background transcription is still running inside this thread —
    *  the mic has closed but the transcript has not landed yet. This spans the
-   *  whole post-recording pipeline: the `stopping` phase (finalize/upload/ASR
-   *  selection happens there, before the detached job is registered) and the
-   *  detached transcription job itself. */
+   *  whole post-recording pipeline, from the moment the recorder is stopped
+   *  (finalize, upload, ASR selection) through the detached transcription job. */
   isTranscribingThread(threadId: string): boolean {
     const matches = (scope: SpeechScope | null): boolean =>
       scope !== null && scope.kind !== 'global' && scope.threadId === threadId
-    if (this.transcribingScopes.some((entry) => matches(entry.scope))) return true
+    if (this.transcribing.some((entry) => matches(entry.scope))) return true
     // The mic has closed but the capture is still finishing — the transcript
     // job has not been registered yet, so the capture scope is the only signal.
     return this.state.state === 'stopping' && matches(this.capturingScope)
+  }
+
+  /**
+   * Whether the dictation in flight for this editor target can send itself when
+   * the transcript lands. False for every editor that is not a message surface
+   * (spec fields, comment boxes), where the transcript can only be pasted.
+   */
+  canAutoSendVoice(targetId: string): boolean {
+    return this.transcribing.some((entry) => entry.targetId === targetId && entry.autoSend)
+  }
+
+  /** Stage of the armed voice send for an editor target, or null when off. */
+  voiceSendStageForTarget(targetId: string): VoiceSendStage | null {
+    const intent = this.armedVoiceSend((entry) => entry.targetId === targetId)
+    return intent ? stageForLevel(intent.level) : null
+  }
+
+  /** Stage of the armed voice send belonging to a thread's row, or null. */
+  voiceSendStageForThread(threadId: string): VoiceSendStage | null {
+    const intent = this.armedVoiceSend(
+      (entry) => entry.scope.kind !== 'global' && entry.scope.threadId === threadId
+    )
+    return intent ? stageForLevel(intent.level) : null
+  }
+
+  /**
+   * An armed intent is only meaningful while its transcription is still in
+   * flight. Reading through the live transcription list keeps an intent that
+   * outlived its delivery invisible instead of leaving an armed icon behind.
+   */
+  private armedVoiceSend(match: (intent: VoiceSendIntent) => boolean): VoiceSendIntent | null {
+    return (
+      this.voiceSends.find(
+        (intent) =>
+          this.transcribing.some((entry) => entry.attemptId === intent.attemptId) && match(intent)
+      ) ?? null
+    )
+  }
+
+  /**
+   * Arm, or escalate, the automatic delivery of the transcription in flight.
+   *
+   * The mic button (double-click) and Cmd/Ctrl+Shift+Enter both land here while
+   * a transcript is still being produced, and every press advances one step of
+   * a ladder that cycles back to where it started:
+   *
+   * 1. the transcript is sent when it lands, together with whatever the
+   *    composer already held, which waits for it instead of being sent alone;
+   * 2. the composer's text is steered into the running turn right now and the
+   *    transcript follows as its own message;
+   * 3. the transcript itself is steered, interrupting the running turn;
+   * 4. the intent is cleared again, so the transcript goes back to being pasted
+   *    into its editor (and written to the clipboard) with nothing sent, and
+   *    the next press arms a fresh send.
+   *
+   * Returns false when nothing is armable: a dictation on a plain editor, or
+   * no dictation at all, so callers can leave the event to its normal meaning.
+   */
+  armVoiceSend(options: { targetId?: string } = {}): boolean {
+    const record = this.voiceSendCandidate(options.targetId)
+    if (!record) return false
+    const existing = this.voiceSends.find((entry) => entry.attemptId === record.attemptId)
+    // The press after "steer the transcript" ends the ladder instead of
+    // escalating it: the intent goes away and the cycle starts over.
+    const cleared = existing?.level === 3
+    // With nothing typed there is nothing to hand over at level 2, so asking
+    // again means the transcript itself should steer: the same intent the third
+    // press expresses once the box has already been handed over.
+    const next: VoiceSendLevel = existing === undefined ? 1 : existing.level === 1 ? 2 : 3
+    const level: VoiceSendLevel =
+      next === 2 && unsentComposerContent(record.scope) === null ? 3 : next
+    this.voiceSends = [
+      // Prune intents whose transcription already settled: only the dictation
+      // in flight may carry an armed state, and a cleared one is dropped so the
+      // transcript keeps only its plain paste behaviour.
+      ...this.voiceSends.filter(
+        (entry) =>
+          entry.attemptId !== record.attemptId &&
+          this.transcribing.some((live) => live.attemptId === entry.attemptId)
+      ),
+      ...(cleared
+        ? []
+        : [
+            {
+              attemptId: record.attemptId,
+              targetId: record.targetId,
+              target: record.target,
+              scope: record.scope,
+              level
+            }
+          ])
+    ]
+    // Arming is a user action on the transcription's thread, so the row's
+    // single indicator slot is claimed now, as any other speech action does:
+    // the armed state is then the most recent claim, which is what the row's
+    // last-action-wins rule compares against computer-use activity.
+    this.claimThreadSlot(record.scope)
+    // Level 2 hands over what the composer holds at this instant: that text is
+    // an instruction for the running turn and must not wait for the transcript.
+    // Clearing is never level 2, so this only fires on a fresh ladder step.
+    if (level === 2) this.trackPendingSteer(record)
+    return true
+  }
+
+  /** Hand the composer content to the running turn, remembering the work so a
+   *  transcript landing meanwhile waits for it instead of racing it. */
+  private trackPendingSteer(record: VoiceTranscriptionRecord): void {
+    // Never rejects: the delivery awaits this promise, and a steer that threw
+    // must not turn into a transcription failure for the transcript behind it.
+    const steering = this.steerPendingComposerContent(record).catch((cause: unknown) => {
+      logRendererError('The queued voice message could not be steered.', cause)
+    })
+    this.pendingSteers.set(record.attemptId, steering)
+    void steering.finally(() => {
+      if (this.pendingSteers.get(record.attemptId) === steering)
+        this.pendingSteers.delete(record.attemptId)
+    })
+  }
+
+  /**
+   * The dictation an arming gesture applies to. A pinch on a specific mic
+   * button pins its own target; the global shortcut prefers a dictation that is
+   * already armed, then the one on the thread being viewed, then the newest.
+   * The user who walked away mid-recording is exactly who arms this remotely.
+   */
+  private voiceSendCandidate(targetId?: string): VoiceTranscriptionRecord | null {
+    const candidates = this.transcribing.filter((entry) => entry.autoSend)
+    if (candidates.length === 0) return null
+    if (targetId) return candidates.find((entry) => entry.targetId === targetId) ?? null
+    const armed = candidates.filter((entry) =>
+      this.voiceSends.some((intent) => intent.attemptId === entry.attemptId)
+    )
+    if (armed.length > 0) return armed[armed.length - 1]
+    const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
+    const onView = viewed
+      ? candidates.find(
+          (entry) =>
+            entry.scope.kind !== 'global' &&
+            entry.scope.threadId === viewed.id &&
+            (entry.scope.kind !== 'project' || entry.scope.projectId === viewed.projectId)
+        )
+      : undefined
+    return onView ?? candidates[candidates.length - 1]
+  }
+
+  /**
+   * Steer what a thread's composer already holds. A mounted composer drives its
+   * own send path so the steer obeys every gate the send button has; otherwise
+   * the mirrored draft is steered headlessly.
+   */
+  private async steerPendingComposerContent(record: VoiceTranscriptionRecord): Promise<void> {
+    const autoSend = record.target.autoSend
+    if (autoSend?.isLive()) {
+      autoSend.submit(true)
+      // A composer that dispatched clears its own buffer. One that refused (an
+      // open slash or mention menu, a locked field) left the text in place, so
+      // steer it headlessly instead of quietly dropping the intent.
+      if (unsentComposerContent(record.scope) === null) return
+    }
+    await sendUnsentComposerContentNow(record.scope)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -426,9 +693,7 @@ class SpeechController {
   /** The thread target of a dictation scope, when it dictates into a thread
    *  composer. Global scope and thread-less scopes have no draft surface. */
   private draftTargetFromScope(scope: SpeechScope): { projectId: string; threadId: string } | null {
-    if (scope.kind === 'global' || !scope.threadId) return null
-    const projectId = scope.kind === 'project' ? scope.projectId : INBOX_PROJECT_ID
-    return { projectId, threadId: scope.threadId }
+    return voiceScopeTarget(scope)
   }
 
   /** Flag the thread as drafting in the DB the moment a capture starts, so a
@@ -478,6 +743,8 @@ class SpeechController {
       await this.cancelPlayback()
     }
     this.captureScope = scope
+    // The mic opening is a new speech action for the thread's row slot.
+    this.claimThreadSlot(scope)
     if (!this.soundReady) await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
@@ -649,10 +916,17 @@ class SpeechController {
     this.clearElapsedTimer()
     this.clearPreloadTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
+    // The mic is closed and the transcript is on its way: that transition is a
+    // new speech action for the thread's row slot.
+    this.claimThreadSlot(this.capturingScope)
     // Capture the target's current value and caret when the user stops, not
     // only when recording started. This lets users type and reposition the
     // caret while the mic is active without losing the intended insertion point.
     const insertionSnapshot = active.target.capture() ?? active.snapshot
+    // The transcript is on its way from this instant, not from the moment ASR
+    // answers. Registering the job here is what makes the dictation armable
+    // while the capture is still finalising, instead of only afterwards.
+    this.beginTranscription(active)
 
     try {
       const durationMs = Math.max(0, performance.now() - active.startedAt)
@@ -684,6 +958,9 @@ class SpeechController {
         if (current === transcription) this.transcriptions.delete(active.attemptId)
       })
     } catch (cause) {
+      // No transcript will ever land for this attempt, so its job and any
+      // intent armed for it are over before the failure surfaces.
+      this.endTranscription(active.attemptId)
       const message = errorMessage(cause)
       await (
         active.native
@@ -699,6 +976,29 @@ class SpeechController {
     }
   }
 
+  /** Start tracking a dictation whose transcript has not landed yet. Called the
+   *  moment the recorder is told to stop, so a transcript is armable across the
+   *  whole post-recording pipeline and not only once ASR has answered. */
+  private beginTranscription(active: ActiveCapture): void {
+    this.transcribing = [
+      ...this.transcribing,
+      {
+        attemptId: active.attemptId,
+        targetId: active.target.id,
+        target: active.target,
+        scope: structuredClone(active.scope),
+        autoSend: active.target.autoSend !== undefined
+      }
+    ]
+  }
+
+  /** Stop tracking a dictation and drop any intent armed for it. */
+  private endTranscription(attemptId: string): void {
+    this.transcribing = this.transcribing.filter((entry) => entry.attemptId !== attemptId)
+    this.voiceSends = this.voiceSends.filter((entry) => entry.attemptId !== attemptId)
+    this.pendingSteers.delete(attemptId)
+  }
+
   /**
    * Detached per-attempt transcription job. Runs in the background so the
    * microphone and the shared state machine free up for a new recording while
@@ -709,17 +1009,17 @@ class SpeechController {
     insertionSnapshot: SpeechEditorSnapshot
   ): Promise<void> {
     const transcribingScope = structuredClone(active.scope)
-    this.transcribingTargets = [...this.transcribingTargets, active.target.id]
-    this.transcribingScopes = [
-      ...this.transcribingScopes,
-      { attemptId: active.attemptId, scope: transcribingScope }
-    ]
     try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
       let applied: SpeechEditorApplyResult = inserted
-      if (!applied.ok && applied.reason === 'destroyed' && active.target.fallbackApply) {
+      if (!applied.ok && active.target.fallbackApply) {
+        // Every failed insertion still has a home: the target's store-level
+        // fallback appends the transcript to the value it mirrors. That covers a
+        // destroyed editor, a field the user kept typing in while the model was
+        // transcribing, and a box an armed level-2 steer has already emptied,
+        // which is exactly the case an armed transcript has to survive.
         applied = active.target.fallbackApply(insertionSnapshot, transcript)
       }
       if (!applied.ok) {
@@ -743,6 +1043,12 @@ class SpeechController {
       const current = this.spans.get(active.target.id) ?? []
       this.spans.set(active.target.id, [...current.slice(-7), span])
       this.playCue('completed')
+      // Armed dictation: the transcript has landed, so hand it over now. The
+      // composer drives its own send path whenever the transcript reached the
+      // live editor; otherwise the mirrored draft is delivered headlessly,
+      // which is what makes this work from another thread entirely.
+      const intent = this.voiceSends.find((entry) => entry.attemptId === active.attemptId)
+      if (intent) await this.deliverArmedVoiceSend(intent, inserted.ok)
     } catch (cause) {
       await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
         () => undefined
@@ -756,12 +1062,38 @@ class SpeechController {
         // Toast failures must never break the detached job.
       }
     } finally {
-      this.transcribingTargets = this.transcribingTargets.filter((id) => id !== active.target.id)
-      this.transcribingScopes = this.transcribingScopes.filter(
-        (entry) => entry.attemptId !== active.attemptId
-      )
+      this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
     }
+  }
+
+  /**
+   * Delivery of an armed dictation once its transcript has landed. `landedLive`
+   * reports whether the transcript was inserted into the mounted editor: only
+   * then may the composer dispatch itself, because its buffer is the only copy
+   * that then holds the transcript.
+   */
+  private async deliverArmedVoiceSend(intent: VoiceSendIntent, landedLive: boolean): Promise<void> {
+    // A level-2 steer may still be handing the box content over. The transcript
+    // must not be read out of the mirrored draft until that text has left it, or
+    // the same message is delivered twice.
+    await this.pendingSteers.get(intent.attemptId)
+    const direct = intent.level >= 3
+    if (landedLive) {
+      const autoSend = intent.target.autoSend
+      if (autoSend?.isLive()) {
+        // The composer's own send path already reports the dictation for
+        // correction learning, so this branch is complete on its own.
+        autoSend.submit(direct)
+        return
+      }
+    }
+    const deliveredText = await deliverTranscriptHeadless(intent.scope, direct)
+    // A headless delivery bypasses the composer, which is where a dictation is
+    // normally reported for correction learning. Report it here instead, so a
+    // voice message sent from another thread teaches the model exactly like one
+    // sent by hand.
+    if (deliveredText !== null) this.observeSent(intent.targetId, deliveredText)
   }
 
   private stopRecorder(recorder: MediaRecorder): Promise<void> {
@@ -880,6 +1212,8 @@ class SpeechController {
       this.activePlayback = playback
       this.currentSegments = playback.prepared.segments
       this.playbackScope = scope ?? null
+      // Playback beginning is a new speech action for the thread's row slot.
+      this.claimThreadSlot(this.playbackScope)
       await this.playSegment(playback, 0)
     } catch (cause) {
       this.clearPlaybackStallWatchdog()

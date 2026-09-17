@@ -49,8 +49,8 @@ import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.i
 import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
 import {
   classifyProviderIssue,
-  extractProviderErrorEnvelope,
-  parseUsageResetAt
+  parseUsageResetAt,
+  presentProviderError
 } from '../../lib/provider-issue'
 import {
   PersistentCliDriver,
@@ -1294,7 +1294,7 @@ export function mapPiRecord(
     // the engine converts it into the will-retry card and auto-resumes later,
     // instead of parking the thread on a terminal error.
     const kind = classifyProviderIssue(finalError)
-    const message = extractProviderErrorEnvelope(finalError).message
+    const { message } = presentProviderError(finalError)
     const retryAt =
       kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
     return {
@@ -1332,7 +1332,7 @@ export function mapPiRecord(
       // error, so a permanently oversized request is never hidden.
       if (isOversizedRequestError(lastAssistant.error)) return { events: [] }
       const kind = classifyProviderIssue(lastAssistant.error)
-      const message = extractProviderErrorEnvelope(lastAssistant.error).message
+      const { message } = presentProviderError(lastAssistant.error)
       const retryAt =
         kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
       return {
@@ -3838,7 +3838,7 @@ export class PiDriver extends PersistentCliDriver {
           state: 'error',
           issue: {
             kind,
-            message: extractProviderErrorEnvelope(detail).message,
+            message: presentProviderError(detail).message,
             rawError: detail,
             harnessId: this.id,
             retryable: kind !== 'billing'
@@ -3911,7 +3911,7 @@ export class PiDriver extends PersistentCliDriver {
         state: 'error',
         issue: {
           kind,
-          message: extractProviderErrorEnvelope(error).message,
+          message: presentProviderError(error).message,
           rawError: error,
           harnessId: this.id,
           retryable: kind !== 'billing'

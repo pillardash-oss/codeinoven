@@ -8,11 +8,13 @@ import type {
   ManagedWorktreeDescriptor,
   ScopeEnvironmentMode,
   ScopeLifecyclePreflight,
+  ScopeLifecycleSnapshot,
   ScopeMergeMode,
   ScopeMergeOutcome,
   ScopeMergePreflight,
   ScopeSetupCommandRecord,
   ScopeSetupCommandSpec,
+  ScopeSetupStatus,
   ScopeTarget,
   ScopeWorktreeCreateInput,
   ScopeWorktreeHealth,
@@ -52,6 +54,11 @@ export interface ScopeThreadLifecycle {
     projectId: string,
     fromBucketId: string
   ): Promise<{ moved: number; evicted: number }>
+  /**
+   * Move one thread into a scope bucket. Used when an agent creates a scope for
+   * the work it is already doing, so the next turn runs in the new root.
+   */
+  moveThreadIntoScope(projectId: string, threadId: string, bucketId: string): Promise<void>
 }
 
 export interface ScopeWorktreeServiceOptions {
@@ -677,7 +684,10 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * Repair an unhealthy managed scope according to its health category:
    * unlock locked registrations, prune stale ones, restore missing checkouts
    * from their managed branch, move relocated checkouts back under the config
-   * root, and re-checkout a switched branch. Returns the fresh health state.
+   * root, and re-checkout a switched branch. A re-created checkout is
+   * reconciled afterwards (environment files re-propagated, recorded setup
+   * marked stale) so the scope is not left claiming a prepared environment it
+   * no longer has. Returns the fresh health state.
    */
   async repair(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
     return this.enqueue(target.projectId, async () => {
@@ -687,63 +697,169 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const repoPath = project?.source === 'local' && project.path ? project.path : undefined
       const gitCwd = repoPath ?? expectedPath
       const before = await this.health(target)
+      let restoredCheckout = false
       switch (before.category) {
         case 'healthy':
           return before
         case 'repository-unavailable':
           throw new Error(before.detail ?? 'The project repository is unavailable')
         case 'locked':
-          await runGit(['worktree', 'unlock', expectedPath], { cwd: gitCwd })
+          await this.runRepairStep(
+            ['worktree', 'unlock', expectedPath],
+            gitCwd,
+            'The Git lock on this worktree could not be released.'
+          )
           break
         case 'prunable': {
-          await runGit(['worktree', 'prune'], { cwd: gitCwd, timeoutMs: 120_000 })
+          await runGitChecked(['worktree', 'prune'], { cwd: gitCwd, timeoutMs: 120_000 }).catch(
+            () => undefined
+          )
           if (!existsSync(expectedPath)) {
             await this.restoreCheckout(gitCwd, expectedPath, descriptor.branch)
+            restoredCheckout = true
           }
           break
         }
         case 'missing':
           await this.restoreCheckout(gitCwd, expectedPath, descriptor.branch)
+          restoredCheckout = true
           break
         case 'path-mismatch':
           if (!before.actualPath) {
             throw new Error('Git did not report the relocated worktree path')
           }
           await ensureParentDir(expectedPath)
-          await runGit(['worktree', 'move', before.actualPath, expectedPath], {
-            cwd: gitCwd,
-            timeoutMs: 120_000
-          })
+          await this.runRepairStep(
+            ['worktree', 'move', before.actualPath, expectedPath],
+            gitCwd,
+            `The checkout at ${before.actualPath} could not be moved back under the app's project directory.`,
+            120_000
+          )
           break
         case 'branch-mismatch':
-          await runGit(['checkout', descriptor.branch], { cwd: expectedPath, timeoutMs: 60_000 })
+          await this.runRepairStep(
+            ['checkout', descriptor.branch],
+            expectedPath,
+            `The checkout could not be switched back to ${descriptor.branch}. Commit or discard its changes, then repair it again.`,
+            60_000
+          )
           break
         case 'unregistered':
           // Relink registrations for directories that were moved manually.
-          await runGit(['worktree', 'repair'], { cwd: gitCwd, timeoutMs: 120_000 })
+          await this.runRepairStep(
+            ['worktree', 'repair'],
+            gitCwd,
+            'Git could not relink this directory as a worktree.',
+            120_000
+          )
           break
       }
+      if (restoredCheckout) await this.reconcileRestoredCheckout(target, expectedPath)
       return this.health(target)
     })
   }
 
-  /** Re-create the checkout at `expectedPath` from an existing managed branch. */
+  /** Run one repair step, turning a Git refusal into an actionable error. */
+  private async runRepairStep(
+    args: string[],
+    cwd: string,
+    failure: string,
+    timeoutMs?: number
+  ): Promise<void> {
+    try {
+      await runGitChecked(args, { cwd, ...(timeoutMs === undefined ? {} : { timeoutMs }) })
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      throw new Error(`${failure} (${detail})`, { cause })
+    }
+  }
+
+  /**
+   * Reconcile a re-created checkout with what the app owes the scope. Git only
+   * restores committed content, so propagated environment files and every
+   * gitignored build artifact are gone: re-propagate the environment files and
+   * mark the recorded setup as stale so the scope offers an explicit
+   * "Re-run setup" instead of claiming a prepared environment it no longer has.
+   */
+  private async reconcileRestoredCheckout(
+    target: ScopeTarget,
+    worktreePath: string
+  ): Promise<void> {
+    const descriptor = this.requireManaged(target)
+    const project = await this.projects.getProject(target.projectId)
+    if (project?.source === 'local' && project.path) {
+      try {
+        await this.propagateEnvironment(target.projectId, worktreePath, descriptor.environmentMode)
+      } catch (cause) {
+        // Re-running setup propagates the environment again, so a failed copy
+        // here is logged and never fatal to the restore itself.
+        const detail = cause instanceof Error ? cause.message : String(cause)
+        Logger.error(`Environment propagation after a checkout restore failed: ${detail}`)
+      }
+    }
+    // A scope whose setup never ran has nothing recorded to invalidate.
+    if (descriptor.setup.commands.length === 0) return
+    const setup: ScopeSetupStatus = {
+      state: 'stale',
+      commands: descriptor.setup.commands.map((record) => ({
+        index: record.index,
+        executable: record.executable,
+        args: record.args,
+        state: 'pending'
+      })),
+      ...(descriptor.setup.startedAt === undefined
+        ? {}
+        : { startedAt: descriptor.setup.startedAt }),
+      ...(descriptor.setup.finishedAt === undefined
+        ? {}
+        : { finishedAt: descriptor.setup.finishedAt })
+    }
+    this.scopes.attachManagedRoot(target.projectId, target.scopeBucketId, { ...descriptor, setup })
+  }
+
+  /**
+   * Re-create the checkout at `expectedPath` from an existing managed branch.
+   * A branch that no longer exists is the one case repair cannot resolve on its
+   * own, so it fails with the recovery instead of leaving the scope silently
+   * broken.
+   */
   private async restoreCheckout(
     repoPath: string,
     expectedPath: string,
     branch: string
   ): Promise<void> {
-    await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 120_000 }).catch(
+    if (!(await this.managedBranchExists(repoPath, branch))) {
+      throw new Error(
+        `The managed branch ${branch} no longer exists, so its checkout cannot be restored. Delete the scope to clear its record, or restore the branch from the remote and then run "Repair worktree" again.`
+      )
+    }
+    await runGitChecked(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 120_000 }).catch(
       () => undefined
     )
     await ensureParentDir(expectedPath)
-    await runGit(['worktree', 'add', expectedPath, branch], {
-      cwd: repoPath,
-      timeoutMs: 120_000
-    }).catch(async (error) => {
+    try {
+      await runGitChecked(['worktree', 'add', expectedPath, branch], {
+        cwd: repoPath,
+        timeoutMs: 120_000
+      })
+    } catch (cause) {
       await rm(expectedPath, { recursive: true, force: true }).catch(() => undefined)
-      throw error
-    })
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      throw new Error(`The checkout could not be restored from ${branch}: ${detail}`, { cause })
+    }
+  }
+
+  /** Whether the project repository still has the scope's local branch. */
+  private async managedBranchExists(repoPath: string, branch: string): Promise<boolean> {
+    try {
+      await runGitChecked(['rev-parse', '--verify', `refs/heads/${branch}`], {
+        cwd: repoPath,
+        timeoutMs: 30_000
+      })
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -959,42 +1075,72 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path
 
-      const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
-      const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
-      const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
-        repoPath ?? worktreePath,
+      const snapshot = await this.computeLifecycleSnapshot(
+        target,
         worktreePath,
-        descriptor.branch
+        descriptor.branch,
+        repoPath
       )
-      const hasActiveProcesses =
-        (await this.activeProcesses?.hasActiveProcessesFor(
-          target.projectId,
-          target.scopeBucketId
-        )) ?? false
-
-      const snapshot: PreflightSnapshot = {
+      const record: PreflightSnapshot = {
         action,
         target,
-        dirtyFiles,
-        unpushedCommits,
-        hasActiveProcesses,
-        branchOwnedByWorktree,
+        ...snapshot,
         token: randomBytes(16).toString('hex'),
         createdAt: Date.now()
       }
-      this.preflights.set(snapshot.token, snapshot)
+      this.preflights.set(record.token, record)
       return {
-        action: snapshot.action,
+        action: record.action,
         projectId: target.projectId,
         scopeBucketId: target.scopeBucketId,
-        dirtyFiles: [...snapshot.dirtyFiles],
-        unpushedCommits: snapshot.unpushedCommits,
-        hasActiveProcesses: snapshot.hasActiveProcesses,
-        branchOwnedByWorktree: snapshot.branchOwnedByWorktree,
-        confirmationId: snapshot.token,
-        createdAt: snapshot.createdAt
+        dirtyFiles: [...record.dirtyFiles],
+        unpushedCommits: record.unpushedCommits,
+        hasActiveProcesses: record.hasActiveProcesses,
+        branchOwnedByWorktree: record.branchOwnedByWorktree,
+        confirmationId: record.token,
+        createdAt: record.createdAt
       }
     })
+  }
+
+  /**
+   * Read what a destructive action on this scope would discard, without minting
+   * a confirmation token. The agent-facing scope tool shows this before the user
+   * decides; `preflight` mints the single-use token from the same computation,
+   * so the challenge a user sees and the state the token is bound to agree.
+   */
+  async lifecycleSnapshot(target: ScopeTarget): Promise<ScopeLifecycleSnapshot> {
+    return this.enqueue(target.projectId, async () => {
+      const descriptor = this.requireManaged(target)
+      const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
+      const project = await this.projects.getProject(target.projectId)
+      return await this.computeLifecycleSnapshot(
+        target,
+        worktreePath,
+        descriptor.branch,
+        project?.path
+      )
+    })
+  }
+
+  /** One snapshot computation shared by the token-minting and read-only paths. */
+  private async computeLifecycleSnapshot(
+    target: ScopeTarget,
+    worktreePath: string,
+    branch: string,
+    repoPath: string | undefined
+  ): Promise<ScopeLifecycleSnapshot> {
+    const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
+    const unpushedCommits = await this.unpushedCount(repoPath, branch, worktreePath)
+    const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
+      repoPath ?? worktreePath,
+      worktreePath,
+      branch
+    )
+    const hasActiveProcesses =
+      (await this.activeProcesses?.hasActiveProcessesFor(target.projectId, target.scopeBucketId)) ??
+      false
+    return { dirtyFiles, unpushedCommits, branchOwnedByWorktree, hasActiveProcesses }
   }
 
   /** Consume a confirmation token bound to its snapshot. Returns null when stale. */
@@ -1076,7 +1222,14 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * confirmation token. Throws when the token is stale or dirty/pushed state
    * changed since the snapshot was minted.
    */
-  async confirmDetach(target: ScopeTarget, token: string): Promise<void> {
+  /**
+   * Consume a detach token: remove the checkout and re-point the scope at the
+   * project directory while keeping its branch, threads and appearance. The
+   * confirmed force flag is what the renderer's second confirmation unlocks,
+   * and it is passed through to Git so a confirmed detach of a checkout with
+   * uncommitted work cannot silently leave the directory behind.
+   */
+  async confirmDetach(target: ScopeTarget, token: string, force = false): Promise<void> {
     await this.enqueue(target.projectId, async () => {
       const snapshot = this.requireFreshSnapshot(token, target, 'detach')
       const descriptor = this.requireManaged(target)
@@ -1084,13 +1237,19 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path
 
-      if (snapshot.dirtyFiles.length > 0 || snapshot.unpushedCommits > 0) {
-        throw new Error('Cannot detach a worktree with dirty or unpushed work; force required')
+      if (!force && (snapshot.dirtyFiles.length > 0 || snapshot.unpushedCommits > 0)) {
+        throw new Error(
+          'Cannot detach a worktree with uncommitted or unpushed work; confirm the forced detach first'
+        )
       }
-      await runGit(['worktree', 'remove', worktreePath], {
-        cwd: repoPath ?? worktreePath,
-        timeoutMs: 120_000
-      })
+      await this.runRepairStep(
+        force
+          ? ['worktree', 'remove', '--force', worktreePath]
+          : ['worktree', 'remove', worktreePath],
+        repoPath ?? worktreePath,
+        'The worktree directory could not be removed, so the scope was left attached to it.',
+        120_000
+      )
       this.scopes.detachManagedRoot(target.projectId, target.scopeBucketId)
     })
   }

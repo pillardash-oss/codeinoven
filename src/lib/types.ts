@@ -122,7 +122,15 @@ export interface ScopeSetupCommandRecord {
   finishedAt?: number
 }
 
-export type ScopeSetupStatusState = 'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted'
+/**
+ * Persisted setup state of one managed worktree. `stale` means the checkout
+ * itself was re-created after its recorded setup had already run (a repair
+ * restored it from the managed branch), so the recorded results no longer
+ * describe the working tree and setup has to run again before the scope is
+ * usable.
+ */
+export type ScopeSetupStatusState =
+  'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted' | 'stale'
 
 export interface ScopeSetupStatus {
   state: ScopeSetupStatusState
@@ -260,6 +268,21 @@ export interface AdoptableWorktreeInfo {
   reason?: string
 }
 
+/**
+ * What one destructive lifecycle action would discard, read without minting a
+ * confirmation token. Agent-facing flows show this before the user (or the
+ * model) decides; the single-use token is only minted when they do.
+ */
+export interface ScopeLifecycleSnapshot {
+  /** Tracked files with uncommitted modifications (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any known remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Whether the scope's branch is checked out by this worktree. */
+  branchOwnedByWorktree: boolean
+}
+
 /** Actions that require a state-bound, single-use confirmation ID. */
 export type ScopeLifecycleAction =
   'detach' | 'remove-worktree' | 'delete-scope' | 'delete-branch' | 'delete-project-worktrees'
@@ -337,6 +360,92 @@ export interface ScopeWorktreeProgress {
 export interface ScopeWorktreeProgressEvent extends ScopeWorktreeProgress {
   projectId: string
   scopeBucketId: string
+  /**
+   * Who started the run. An `agent` run has no renderer-owned job record, so
+   * the docked job panel creates one from the first progress event instead of
+   * silently dropping stages the user never asked for in this window.
+   */
+  origin: ScopeWorktreeRunOrigin
+  /** Scope display name of an agent run, so its docked panel can be labelled. */
+  title?: string
+}
+
+/** Who initiated a managed-worktree run. */
+export type ScopeWorktreeRunOrigin = 'user' | 'agent'
+
+// ─── Agent-facing scope capability (`cio:scope`) ─────────────────────────────
+
+/**
+ * Every operation the agent-facing `cio:scope` utility can perform. Read actions
+ * report state, write actions mutate app-owned scope state, and the destructive
+ * actions are confirmation-gated (see `ScopeAgentConfirmationRequest`).
+ */
+export const SCOPE_TOOL_ACTIONS = [
+  'list',
+  'status',
+  'conflicts',
+  'source_info',
+  'detect_adoptable',
+  'create',
+  'rename',
+  'pin',
+  'unpin',
+  'archive',
+  'restore',
+  'adopt',
+  'repair',
+  'retry_setup',
+  'sync_from_main',
+  'sync_to_main',
+  'detach_worktree',
+  'delete_scope',
+  'merge_into_project'
+] as const
+
+export type ScopeToolAction = (typeof SCOPE_TOOL_ACTIONS)[number]
+
+/** The destructive actions: they always require an explicit confirmation. */
+export const SCOPE_TOOL_DESTRUCTIVE_ACTIONS = [
+  'detach_worktree',
+  'delete_scope',
+  'merge_into_project'
+] as const satisfies readonly ScopeToolAction[]
+
+/**
+ * One confirmation an agent-initiated destructive scope action is waiting for.
+ * `auto_review` turns surface this as an app dialog and the tool call blocks
+ * until the user decides; `full_access` turns only get the in-tool challenge.
+ */
+export interface ScopeAgentConfirmationRequest {
+  requestId: string
+  action: ScopeToolAction
+  /** Verb phrase for the challenge copy, e.g. `delete the scope git-panel-redesign`. */
+  summary: string
+  /** What the confirmed action will destroy, as discrete consequence lines. */
+  consequences: string[]
+  projectId: string
+  projectName: string
+  scopeBucketId: string
+  scopeName: string
+  /** Thread whose agent asked for the action. */
+  threadId: string
+  threadTitle: string
+  /** Dirty files in the affected checkout (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Epoch ms after which the request denies itself. */
+  expiresAt: number
+}
+
+/** Live board invalidation pushed whenever an agent changes scope state. */
+export interface ScopeBoardChangedEvent {
+  projectId: string
+  /** Bucket the agent acted on, when the action named one. */
+  scopeBucketId?: string
+  /** Short verb phrase of what happened, shown as a toast/inline note. */
+  summary: string
 }
 
 export interface ProjectFileEntry {
@@ -1192,6 +1301,28 @@ export interface ComputerUsePipState {
   appName?: string
   /** Id of the thread whose agent is driving the tracked app, when active. */
   threadId?: string
+}
+
+/**
+ * One thread's computer-use activity, mirrored to the renderer so a thread row
+ * can show the cursor indicator while its agent drives an app.
+ *
+ * Deliberately independent of the PiP: the PiP needs a window to track, while
+ * an agent that escalated to desktop scope (`get_desktop_state`,
+ * `escalate_session`, a desktop `hotkey`) has no pid at all yet is still very
+ * much using the computer. A `ComputerUseActivity` is therefore emitted for
+ * every computer-use operation, pid or not.
+ */
+export interface ComputerUseActivity {
+  threadId: string
+  /** Whether the thread's agent is still driving the computer. */
+  active: boolean
+  /** Wall-clock time of this thread's most recent computer-use action. */
+  at: number
+  /** Target process, when the action named one. */
+  pid?: number
+  /** Driver operation that most recently ran, e.g. `drag`. */
+  operation?: string
 }
 
 export interface SessionConfig {
@@ -2774,6 +2905,79 @@ export interface ThreadMessagePage {
   hasNewer?: boolean
 }
 
+/**
+ * Trace entries the working trace mounts when it opens, and the size of each
+ * older page it pulls in on inner scroll. A live trace streams unbounded into
+ * the durable log, but the renderer only ever mounts one bounded window: a long
+ * running thread must open instantly, and while the reader stays on the thread
+ * nothing already mounted is ever evicted.
+ */
+export const WORKING_TRACE_PAGE_SIZE = 15
+
+/**
+ * Bounded window request over a thread's durable working-trace stream.
+ *
+ * The stream log folds to one ordered, first-seen list of parts for the newest
+ * logical turn, so a window is expressed as a slice of that list rather than a
+ * timestamp cursor: `beforeId` walks back through older entries, and
+ * `changedSince` reports what the log touched since a previous read.
+ */
+export interface TurnStreamPartsQuery {
+  /** Return up to `limit` parts immediately older than this part id. */
+  beforeId?: string
+  /**
+   * Return every part the log touched after this cursor: entries that appeared
+   * AND entries updated in place (a tool call completing, a sub-agent reporting
+   * progress). A growth-only cursor would leave an already mounted entry frozen
+   * at its stale snapshot, which is what a second app instance watching the same
+   * thread would see, so a live poll reads changes instead of growth.
+   */
+  changedSince?: number
+  /** Maximum parts in a window request. Defaults to `WORKING_TRACE_PAGE_SIZE`.
+   *  Ignored by a change request, whose size is whatever the log streamed
+   *  between the two reads and is never silently truncated. */
+  limit?: number
+}
+
+/** One bounded page of a thread's durable working-trace parts. */
+export interface TurnStreamPartsPage {
+  kind: 'window'
+  /** The page, ordered oldest to newest. Task-list tool parts are excluded:
+   *  they drive the task card (`todoParts`), never the trace window. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Index of `parts[0]` inside that full folded list. */
+  start: number
+  /** True when the fold holds trace parts older than this page. */
+  hasOlder: boolean
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
+  /** Newest durable task-list tool parts for the turn, so the task card never
+   *  depends on which trace page happens to be mounted. */
+  todoParts: AgentPart[]
+}
+
+/**
+ * Everything the durable working-trace log touched since a change cursor.
+ *
+ * A change is not a window: it carries no fold coordinates, because its parts
+ * are simply the ones that moved (appeared or were updated in place) since the
+ * previous read. Counts and cursors stay on it so a live reader can tell that
+ * the fold was replaced under it and remount a window.
+ */
+export interface TurnStreamPartsChange {
+  kind: 'change'
+  /** Touched parts, in fold order. */
+  parts: AgentPart[]
+  /** Total trace parts the durable log currently folds for the turn. */
+  total: number
+  /** Stream events consumed so far, to pass back as `changedSince`. */
+  cursor: number
+  /** Newest durable task-list tool parts for the turn. */
+  todoParts: AgentPart[]
+}
+
 /** Lightweight user-authored message summary for the header history jump list. */
 export interface UserMessageSummary {
   id: string
@@ -2986,6 +3190,14 @@ export type AgentEvent =
       projectId: string
       threadId: string
       brainstormId: string
+      version: number
+    }
+  | {
+      type: 'prd.ready'
+      sessionId: string
+      projectId: string
+      threadId: string
+      prdId: string
       version: number
     }
   | {
@@ -4297,6 +4509,19 @@ export interface GitIdentityInput {
   email: string
 }
 
+/**
+ * A ref decoration attached to a commit, normalized from `git log`'s `%D` so the
+ * renderer never has to parse git's decoration syntax itself.
+ */
+export interface GitCommitRef {
+  /** Short display name, e.g. `main`, `origin/main`, `v1.0`. */
+  name: string
+  /** `tag` for a tag decoration, otherwise a branch (local or remote-tracking). */
+  kind: 'branch' | 'tag'
+  /** True for the ref the checked-out HEAD points at. */
+  head: boolean
+}
+
 /** One commit from `git log`, surfaced in a compact form. */
 export interface GitCommitInfo {
   hash: string
@@ -4304,6 +4529,12 @@ export interface GitCommitInfo {
   author: string
   date: number
   message: string
+  /** Everything after the subject line, as git recorded it. */
+  body: string
+  /** Parent hashes, first parent first. Empty for a root commit. */
+  parents: string[]
+  /** Decorations on this commit (branch tips, HEAD, tags). */
+  refs: GitCommitRef[]
 }
 
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
@@ -4403,6 +4634,20 @@ export interface GitConflictAnalysis {
   hunks: GitConflictHunk[]
 }
 
+/**
+ * Which side of an unresolved conflict to take wholesale. `incoming` is the
+ * theirs side (the branch being integrated in), `current` is the ours side
+ * (what HEAD already had). The same words the per-hunk merge editor uses.
+ */
+export type GitConflictSide = 'incoming' | 'current'
+
+/**
+ * How to move a stopped rebase along: `continue` applies the commit git
+ * stopped on and replays the rest, `skip` drops that commit and replays the
+ * rest. Aborting is its own operation (`git:abortRebase`).
+ */
+export type GitRebaseAction = 'continue' | 'skip'
+
 /** Persisted state for one conflict range inside the scratch merge document. */
 export interface GitConflictWorkHunkState {
   /** Stable index matching the corresponding entry in `analysis.hunks`. */
@@ -4482,8 +4727,9 @@ export interface PullRequestReference {
 /**
  * Pull request as shown in the sidebar list.
  *
- * Avatars are deliberately absent: the renderer CSP blocks remote image hosts,
- * so the UI renders a monogram from `authorLogin` instead of a network image.
+ * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves a
+ * picture from `authorLogin` through main, which inlines it as a `data:` URL, and
+ * draws a monogram of the login until it arrives (see `PrAvatar.svelte`).
  */
 export interface PullRequestSummary {
   number: number
@@ -4492,6 +4738,15 @@ export interface PullRequestSummary {
   state: 'open' | 'closed' | 'merged'
   draft: boolean
   authorLogin: string
+  /**
+   * The author's picture as the provider declares it. Authoritative over the
+   * login-derived guess: a bot account's `[bot]` login resolves to a meaningless
+   * identicon on the avatar CDN, while this URL is the app's real picture   the
+   * one github.com shows.
+   */
+  authorAvatarUrl?: string | null
+  /** True for app/bot accounts, which GitHub labels with a `Bot` badge. */
+  authorIsBot?: boolean
   headRef: string
   baseRef: string
   createdAt: string
@@ -4570,13 +4825,62 @@ export interface PullRequestCommit {
   date: string
 }
 
+/**
+ * Which provider collection a comment lives in. GitHub keeps conversation
+ * comments and inline diff comments on two separate endpoints with unrelated
+ * ids, so every comment mutation has to say which one it means.
+ */
+export type PrCommentKind = 'issue' | 'review'
+
+/**
+ * An account whose picture the UI wants.
+ *
+ * The declared URL is authoritative and the login is the fallback. That order
+ * matters for app accounts: asking the avatar CDN for `pullfrog[bot]` by login
+ * alone answers with GitHub's meaningless generated identicon, while the URL the
+ * provider returned for the same comment is the picture the app itself published
+ *   the one github.com shows next to that comment.
+ */
+export interface GitHubAvatarRequest {
+  login: string
+  avatarUrl?: string | null
+}
+
+/**
+ * Why a comment was hidden. GitHub's own minimisation classifiers, in its own
+ * order   `minimizeComment` rejects anything outside this set.
+ */
+export type PrMinimizeReason = 'ABUSE' | 'OFF_TOPIC' | 'OUTDATED' | 'RESOLVED' | 'SPAM'
+
 /** One issue comment on a pull request. */
 export interface PullRequestComment {
   id: number
   authorLogin: string
+  /** Provider-declared picture, preferred over the login-derived guess. */
+  authorAvatarUrl: string | null
+  /** True for app/bot accounts, so the row can draw GitHub's `Bot` badge. */
+  authorIsBot: boolean
   body: string
   createdAt: string
+  /** Last edit time, null when the comment has never been edited. */
+  updatedAt: string | null
+  /** GraphQL global id, the only handle `minimizeComment` accepts. */
+  nodeId: string | null
   url: string
+}
+
+/**
+ * An account that can be @-mentioned in a pull request conversation. Built from
+ * the repository's assignable users, the widest list GitHub exposes to a read
+ * token; app accounts arrive as `login[bot]`.
+ */
+export interface RepositoryMentionUser {
+  login: string
+  /** Display name, when the account publishes one. */
+  name: string | null
+  avatarUrl: string | null
+  /** True for app/bot accounts, which GitHub renders as an app mention. */
+  bot: boolean
 }
 
 /** Review verdict submitted from the sidebar. */
@@ -4597,21 +4901,37 @@ export interface PullRequestFile {
 export interface PullRequestReview {
   id: number
   authorLogin: string
+  authorAvatarUrl: string | null
+  authorIsBot: boolean
   /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
   state: string
   body: string
   submittedAt: string
+  /** Permalink to the review inside the pull request conversation. */
+  url: string
+  /**
+   * GraphQL global id. Present so the reader can address the review, but note
+   * that GitHub exposes no edit or delete for a submitted review's body   the
+   * actions menu deliberately offers only the copy and quote actions for one.
+   */
+  nodeId: string | null
 }
 
 /** An inline code comment attached to a line of the diff. */
 export interface PullRequestReviewComment {
   id: number
   authorLogin: string
+  authorAvatarUrl: string | null
+  authorIsBot: boolean
   body: string
   path: string
   /** Line in the file the comment anchors to; null once outdated. */
   line: number | null
   createdAt: string
+  updatedAt: string | null
+  nodeId: string | null
+  /** Permalink to the inline comment inside the pull request conversation. */
+  url: string
 }
 
 /** One CI check or commit status on the PR head. */
@@ -4631,6 +4951,12 @@ export interface PullRequestCheck {
   url: string | null
   /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
   workflowRunId: number | null
+  /**
+   * GitHub Actions job id for this exact check, when its provider URL names one.
+   * A run has many jobs (one per matrix leg), so this is what lets the panel read
+   * the log of the check that was clicked rather than the run's first job.
+   */
+  jobId: number | null
 }
 
 /** Rolled-up CI state for a pull request head. */
@@ -4820,7 +5146,11 @@ export interface GitHubDeploymentDetail {
   fetchedAt: number
 }
 
-/** Capped raw log text for one workflow run job. */
+/**
+ * Raw log text for one workflow run job, capped at roughly 200 KB. An oversized log
+ * keeps its head and its tail with an omission line between them, because the step
+ * that failed is at the end.
+ */
 export interface GitHubDeploymentJobLog {
   jobId: number
   log: string
@@ -4833,6 +5163,15 @@ export interface GitHubWorkflowRunDetail {
   jobs: GitHubDeploymentJob[]
   fetchedAt: number
 }
+
+/**
+ * Which jobs a workflow re-run replays. GitHub offers exactly these two: every
+ * job in the run, or only the ones that failed.
+ */
+export type WorkflowRerunMode = 'all' | 'failed'
+
+/** A workflow re-run answers with an empty body, so the result carries no value. */
+export type WorkflowRerunResult = GitHubMutationResult<null>
 
 // ─── Cloud deployments ───────────────────────────────────────────────────────
 

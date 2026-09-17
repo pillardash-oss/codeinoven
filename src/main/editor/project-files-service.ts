@@ -241,6 +241,12 @@ export class ProjectFilesService {
    * may be relative (`src/foo.ts`), prefixed with the project CWD (absolute), or
    * `file://` URLs. Anything that does not exist, escapes the root, or is a
    * symbolic link resolves to `null`   such citations must never become links.
+   *
+   * A candidate that runs through a regular file does not exist either, which is
+   * the normal shape of a linked worktree's `.git`: it is a file, so `.git/heads`
+   * has nothing under it. That resolves to `null` like any other missing entry.
+   * It must not reject the call, because the resolver runs over agent-authored
+   * text and one odd candidate would take the whole message's citations with it.
    */
   async resolveCitationPaths(
     projectId: string,
@@ -282,7 +288,7 @@ export class ProjectFilesService {
       if (metadata.isSymbolicLink()) return false
       return metadata.isFile() || metadata.isDirectory()
     } catch (error) {
-      if (this.isMissingPathError(error)) return false
+      if (this.isUnresolvablePathError(error)) return false
       throw error
     }
   }
@@ -312,17 +318,24 @@ export class ProjectFilesService {
 
     try {
       let current = root
-      for (const segment of segments) {
+      for (const [index, segment] of segments.entries()) {
         current = resolve(current, segment)
         if (!isWithinRoot(root, current)) return null
         const metadata = await lstat(current)
         if (metadata.isSymbolicLink()) return null
+        if (index < segments.length - 1) {
+          // A segment that is not a directory leaves nothing beneath it, so the
+          // candidate cannot exist: stop here instead of asking lstat for a path
+          // through a file and taking its ENOTDIR. `<worktree>/.git` is a regular
+          // file, and `.git/rebase-merge` is exactly that input.
+          if (!metadata.isDirectory()) return null
+          continue
+        }
+        if (!metadata.isFile() && !metadata.isDirectory()) return null
       }
-      const metadata = await lstat(current)
-      if (!metadata.isFile() && !metadata.isDirectory()) return null
       return relativePath
     } catch (error) {
-      if (this.isMissingPathError(error)) return null
+      if (this.isUnresolvablePathError(error)) return null
       throw error
     }
   }
@@ -1120,6 +1133,24 @@ export class ProjectFilesService {
       'code' in error &&
       typeof error.code === 'string' &&
       error.code === 'ENOENT'
+    )
+  }
+
+  /**
+   * Whether a filesystem error means "no entry can live at this path", for the
+   * two citation resolvers: `ENOENT` for a missing entry, and `ENOTDIR` for a
+   * path that runs through a file where a directory would have to be. Both
+   * answer the same way, with no entry, and neither may throw: these run over
+   * agent-authored text, where one candidate that happens to name a path under a
+   * file would otherwise fail the call for every citation in the message.
+   */
+  private isUnresolvablePathError(error: unknown): boolean {
+    return (
+      this.isMissingPathError(error) ||
+      (error instanceof Error &&
+        'code' in error &&
+        typeof error.code === 'string' &&
+        error.code === 'ENOTDIR')
     )
   }
 

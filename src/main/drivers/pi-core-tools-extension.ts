@@ -227,6 +227,19 @@ const GIT_DESTRUCTIVE_RULES: DenyRule[] = [
   { pattern: /(?:^|[;&|]\\s*)git\\s+gc\\s+(?=[^\\n]*--prune=now)/u, label: 'git gc --prune=now' }
 ]
 
+// Worktree lifecycle belongs to CodeInOven. A raw linked worktree is invisible
+// to the scope board, its health checks, its environment propagation and its
+// sync tooling, so creating or removing one by hand has to be the user's
+// explicit decision. The app's own route is the scope capability behind the
+// utility gateway, which the agent discovers by searching for it.
+const RAW_WORKTREE_RULES: DenyRule[] = [
+  {
+    pattern: /(?:^|[;&|]\\s*)git\\s+worktree\\s+(?:add|remove|move|lock|unlock|prune)\\b/u,
+    label:
+      'a raw git worktree command (use the app-managed scope capability through the utility gateway instead)'
+  }
+]
+
 // Privileged or system-level commands.
 const SYSTEM_RULES: DenyRule[] = [
   { pattern: /(?:^|[;&|]\\s*)sudo\\b/u, label: 'sudo' },
@@ -407,6 +420,9 @@ function evaluateGate(toolName, input, cwd) {
       if (rule.pattern.test(command)) return gateHit('shell', rule.label, [], command)
     }
     for (const rule of GIT_DESTRUCTIVE_RULES) {
+      if (rule.pattern.test(command)) return gateHit('shell', rule.label, [], command)
+    }
+    for (const rule of RAW_WORKTREE_RULES) {
       if (rule.pattern.test(command)) return gateHit('shell', rule.label, [], command)
     }
     for (const rule of PIPED_SHELL_RULES) {

@@ -8,7 +8,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
-import { mergeStreamedPart } from '$lib/agent-part-merge'
+import { mergeStreamedPart } from '$shared/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
@@ -1334,6 +1334,14 @@ class ThreadMessagesStore {
       case 'session.status':
         if (event.status.state === 'working' || event.status.state === 'waiting') {
           this.setRunIssue(projectId, threadId, null)
+          // Track the scheduled reset so the header's activity badge can drop a
+          // thread whose auto-retry is parked beyond the wake window; a working
+          // status means no retry is pending anymore.
+          agentRuns.setRetryAt(
+            projectId,
+            threadId,
+            event.status.state === 'waiting' ? (event.status.issue.retryAt ?? null) : null
+          )
           agentRuns.setBusy(
             projectId,
             threadId,
@@ -1341,6 +1349,7 @@ class ThreadMessagesStore {
             this.#latestUserMessageId(projectId, threadId)
           )
         } else if (event.status.state === 'idle') {
+          agentRuns.setRetryAt(projectId, threadId, null)
           agentRuns.completeSession(projectId, threadId)
         }
         break

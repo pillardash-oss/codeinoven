@@ -61,6 +61,7 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -261,6 +262,9 @@
     /** Renders the scope shoe   the project scope + project type row at the
      *  footer of the composer. Only set in project mode. */
     scopeShoe?: ComposerScopeShoe
+    /** Called instead of sending when the thread has no AI account or no model
+     *  selected, so the host can show its setup card and keep the draft. */
+    onNeedsAiAccount?: () => void
   }
 
   let {
@@ -336,7 +340,8 @@
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
     hideUsageIndicator = false,
-    scopeShoe
+    scopeShoe,
+    onNeedsAiAccount
   }: Props = $props()
 
   /** Base composer settings   the prop when provided, else the global last-used. */
@@ -546,6 +551,13 @@
       id: editorTarget.id,
       capture: () => editorTarget.capture(),
       apply: (snapshot, transcript) => editorTarget.apply(snapshot, transcript),
+      // Armed voice dictation dispatches through the composer itself (see
+      // `SpeechEditorAutoSend`), so a voice send obeys the same queue/steer
+      // rules as the send button.
+      autoSend: {
+        isLive: () => richEditor?.speechEditorTarget(composerEditorId)?.capture() != null,
+        submit: (direct) => submit(direct)
+      },
       fallbackApply: (snapshot, transcript): SpeechEditorApplyResult => {
         if (!projectId || !threadId || typeof onValueChange !== 'function') {
           return { ok: false, reason: 'destroyed' }
@@ -825,6 +837,18 @@
   )
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
+  )
+
+  /**
+   * True when this composer cannot run a turn yet: either the harness has no
+   * provider the user holds credentials for, or no model is selected. Sending
+   * such a turn only reaches the driver to fail with an unavailable model, so
+   * hosts that pass `onNeedsAiAccount` get to show their setup card instead.
+   * Hosts that omit the callback keep the old behaviour.
+   */
+  let needsAiAccount = $derived(
+    !harnessHasProvider(resolvedProviders, resolved.harnessId) ||
+      !selectedModelExists(resolvedProviders, resolved)
   )
 
   /** True when the selected harness cannot accept any prompt attachments. */
@@ -1160,6 +1184,12 @@
     }
     if (selectedHarnessLacksAttachments && attachments.length > 0) {
       attachmentBlockedNotice = true
+      return
+    }
+    // Nothing to send with: let the host show its setup card instead of
+    // handing the driver a turn it can only reject. The draft stays intact.
+    if (needsAiAccount && onNeedsAiAccount) {
+      onNeedsAiAccount()
       return
     }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.

@@ -21,10 +21,11 @@
   let busy = $state(false)
   let error = $state<string | null>(null)
 
-  // Mirrors main's guard exactly: removal refuses when the worktree is dirty
-  // OR carries unpushed commits, so both conditions require force confirmation.
+  // Mirrors main's guard exactly: removal and detach refuse when the worktree
+  // is dirty OR carries unpushed commits, so both conditions require the forced
+  // second confirmation.
   let forceNeeded = $derived(
-    action === 'remove-worktree' &&
+    (action === 'remove-worktree' || action === 'detach') &&
       ((preflight?.dirtyFiles.length ?? 0) > 0 || (preflight?.unpushedCommits ?? 0) > 0)
   )
 

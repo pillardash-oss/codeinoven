@@ -9,7 +9,6 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
   import type {
-    BaseUrlProvider,
     HarnessManifestEntry,
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
@@ -39,10 +38,9 @@
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
-  import AddProviderModal from './AddProviderModal.svelte'
-  import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
+  import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
   /** Where users can browse existing PRs / open one for a V2 support effort. */
   const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
@@ -56,24 +54,8 @@
   /** Breathing room between background hydration jobs on low-end machines. */
   const BACKGROUND_BATCH_DELAY_MS = 50
 
-  /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
-  let baseUrlHarnesses = $derived(
-    providerStore.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
-    )
-  )
-
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
-  /** Tab the Add-provider modal opens on   'custom' when returning there via
-   *  the editor's Back button, so the user lands back on the list they left. */
-  let addTargetInitialTab = $state<'connect' | 'custom'>('connect')
-  let customEditorFor = $state<string | null>(null)
-  /** Provider being edited in the custom base-URL editor, or null when creating one. */
-  let customEditorProvider = $state<BaseUrlProvider | null>(null)
-  /** Set only when the editor was opened from the Add-provider modal, so its
-   *  footer Back button can return there instead of closing everything. */
-  let customEditorReturnTo = $state<ProviderConnectionInfo | null>(null)
   /** Harness awaiting uninstall confirmation, with its resolved handoff command. */
   let uninstallTarget = $state<ProviderConnectionInfo | null>(null)
   let uninstallCommand = $state<string>('')
@@ -460,9 +442,8 @@
   }
 
   function canAddProvider(provider: ProviderConnectionInfo): boolean {
-    return provider.integration === 'ready' && provider.status === 'available'
+    return providerStore.canAddProvider(provider)
   }
-
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (activeTab !== 'harnesses') return
@@ -858,10 +839,7 @@
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
                   disabled={!canAddProvider(provider)}
-                  onclick={() => {
-                    addTargetInitialTab = 'connect'
-                    addTarget = provider
-                  }}
+                  onclick={() => (addTarget = provider)}
                 >
                   <Plug2 size={13} /> Manage providers
                 </button>
@@ -1027,50 +1005,7 @@
 </div>
 
 {#if addTarget}
-  <AddProviderModal
-    harness={addTarget}
-    initialTab={addTargetInitialTab}
-    onClose={() => (addTarget = null)}
-    onAddCustom={(harnessId) => {
-      customEditorReturnTo = addTarget
-      customEditorFor = harnessId
-      customEditorProvider = null
-      addTarget = null
-    }}
-    onEditCustom={(provider) => {
-      customEditorReturnTo = addTarget
-      customEditorFor = provider.harnessId
-      customEditorProvider = provider
-      addTarget = null
-    }}
-  />
-{/if}
-
-{#if customEditorFor}
-  <BaseUrlProviderEditor
-    provider={customEditorProvider}
-    harnesses={baseUrlHarnesses}
-    defaultHarnessId={customEditorFor}
-    onClose={() => {
-      customEditorFor = null
-      customEditorProvider = null
-      customEditorReturnTo = null
-    }}
-    onSaved={() => {
-      customEditorFor = null
-      customEditorProvider = null
-      customEditorReturnTo = null
-    }}
-    onBack={customEditorReturnTo
-      ? () => {
-          addTargetInitialTab = 'custom'
-          addTarget = customEditorReturnTo
-          customEditorFor = null
-          customEditorProvider = null
-          customEditorReturnTo = null
-        }
-      : undefined}
-  />
+  <ProviderConnectFlow harness={addTarget} onClose={() => (addTarget = null)} />
 {/if}
 
 {#if uninstallTarget}
