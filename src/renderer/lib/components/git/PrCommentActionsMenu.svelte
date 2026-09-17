@@ -42,6 +42,20 @@
      */
     canHide: boolean
     busy?: boolean
+    /**
+     * Where the three rows that leave the app actually go. Declared rather than
+     * built here because only the caller knows the comment they belong to, and a
+     * row that opens a URL has to declare it for the shared right-click menu to
+     * offer the same actions a link offers.
+     */
+    externalUrls: {
+      /** The new-issue page, prefilled with this comment as a reference. */
+      reference: string
+      /** GitHub's abuse-report form. */
+      report: string
+      /** The blocked-accounts settings, where blocking an account lives. */
+      block: string
+    }
     onCopyLink: () => void
     onCopyMarkdown: () => void
     onQuote: () => void
@@ -60,6 +74,7 @@
     canDelete,
     canHide,
     busy = false,
+    externalUrls,
     onCopyLink,
     onCopyMarkdown,
     onQuote,
@@ -103,7 +118,12 @@
   <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
   Quote reply
 </Menu.Item>
-<Menu.Item class={itemClass} onSelect={onReferenceInNewIssue} disabled={busy}>
+<Menu.Item
+  class={itemClass}
+  data-external-url={externalUrls.reference}
+  onSelect={onReferenceInNewIssue}
+  disabled={busy}
+>
   <MessageSquarePlus size={12} class="shrink-0 text-dimmed" />
   Reference in new issue
 </Menu.Item>
@@ -153,12 +173,22 @@
 
 <Menu.Separator class="my-1 h-px bg-border" />
 
-<Menu.Item class={itemClass} onSelect={onReport} disabled={busy}>
+<Menu.Item
+  class={itemClass}
+  data-external-url={externalUrls.report}
+  onSelect={onReport}
+  disabled={busy}
+>
   <Flag size={12} class="shrink-0 text-dimmed" />
   Report content
 </Menu.Item>
 {#if canBlock}
-  <Menu.Item class={itemClass} onSelect={onBlock} disabled={busy}>
+  <Menu.Item
+    class={itemClass}
+    data-external-url={externalUrls.block}
+    onSelect={onBlock}
+    disabled={busy}
+  >
     <Ban size={12} class="shrink-0 text-dimmed" />
     Block @{githubDisplayLogin(author)}
   </Menu.Item>

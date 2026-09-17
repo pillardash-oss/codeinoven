@@ -1,5 +1,6 @@
 import { Check, CircleDot, CircleSlash, X } from '@lucide/svelte'
 import type { PrCommentKind, PullRequestBundle, PullRequestCheck } from '$shared/types'
+import { githubDisplayLogin } from '$lib/format/github-login'
 
 export type ConversationEntryKind = 'description' | 'comment' | 'review' | 'inline'
 
@@ -182,7 +183,10 @@ export function conversationQuoteBlock(entry: ConversationEntry): string {
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n')
-  return `> **@${entry.author}** wrote:\n>\n${quoted}\n\n`
+  // The attribution is a mention, so it takes the display login: an app account's
+  // raw `name[bot]` would put GitHub's suffix where the handle belongs, and square
+  // brackets are markdown link syntax.
+  return `> **@${githubDisplayLogin(entry.author)}** wrote:\n>\n${quoted}\n\n`
 }
 
 export function checkIcon(check: PullRequestCheck): typeof Check {

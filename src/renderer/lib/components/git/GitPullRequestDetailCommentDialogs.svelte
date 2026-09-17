@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import { gitState } from '$lib/stores/git.svelte'
   import type { ConversationEntry } from './git-pull-request-detail-format'
 
@@ -70,7 +71,7 @@
       </AlertDialog.Title>
       <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
         Your comment by
-        <strong class="text-foreground">{entry?.author ?? ''}</strong>
+        <strong class="text-foreground">{githubDisplayLogin(entry?.author)}</strong>
         will be removed from pull request #{number}. This runs on GitHub and cannot be undone from
         here.
       </AlertDialog.Description>

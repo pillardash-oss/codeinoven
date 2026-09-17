@@ -34,6 +34,16 @@
     open = false
     await openInBrowser(url)
   }
+
+  /**
+   * The two profile destinations this menu opens, named once each.
+   *
+   * A row and the `data-external-url` it declares have to be the same URL, since
+   * the declared one is what the shared right-click menu offers to open and copy.
+   * A second copy of the literal here would only be a way to get them wrong.
+   */
+  const profileUrl = $derived(`https://github.com/${user?.login ?? ''}`)
+  const myPullRequestsUrl = 'https://github.com/pulls'
 </script>
 
 {#if github.connected && user}
@@ -81,6 +91,7 @@
           {#if remoteWebUrl}
             <DropdownMenu.Item
               class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+              data-external-url={remoteWebUrl}
               onSelect={() => void openUrl(remoteWebUrl)}
             >
               <ExternalLink size={12} class="shrink-0 text-dimmed" />
@@ -89,14 +100,16 @@
           {/if}
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-            onSelect={() => void openUrl(`https://github.com/${user.login}`)}
+            data-external-url={profileUrl}
+            onSelect={() => void openUrl(profileUrl)}
           >
             <User size={12} class="shrink-0 text-dimmed" />
             View my GitHub profile
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-            onSelect={() => void openUrl('https://github.com/pulls')}
+            data-external-url={myPullRequestsUrl}
+            onSelect={() => void openUrl(myPullRequestsUrl)}
           >
             <GitFork size={12} class="shrink-0 text-dimmed" />
             My pull requests

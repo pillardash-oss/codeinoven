@@ -34,6 +34,7 @@
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
+  import BotBadge from './BotBadge.svelte'
   import GitPullRequestDetailConversation from './GitPullRequestDetailConversation.svelte'
   import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
@@ -644,6 +645,13 @@
       <span class="font-mono">{summary.headRef}</span>
       <span class="font-mono">→ {summary.baseRef}</span>
       <span class="shrink-0">· {githubDisplayLogin(summary.authorLogin)}</span>
+      <!--
+        The name above lost its `[bot]` suffix, so this badge is what says the
+        account is an App. Without it a bot's pull request reads as a person's.
+      -->
+      {#if summary.authorIsBot}
+        <BotBadge />
+      {/if}
       <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
       {#if detail}
         <span class="flex shrink-0 items-center gap-1.5 tabular-nums">

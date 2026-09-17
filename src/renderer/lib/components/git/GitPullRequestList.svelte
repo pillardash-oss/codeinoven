@@ -19,6 +19,7 @@
   import { githubAppInstallUrl } from '$lib/github-references'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
+  import BotBadge from './BotBadge.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
   import {
     prChecksStateIcon,
@@ -276,8 +277,12 @@
                   {/if}
                 </span>
               {/if}
-              <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">
-                #{pr.number} by {githubDisplayLogin(pr.authorLogin)} · {relativeTime(pr.updatedAt)}
+              <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
+                <span class="truncate">#{pr.number} by {githubDisplayLogin(pr.authorLogin)}</span>
+                {#if pr.authorIsBot}
+                  <BotBadge />
+                {/if}
+                <span class="shrink-0">· {relativeTime(pr.updatedAt)}</span>
               </p>
               <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
                 {pr.headRef} → {pr.baseRef}

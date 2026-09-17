@@ -14,6 +14,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import PrAvatar from './PrAvatar.svelte'
+  import BotBadge from './BotBadge.svelte'
   import PrCommentActionsMenu from './PrCommentActionsMenu.svelte'
   import GitPullRequestDetailCommentDialogs from './GitPullRequestDetailCommentDialogs.svelte'
   import {
@@ -81,13 +82,24 @@
   }
 
   /**
+   * The markdown a reference carries: the comment, attributed and linked.
+   *
+   * Extracted because two callers need byte-identical text: the row that copies it
+   * and opens the new-issue page, and the URL that same row declares for the
+   * shared right-click menu, which has to be the page the row actually opens.
+   */
+  function commentReference(entry: ConversationEntry): string {
+    return `${entry.body.trim()}\n\n_Originally posted by @${githubDisplayLogin(entry.author)} in ${entry.url}_`
+  }
+
+  /**
    * GitHub's "Reference in new issue" carries the comment into a new issue. There
    * is no issue composer in this app, so the reference is copied as markdown and
    * the repository's new-issue page opens with the same text prefilled: the same
    * result, with the writing still happening where issues are written.
    */
   async function referenceInNewIssue(entry: ConversationEntry): Promise<void> {
-    const reference = `${entry.body.trim()}\n\n_Originally posted by @${githubDisplayLogin(entry.author)} in ${entry.url}_`
+    const reference = commentReference(entry)
     await copyText(reference)
     await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
     onNotice('Reference copied, new issue opened on GitHub')
@@ -203,16 +215,7 @@
                 >{githubDisplayLogin(entry.author)}</span
               >
               {#if entry.isBot}
-                <!-- GitHub's own badge for an app account. It is what tells a
-                     reader that the next paragraph was written by a bot and not
-                     by a colleague, which the login alone (`name[bot]`) only
-                     hints at. -->
-                <span
-                  class="shrink-0 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted"
-                  title="This account is an App, not a person"
-                >
-                  Bot
-                </span>
+                <BotBadge />
               {/if}
               <span
                 class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {conversationKindClass(
@@ -270,6 +273,15 @@
                     canDelete={canDeleteConversationEntry(entry, gitState.githubViewerLogin)}
                     canHide={canHideConversationEntry(entry)}
                     busy={commentActionBusy}
+                    externalUrls={{
+                      reference: githubNewIssueUrl(
+                        identity.owner,
+                        identity.repo,
+                        commentReference(entry)
+                      ),
+                      report: githubAbuseReportUrl(),
+                      block: githubBlockUserUrl(entry.author)
+                    }}
                     onCopyLink={() => void copyEntryLink(entry)}
                     onCopyMarkdown={() => void copyEntryMarkdown(entry)}
                     onQuote={() => onQuote(entry)}
