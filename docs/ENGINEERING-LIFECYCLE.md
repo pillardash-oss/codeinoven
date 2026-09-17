@@ -30,6 +30,17 @@ Both sources produce the same reviewable draft, the same human Assignment-approv
 
 The user's message that triggers generation is passed to the Sr. Engineer as that Assignment's request, so a send in the Assignment stage is never silently discarded.
 
+### Assignment interview
+
+The Assignment stage is conversational, exactly like the Brainstorm and PRD stages. A send in the Assignment stage is never force-decomposed: the Sr. Engineer reads the whole thread (the user's message plus everything the conversation already recorded, and the approved Spec as well when one exists) and then either submits or interviews.
+
+- **Submits** when the source already holds a task graph: concrete deliverables, the files or areas each one touches, ownership, dependencies, and how every task is verified. The submission persists the draft, or replaces the unsigned draft the same turn is re-deriving, and it always advances the Assignment-approval gate.
+- **Interviews** when it does not: the Sr. Engineer asks only the unresolved task-graph questions through the question tool and ends the turn on them, keeping every question as a card in the conversation. The answers resume the same logical turn and the interview repeats until the source is sufficient. A partial, speculative, or invented graph is never submitted to look complete.
+
+The interview owns both the active Assignment stage and its `assignment_approval` gate, so the unsigned draft under review can still be reworked by talking to the Sr. Engineer. Two paths deliberately bypass the interview: **Auto Pilot**, which has nobody to answer and keeps the forced background decomposition, and the explicit **Generate assignment** action, which is the user asking for the graph now.
+
+Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
+
 After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document. Likewise, after a PRD finalizes, the PRD Studio offers a **Next step** menu to Generate Spec.
 
 ### Auto Pilot

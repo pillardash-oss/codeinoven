@@ -219,6 +219,14 @@ export type AgentEvent =
       version: number
     }
   | {
+      type: 'assignment.ready'
+      sessionId: string
+      projectId: string
+      threadId: string
+      assignmentId: string
+      version: number
+    }
+  | {
       type: 'brainstorm.trace'
       sessionId: string
       projectId: string

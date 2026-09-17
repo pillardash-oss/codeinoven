@@ -4390,7 +4390,8 @@
     if (
       (event.type === 'spec.ready' ||
         event.type === 'brainstorm.ready' ||
-        event.type === 'prd.ready') &&
+        event.type === 'prd.ready' ||
+        event.type === 'assignment.ready') &&
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
@@ -5232,12 +5233,14 @@
       return
     }
 
-    const selectedAssignment = engineeringLifecycle?.activeStage === 'assignment'
+    const selectedAssignment =
+      engineeringLifecycle?.activeStage === 'assignment' ||
+      engineeringLifecycle?.humanGate === 'assignment_approval'
     if (selectedAssignment && specAction === undefined) {
       // A Spec that exists but is not approved still owns the Assignment, so ask
-      // for approval first. With no Spec at all the user's own message is the
-      // authoritative scope, so this send is never silently discarded.
-      if (spec && spec.status !== 'approved') {
+      // for approval first. Only while no Assignment exists yet: once the board
+      // is there, the message belongs to the Assignment conversation.
+      if (spec && spec.status !== 'approved' && assignment === null) {
         assignmentError = 'Approve the Spec before generating an Assignment from it.'
         return
       }
@@ -5246,8 +5249,15 @@
           await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
         ).state
       }
-      await generateAssignmentDraft(msg)
-      return
+      if (engineeringLifecycle?.autopilot === true) {
+        // Autopilot has nobody to answer, so it keeps the forced background
+        // decomposition instead of opening an interview.
+        await generateAssignmentDraft(msg)
+        return
+      }
+      // Fall through on purpose: an Assignment-stage message is the Assignment
+      // interview. The Sr. Engineer either submits the task graph or asks the
+      // questions the thread and the message together cannot settle.
     }
 
     const lifecycleStarted =

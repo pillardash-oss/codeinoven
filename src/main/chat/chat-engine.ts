@@ -190,6 +190,7 @@ import type {
   UsageBearingMessage,
   AssignmentPlan,
   AssignmentPlanContent,
+  AssignmentProvenance,
   AssignmentTask,
   AssignmentToolResult,
   AssignmentTaskReport,
@@ -273,6 +274,7 @@ import {
 import { decideModelSwitchCompaction } from '../../lib/model-switch-compaction'
 import {
   ASSIGNMENT_PLAN_SCHEMA,
+  ASSIGNMENT_PLAN_TOOL_NAME,
   APPLICATION_AGENT_TOOLS,
   PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME,
   PROPOSE_MEMORY_SCHEMA
@@ -349,6 +351,7 @@ import type {
   ImageDescriptorUserDecision,
   PendingImageDescriptorDecision,
   PendingInitialSpecGeneration,
+  PendingAssignmentTurn,
   PendingMemoryDecision,
   PendingPermissionInfo,
   PendingPrdTurn,
@@ -538,6 +541,7 @@ import {
   latestAssignmentAuditOutput,
   listenAssignmentApi,
   parseBrainstormGeneratedOutput,
+  pendingAssignmentTurnPath,
   pendingPrdTurnPath,
   pendingSpecRevisionPath,
   preserveMirrorGenerationDurations,
@@ -855,6 +859,16 @@ export class ChatEngine {
   private pendingPrdTurns = new Map<string, PendingPrdTurn>()
 
   private prdTurnTasks = new Map<string, Promise<PrdDocument | null>>()
+
+  /**
+   * A conversational Assignment turn. The agent either submits the task graph
+   * or interviews the user about the pieces the source does not settle, so the
+   * submission is captured only when the turn finally ends without waiting for
+   * the user and without an error.
+   */
+  private pendingAssignmentTurns = new Map<string, PendingAssignmentTurn>()
+
+  private assignmentTurnTasks = new Map<string, Promise<AssignmentPlan | null>>()
 
   private pendingBrainstormTurns = new Map<
     string,
@@ -2628,10 +2642,12 @@ export class ChatEngine {
     this.activeBrainstormEntryOperations.clear()
     this.pendingSpecRevisions.clear()
     this.pendingPrdTurns.clear()
+    this.pendingAssignmentTurns.clear()
     this.pendingBrainstormTurns.clear()
     this.activeCompactions.clear()
     this.specRevisionTasks.clear()
     this.prdTurnTasks.clear()
+    this.assignmentTurnTasks.clear()
     this.preparedImplementationSessions.clear()
     this.planningSessions.clear()
     this.handledIdleSessions.clear()
@@ -5672,6 +5688,7 @@ export class ChatEngine {
     for (const sessionId of this.activeBrainstormSessions.keys()) add(sessionId)
     for (const sessionId of this.pendingSpecRevisions.keys()) add(sessionId)
     for (const sessionId of this.pendingPrdTurns.keys()) add(sessionId)
+    for (const sessionId of this.pendingAssignmentTurns.keys()) add(sessionId)
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
     return active.size
@@ -7001,11 +7018,18 @@ export class ChatEngine {
       lifecycleForMode !== null &&
       lifecycleForMode.activeStage === undefined &&
       lifecycleForMode.humanGate === undefined
+    // A thread whose Assignment is already signed or running is a working
+    // conversation, not a planning one: the Sr. Engineer coordinates workers and
+    // answers the user there, so a plain message must reach the coordinator
+    // prompt instead of reopening the specification pipeline or stalling on a
+    // Brainstorm entry card. Explicit studio actions still take the planning path.
+    const ownedAssignment = this.assignmentEngine.getActive(projectId, threadId)
+    const assignmentInProgress = ownedAssignment !== null && ownedAssignment.status !== 'draft'
     const explicitPlanningAction = specAction === 'request' || specAction === 'review'
     const planningSpecTurn =
       engineeringActive &&
       specAction !== 'implement' &&
-      (explicitPlanningAction || !lifecycleParked)
+      (explicitPlanningAction || (!lifecycleParked && !assignmentInProgress))
     // Persist the selected harness before resolving the session. The renderer
     // pre-binds this same harness immediately before dispatch; leaving the old
     // harness in thread settings would make ensureSession replace that session
@@ -7032,7 +7056,29 @@ export class ChatEngine {
       (lifecycleForMode?.activeStage === 'prd' ||
         lifecycleForMode?.humanGate === 'prd_finalization') &&
       this.prdEngine.getWorkflowState(projectId, threadId)?.stage === 'drafting'
-    if (planningSpecTurn && !preloadedActiveSpec && !prdDiscussionTurn) {
+    // The Assignment stage is conversational for the same reason the PRD stage
+    // is: a message can describe work that cannot be decomposed yet, and the
+    // honest answer there is a focused question, not an invented task graph.
+    // It owns both its active stage and its `assignment_approval` gate, because
+    // the unsigned draft under review is still being discussed. The turn applies
+    // while the thread still owns its own Assignment (none yet, or an unsigned
+    // draft the user can still change) and while the user is the one driving it;
+    // Autopilot keeps the forced background generation because nobody is there
+    // to answer, and a signed or running Assignment hands the thread to the
+    // coordinator conversation instead.
+    const assignmentDiscussionTurn =
+      planningSpecTurn &&
+      specAction === undefined &&
+      (lifecycleForMode?.activeStage === 'assignment' ||
+        lifecycleForMode?.humanGate === 'assignment_approval') &&
+      lifecycleForMode.autopilot !== true &&
+      (ownedAssignment === null || ownedAssignment.status === 'draft')
+    if (
+      planningSpecTurn &&
+      !preloadedActiveSpec &&
+      !prdDiscussionTurn &&
+      !assignmentDiscussionTurn
+    ) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
       if (!brainstormWorkflow) {
         brainstormWorkflow = this.brainstormEngine.ensureWorkflow(projectId, threadId)
@@ -7104,7 +7150,12 @@ export class ChatEngine {
       // specification turns suppress their chat prose. Brainstorm interviews and
       // PRD interviews must retain the findings, the recap, and the questions as
       // visible conversation.
-      if (planningSpecTurn && !activeBrainstormSession && !prdDiscussionTurn) {
+      if (
+        planningSpecTurn &&
+        !activeBrainstormSession &&
+        !prdDiscussionTurn &&
+        !assignmentDiscussionTurn
+      ) {
         this.planningSessions.add(sessionId)
       } else {
         this.planningSessions.delete(sessionId)
@@ -7405,6 +7456,12 @@ export class ChatEngine {
           `The ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
         ].join('\n\n')
       : ''
+    const assignmentDiscussionPrompt = assignmentDiscussionTurn
+      ? [
+          await this.cioPrompt('assignment-discussion'),
+          `The ${ASSIGNMENT_PLAN_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(ASSIGNMENT_PLAN_SCHEMA)}`
+        ].join('\n\n')
+      : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
           activeBrainstormTurn: activeBrainstormSession,
@@ -7412,6 +7469,7 @@ export class ChatEngine {
           brainstormDiscussionPrompt,
           engineeringSpecPrompt,
           prdDiscussionPrompt,
+          assignmentDiscussionPrompt,
           revisionPrompt: '',
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
@@ -7475,7 +7533,11 @@ export class ChatEngine {
           )
         : null)
     const shouldScheduleInitialSpec =
-      planningSpecTurn && !activeSpec && !activeBrainstormSession && !prdDiscussionTurn
+      planningSpecTurn &&
+      !activeSpec &&
+      !activeBrainstormSession &&
+      !prdDiscussionTurn &&
+      !assignmentDiscussionTurn
     if (planningSpecTurn) {
       if (!activeBrainstormSession) this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
@@ -7503,6 +7565,20 @@ export class ChatEngine {
         }
         this.pendingPrdTurns.set(sessionId, pendingPrdTurn)
         await this.writePendingPrdTurn(pendingPrdTurn)
+      }
+      if (assignmentDiscussionTurn) {
+        const pendingAssignmentTurn: PendingAssignmentTurn = {
+          schemaVersion: 1,
+          projectId,
+          threadId,
+          sessionId,
+          harnessId: driverId,
+          ...(settings.providerId ? { providerId: settings.providerId } : {}),
+          ...(settings.modelId ? { modelId: settings.modelId } : {}),
+          createdAt: Date.now()
+        }
+        this.pendingAssignmentTurns.set(sessionId, pendingAssignmentTurn)
+        await this.writePendingAssignmentTurn(pendingAssignmentTurn)
       }
       this.registerSession(
         sessionId,
@@ -7545,7 +7621,7 @@ export class ChatEngine {
           }
           return publicUserMessage
         }
-        if (activeSpec && !prdDiscussionTurn) {
+        if (activeSpec && !prdDiscussionTurn && !assignmentDiscussionTurn) {
           const pendingRevision: PendingSpecRevision = {
             schemaVersion: 1,
             projectId,
@@ -7573,7 +7649,7 @@ export class ChatEngine {
           })
         }
         const revisionPrompt =
-          activeSpec && !prdDiscussionTurn
+          activeSpec && !prdDiscussionTurn && !assignmentDiscussionTurn
             ? buildSpecRevisionSystemPrompt(
                 await this.artifactRef(
                   projectId,
@@ -7594,6 +7670,7 @@ export class ChatEngine {
           activeSpec !== null &&
           !activeBrainstormSession &&
           !prdDiscussionTurn &&
+          !assignmentDiscussionTurn &&
           driver.capabilities?.structuredOutput === true &&
           !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
             ? {
@@ -7612,6 +7689,7 @@ export class ChatEngine {
             brainstormDiscussionPrompt,
             engineeringSpecPrompt,
             prdDiscussionPrompt,
+            assignmentDiscussionPrompt,
             revisionPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
@@ -7647,9 +7725,11 @@ export class ChatEngine {
         this.clearCompletionWaiter(sessionId)
         this.pendingSpecRevisions.delete(sessionId)
         this.pendingPrdTurns.delete(sessionId)
+        this.pendingAssignmentTurns.delete(sessionId)
         this.pendingBrainstormTurns.delete(sessionId)
         await this.clearPendingSpecRevision(projectId, threadId)
         await this.clearPendingPrdTurn(projectId, threadId)
+        await this.clearPendingAssignmentTurn(projectId, threadId)
         if (shouldScheduleInitialSpec && !promptDispatched) {
           await this.clearPendingInitialSpec(projectId, threadId)
         }
@@ -13967,13 +14047,13 @@ export class ChatEngine {
         }
       }
 
-      const assignment = await this.assignmentEngine.createDraft({
+      const assignment = await this.persistAssignmentDraft({
         projectId,
         coordinatorThreadId,
-        ...(source.kind === 'spec'
-          ? { specId: source.spec.id, specVersion: source.spec.version }
-          : {}),
         content,
+        // A draft that appeared while this graph was being generated is the
+        // user's, so it is left in place rather than overwritten.
+        replaceDraft: false,
         provenance: {
           source: 'agent',
           actor: 'Sr. Engineer',
@@ -13982,12 +14062,6 @@ export class ChatEngine {
           modelId: settings.modelId
         }
       })
-      const lifecycle = this.engineeringLifecycleEngine.get(projectId, coordinatorThreadId)
-      if (lifecycle?.activeStage === 'assignment') {
-        this.engineeringLifecycleEngine.advance(projectId, coordinatorThreadId, {
-          gate: 'assignment_approval'
-        })
-      }
       await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
@@ -13999,6 +14073,61 @@ export class ChatEngine {
       this.markEngineeringLifecycleFailure(projectId, coordinatorThreadId, error)
       throw error
     }
+  }
+
+  /**
+   * Persist a submitted task graph as the thread's unsigned Assignment draft.
+   * The approved specification stays the recorded source when one exists; with
+   * no specification the conversation is the source and the draft carries none.
+   *
+   * An existing unsigned draft is replaced only when the caller owns the turn
+   * that produced the graph (`replaceDraft`), so a concurrent background run
+   * never clobbers it; a signed, running, or completed Assignment is never
+   * touched.
+   */
+  private async persistAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    content: AssignmentPlanContent
+    provenance: Pick<
+      AssignmentProvenance,
+      'source' | 'actor' | 'harnessId' | 'providerId' | 'modelId'
+    >
+    replaceDraft: boolean
+  }): Promise<AssignmentPlan> {
+    const { projectId, coordinatorThreadId, content, provenance, replaceDraft } = input
+    const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
+    if (spec && spec.status !== 'approved') {
+      throw new Error(
+        'Approve the specification before generating an Assignment from it, or dismiss the specification to build the Assignment from this conversation.'
+      )
+    }
+    const existing = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (existing && existing.status !== 'draft') return existing
+    const assignment =
+      existing === null
+        ? await this.assignmentEngine.createDraft({
+            projectId,
+            coordinatorThreadId,
+            ...(spec ? { specId: spec.id, specVersion: spec.version } : {}),
+            content,
+            provenance
+          })
+        : replaceDraft
+          ? await this.assignmentEngine.saveDraft(
+              projectId,
+              coordinatorThreadId,
+              content,
+              provenance
+            )
+          : existing
+    const lifecycle = this.engineeringLifecycleEngine.get(projectId, coordinatorThreadId)
+    if (lifecycle?.activeStage === 'assignment') {
+      this.engineeringLifecycleEngine.advance(projectId, coordinatorThreadId, {
+        gate: 'assignment_approval'
+      })
+    }
+    return assignment
   }
 
   private async generateAssignmentContent(
@@ -17220,6 +17349,24 @@ export class ChatEngine {
     return this.storage.remove(pendingPrdTurnPath(projectId, threadId))
   }
 
+  private readPendingAssignmentTurn(
+    projectId: string,
+    threadId: string
+  ): Promise<PendingAssignmentTurn | null> {
+    return this.storage.read<PendingAssignmentTurn>(pendingAssignmentTurnPath(projectId, threadId))
+  }
+
+  private writePendingAssignmentTurn(pending: PendingAssignmentTurn): Promise<void> {
+    return this.storage.write(
+      pendingAssignmentTurnPath(pending.projectId, pending.threadId),
+      pending
+    )
+  }
+
+  private clearPendingAssignmentTurn(projectId: string, threadId: string): Promise<void> {
+    return this.storage.remove(pendingAssignmentTurnPath(projectId, threadId))
+  }
+
   private async getActiveSpec(
     projectId: string,
     threadId: string
@@ -17662,6 +17809,118 @@ export class ChatEngine {
       version: created.version
     })
     return created
+  }
+
+  private runPendingAssignmentTurn(
+    sessionId: string,
+    messages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<AssignmentPlan | null> {
+    const existing = this.assignmentTurnTasks.get(sessionId)
+    if (existing) return existing
+    const task = this.persistPendingAssignmentTurn(sessionId, messages, scope)
+    this.assignmentTurnTasks.set(sessionId, task)
+    void task.then(
+      () => {
+        if (this.assignmentTurnTasks.get(sessionId) === task) {
+          this.assignmentTurnTasks.delete(sessionId)
+        }
+      },
+      () => {
+        if (this.assignmentTurnTasks.get(sessionId) === task) {
+          this.assignmentTurnTasks.delete(sessionId)
+        }
+      }
+    )
+    return task
+  }
+
+  /**
+   * Capture an Assignment the agent submitted inside its own conversational
+   * turn. A turn that ends without a submission is the interview outcome, never
+   * a failure: the agent asked the user the task-graph questions the source
+   * could not answer, and the conversation continues with the answers.
+   */
+  private async persistPendingAssignmentTurn(
+    sessionId: string,
+    loadedMessages?: AgentMessage[],
+    scope?: { projectId: string; threadId: string }
+  ): Promise<AssignmentPlan | null> {
+    const pending =
+      this.pendingAssignmentTurns.get(sessionId) ??
+      (scope ? await this.readPendingAssignmentTurn(scope.projectId, scope.threadId) : null)
+    if (!pending || pending.sessionId !== sessionId) return null
+    this.pendingAssignmentTurns.delete(sessionId)
+    await this.clearPendingAssignmentTurn(pending.projectId, pending.threadId)
+
+    // Re-derive the turn intent before touching anything. A record retained
+    // across a question-tool turn is consumed by the next finalization for this
+    // session, which may belong to a later stage once the Assignment was signed
+    // off or the lifecycle moved on, and creating a draft there would be wrong.
+    const turnLifecycle = this.engineeringLifecycleEngine.get(pending.projectId, pending.threadId)
+    if (
+      turnLifecycle?.activeStage !== 'assignment' &&
+      turnLifecycle?.humanGate !== 'assignment_approval'
+    ) {
+      return null
+    }
+
+    const driver = this.driverForRuntime(
+      pending.harnessId,
+      this.sessionRegistry.get(sessionId)?.accountId
+    )
+    if (!driver) throw new Error(`Unknown harness: ${pending.harnessId}`)
+    const projectPath =
+      this.sessionRegistry.get(sessionId)?.projectPath ??
+      (await this.resolveThreadPath(pending.projectId, pending.threadId))
+    const messages = loadedMessages ?? (await driver.loadMessages(projectPath, sessionId))
+    const response = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!response) return null
+    if (response.error) throw new Error(response.error)
+    const text = response.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+    // No decodable JSON object in the answer is the interview outcome: the agent
+    // asked its questions or narrated instead of submitting, so nothing is
+    // captured and nothing failed. A decodable object that then fails Assignment
+    // validation is a rejected submission and throws below.
+    let submitted: unknown
+    if (response.structuredOutput === undefined) {
+      try {
+        submitted = parseGeneratedJson(text, 'The Assignment agent returned invalid JSON')
+      } catch (error) {
+        if (error instanceof GeneratedJsonParseError) return null
+        throw error
+      }
+    } else {
+      submitted = response.structuredOutput
+    }
+    const content = parseGeneratedAssignmentContent(submitted)
+    const assignment = await this.persistAssignmentDraft({
+      projectId: pending.projectId,
+      coordinatorThreadId: pending.threadId,
+      content,
+      // The agent owns the turn that produced this graph, so an unsigned draft it
+      // is re-deriving is replaced instead of left stale.
+      replaceDraft: true,
+      provenance: {
+        source: 'agent',
+        actor: 'Sr. Engineer',
+        harnessId: pending.harnessId,
+        ...(pending.providerId ? { providerId: pending.providerId } : {}),
+        ...(pending.modelId ? { modelId: pending.modelId } : {})
+      }
+    })
+    this.broadcast({
+      type: 'assignment.ready',
+      sessionId,
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      assignmentId: assignment.id,
+      version: assignment.version
+    })
+    return assignment
   }
 
   private runPendingSpecRevision(
@@ -21096,9 +21355,18 @@ export class ChatEngine {
         this.pendingPrdTurns.delete(sessionId)
         await this.clearPendingPrdTurn(info.projectId, info.threadId)
       }
+      // The Assignment turn follows the same rule: an interview that ended on a
+      // question keeps its pending record so the answers resume it, and a failed
+      // turn drops it because there is no submission to capture.
+      const pendingAssignmentTurn = this.pendingAssignmentTurns.get(sessionId)
+      if (failure && pendingAssignmentTurn) {
+        this.pendingAssignmentTurns.delete(sessionId)
+        await this.clearPendingAssignmentTurn(info.projectId, info.threadId)
+      }
       let revisedSpec: EngineeringSpec | null = null
       let revisedBrainstorm: BrainstormDocument | null = null
       let createdPrd: PrdDocument | null = null
+      let createdAssignment: AssignmentPlan | null = null
       // Post-turn artifact updates (spec revision, brainstorm report) must
       // stay silent when they fail: the main turn's work is already done, the
       // previous artifact version remains reviewable, and each surface has its
@@ -21186,6 +21454,27 @@ export class ChatEngine {
           broadcastToast(`The PRD was not created: ${auxiliaryFailure}`)
         }
       }
+      if (!failure && !awaitingUser && pendingAssignmentTurn) {
+        try {
+          createdAssignment = await this.runPendingAssignmentTurn(sessionId, messages, {
+            projectId: info.projectId,
+            threadId: info.threadId
+          })
+        } catch (error) {
+          // A rejected submission is recoverable: no draft is written, the
+          // Assignment stage stays open, and the interview carries on, so this
+          // must never mark the thread failed or trip the terminal-failure gate.
+          auxiliaryFailure =
+            error instanceof Error ? error.message : 'The Assignment submission was invalid.'
+          Logger.error('Assignment submission failed after a completed turn', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: auxiliaryFailure
+          })
+          broadcastToast(`The Assignment was not created: ${auxiliaryFailure}`)
+        }
+      }
       // Race-safe guard: if the persisted thread is already `failed` (an
       // earlier session-error path marked it) and this finalization would
       // otherwise claim success, keep it failed so a terminal "done"
@@ -21209,7 +21498,7 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : createdPrd && threadBeforeFinalize?.status !== 'failed'
+              : (createdPrd || createdAssignment) && threadBeforeFinalize?.status !== 'failed'
                 ? 'awaiting_approval'
                 : auxiliaryFailure
                   ? // An auxiliary artifact update failed: settle on the

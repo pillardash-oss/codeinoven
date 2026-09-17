@@ -878,6 +878,10 @@ export function pendingPrdTurnPath(projectId: string, threadId: string): string 
   return `projects/${projectId}/threads/${threadId}/prd-turn.json`
 }
 
+export function pendingAssignmentTurnPath(projectId: string, threadId: string): string {
+  return `projects/${projectId}/threads/${threadId}/assignment-turn.json`
+}
+
 export function scopeHarnessCommands(
   harnessId: string,
   commands: HarnessCommand[]

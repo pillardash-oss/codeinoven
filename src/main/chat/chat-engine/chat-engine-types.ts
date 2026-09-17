@@ -252,6 +252,22 @@ export interface PendingPrdTurn {
   createdAt: number
 }
 
+/**
+ * An Assignment discussion turn whose submission is captured at turn end. A
+ * turn that ends on user questions keeps the record, because the answers resume
+ * the same logical turn and the task graph arrives with them.
+ */
+export interface PendingAssignmentTurn {
+  schemaVersion: 1
+  projectId: string
+  threadId: string
+  sessionId: string
+  harnessId: string
+  providerId?: string
+  modelId?: string
+  createdAt: number
+}
+
 export interface AssignmentApiCapability {
   role: 'coordinator' | 'worker'
   assignmentId: string

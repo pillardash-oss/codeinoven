@@ -5,7 +5,11 @@ import { IMAGE_DESCRIPTOR_PROMPT } from '../../providers/image-descriptor-provid
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
 import { registerCioPromptDefault, SKILL_OUTPUT_INSTRUCTION } from '../../../lib/cio-prompts'
-import { BRAINSTORM_DOCUMENT_TOOL_NAME, ENGINEERING_SPEC_TOOL_NAME } from '../../../lib/agent-tools'
+import {
+  BRAINSTORM_DOCUMENT_TOOL_NAME,
+  ENGINEERING_SPEC_TOOL_NAME,
+  ASSIGNMENT_PLAN_TOOL_NAME
+} from '../../../lib/agent-tools'
 import {
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -209,6 +213,28 @@ export const CONVERSATION_ASSIGNMENT_INSTRUCTION = [
   'Convert every distinct work item the user asked for in the conversation into its own Assignment task. Never merge unrelated items, never silently drop one, and never invent work the conversation does not describe.',
   'Inspect the project with read-only tools to resolve concrete project-relative expectedFiles for each task instead of guessing paths.',
   'Return one complete Assignment object and nothing else.'
+].join(' ')
+
+/**
+ * Assignment-stage conversational turn. Mirrors the PRD discussion contract:
+ * the Sr. Engineer either submits a complete task graph or interviews the user,
+ * and the app treats a turn that ends without a submission as the interview
+ * outcome rather than a failure.
+ */
+export const ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT = [
+  'You are the Sr. Engineer turning an authoritative source into a reviewable Assignment graph.',
+  'The source is the approved engineering specification when one exists; otherwise it is this thread, where the user’s latest message and everything the conversation already recorded together define the scope. Read the whole thread before judging it: when the latest message names no work item of its own, the earlier conversation carries the scope, and when it names one, that request leads.',
+  'First decide whether the source actually holds a task graph: the concrete deliverables, the files or areas each one touches, which work depends on which, who owns each piece, and how every task will be verified.',
+  `When it does, submit the complete Assignment through ${ASSIGNMENT_PLAN_TOOL_NAME} and end the turn with it. When it does not, ask only the unresolved questions through the question tool and end your turn on those questions.`,
+  'Never submit a partial, speculative, or invented graph, and never pad one with generic tasks to look complete: an Assignment that exists only to answer the turn is worse than asking. Never ask about anything the specification, the conversation, or the user’s message already answers, and do not interrogate the user about facts you can establish by reading the project.',
+  'Prefer one to three high-impact questions at a time, put a justified recommended option first, and allow custom answers.',
+  'Decompose into narrowly scoped tasks with explicit dependencies, safe parallel work, no overlapping expected files between parallel tasks, self-contained worker prompts, and concrete audit checklists.',
+  'Use owner senior only for work the Sr. Engineer performs in this coordinator thread, and owner worker for durable worker tasks.',
+  'Assignment tasks describe product implementation only. Never create plan-scaffolding, progress-reporting, test-output archival, Assignment-document, or audit-document tasks, and never list those artifacts in expectedFiles.',
+  'When an unsigned draft already exists, refine it from the user’s direction instead of starting over, keeping the id of every task whose work did not change.',
+  'Do not implement, mutate files, dispatch workers, or choose models. The user signs the Assignment off and picks models in the review surface.',
+  QUESTION_TOOL_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
 export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
@@ -491,6 +517,7 @@ export const asEditableTemplate = (prompt: string): string =>
   prompt
     .replaceAll(APP_NAME, '{{APP_NAME}}')
     .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{CIO_SPEC_TOOL}}')
+    .replaceAll(ASSIGNMENT_PLAN_TOOL_NAME, '{{CIO_ASSIGNMENT_TOOL}}')
     .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{CIO_BRAINSTORM_DOC_TOOL}}')
 
 registerCioPromptDefault(
@@ -519,6 +546,11 @@ registerCioPromptDefault('engineering-spec', asEditableTemplate(SPEC_GENERATION_
 registerCioPromptDefault(
   'engineering-implementation',
   asEditableTemplate(SPEC_IMPLEMENT_SYSTEM_PROMPT)
+)
+
+registerCioPromptDefault(
+  'assignment-discussion',
+  asEditableTemplate(ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT)
 )
 
 registerCioPromptDefault(
@@ -608,6 +640,8 @@ export function composeBrainstormSystemPrompt(input: {
   engineeringSpecPrompt?: string
   /** Set only on a PRD stage turn, which owns its own generate-or-interview rule. */
   prdDiscussionPrompt?: string
+  /** Set only on an Assignment stage turn, which owns the same generate-or-interview rule. */
+  assignmentDiscussionPrompt?: string
   revisionPrompt: string
   memoryInstruction: string
   imageDescriptorNote: string
@@ -616,15 +650,17 @@ export function composeBrainstormSystemPrompt(input: {
   historyRecap: string
 }): string {
   const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
+  const assignmentTurnPrompt = input.assignmentDiscussionPrompt ?? ''
   return [
     prdTurnPrompt,
+    assignmentTurnPrompt,
     input.activeBrainstormTurn
       ? (input.brainstormDiscussionPrompt ?? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
       : '',
-    input.activeBrainstormTurn || prdTurnPrompt
+    input.activeBrainstormTurn || prdTurnPrompt || assignmentTurnPrompt
       ? ''
       : (input.engineeringSpecPrompt ?? SPEC_GENERATION_SYSTEM_PROMPT),
-    !input.activeBrainstormTurn && input.assignmentMode && !prdTurnPrompt
+    !input.activeBrainstormTurn && input.assignmentMode && !prdTurnPrompt && !assignmentTurnPrompt
       ? ASSIGNMENT_GENERATION_INSTRUCTION
       : '',
     input.revisionPrompt,
