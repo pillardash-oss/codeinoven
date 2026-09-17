@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { gitInvocation } from '../../git/git-refusal'
 import {
   validateBoolean,
   validateBoundedInteger,
@@ -232,15 +233,18 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
     'git:checkout',
     async (_, projectId: unknown, branch: unknown, scopeBucketId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const status = await gitService.checkout(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateBranchName(branch)
+      const projectPath = await resolveProjectPath(
+        safeProjectId,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
+      // A checkout git refuses (local changes it would overwrite) is a state the
+      // panel resolves, so it returns as data and the branch bookkeeping below
+      // only runs for a checkout that actually happened.
+      const outcome = await gitInvocation(() =>
+        gitService.checkout(projectPath, validateBranchName(branch))
+      )
+      if (!outcome.ok) return outcome
+      const status = outcome.value
       // Keep thread.branch coherent when the app drives a checkout (D7): update
       // every owned thread whose working directory is this project.
       const threads = await threadManager.listThreads(safeProjectId)
@@ -257,15 +261,15 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
     'git:createBranch',
     async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const status = await gitService.createBranch(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateBranchName(name)
+      const projectPath = await resolveProjectPath(
+        safeProjectId,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
+      const outcome = await gitInvocation(() =>
+        gitService.createBranch(projectPath, validateBranchName(name))
+      )
+      if (!outcome.ok) return outcome
+      const status = outcome.value
       const threads = await threadManager.listThreads(safeProjectId)
       for (const thread of threads) {
         if (thread.workingDirectory) {
@@ -287,17 +291,20 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       scopeBucketId?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const status = await gitService.createTrackingBranch(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateRemoteName(remote),
-        validateBranchName(branch, 'Remote branch'),
-        validateBranchName(localName, 'Local branch')
+      const projectPath = await resolveProjectPath(
+        safeProjectId,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
+      const outcome = await gitInvocation(() =>
+        gitService.createTrackingBranch(
+          projectPath,
+          validateRemoteName(remote),
+          validateBranchName(branch, 'Remote branch'),
+          validateBranchName(localName, 'Local branch')
+        )
+      )
+      if (!outcome.ok) return outcome
+      const status = outcome.value
       const threads = await threadManager.listThreads(safeProjectId)
       for (const thread of threads) {
         if (thread.workingDirectory) {
@@ -310,18 +317,19 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.handle(
     'git:deleteBranch',
-    async (_, projectId: unknown, name: unknown, force?: unknown, scopeBucketId?: unknown) => {
-      return gitService.deleteBranch(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateBranchName(name),
-        force === undefined ? false : validateBoolean(force, 'Force delete')
+    async (_, projectId: unknown, name: unknown, force?: unknown, scopeBucketId?: unknown) =>
+      gitInvocation(async () =>
+        gitService.deleteBranch(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateBranchName(name),
+          force === undefined ? false : validateBoolean(force, 'Force delete')
+        )
       )
-    }
   )
   ipcMain.handle(
     'git:deleteRemoteBranch',

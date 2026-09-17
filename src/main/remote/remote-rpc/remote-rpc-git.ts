@@ -10,7 +10,7 @@
  */
 
 import type { GitConflictSide, GitRebaseAction, GitResetMode } from '../../../lib/types'
-import { gitSyncOutcome } from '../../git/git-refusal'
+import { gitInvocation } from '../../git/git-refusal'
 import { validateSyncWithOptions } from '../../ipc/validation/pr'
 import type { RemoteRpcCallContext } from './remote-rpc-context'
 import { REMOTE_RPC_UNHANDLED } from './remote-rpc-context'
@@ -118,40 +118,47 @@ export async function callRemoteGitRpc(
           args[1] === undefined ? undefined : requireString(args[1])
         )
       )
-    case 'git:checkout':
-      return syncBranchAfterCheckout(
-        ctx,
-        requireString(args[0]),
-        await ctx.gitService.checkout(
-          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+    case 'git:checkout': {
+      const projectId = requireString(args[0])
+      const outcome = await gitInvocation(async () =>
+        ctx.gitService.checkout(
+          await resolveRemoteProjectPath(ctx, projectId),
           requireString(args[1])
         )
       )
-    case 'git:createBranch':
-      return syncBranchAfterCheckout(
-        ctx,
-        requireString(args[0]),
-        await ctx.gitService.createBranch(
-          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+      // A refused checkout changed nothing, so the branch bookkeeping is skipped
+      // and the refusal goes back to the phone as data.
+      return outcome.ok ? syncBranchAfterCheckout(ctx, projectId, outcome.value) : outcome
+    }
+    case 'git:createBranch': {
+      const projectId = requireString(args[0])
+      const outcome = await gitInvocation(async () =>
+        ctx.gitService.createBranch(
+          await resolveRemoteProjectPath(ctx, projectId),
           requireString(args[1])
         )
       )
-    case 'git:createTrackingBranch':
-      return syncBranchAfterCheckout(
-        ctx,
-        requireString(args[0]),
-        await ctx.gitService.createTrackingBranch(
-          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+      return outcome.ok ? syncBranchAfterCheckout(ctx, projectId, outcome.value) : outcome
+    }
+    case 'git:createTrackingBranch': {
+      const projectId = requireString(args[0])
+      const outcome = await gitInvocation(async () =>
+        ctx.gitService.createTrackingBranch(
+          await resolveRemoteProjectPath(ctx, projectId),
           requireString(args[1]),
           requireString(args[2]),
           requireString(args[3])
         )
       )
+      return outcome.ok ? syncBranchAfterCheckout(ctx, projectId, outcome.value) : outcome
+    }
     case 'git:deleteBranch':
-      return ctx.gitService.deleteBranch(
-        await resolveRemoteProjectPath(ctx, requireString(args[0])),
-        requireString(args[1]),
-        optionalBoolean(args[2]) ?? false
+      return gitInvocation(async () =>
+        ctx.gitService.deleteBranch(
+          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+          requireString(args[1]),
+          optionalBoolean(args[2]) ?? false
+        )
       )
     case 'git:deleteRemoteBranch':
       return ctx.gitService.deleteRemoteBranch(
@@ -243,7 +250,9 @@ export async function callRemoteGitRpc(
         requireString(args[2])
       )
     case 'git:pull':
-      return ctx.gitService.pull(await resolveRemoteProjectPath(ctx, requireString(args[0])))
+      return gitInvocation(async () =>
+        ctx.gitService.pull(await resolveRemoteProjectPath(ctx, requireString(args[0])))
+      )
     case 'git:pullIntegrate': {
       const projectId = requireString(args[0])
       const options = (args[1] ?? {}) as {
@@ -259,18 +268,20 @@ export async function callRemoteGitRpc(
       const token = (await ctx.vault.exists(tokenRef))
         ? await ctx.vault.resolve(tokenRef)
         : undefined
-      return ctx.gitService.pullIntegrate(
-        await resolveRemoteProjectPath(
-          ctx,
-          projectId,
-          args[2] === undefined ? undefined : requireString(args[2])
-        ),
-        {
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          strategy,
-          token
-        }
+      return gitInvocation(async () =>
+        ctx.gitService.pullIntegrate(
+          await resolveRemoteProjectPath(
+            ctx,
+            projectId,
+            args[2] === undefined ? undefined : requireString(args[2])
+          ),
+          {
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            strategy,
+            token
+          }
+        )
       )
     }
     case 'git:syncWith': {
@@ -288,7 +299,7 @@ export async function callRemoteGitRpc(
       )
       // A refusal is a state the user resolves, so it travels as data: the
       // phone renders the same sentence the desktop panel does.
-      return gitSyncOutcome(() =>
+      return gitInvocation(() =>
         ctx.gitService.syncWith(projectPath, {
           direction: options.direction,
           peer: peer.target,
@@ -319,18 +330,20 @@ export async function callRemoteGitRpc(
       const token = (await ctx.vault.exists(tokenRef))
         ? await ctx.vault.resolve(tokenRef)
         : undefined
-      return ctx.gitService.push(
-        await resolveRemoteProjectPath(
-          ctx,
-          projectId,
-          args[2] === undefined ? undefined : requireString(args[2])
-        ),
-        {
-          setUpstream: Boolean(options.setUpstream),
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          token
-        }
+      return gitInvocation(async () =>
+        ctx.gitService.push(
+          await resolveRemoteProjectPath(
+            ctx,
+            projectId,
+            args[2] === undefined ? undefined : requireString(args[2])
+          ),
+          {
+            setUpstream: Boolean(options.setUpstream),
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            token
+          }
+        )
       )
     }
     case 'git:getCredentialStatus': {
@@ -341,14 +354,18 @@ export async function callRemoteGitRpc(
       }
     }
     case 'git:merge':
-      return ctx.gitService.merge(
-        await resolveRemoteProjectPath(ctx, requireString(args[0])),
-        requireString(args[1])
+      return gitInvocation(async () =>
+        ctx.gitService.merge(
+          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+          requireString(args[1])
+        )
       )
     case 'git:rebase':
-      return ctx.gitService.rebase(
-        await resolveRemoteProjectPath(ctx, requireString(args[0])),
-        requireString(args[1])
+      return gitInvocation(async () =>
+        ctx.gitService.rebase(
+          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+          requireString(args[1])
+        )
       )
     case 'git:stash':
       return ctx.gitService.stash(
@@ -358,9 +375,11 @@ export async function callRemoteGitRpc(
     case 'git:stashList':
       return ctx.gitService.listStashes(await resolveRemoteProjectPath(ctx, requireString(args[0])))
     case 'git:stashPop':
-      return ctx.gitService.popStash(
-        await resolveRemoteProjectPath(ctx, requireString(args[0])),
-        typeof args[1] === 'string' ? args[1] : undefined
+      return gitInvocation(async () =>
+        ctx.gitService.popStash(
+          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+          typeof args[1] === 'string' ? args[1] : undefined
+        )
       )
     case 'git:stashDrop':
       return ctx.gitService.dropStash(
@@ -372,9 +391,11 @@ export async function callRemoteGitRpc(
     case 'git:abortRebase':
       return ctx.gitService.abortRebase(await resolveRemoteProjectPath(ctx, requireString(args[0])))
     case 'git:rebaseAction':
-      return ctx.gitService.rebaseAction(
-        await resolveRemoteProjectPath(ctx, requireString(args[0])),
-        requireString(args[1]) as GitRebaseAction
+      return gitInvocation(async () =>
+        ctx.gitService.rebaseAction(
+          await resolveRemoteProjectPath(ctx, requireString(args[0])),
+          requireString(args[1]) as GitRebaseAction
+        )
       )
 
     // ─── GitHub read-only auth status (device flow stays desktop-only) ──

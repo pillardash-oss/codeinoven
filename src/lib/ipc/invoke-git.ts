@@ -18,14 +18,15 @@ import type {
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
+  GitInvocation,
   GitRebaseAction,
   GitRemoteInfo,
   GitStashEntry,
   GitStatus,
   GitSyncDirection,
-  GitSyncOutcome,
   GitSyncPeer,
   GitSyncPeerOption,
+  GitSyncResult,
   MergeSummary,
   PrAgentReport,
   PrCommentKind,
@@ -133,19 +134,19 @@ export const invokeGitContract = {
   'git:defaultBranch': {} as Contract<[projectId: string, scopeBucketId?: string], string | null>,
   'git:checkout': {} as Contract<
     [projectId: string, branch: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:createBranch': {} as Contract<
     [projectId: string, name: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:createTrackingBranch': {} as Contract<
     [projectId: string, remote: string, branch: string, localName: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:deleteBranch': {} as Contract<
     [projectId: string, name: string, force?: boolean, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:deleteRemoteBranch': {} as Contract<
     [projectId: string, remote: string, name: string, scopeBucketId?: string],
@@ -203,7 +204,7 @@ export const invokeGitContract = {
     [projectId: string, remote: string, branch: string, scopeBucketId?: string],
     GitStatus
   >,
-  'git:pull': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:pull': {} as Contract<[projectId: string, scopeBucketId?: string], GitInvocation<GitStatus>>,
   'git:pullIntegrate': {} as Contract<
     [
       projectId: string,
@@ -214,7 +215,7 @@ export const invokeGitContract = {
       },
       scopeBucketId?: string
     ],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   /** Integrate another checkout or branch into a checkout, or fold a checkout's commits into one. */
   'git:syncWith': {} as Contract<
@@ -227,7 +228,7 @@ export const invokeGitContract = {
       },
       scopeBucketId?: string
     ],
-    GitSyncOutcome
+    GitInvocation<GitSyncResult>
   >,
   /** Every checkout and branch this project can sync with, as main names them. */
   'git:syncPeers': {} as Contract<[projectId: string, scopeBucketId?: string], GitSyncPeerOption[]>,
@@ -237,18 +238,18 @@ export const invokeGitContract = {
       options: { setUpstream: boolean; remote?: string; branch?: string },
       scopeBucketId?: string
     ],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:getCredentialStatus': {} as Contract<[projectId: string], GitCredentialStatus>,
   'git:setCredential': {} as Contract<[projectId: string, token: string], GitCredentialStatus>,
   'git:removeCredential': {} as Contract<[projectId: string], GitCredentialStatus>,
   'git:merge': {} as Contract<
     [projectId: string, target: string, scopeBucketId?: string],
-    MergeSummary
+    GitInvocation<MergeSummary>
   >,
   'git:rebase': {} as Contract<
     [projectId: string, target: string, scopeBucketId?: string],
-    MergeSummary
+    GitInvocation<MergeSummary>
   >,
   'git:preparePrResolve': {} as Contract<
     [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
@@ -273,7 +274,7 @@ export const invokeGitContract = {
   'git:stashList': {} as Contract<[projectId: string, scopeBucketId?: string], GitStashEntry[]>,
   'git:stashPop': {} as Contract<
     [projectId: string, id?: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:stashDrop': {} as Contract<
     [projectId: string, id?: string, scopeBucketId?: string],
@@ -292,7 +293,7 @@ export const invokeGitContract = {
   /** Continue a stopped rebase, or drop the commit it stopped on. */
   'git:rebaseAction': {} as Contract<
     [projectId: string, action: GitRebaseAction, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'pr:create': {} as Contract<
     [projectId: string, input: PrCreateInput, scopeBucketId?: string],

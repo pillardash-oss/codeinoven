@@ -12,6 +12,7 @@ import { invokeNotificationContract } from './ipc/invoke-notification'
 import { invokeUpdaterContract } from './ipc/invoke-updater'
 import { invokeSpeechContract } from './ipc/invoke-speech'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
+import type { GitInvocation, GitRefusedOperation } from './types'
 
 export * from './ipc/updater'
 export * from './ipc/browser'
@@ -42,3 +43,29 @@ export type InvokeChannel = keyof IpcInvokeContract
 export type InvokeArgs<Channel extends InvokeChannel> = IpcInvokeContract[Channel]['args']
 export type InvokeResult<Channel extends InvokeChannel> = IpcInvokeContract[Channel]['result']
 export type EventArgs<Channel extends keyof IpcEventContract> = IpcEventContract[Channel]
+
+/**
+ * Channels whose expected refusals cross IPC as data rather than as a rejected
+ * invoke. Derived from the contract, so a channel that starts or stops refusing
+ * cannot leave a hand-maintained list behind: every call site of `invokeGit`
+ * becomes a type error instead.
+ */
+export type GitRefusingChannel = {
+  [Channel in InvokeChannel]: InvokeResult<Channel> extends GitInvocation<unknown> ? Channel : never
+}[InvokeChannel]
+
+/** The value a refusing channel yields once `invokeGit` unwraps its envelope. */
+export type GitInvocationValue<Result> = Result extends { ok: true; value: infer Value }
+  ? Value
+  : never
+
+/**
+ * Whether a value is a refusal a refusing git channel returned instead of a
+ * rejection. Guards the decode in `invokeGit`, so a channel that ever handed
+ * back something else is passed through untouched rather than misread.
+ */
+export function isGitRefusedOperation(value: unknown): value is GitRefusedOperation {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as { ok?: unknown; refusal?: unknown }
+  return candidate.ok === false && typeof candidate.refusal === 'string'
+}

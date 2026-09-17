@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { gitInvocation } from '../../git/git-refusal'
 import {
   validateEntityId,
   validateGitPathArray,
@@ -18,27 +19,31 @@ export function registerMergeHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'git:merge',
     async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) =>
-      gitService.merge(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateMergeTarget(target)
+      gitInvocation(async () =>
+        gitService.merge(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateMergeTarget(target)
+        )
       )
   )
   ipcMain.handle(
     'git:rebase',
     async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) =>
-      gitService.rebase(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateMergeTarget(target)
+      gitInvocation(async () =>
+        gitService.rebase(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateMergeTarget(target)
+        )
       )
   )
   ipcMain.handle(
@@ -126,14 +131,16 @@ export function registerMergeHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'git:stashPop',
     async (_, projectId: unknown, id?: unknown, scopeBucketId?: unknown) =>
-      gitService.popStash(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateStashId(id)
+      gitInvocation(async () =>
+        gitService.popStash(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateStashId(id)
+        )
       )
   )
   ipcMain.handle(
@@ -195,14 +202,16 @@ export function registerMergeHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'git:rebaseAction',
     async (_, projectId: unknown, action: unknown, scopeBucketId?: unknown) =>
-      gitService.rebaseAction(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateGitRebaseAction(action)
+      gitInvocation(async () =>
+        gitService.rebaseAction(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateGitRebaseAction(action)
+        )
       )
   )
 }

@@ -1154,7 +1154,7 @@ export class GitService {
       const peerDirectory = options.peer.path ? await this.repo(options.peer.path) : null
       const toward = options.direction === 'from' ? 'from' : 'to'
       if (peerDirectory === directory) {
-        throw new Error(
+        throw new GitRefusal(
           options.direction === 'from'
             ? `This checkout is ${options.peer.label}, so there is nothing to sync from`
             : `This checkout is ${options.peer.label}, so it cannot be synced to itself`
@@ -1633,7 +1633,7 @@ export class GitService {
       const before = await this.readStatus(directory)
       const unresolved = before.conflicted.length
       if (action === 'continue' && unresolved > 0) {
-        throw new Error(
+        throw new GitRefusal(
           `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
         )
       }

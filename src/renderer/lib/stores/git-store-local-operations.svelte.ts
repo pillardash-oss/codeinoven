@@ -1,4 +1,4 @@
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, invokeGit } from '$lib/ipc.svelte'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -234,7 +234,7 @@ export class GitLocalOperations {
     this.access.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:checkout', ...this.access.scopedGitArgs(projectId, branch))
+      this.status = await invokeGit('git:checkout', ...this.access.scopedGitArgs(projectId, branch))
       await this.access.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Checkout failed')
@@ -247,7 +247,10 @@ export class GitLocalOperations {
     this.access.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:createBranch', ...this.access.scopedGitArgs(projectId, name))
+      this.status = await invokeGit(
+        'git:createBranch',
+        ...this.access.scopedGitArgs(projectId, name)
+      )
       await this.access.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Branch creation failed')
@@ -265,7 +268,7 @@ export class GitLocalOperations {
     this.access.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:createTrackingBranch',
         ...this.access.scopedGitArgs(projectId, remote, branch, localName)
       )
@@ -281,7 +284,7 @@ export class GitLocalOperations {
     this.access.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:deleteBranch',
         ...this.access.scopedGitArgs(projectId, name, force)
       )
@@ -368,7 +371,7 @@ export class GitLocalOperations {
     // count towards the panel-open gate.
     this.access.noteFetchAttempt(projectId)
     try {
-      this.status = await invoke('git:pull', ...this.access.scopedGitArgs(projectId))
+      this.status = await invokeGit('git:pull', ...this.access.scopedGitArgs(projectId))
       // A pull moves remote-tracking refs, so re-read branches and their
       // ahead/behind counts instead of leaving the panel showing stale ones.
       await this.access.refresh(projectId)
@@ -391,8 +394,8 @@ export class GitLocalOperations {
       const options = { setUpstream, remote, branch }
       const scopeBucketId = this.access.scopeFor(projectId)
       this.status = scopeBucketId
-        ? await invoke('git:push', projectId, options, scopeBucketId)
-        : await invoke('git:push', projectId, options)
+        ? await invokeGit('git:push', projectId, options, scopeBucketId)
+        : await invokeGit('git:push', projectId, options)
       await this.access.refresh(projectId)
       // Pushing changes what GitHub computes for the branch - force a fresh
       // conflict check instead of waiting for the next thread open.
@@ -427,8 +430,8 @@ export class GitLocalOperations {
       const options = { remote, branch, strategy }
       const scopeBucketId = this.access.scopeFor(projectId)
       this.status = scopeBucketId
-        ? await invoke('git:pullIntegrate', projectId, options, scopeBucketId)
-        : await invoke('git:pullIntegrate', projectId, options)
+        ? await invokeGit('git:pullIntegrate', projectId, options, scopeBucketId)
+        : await invokeGit('git:pullIntegrate', projectId, options)
       // Same reason as pull: a pull moves remote-tracking refs, so the branch
       // list and its ahead/behind counts have to be re-read.
       await this.access.refresh(projectId)
@@ -464,10 +467,9 @@ export class GitLocalOperations {
    * conflict UI.
    *
    * A refusal (uncommitted work, a detached HEAD, an open integration, a peer
-   * that cannot receive commits) arrives as `{ ok: false }` rather than as a
-   * rejection, because Electron logs every rejected invoke as a console error;
-   * either way it lands in `error`, which is exactly what the sync dialogs
-   * render.
+   * that cannot receive commits) is reported by main as data and re-thrown by
+   * `invokeGit` on this side of the boundary, so it lands in `error` without
+   * Electron logging it, which is exactly what the sync dialogs render.
    *
    * `scopeBucketId` is the checkout the sync runs in, which is not always the
    * active one: a scope's own menu syncs that scope's worktree while the panel
@@ -482,14 +484,9 @@ export class GitLocalOperations {
     this.access.markBusy('sync', true)
     this.error = null
     try {
-      const outcome = scopeBucketId
-        ? await invoke('git:syncWith', projectId, options, scopeBucketId)
-        : await invoke('git:syncWith', projectId, options)
-      if (!outcome.ok) {
-        this.error = outcome.refusal
-        return null
-      }
-      const result = outcome.result
+      const result = scopeBucketId
+        ? await invokeGit('git:syncWith', projectId, options, scopeBucketId)
+        : await invokeGit('git:syncWith', projectId, options)
       if (this.access.scopeFor(projectId) === scopeBucketId) {
         this.status = result.status
         if (result.status.conflicted.length === 0) this.conflictsMode = false
@@ -566,7 +563,7 @@ export class GitLocalOperations {
     this.access.markBusy('merge', true)
     this.error = null
     try {
-      const summary = await invoke('git:merge', ...this.access.scopedGitArgs(projectId, target))
+      const summary = await invokeGit('git:merge', ...this.access.scopedGitArgs(projectId, target))
       this.status = await this.access.readStatus(projectId)
       return summary
     } catch (reason) {
@@ -581,7 +578,7 @@ export class GitLocalOperations {
     this.access.markBusy('rebase', true)
     this.error = null
     try {
-      const summary = await invoke('git:rebase', ...this.access.scopedGitArgs(projectId, target))
+      const summary = await invokeGit('git:rebase', ...this.access.scopedGitArgs(projectId, target))
       this.status = await this.access.readStatus(projectId)
       return summary
     } catch (reason) {
@@ -625,7 +622,7 @@ export class GitLocalOperations {
     this.access.markBusy('rebase-action', true)
     this.error = null
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:rebaseAction',
         ...this.access.scopedGitArgs(projectId, action)
       )
@@ -735,7 +732,7 @@ export class GitLocalOperations {
     this.access.markBusy('stash-pop', true)
     this.error = null
     try {
-      this.status = await invoke('git:stashPop', ...this.access.scopedGitArgs(projectId, id))
+      this.status = await invokeGit('git:stashPop', ...this.access.scopedGitArgs(projectId, id))
       this.stashes = await invoke('git:stashList', ...this.access.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash pop failed')

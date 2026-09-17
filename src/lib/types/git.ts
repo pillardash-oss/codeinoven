@@ -229,16 +229,24 @@ export interface GitSyncResult {
 }
 
 /**
- * Outcome of `git:syncWith`.
- *
- * A refusal is a state the user can resolve (an uncommitted working tree, a
- * detached HEAD, an integration still open, a peer that cannot receive
- * commits), so it travels as data instead of a rejected IPC invoke. Electron
- * logs every rejected `ipcMain.handle` call as a console error, and the panel
- * already renders the refusal in its own dialog, so rejecting here would only
- * duplicate a message the user is already reading.
+ * A git operation git refused in a state the user can resolve by acting: an
+ * uncommitted working tree, a detached HEAD, an integration still open, a peer
+ * that cannot receive commits.
  */
-export type GitSyncOutcome = { ok: true; result: GitSyncResult } | { ok: false; refusal: string }
+export interface GitRefusedOperation {
+  ok: false
+  /** The sentence the UI shows, already naming what to do about it. */
+  refusal: string
+}
+
+/**
+ * Outcome of a git channel whose expected refusals travel as data instead of a
+ * rejected invoke. Electron logs every rejected `ipcMain.handle` call with
+ * `console.error`, so a refusal the panel already renders would otherwise be
+ * broadcast to the log with its whole cause chain. An unexpected failure still
+ * rejects, so it stays visible.
+ */
+export type GitInvocation<Value> = { ok: true; value: Value } | GitRefusedOperation
 
 /** Conflict information reported by a merge/rebase failure. */
 export interface GitConflictFile {

@@ -1,5 +1,5 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import { gitSyncOutcome } from '../../git/git-refusal'
+import { gitInvocation } from '../../git/git-refusal'
 import {
   validateBranchName,
   validateEntityId,
@@ -91,10 +91,14 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
       )
   )
   ipcMain.handle('git:pull', async (_, projectId: unknown, scopeBucketId?: unknown) =>
-    gitService.pull(
-      await resolveProjectPath(
-        validateEntityId(projectId, 'Project ID'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+    gitInvocation(async () =>
+      gitService.pull(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        )
       )
     )
   )
@@ -106,17 +110,19 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
       // Resolve the vaulted PAT in main only; the token never crosses IPC.
       const tokenRef = gitCredentialRef(safeProjectId)
       const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-      return gitService.pullIntegrate(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        {
-          ...safeOptions,
-          token
-        }
+      return gitInvocation(async () =>
+        gitService.pullIntegrate(
+          await resolveProjectPath(
+            safeProjectId,
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          {
+            ...safeOptions,
+            token
+          }
+        )
       )
     }
   )
@@ -141,7 +147,7 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
     // rather than a rejected invoke: Electron logs every rejected
     // `ipcMain.handle` call as a console error, which would broadcast to the
     // log a sentence the panel is already showing.
-    return gitSyncOutcome(() =>
+    return gitInvocation(() =>
       gitService.syncWith(projectPath, {
         direction: safeOptions.direction,
         peer: peer.target,
@@ -172,14 +178,16 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
       // Resolve the vaulted PAT in main only; the token never crosses IPC.
       const tokenRef = gitCredentialRef(safeProjectId)
       const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-      return gitService.push(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        { ...safeOptions, token }
+      return gitInvocation(async () =>
+        gitService.push(
+          await resolveProjectPath(
+            safeProjectId,
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          { ...safeOptions, token }
+        )
       )
     }
   )
