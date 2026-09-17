@@ -32,7 +32,14 @@ const PR_LIST_FILTERS = new Set<import('../../../lib/types').PrListFilter>([
   'review-requested',
   'involves'
 ])
-const PR_LIST_SORTS = new Set<import('../../../lib/types').PrListSort>(['updated', 'created'])
+const PR_LIST_SORTS = new Set<import('../../../lib/types').PrListSort>([
+  'updated',
+  'created',
+  'comments-desc',
+  'updated-asc',
+  'created-asc',
+  'comments-asc'
+])
 const PR_REVIEW_EVENTS = new Set<import('../../../lib/types').PrReviewEvent>([
   'APPROVE',
   'REQUEST_CHANGES',

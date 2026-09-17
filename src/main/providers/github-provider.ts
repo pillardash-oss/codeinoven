@@ -11,6 +11,7 @@ import type {
   GitHubWorkflowRunDetail,
   PrCommentKind,
   PrDraft,
+  PrListSort,
   PullRequestComment,
   PullRequestCommit,
   PullRequestCheck,
@@ -129,9 +130,7 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
             color
           }
         }
-        comments {
-          totalCount
-        }
+        totalCommentsCount
         commits(last: 1) {
           nodes {
             commit {
@@ -158,6 +157,22 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
     }
   }
 }`
+
+/**
+ * The `sort:` qualifier for each ordering the listing offers.
+ *
+ * A record keyed by the union rather than a chain of comparisons, so adding an
+ * ordering to `PrListSort` without giving it a qualifier here fails to compile
+ * instead of silently listing by something else.
+ */
+const PULL_REQUEST_LIST_SORTS: Record<PrListSort, string> = {
+  updated: 'sort:updated-desc',
+  created: 'sort:created-desc',
+  'comments-desc': 'sort:comments-desc',
+  'updated-asc': 'sort:updated-asc',
+  'created-asc': 'sort:created-asc',
+  'comments-asc': 'sort:comments-asc'
+}
 
 /**
  * GitHub-first REST adapter.
@@ -347,7 +362,7 @@ export class GitHubProvider implements GitProvider {
     else if (input.filter === 'assigned') qualifiers.push('assignee:@me')
     else if (input.filter === 'review-requested') qualifiers.push('review-requested:@me')
     else if (input.filter === 'involves') qualifiers.push('involves:@me')
-    qualifiers.push(input.sort === 'created' ? 'sort:created-desc' : 'sort:updated-desc')
+    qualifiers.push(PULL_REQUEST_LIST_SORTS[input.sort])
 
     // Ask for exactly the page size. An over-fetch of one extra would move
     // `endCursor` past the first row of the next page, because the cursor is the
@@ -366,11 +381,16 @@ export class GitHubProvider implements GitProvider {
         return summary ? [summary] : []
       })
       const pageInfo = search ? this.readRecord(search, 'pageInfo') : null
+      const hasMore = pageInfo?.['hasNextPage'] === true
       return {
         items,
         page: input.page,
-        hasMore: pageInfo?.['hasNextPage'] === true,
-        nextCursor: pageInfo ? this.readString(pageInfo, 'endCursor') : null
+        hasMore,
+        // Only a finished page reports no cursor. GitHub returns the last node's
+        // cursor on the final page too, where following it returns an empty set,
+        // and a caller that walks from page one has no other way to tell that the
+        // page it is about to ask for does not exist.
+        nextCursor: hasMore && pageInfo ? this.readString(pageInfo, 'endCursor') : null
       }
     } catch (failure) {
       // The IPC handler tells a repository the App cannot see apart from a
@@ -1322,7 +1342,6 @@ export class GitHubProvider implements GitProvider {
     const rawState = this.readString(record, 'state')
     const state: PullRequestSummary['state'] =
       rawState === 'MERGED' ? 'merged' : rawState === 'CLOSED' ? 'closed' : 'open'
-    const comments = this.readRecord(record, 'comments')
     const checks = this.readChecksRollup(record)
     const mergeStateStatus = this.readString(record, 'mergeStateStatus')
     return {
@@ -1338,7 +1357,7 @@ export class GitHubProvider implements GitProvider {
       baseRef: this.readString(record, 'baseRefName') ?? '',
       createdAt: this.readString(record, 'createdAt') ?? '',
       updatedAt: this.readString(record, 'updatedAt') ?? '',
-      comments: comments ? this.readNumber(comments, 'totalCount') : 0,
+      comments: this.readNumber(record, 'totalCommentsCount'),
       labels: this.readLabels(record),
       ...(checks ? { checks } : {}),
       mergeable: this.readMergeable(record),

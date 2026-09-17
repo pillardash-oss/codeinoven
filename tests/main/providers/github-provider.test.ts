@@ -288,7 +288,7 @@ describe('GitHubProvider', () => {
                     { name: 'urgent', color: '0000ff' }
                   ]
                 },
-                comments: { totalCount: 7 },
+                totalCommentsCount: 7,
                 commits: {
                   nodes: [
                     {
@@ -415,7 +415,10 @@ describe('GitHubProvider', () => {
     expect(body.variables['after']).toBe('CURSOR_1')
     expect(page.page).toBe(3)
     expect(page.hasMore).toBe(false)
-    expect(page.nextCursor).toBe('CURSOR_2')
+    // GitHub reports the last node's cursor even on the final page, where
+    // following it returns nothing. A cursor is a way into a page that exists,
+    // so the last page reports none.
+    expect(page.nextCursor).toBeNull()
   })
 
   it('maps a FORBIDDEN GraphQL error to a ProviderHttpError with status 403', async () => {

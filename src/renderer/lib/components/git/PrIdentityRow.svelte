@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { ArrowLeft, ShieldCheck } from '@lucide/svelte'
+  import { ArrowLeft } from '@lucide/svelte'
   import type { PullRequestChecks, PullRequestDetail, PullRequestSummary } from '$shared/types'
-  import { prChecksBadgeClass, prChecksStateLabel, prStateBadgeClass } from './pr-view'
+  import {
+    prChecksBadgeClass,
+    prChecksStateIcon,
+    prChecksStateLabel,
+    prChecksStateSpinning,
+    prStateBadgeClass
+  } from './pr-view'
 
   interface Props {
     summary: PullRequestSummary
@@ -47,6 +53,7 @@
   {state}{draft ? ' · draft' : ''}
 </span>
 {#if checks && checks.state !== 'none'}
+  {@const ChecksIcon = prChecksStateIcon(checks.state)}
   <button
     type="button"
     class="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium transition-colors {prChecksBadgeClass(
@@ -56,7 +63,7 @@
     aria-label="{prChecksStateLabel(checks.state)}, open check results"
     onclick={onOpenChecks}
   >
-    <ShieldCheck size={10} />
+    <ChecksIcon size={10} class={prChecksStateSpinning(checks.state) ? 'animate-spin' : ''} />
     {#if showChecksLabel}{prChecksStateLabel(checks.state)}{/if}
   </button>
 {/if}

@@ -10,7 +10,6 @@
     Maximize2,
     MessageSquare,
     RefreshCw,
-    ShieldCheck,
     TriangleAlert
   } from '@lucide/svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -21,7 +20,14 @@
   import { githubDisplayLogin } from '$lib/format/github-login'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
-  import { prChecksStateLabel, prChecksToneClass, prLabelStyle, prListFilterLabel } from './pr-view'
+  import {
+    prChecksStateIcon,
+    prChecksStateLabel,
+    prChecksStateSpinning,
+    prChecksToneClass,
+    prLabelStyle,
+    prListFilterLabel
+  } from './pr-view'
   import type { PrListFilter, PrListSort, PrState, PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -239,6 +245,8 @@
           {@const labels = pr.labels ?? []}
           {@const shownLabels = labels.slice(0, VISIBLE_LABELS)}
           {@const hiddenLabels = labels.slice(VISIBLE_LABELS)}
+          {@const checksState = pr.checks?.state ?? 'none'}
+          {@const ChecksIcon = prChecksStateIcon(checksState)}
           <button
             type="button"
             class="flex w-full cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-2 text-left transition-colors hover:bg-elevated"
@@ -299,7 +307,10 @@
                   title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
                     .total}"
                 >
-                  <ShieldCheck size={9} />
+                  <ChecksIcon
+                    size={9}
+                    class={prChecksStateSpinning(pr.checks.state) ? 'animate-spin' : ''}
+                  />
                   {pr.checks.passed}/{pr.checks.total}
                 </span>
               {/if}

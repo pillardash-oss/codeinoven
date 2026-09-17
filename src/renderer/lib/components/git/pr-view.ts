@@ -4,8 +4,17 @@
  * state pills, the check pill and the view switcher in its own rows now, so
  * neither the badge classes nor the view list can live inside the reader.
  */
-import { Bot, FileDiff, GitCommitHorizontal, MessagesSquare, ShieldCheck } from '@lucide/svelte'
-import type { PrListFilter, PrListSort, PullRequestBundle } from '$shared/types'
+import {
+  Bot,
+  CircleCheck,
+  CircleX,
+  FileDiff,
+  GitCommitHorizontal,
+  Loader2,
+  MessagesSquare,
+  ShieldCheck
+} from '@lucide/svelte'
+import type { PrListFilter, PrListSort, PullRequestBundle, PullRequestChecks } from '$shared/types'
 
 /** The views the pull request detail reader switches between. */
 export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
@@ -91,7 +100,35 @@ export function prChecksBadgeClass(state: string): string {
 export function prChecksStateLabel(state: string): string {
   if (state === 'failure') return 'Checks failing'
   if (state === 'pending') return 'Checks running'
-  return 'Checks passing'
+  if (state === 'success') return 'Checks passing'
+  // Reachable only through a caller that skipped its `!== 'none'` guard, but the
+  // fallback must still describe `none` rather than claim a pass it never saw.
+  return 'No checks'
+}
+
+/**
+ * The glyph for a rolled-up check state.
+ *
+ * The counts alone do not say whether `3/3` is good news: a failed run reports
+ * `3/3` too. Colour was carrying that distinction, which is invisible to anyone
+ * who cannot separate the red and green tones, so the shape carries it as well:
+ * a tick for every check passed, a cross for a failure, and a spinner for work
+ * still running.
+ *
+ * Chosen here rather than in each caller because the listing row and the detail
+ * header draw the same pill, and a state that renders as a tick in one surface
+ * must not render as a cross in the other.
+ */
+export function prChecksStateIcon(state: PullRequestChecks['state']): typeof ShieldCheck {
+  if (state === 'success') return CircleCheck
+  if (state === 'failure') return CircleX
+  if (state === 'pending') return Loader2
+  return ShieldCheck
+}
+
+/** Whether that glyph only reads as "running" while it turns. */
+export function prChecksStateSpinning(state: PullRequestChecks['state']): boolean {
+  return state === 'pending'
 }
 
 /**
@@ -117,10 +154,21 @@ export const PR_LIST_FILTER_OPTIONS: Array<{
   { id: 'involves', label: 'Involves me', hint: 'You opened, were assigned, or were mentioned' }
 ]
 
-/** The orderings a listing offers, newest first either way. */
+/**
+ * The orderings a listing offers, in the order the menu lists them.
+ *
+ * The same set github.com's pull request list offers, and the labels are the ones
+ * its Sort menu uses for them. Each id maps to one `sort:` qualifier in the
+ * provider; the comment orderings earn their place here because "which pull
+ * request is worth opening" is a question about discussion, not recency.
+ */
 export const PR_LIST_SORT_OPTIONS: Array<{ id: PrListSort; label: string }> = [
   { id: 'updated', label: 'Recently updated' },
-  { id: 'created', label: 'Newest' }
+  { id: 'created', label: 'Newest' },
+  { id: 'comments-desc', label: 'Most commented' },
+  { id: 'updated-asc', label: 'Least recently updated' },
+  { id: 'created-asc', label: 'Oldest' },
+  { id: 'comments-asc', label: 'Least commented' }
 ]
 
 /** Wording for one relationship filter, for a menu row or a sentence. */

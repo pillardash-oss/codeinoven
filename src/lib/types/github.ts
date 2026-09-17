@@ -11,8 +11,16 @@ export type PrState = 'open' | 'closed' | 'all'
  */
 export type PrListFilter = 'all' | 'authored' | 'assigned' | 'review-requested' | 'involves'
 
-/** How a pull request listing is ordered, newest first either way. */
-export type PrListSort = 'updated' | 'created'
+/**
+ * How a pull request listing is ordered.
+ *
+ * One member per `sort:` qualifier GitHub's search accepts, which is the same set
+ * github.com's pull request list offers. A bare `sort:updated` already means
+ * descending, so the plain members keep the spelling the provider always sent and
+ * only the reversed and comment orderings are new.
+ */
+export type PrListSort =
+  'updated' | 'created' | 'comments-desc' | 'updated-asc' | 'created-asc' | 'comments-asc'
 
 /**
  * The listing choices that are not the state filter or the page: what the page
@@ -97,7 +105,14 @@ export interface PullRequestSummary {
   baseRef: string
   createdAt: string
   updatedAt: string
-  /** Issue-comment count as reported by the provider (review comments excluded). */
+  /**
+   * How many comments the pull request has received, as github.com counts them:
+   * issue comments and review comments together. The listing asks for GitHub's
+   * `totalCommentsCount`, which is that same figure, because a review thread is
+   * part of the conversation a reader weighs before opening the pull request.
+   * The REST payloads GitHub returns elsewhere carry the issue-comment count
+   * alone, so a locally-constructed summary can report the smaller number.
+   */
   comments: number
   /** Labels in GitHub's own order. Absent when the payload did not carry them. */
   labels?: PullRequestLabel[]
