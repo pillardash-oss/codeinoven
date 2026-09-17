@@ -15,6 +15,7 @@ import type {
   SessionAgentEvent
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
 import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
@@ -397,8 +398,15 @@ export class PiDriver extends PersistentCliDriver {
   /** Resolved key env for the session's custom-providers extension, merged
    *  into the RPC process environment on every (re)boot. */
   private cioProvidersExtensionEnvs = new Map<string, Record<string, string>>()
-  /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
-  private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
+  /** This driver's Pi agent directory when it serves a managed account
+   *  container; undefined for the harness-global account. Every catalog input
+   *  (credentials, native provider config) lives inside that directory, so the
+   *  driver must never read the other account's files. */
+  private readonly agentDirectory: string | undefined
+  /** Read view of THIS account's credential store (`auth.json`). The default
+   *  account keeps the WSL-aware transport; a container path is a plain local
+   *  file, exactly as the connect flow writes it. */
+  private readonly authConfig: PiAuthConfigService
 
   constructor(
     storage: StorageEngine,
@@ -407,6 +415,10 @@ export class PiDriver extends PersistentCliDriver {
     private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
+    this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
+    this.authConfig = this.agentDirectory
+      ? new PiAuthConfigService(join(this.agentDirectory, 'auth.json'))
+      : new PiAuthConfigService(undefined, piAuthFileIo)
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -509,19 +521,27 @@ export class PiDriver extends PersistentCliDriver {
 
   /**
    * The providers the user is actually connected to, keyed by the same provider
-   * ids pi's catalog reports: credentials in `~/.pi/agent/auth.json` (written by
-   * pi's TUI or CodeInOven's connect flow), providers configured in
-   * `~/.pi/agent/models.json` (keyed catalog providers and keyless local
-   * servers alike), and CodeInOven-managed base-URL providers injected through
-   * the discovery overlay. Returns `null` when the connected set cannot be
-   * determined reliably   callers then keep the catalog unfiltered rather than
-   * wrongly hiding every provider behind a transient read failure.
+   * ids pi's catalog reports: credentials in this account's `auth.json` (written
+   * by pi's TUI or CodeInOven's connect flow), providers configured in its
+   * `models.json` (keyed catalog providers and keyless local servers alike), and
+   * CodeInOven-managed base-URL providers injected through the discovery
+   * overlay. Returns `null` when the connected set cannot be determined
+   * reliably   callers then keep the catalog unfiltered rather than wrongly
+   * hiding every provider behind a transient read failure.
+   *
+   * Every read here is scoped to the account this driver serves. Reading the
+   * harness-global files instead hides the whole catalog of a container-backed
+   * account: its credentials never appear in `~/.pi/agent/auth.json`, so the
+   * filter would drop every provider the container's pi process just reported
+   * and leave only the harness-global custom providers.
    */
   private async connectedProviderIds(): Promise<Set<string> | null> {
     const overlay = this.baseUrlProviders
-      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => null)
+      ? await this.baseUrlProviders.listEnabled(this.id, this.agentDirectory).catch(() => null)
       : []
-    const nativeIds = await piNativeProviderIds().catch(() => null)
+    const nativeIds = await piNativeProviderIds(
+      this.agentDirectory ? join(this.agentDirectory, 'models.json') : undefined
+    ).catch(() => null)
     if (overlay === null || nativeIds === null) return null
     const connected = new Set<string>([...(await this.authConfig.credentialIds()), ...nativeIds])
     for (const provider of overlay) connected.add(provider.id)
@@ -2805,6 +2825,11 @@ export class PiDriver extends PersistentCliDriver {
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
           subagentWatchPath: this.storage.resolve(watchFlagRelative),
+          // The primary agent's composed instructions ride the per-turn system
+          // prompt handoff, which only the root session's hook reads. A worker
+          // gets this distilled contract instead, so it can never be left with
+          // none of the application rules.
+          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT,
           sessionId,
           // Same durable resolver the orchestration service publishes for the
           // prose recovery path; the gateway tools use it for host-level
