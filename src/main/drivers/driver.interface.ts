@@ -256,8 +256,30 @@ export interface SendPromptOptions {
   userMessageId?: string
 }
 
+/**
+ * One explicit auxiliary candidate: the provider and model a disposable
+ * auxiliary completion must use. Structurally identical to the drivers' own
+ * `TitleModelCandidate`, so callers can pass either shape.
+ */
+export interface AuxiliaryModelCandidate {
+  providerId: string
+  modelId: string
+}
+
+/**
+ * Explicit candidates that replace a driver's own auxiliary model discovery.
+ * The shared one-shot runner still appends the settings' own provider/model as
+ * the last-resort candidate and de-duplicates it, so a caller that pins the
+ * same model in `settings` gets exactly one attempt. Passing this is how a
+ * user-configured auxiliary model overrides every harness's built-in
+ * cheap-model preference (`AppConfig.auxiliaryAgents`).
+ */
+export interface AuxiliaryCandidateOverride {
+  candidates?: AuxiliaryModelCandidate[]
+}
+
 /** Input for one disposable, provider-owned thread-title completion. */
-export interface GenerateTitleOptions {
+export interface GenerateTitleOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   message: string
   /** Parent turn whose authenticated transport permits a safe auxiliary title process. */
@@ -265,7 +287,7 @@ export interface GenerateTitleOptions {
 }
 
 /** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
-export interface GradeTurnOptions {
+export interface GradeTurnOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** The initiating visible user message of the closed conversation window. */
   userMessage: string
@@ -282,7 +304,7 @@ export interface GradeTurnOptions {
  * available model, shared by every disposable cheap-model scenario (title
  * generation, turn grading, speech lessons, memory proposals, …).
  */
-export interface CheapModelRequest {
+export interface CheapModelRequest extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** Short scenario label used as the disposable session title. */
   purpose: string

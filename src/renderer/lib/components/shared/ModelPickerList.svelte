@@ -41,6 +41,8 @@
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
+    /** Restricts the list to one harness. Unset shows every harness as today. */
+    harnessFilter?: string | null
     favoriteModels: string[]
     recentModels: string[]
     visionOnly: boolean
@@ -67,6 +69,7 @@
   let {
     displayProviders,
     cachedProviders,
+    harnessFilter = null,
     favoriteModels,
     recentModels,
     visionOnly,
@@ -115,9 +118,11 @@
   const selectedModelKeysSet = $derived(new Set(selectedModelKeys))
   const availableModelKeys = $derived(
     new Set(
-      [...displayProviders, ...cachedProviders].flatMap((provider) =>
-        provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
-      )
+      [...displayProviders, ...cachedProviders]
+        .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+        .flatMap((provider) =>
+          provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
+        )
     )
   )
   const unavailableFavoriteModels = $derived(
@@ -125,7 +130,8 @@
       .filter((key) => !availableModelKeys.has(key))
       .map((key) => {
         const parsed = parseModelKey(key)
-        return parsed ? { modelKey: key, ...parsed } : null
+        if (!parsed || !passesPropHarnessFilter(parsed.harnessId)) return null
+        return { modelKey: key, ...parsed }
       })
       .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
   )
@@ -146,7 +152,11 @@
               harnessId,
               parsed.harnessId
             )
-            return entry && passesVisionFilter(entry.model, visionOnly) ? entry : null
+            return entry &&
+              passesPropHarnessFilter(entry.provider.harnessId) &&
+              passesVisionFilter(entry.model, visionOnly)
+              ? entry
+              : null
           })
           .filter((entry): entry is ModelEntry => entry !== null)
       ),
@@ -169,6 +179,7 @@
               parsed.harnessId
             )
             return entry &&
+              passesPropHarnessFilter(entry.provider.harnessId) &&
               passesHarnessFilter(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
@@ -182,6 +193,7 @@
   const filteredProviders = $derived.by(() => {
     const words = searchWords(search)
     return displayProviders
+      .filter((provider) => passesPropHarnessFilter(provider.harnessId))
       .filter((provider) => passesHarnessFilter(provider.harnessId))
       .map((provider) => ({
         ...provider,
@@ -209,6 +221,7 @@
     Array.from(
       new Map(
         displayProviders
+          .filter((provider) => passesPropHarnessFilter(provider.harnessId))
           .map((provider) => provider.harnessId)
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
@@ -246,6 +259,11 @@
     if (showAllHarnesses) return true
     if (selectedHarnesses.size === 0) return true
     return selectedHarnesses.has(candidateHarnessId)
+  }
+
+  /** Restrict to the caller-supplied harness. Unset/null is a no-op. */
+  function passesPropHarnessFilter(candidateHarnessId: string): boolean {
+    return !harnessFilter || candidateHarnessId === harnessFilter
   }
 
   function isHarnessSelected(candidateHarnessId: string): boolean {

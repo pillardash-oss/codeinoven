@@ -85,7 +85,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'harnesses',
     title: 'Harnesses',
     description: 'Agent harness connections and model providers.',
-    keywords: ['providers', 'models', 'api keys'],
+    keywords: [
+      'providers',
+      'models',
+      'api keys',
+      'auxiliary agents',
+      'background model',
+      'cheap model'
+    ],
     icon: Plug
   },
   {

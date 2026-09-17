@@ -435,7 +435,7 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    const candidates = await this.cheapCandidates(projectPath)
+    const candidates = options.candidates ?? (await this.cheapCandidates(projectPath))
     return this.isolatedOneShot(
       projectPath,
       options.settings,
@@ -469,7 +469,7 @@ export class OpenCodeDriver implements HarnessDriver {
     projectPath: string,
     request: CheapModelRequest
   ): Promise<CheapModelResult> {
-    const candidates = await this.cheapCandidates(projectPath)
+    const candidates = request.candidates ?? (await this.cheapCandidates(projectPath))
     const attempts: CheapModelAttempt[] = []
     const text = await this.isolatedOneShot(
       projectPath,
@@ -484,7 +484,7 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    const candidates = await this.cheapCandidates(projectPath)
+    const candidates = options.candidates ?? (await this.cheapCandidates(projectPath))
     const result = await this.isolatedOneShot(
       projectPath,
       options.settings,

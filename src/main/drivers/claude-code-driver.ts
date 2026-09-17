@@ -256,7 +256,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapAnthropicCandidates(projectPath)
+      options.candidates ?? (await this.cheapAnthropicCandidates(projectPath))
     )
   }
 
@@ -265,7 +265,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(
       projectPath,
       options,
-      await this.cheapAnthropicCandidates(projectPath)
+      options.candidates ?? (await this.cheapAnthropicCandidates(projectPath))
     )
   }
 

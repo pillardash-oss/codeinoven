@@ -2,6 +2,7 @@ import type { IsolatedHandle } from '../../drivers/opencode-driver'
 import type { ProjectFingerprint } from '../../git/change-tracking-service'
 import type { PermissionDecisionResult } from '../../permissions/permission-policy'
 import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/driver.interface'
+import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type {
   AgentMessage,
@@ -37,6 +38,23 @@ export interface PersistedProviderCatalog {
   catalogs: ProviderCatalog[]
   /** Last-seen per-driver catalog-input fingerprints; drift invalidates the snapshot. */
   catalogFingerprints?: Record<string, string>
+}
+
+/**
+ * Resolved user-assigned auxiliary model for one harness's background work.
+ * `harnessId` and `settings` describe the harness that actually runs the
+ * auxiliary session, which may differ from the harness the thread runs on.
+ */
+export interface AuxiliaryRoute {
+  driver: HarnessDriver
+  projectPath: string
+  harnessId: string
+  providerId: string
+  modelId: string
+  /** The single explicit candidate the disposable session must use. */
+  candidates: AuxiliaryModelCandidate[]
+  /** Harness-correct settings for the disposable auxiliary session. */
+  settings: ThreadSettings
 }
 
 export interface AgentMemoryProposalInput {

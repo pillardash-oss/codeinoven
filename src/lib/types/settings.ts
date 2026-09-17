@@ -1,4 +1,4 @@
-import type { AgentDefaultsConfig } from './agent'
+import type { AgentDefaultsConfig, AuxiliaryAgentConfig } from './agent'
 import type { GitPullPreference, PrMergeMethod } from './git'
 
 export interface WorkflowStage {
@@ -187,6 +187,8 @@ export interface AppConfig {
   memory: MemoryConfig
   /** User-selected defaults for Engineering agent roles. Roles remain unset after installation. */
   agentDefaults: AgentDefaultsConfig
+  /** Model each harness uses for auxiliary work, keyed by the harness a thread runs on. */
+  auxiliaryAgents: AuxiliaryAgentConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
   agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
@@ -246,6 +248,7 @@ export type AppConfigPatch = Partial<
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'
+    | 'auxiliaryAgents'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'

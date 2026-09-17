@@ -4,6 +4,7 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
+import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
@@ -11,6 +12,7 @@ import type {
   AgentDefaultsConfig,
   AgentModelSelection,
   AppConfigPatch,
+  AuxiliaryAgentConfig,
   EditorId,
   HeartbeatConfig,
   LocalProfileAnalyticsRange,
@@ -72,6 +74,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'preferredEditor',
   'memory',
   'agentDefaults',
+  'auxiliaryAgents',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
@@ -96,7 +99,6 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'imageDescriptorFallback',
   'syncFromThreadChanges'
 ])
-
 function isUnloadOption(value: unknown): value is '5m' | '10m' | '20m' | '30m' | 'keep' {
   return value === '5m' || value === '10m' || value === '20m' || value === '30m' || value === 'keep'
 }
@@ -168,6 +170,31 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
           )
         })
   }
+}
+
+/**
+ * Validate the per-harness auxiliary model assignments. Keys are harness ids a
+ * thread may run on; values name the harness that runs the auxiliary work, so
+ * a key and its value's harness are allowed to differ (a Pi local model can
+ * serve every harness).
+ */
+export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
+  if (!isRecord(value)) throw new TypeError('Auxiliary agents must be an object')
+  const entries = Object.entries(value)
+  if (entries.length > MAX_AUXILIARY_AGENTS) {
+    throw new TypeError(`Auxiliary agents accept at most ${MAX_AUXILIARY_AGENTS} harnesses`)
+  }
+  const auxiliaryAgents: AuxiliaryAgentConfig = {}
+  for (const [harnessId, selection] of entries) {
+    if (!harnessId.trim() || harnessId.length > AUXILIARY_AGENT_ID_MAX_LENGTH) {
+      throw new TypeError(`Auxiliary agent harness ID is invalid: ${harnessId}`)
+    }
+    auxiliaryAgents[harnessId] = validateAgentModelSelection(
+      selection,
+      `Auxiliary agent for ${harnessId}`
+    )
+  }
+  return auxiliaryAgents
 }
 
 const FONT_FAMILIES = new Set([
@@ -411,6 +438,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('agentDefaults' in value) {
     patch.agentDefaults = validateAgentDefaults(value.agentDefaults)
+  }
+
+  if ('auxiliaryAgents' in value) {
+    patch.auxiliaryAgents = validateAuxiliaryAgents(value.auxiliaryAgents)
   }
 
   if ('agentBehaviorPrompt' in value) {

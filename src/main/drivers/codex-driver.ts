@@ -287,7 +287,7 @@ export class CodexDriver extends PersistentCliDriver {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapestCandidate(projectPath)
+      options.candidates ?? (await this.cheapestCandidate(projectPath))
     )
   }
 
@@ -295,7 +295,7 @@ export class CodexDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(
       projectPath,
       options,
-      await this.cheapestCandidate(projectPath)
+      options.candidates ?? (await this.cheapestCandidate(projectPath))
     )
   }
 

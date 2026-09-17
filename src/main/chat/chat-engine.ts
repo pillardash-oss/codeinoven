@@ -275,6 +275,8 @@ import { readPrototypePreviewChunk } from '../prototypes/prototype-preview-servi
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
+import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
+import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
 import {
@@ -317,6 +319,7 @@ import type {
   AgentMemoryProposalInput,
   AssignmentApiCapability,
   AssignmentAuditRepairManifest,
+  AuxiliaryRoute,
   AssignmentWorkerContext,
   AssignmentWorkerRoutingResult,
   ChildSessionInfo,
@@ -9255,6 +9258,88 @@ export class ChatEngine {
     Logger.dev('Thread auto-title generation applied', { projectId, threadId, driverId })
   }
 
+  /**
+   * Resolve the user-assigned auxiliary model for threads running
+   * `threadHarnessId`, or null when nothing is assigned. A null result keeps
+   * the caller on its harness-native cheap-model behaviour, so an unconfigured
+   * app behaves exactly as before. A configured assignment that cannot be
+   * resolved (harness no longer installed, account signed out) also returns
+   * null after logging, which routes the caller to its own fallback instead of
+   * failing the background job.
+   */
+  private async resolveAuxiliaryRoute(target: {
+    /** Harness the owning thread runs on; the assignment is keyed by it. */
+    threadHarnessId: string
+    threadId?: string
+    projectId?: string
+    /** Explicit working directory; grading runs outside any thread. */
+    projectPath?: string
+  }): Promise<AuxiliaryRoute | null> {
+    const config = await this.storage.getConfig()
+    const selection = auxiliarySelectionFor(config.auxiliaryAgents, target.threadHarnessId)
+    if (!selection) return null
+    try {
+      const account = await this.accountRegistry.resolveForProvider(
+        selection.harnessId,
+        selection.providerId,
+        selection.accountId
+      )
+      if (target.projectPath !== undefined) {
+        const driver = await this.driverForAccount(selection.harnessId, account.id)
+        return this.buildAuxiliaryRoute(selection, account.id, driver, target.projectPath)
+      }
+      if (!target.projectId) return null
+      const { driver, projectPath } = await this.resolve(
+        target.projectId,
+        selection.harnessId,
+        target.threadId,
+        account.id
+      )
+      return this.buildAuxiliaryRoute(selection, account.id, driver, projectPath)
+    } catch (error) {
+      Logger.dev('Auxiliary agent assignment could not be resolved; keeping the local fallback', {
+        threadHarnessId: target.threadHarnessId,
+        auxiliaryHarnessId: selection.harnessId,
+        auxiliaryProviderId: selection.providerId,
+        auxiliaryModelId: selection.modelId,
+        error: rawErrorMessage(error)
+      })
+      return null
+    }
+  }
+
+  /**
+   * Harness-correct settings for one auxiliary session. The session runs on the
+   * assigned harness with only the assigned model as its candidate, and keeps
+   * the same sandbox the harness-native cheap path uses: no tools, minimal
+   * reasoning, automatic permission handling.
+   */
+  private buildAuxiliaryRoute(
+    selection: AgentModelSelection,
+    accountId: string,
+    driver: HarnessDriver,
+    projectPath: string
+  ): AuxiliaryRoute {
+    return {
+      driver,
+      projectPath,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      candidates: [{ providerId: selection.providerId, modelId: selection.modelId }],
+      settings: {
+        harnessId: selection.harnessId,
+        accountId,
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        thinkingLevel: selection.thinkingLevel ?? 'minimal',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      }
+    }
+  }
+
   /** Delegate one-shot title generation and model fallback to the selected driver. */
   private async generateTitleWithModel(
     projectId: string,
@@ -9265,6 +9350,24 @@ export class ChatEngine {
     parentTurnId: string,
     parentSessionId?: string
   ): Promise<string | null> {
+    // A user-assigned auxiliary model wins over the harness's own cheap-model
+    // preference and may belong to a different harness, so titling a thread no
+    // longer has to start a second server of the same harness. Only when that
+    // model produces no usable title does the thread's own model take over.
+    const auxiliary = await this.resolveAuxiliaryRoute({
+      projectId,
+      threadId,
+      threadHarnessId: driverId
+    })
+    if (auxiliary) {
+      const auxiliaryTitle = await this.generateTitleOnAuxiliaryRoute(
+        auxiliary,
+        text,
+        threadId,
+        parentTurnId
+      )
+      if (auxiliaryTitle) return auxiliaryTitle
+    }
     const { driver, projectPath } = await this.resolve(
       projectId,
       driverId,
@@ -9292,86 +9395,187 @@ export class ChatEngine {
         costStatus: 'unavailable'
       })
       const attempts = titleAttemptsFromDriver(driver)
-      if (attempts.length > 0) {
-        for (const attempt of attempts) {
-          const tokens = attempt.usage?.tokens
-          const reportedCost = attempt.usage?.cost
-          const pricingProvenance = attempt.usage?.costProvenance
-          const hasKnownCost = reportedCost !== undefined && pricingProvenance !== undefined
-          this.usageRepo.recordEvent({
-            id: `title:${parentTurnId}:${attempt.attempt}`,
-            threadId,
-            parentTurnId,
-            featureCallId: `auto-title:${attempt.providerId}:${attempt.modelId}`,
-            attempt: attempt.attempt,
-            feature: 'title',
-            harnessId: driverId,
-            providerId: attempt.providerId,
-            modelId: attempt.modelId,
-            thinkingLevel: 'minimal',
-            utilityId: null,
-            rawProviderUsage: tokens ? { ...tokens } : {},
-            tokens: {
-              uncachedInput: tokens?.input ?? null,
-              cachedInput: tokens?.cacheRead ?? null,
-              cacheWrite: tokens?.cacheWrite ?? null,
-              output: tokens?.output ?? null,
-              reasoning: tokens?.reasoning ?? null
-            },
-            rawTotal: tokens?.total ?? null,
-            totalSemantics: tokens ? 'provider_defined' : 'unavailable',
-            toolFeeUsd: null,
-            success: attempt.success,
-            retryCause: attempt.fallbackReason,
-            durationMs: attempt.usage?.durationMs ?? 0,
-            createdAt: Date.now(),
-            ...(hasKnownCost
-              ? {
-                  costStatus: 'known' as const,
-                  costUsd: reportedCost,
-                  pricingProvenance
-                }
-              : {
-                  costStatus: 'unavailable' as const,
-                  costUsd: null,
-                  pricingProvenance: null
-                })
-          })
-        }
-      } else {
+      this.recordTitleAttemptRows({
+        attempts,
+        idPrefix: '',
+        harnessId: driverId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        threadId,
+        parentTurnId,
+        inputTokens,
+        outputTokens,
+        success: generated !== null && failure === null,
+        failure
+      })
+    }
+  }
+
+  /**
+   * Run one title attempt on the user-assigned auxiliary model. Every failure
+   * returns null so the caller falls back to the thread's own model; the
+   * attempt is still recorded in the usage ledger either way.
+   */
+  private async generateTitleOnAuxiliaryRoute(
+    route: AuxiliaryRoute,
+    text: string,
+    threadId: string,
+    parentTurnId: string
+  ): Promise<string | null> {
+    let generated: string | null = null
+    let failure: string | null = null
+    try {
+      generated = await route.driver.generateTitle(route.projectPath, {
+        settings: route.settings,
+        message: text,
+        candidates: route.candidates
+      })
+      if (!generated) failure = 'No usable title produced'
+      return generated
+    } catch (error) {
+      failure = rawErrorMessage(error)
+      Logger.dev('Auxiliary agent could not title the thread; using the thread model:', {
+        auxiliaryHarnessId: route.harnessId,
+        auxiliaryModelId: route.modelId,
+        error: failure
+      })
+      return null
+    } finally {
+      const inputTokens = estimateTokens(text)
+      const outputTokens = estimateTokens(generated ?? '')
+      this.memoryService.recordAuxiliaryUsage('title', inputTokens, text.length, {
+        outputTokens,
+        costUsd: null,
+        costStatus: 'unavailable'
+      })
+      this.recordTitleAttemptRows({
+        attempts: titleAttemptsFromDriver(route.driver),
+        idPrefix: 'aux',
+        harnessId: route.harnessId,
+        providerId: route.providerId,
+        modelId: route.modelId,
+        threadId,
+        parentTurnId,
+        inputTokens,
+        outputTokens,
+        success: generated !== null && failure === null,
+        failure
+      })
+    }
+  }
+
+  /**
+   * Record the title run in the event-level usage ledger, one row per candidate
+   * attempt. The auxiliary route prefixes its ids so an auxiliary attempt and
+   * the thread-model fallback that followed it stay distinct rows.
+   */
+  private recordTitleAttemptRows(target: {
+    attempts: readonly TitleAttemptAccounting[]
+    idPrefix: string
+    harnessId: string
+    providerId: string
+    modelId: string
+    threadId: string
+    parentTurnId: string
+    inputTokens: number
+    outputTokens: number
+    success: boolean
+    failure: string | null
+  }): void {
+    const {
+      attempts,
+      idPrefix,
+      harnessId,
+      providerId,
+      modelId,
+      threadId,
+      parentTurnId,
+      inputTokens,
+      outputTokens,
+      success,
+      failure
+    } = target
+    if (attempts.length > 0) {
+      for (const attempt of attempts) {
+        const tokens = attempt.usage?.tokens
+        const reportedCost = attempt.usage?.cost
+        const pricingProvenance = attempt.usage?.costProvenance
+        const hasKnownCost = reportedCost !== undefined && pricingProvenance !== undefined
         this.usageRepo.recordEvent({
-          id: `title:${parentTurnId}`,
+          id: idPrefix
+            ? `title:${parentTurnId}:${idPrefix}:${attempt.attempt}`
+            : `title:${parentTurnId}:${attempt.attempt}`,
           threadId,
           parentTurnId,
-          featureCallId: 'auto-title',
-          attempt: 1,
+          featureCallId: `auto-title:${attempt.providerId}:${attempt.modelId}`,
+          attempt: attempt.attempt,
           feature: 'title',
-          harnessId: driverId,
-          providerId: settings.providerId,
-          modelId: settings.modelId,
+          harnessId,
+          providerId: attempt.providerId,
+          modelId: attempt.modelId,
           thinkingLevel: 'minimal',
           utilityId: null,
-          rawProviderUsage: {},
+          rawProviderUsage: tokens ? { ...tokens } : {},
           tokens: {
-            uncachedInput: inputTokens,
-            cachedInput: null,
-            cacheWrite: null,
-            output: outputTokens,
-            reasoning: null
+            uncachedInput: tokens?.input ?? null,
+            cachedInput: tokens?.cacheRead ?? null,
+            cacheWrite: tokens?.cacheWrite ?? null,
+            output: tokens?.output ?? null,
+            reasoning: tokens?.reasoning ?? null
           },
-          rawTotal: null,
-          totalSemantics: 'unavailable',
+          rawTotal: tokens?.total ?? null,
+          totalSemantics: tokens ? 'provider_defined' : 'unavailable',
           toolFeeUsd: null,
-          success: generated !== null && failure === null,
-          retryCause: failure,
-          durationMs: 0,
+          success: attempt.success,
+          retryCause: attempt.fallbackReason,
+          durationMs: attempt.usage?.durationMs ?? 0,
           createdAt: Date.now(),
-          costStatus: 'unavailable',
-          costUsd: null,
-          pricingProvenance: null
+          ...(hasKnownCost
+            ? {
+                costStatus: 'known' as const,
+                costUsd: reportedCost,
+                pricingProvenance
+              }
+            : {
+                costStatus: 'unavailable' as const,
+                costUsd: null,
+                pricingProvenance: null
+              })
         })
       }
+      return
     }
+    this.usageRepo.recordEvent({
+      id: idPrefix ? `title:${parentTurnId}:${idPrefix}` : `title:${parentTurnId}`,
+      threadId,
+      parentTurnId,
+      featureCallId: 'auto-title',
+      attempt: 1,
+      feature: 'title',
+      harnessId,
+      providerId,
+      modelId,
+      thinkingLevel: 'minimal',
+      utilityId: null,
+      rawProviderUsage: {},
+      tokens: {
+        uncachedInput: inputTokens,
+        cachedInput: null,
+        cacheWrite: null,
+        output: outputTokens,
+        reasoning: null
+      },
+      rawTotal: null,
+      totalSemantics: 'unavailable',
+      toolFeeUsd: null,
+      success,
+      retryCause: failure,
+      durationMs: 0,
+      createdAt: Date.now(),
+      costStatus: 'unavailable',
+      costUsd: null,
+      pricingProvenance: null
+    })
   }
 
   /** Recap of the mirrored transcript when no reusable harness session exists. */
@@ -20843,10 +21047,47 @@ export class ChatEngine {
   /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
   private async gradeCandidateCore(candidate: RankingGradeCandidate): Promise<number | null> {
     try {
+      const workingDirectory = await this.auxiliaryWorkingDirectory()
+      // A user-assigned auxiliary model judges the conversation when one is
+      // configured for the graded model's harness. Grading has no thread, so a
+      // failed or unusable judge falls back to the graded model's own harness
+      // candidate below, which is the only judge that stays inside that
+      // harness's candidate mechanism.
+      const auxiliary = await this.resolveAuxiliaryRoute({
+        threadHarnessId: candidate.harnessId,
+        projectPath: workingDirectory
+      })
+      if (auxiliary) {
+        let auxiliaryScore: number | null = null
+        try {
+          auxiliaryScore = await auxiliary.driver.gradeTurn(auxiliary.projectPath, {
+            settings: auxiliary.settings,
+            candidates: auxiliary.candidates,
+            userMessage: candidate.userMessage,
+            assistantOutput: candidate.assistantOutput,
+            followUp: candidate.followUp
+          })
+        } catch (error) {
+          Logger.dev('Auxiliary agent grading failed; using the harness candidate judge:', {
+            auxiliaryHarnessId: auxiliary.harnessId,
+            auxiliaryModelId: auxiliary.modelId,
+            error: rawErrorMessage(error)
+          })
+        }
+        if (typeof auxiliaryScore === 'number') {
+          Logger.dev('Ranking grading completed on the auxiliary agent', {
+            harnessId: auxiliary.harnessId,
+            modelId: auxiliary.modelId,
+            gradedHarnessId: candidate.harnessId,
+            score: auxiliaryScore
+          })
+          return auxiliaryScore
+        }
+      }
       // The snapshot is self-contained: grading judges the conversation payload,
       // never the project, so a deleted or renamed project cannot block it.
       const driver = await this.driverForAccount(candidate.harnessId)
-      const score = await driver.gradeTurn(await this.auxiliaryWorkingDirectory(), {
+      const score = await driver.gradeTurn(workingDirectory, {
         settings: {
           harnessId: candidate.harnessId,
           providerId: candidate.providerId,
@@ -22304,6 +22545,46 @@ export class ChatEngine {
       'Return only the required memory decision JSON object.'
     ].join('\n\n')
     let cheapFailure: string | null
+    // A user-assigned auxiliary model decides instead of the thread's harness
+    // when one is configured for that harness. Any failure falls through to the
+    // thread-model chain below, never silently to another provider.
+    const auxiliary = await this.resolveAuxiliaryRoute({
+      projectId,
+      threadId,
+      threadHarnessId: driver.id
+    })
+    if (auxiliary) {
+      let auxiliaryFailure: string | null
+      try {
+        const decision = await auxiliary.driver.provideCheapModel(auxiliary.projectPath, {
+          settings: auxiliary.settings,
+          purpose: 'Memory proposal',
+          prompt: cheapPrompt,
+          candidates: auxiliary.candidates
+        })
+        if (decision.text !== null) {
+          return parseStructuredMemoryProposal(decision.text, allowedScopes)
+        }
+        auxiliaryFailure = decision.attempts.at(-1)?.failure ?? 'No cheap-model response'
+      } catch (error) {
+        auxiliaryFailure = rawErrorMessage(error)
+      }
+      this.recordAuxiliaryUsageEvent({
+        feature: 'memory',
+        threadId,
+        parentTurnId,
+        featureCallId: `memory-proposal:${auxiliary.harnessId}`,
+        attempt: 0,
+        harnessId: auxiliary.harnessId,
+        settings: auxiliary.settings,
+        inputText: memoryInputText,
+        failure: auxiliaryFailure
+      })
+      Logger.dev('Auxiliary agent memory proposal unavailable; using the thread model', {
+        auxiliaryHarnessId: auxiliary.harnessId,
+        failure: auxiliaryFailure
+      })
+    }
     try {
       const cheap = await driver.provideCheapModel(projectPath, {
         settings,

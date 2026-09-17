@@ -375,7 +375,7 @@ export class PiDriver extends PersistentCliDriver {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 

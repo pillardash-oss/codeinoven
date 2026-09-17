@@ -66,6 +66,7 @@ function defaultConfig(): AppConfig {
     openLocalhostInCioBrowser: true,
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    auxiliaryAgents: {},
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,

@@ -277,7 +277,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     projectPath: string,
     request: CheapModelRequest
   ): Promise<CheapModelResult> {
-    const candidates = await this.cheapCandidateModels(projectPath)
+    const candidates = request.candidates ?? (await this.cheapCandidateModels(projectPath))
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
@@ -310,7 +310,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 
@@ -333,7 +333,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.gradeTurnWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 

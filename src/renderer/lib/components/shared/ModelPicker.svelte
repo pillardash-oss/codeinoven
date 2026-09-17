@@ -51,6 +51,8 @@
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
+    /** Restricts the picker to one harness. Unset shows every harness as today. */
+    harnessFilter?: string | null
     side?: 'top' | 'bottom'
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
@@ -103,6 +105,7 @@
     thinkingMenuOpen = $bindable(false),
     accountMenuOpen = $bindable(false),
     projectId = null,
+    harnessFilter = null,
     side = 'top',
     disabled = false,
     variant = 'compact',
@@ -139,9 +142,9 @@
    * installed version is unsupported (e.g. OpenCode V2) are dropped so they
    * behave exactly as if not installed. */
   let displayProviders = $derived(
-    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
-      (provider) => !providerStore.isUnsupported(provider.harnessId)
-    )
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders])
+      .filter((provider) => !providerStore.isUnsupported(provider.harnessId))
+      .filter((provider) => !harnessFilter || provider.harnessId === harnessFilter)
   )
   let selectedProvider = $derived(
     displayProviders.find(
@@ -570,6 +573,7 @@
         <ModelPickerList
           {displayProviders}
           {cachedProviders}
+          {harnessFilter}
           {favoriteModels}
           {recentModels}
           {visionOnly}
