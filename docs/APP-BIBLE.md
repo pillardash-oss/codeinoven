@@ -81,8 +81,9 @@ branch is a single `SpecStudio`, `BrainstormStudio`, `PrdStudio`,
 `AssignmentStudio`, or `AuditStudio` invocation wiring many props, so wrapping it
 would add prop drilling rather than remove coupling. The checkpoint and
 file-citation helpers stay for the same reason: they are already thin adapters
-over `checkpoint-matching.ts`, `project-files.svelte.ts`, and
-`context-sidebar.svelte.ts`.
+over `src/renderer/lib/threads/checkpoint-matching.ts`,
+`src/renderer/lib/stores/project-files.svelte.ts`, and
+`src/renderer/lib/stores/context-sidebar.svelte.ts`.
 
 **Git** (`src/renderer/lib/components/git/`, `src/renderer/lib/stores/`)
 `GitStatusPanel.svelte` composes `GitStatusPanelChangesView`, `BranchesView`,
@@ -269,7 +270,7 @@ Accessibility is part of the design system, not an afterthought:
 ### 4.2 Logging
 
 - `console.*` is **forbidden** anywhere in the codebase.
-- Use the `Logger` class (`src/main/logger.ts`). Dev-only output goes through `Logger.dev`.
+- Use the `Logger` class (`src/main/system/logger.ts`). Dev-only output goes through `Logger.dev`.
 
 ### 4.3 Verification commands (scoped, never repo-wide)
 
