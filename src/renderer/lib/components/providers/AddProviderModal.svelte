@@ -1,24 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import {
-    CheckCircle2,
-    KeyRound,
-    Loader2,
-    Pencil,
-    Plug,
-    RefreshCw,
-    Search,
-    Server,
-    Unplug,
-    X
-  } from '@lucide/svelte'
+  import { Plug, Server } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import Modal from '../ui/Modal.svelte'
-  import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import type {
     BaseUrlProvider,
     OfferedProvider,
@@ -28,9 +14,13 @@
     ProviderConnectionInfo,
     HarnessAccount
   } from '$shared/types'
-
-  type AddTab = 'connect' | 'custom'
-  type ConnectStep = 'idle' | 'picking' | 'running' | 'labeling'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import AddProviderModalConnectTab from './AddProviderModalConnectTab.svelte'
+  import AddProviderModalCustomTab from './AddProviderModalCustomTab.svelte'
+  import AddProviderModalFooter from './AddProviderModalFooter.svelte'
+  import { AddProviderModalOAuthController } from './add-provider-modal-oauth.svelte'
+  import { type AddTab, type ConnectStep } from './add-provider-modal-helpers'
 
   interface Props {
     harness: ProviderConnectionInfo
@@ -86,6 +76,8 @@
   let knownAccounts = $state.raw<HarnessAccount[]>([])
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+  let apiKey = $state('')
+  let storingKey = $state(false)
 
   let customProviders = $derived(
     baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
@@ -100,7 +92,7 @@
   )
 
   /** Antigravity has one keyring-backed Google account and no explicit login
-   * command. Its bare `agy` launch is only a login handoff while signed out. */
+   *  command. Its bare `agy` launch is only a login handoff while signed out. */
   let antigravityConnected = $derived(
     harness.id === 'antigravity' && authStatus?.state === 'authenticated'
   )
@@ -117,181 +109,6 @@
    * and paste an API key   the whole flow stays in-app, no terminal handoff.
    */
   let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
-  let apiKey = $state('')
-  let storingKey = $state(false)
-
-  /** In-app sign-in state (Pi: OAuth flows and the provider's own key flows). */
-  let oauthLoginId = $state<string | null>(null)
-  let oauthStatus = $state('')
-  let oauthDeviceCode = $state<{ userCode: string; verificationUri: string } | null>(null)
-  let oauthPrompt = $state<{
-    promptId: string
-    type: 'text' | 'secret' | 'select' | 'manual_code'
-    message: string
-    placeholder?: string
-    options?: Array<{ id: string; label: string }>
-  } | null>(null)
-  let oauthPromptAnswer = $state('')
-  let oauthStarting = $state(false)
-  /** The catalog flags providers that support a fully in-app browser sign-in. */
-  let selectedProviderIsOauth = $derived(selectedProvider?.oauth === true)
-
-  function resetOAuthState(): void {
-    oauthLoginId = null
-    oauthStatus = ''
-    oauthDeviceCode = null
-    oauthPrompt = null
-    oauthPromptAnswer = ''
-    oauthStarting = false
-  }
-
-  /**
-   * Sign-in events can reach the renderer before the `beginOAuthLogin` invoke
-   * resolves and assigns `oauthLoginId`   the main process starts the flow
-   * immediately and key-entry prompts arrive within microseconds. Buffer
-   * payloads received while `oauthLoginId` is still unknown and replay them
-   * once it is set, so the first prompt of a flow is never silently dropped.
-   */
-  let earlyOAuthEvents: Array<Record<string, unknown>> = []
-  const EARLY_OAUTH_EVENT_LIMIT = 50
-
-  function handleOAuthPayload(payload: unknown): void {
-    if (payload === null || typeof payload !== 'object') {
-      return
-    }
-    if (oauthLoginId === null) {
-      if (earlyOAuthEvents.length < EARLY_OAUTH_EVENT_LIMIT) {
-        earlyOAuthEvents.push(payload as Record<string, unknown>)
-      }
-      return
-    }
-    if ((payload as Record<string, unknown>)['loginId'] !== oauthLoginId) {
-      return
-    }
-    const data = payload as Record<string, unknown>
-    if (data['kind'] === 'event') {
-      const event = data['event'] as Record<string, unknown> | undefined
-      if (!event) return
-      if (event['type'] === 'auth_url') {
-        oauthStatus = 'A browser window opened   finish signing in there.'
-        void openInBrowser(String(event['url']))
-      } else if (event['type'] === 'device_code') {
-        oauthDeviceCode = {
-          userCode: String(event['userCode']),
-          verificationUri: String(event['verificationUri'])
-        }
-        oauthStatus = ''
-      } else if (event['type'] === 'progress' || event['type'] === 'info') {
-        oauthStatus = String(event['message'])
-      }
-    } else if (data['kind'] === 'prompt') {
-      const prompt = data['prompt'] as Record<string, unknown> | undefined
-      if (!prompt) return
-      oauthPrompt = {
-        promptId: String(data['promptId']),
-        type:
-          prompt['type'] === 'secret' ||
-          prompt['type'] === 'select' ||
-          prompt['type'] === 'manual_code'
-            ? prompt['type']
-            : 'text',
-        message: String(prompt['message'] ?? 'Continue sign-in'),
-        ...(typeof prompt['placeholder'] === 'string'
-          ? { placeholder: prompt['placeholder'] }
-          : {}),
-        ...(Array.isArray(prompt['options'])
-          ? {
-              options: (prompt['options'] as Array<Record<string, unknown>>).map((option) => ({
-                id: String(option['id']),
-                label: String(option['label'])
-              }))
-            }
-          : {})
-      }
-      oauthPromptAnswer = ''
-    } else if (data['kind'] === 'complete') {
-      const providerId = String(data['providerId'] ?? '')
-      resetOAuthState()
-      apiKey = ''
-      void finishAuthentication(providerId, selectedProvider?.name ?? providerId)
-    } else if (data['kind'] === 'failed') {
-      actionError = String(data['error'] ?? 'The sign-in failed.')
-      resetOAuthState()
-      void discardPendingAccount()
-    }
-  }
-
-  /** Launch the provider's own in-app sign-in flow (OAuth or guided key entry). */
-  async function startProviderSignIn(): Promise<void> {
-    if (!selectedProvider || oauthStarting) return
-    actionError = ''
-    actionWarning = ''
-    notice = ''
-    oauthStarting = true
-    oauthStatus = 'Starting sign-in…'
-    earlyOAuthEvents = []
-    try {
-      const account = await preparePendingAccount(selectedProvider.id)
-      oauthLoginId = await invoke(
-        'providerAccounts:beginOAuthLogin',
-        harness.id,
-        selectedProvider.id,
-        account.id
-      )
-      const buffered = earlyOAuthEvents
-      earlyOAuthEvents = []
-      for (const bufferedPayload of buffered) {
-        handleOAuthPayload(bufferedPayload)
-      }
-      // The flow may have already finished while the invoke was in flight.
-      if (oauthLoginId === null) return
-    } catch (startError) {
-      actionError =
-        startError instanceof Error ? startError.message : 'The sign-in could not be started.'
-      resetOAuthState()
-      await discardPendingAccount()
-    }
-  }
-
-  async function submitOAuthPrompt(): Promise<void> {
-    if (!oauthLoginId || !oauthPrompt) return
-    const answer = oauthPromptAnswer.trim()
-    if (!answer) return
-    oauthPrompt = null
-    oauthPromptAnswer = ''
-    oauthStatus = 'Continuing sign-in…'
-    try {
-      await invoke('providerAccounts:respondOAuthPrompt', oauthLoginId, answer)
-    } catch (answerError) {
-      actionError =
-        answerError instanceof Error ? answerError.message : 'The answer could not be sent.'
-    }
-  }
-
-  /** Answer a select prompt by choosing one of its options directly. */
-  async function answerSelectPrompt(optionId: string): Promise<void> {
-    if (!oauthLoginId || !oauthPrompt) return
-    oauthPrompt = null
-    oauthStatus = 'Continuing sign-in…'
-    try {
-      await invoke('providerAccounts:respondOAuthPrompt', oauthLoginId, optionId)
-    } catch (answerError) {
-      actionError =
-        answerError instanceof Error ? answerError.message : 'The answer could not be sent.'
-    }
-  }
-
-  async function cancelOAuthSignIn(): Promise<void> {
-    if (!oauthLoginId) return
-    const loginId = oauthLoginId
-    resetOAuthState()
-    try {
-      await invoke('providerAccounts:cancelOAuthLogin', loginId)
-    } catch {
-      // The session may have already ended.
-    }
-    await discardPendingAccount()
-  }
 
   let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
 
@@ -307,6 +124,22 @@
           provider.id.toLowerCase().includes(search.toLowerCase()))
     )
   )
+
+  const oauth = new AddProviderModalOAuthController({
+    harnessId: () => harness.id,
+    selectedProvider: () => selectedProvider,
+    clearApiKey: () => (apiKey = ''),
+    clearMessages: () => {
+      actionError = ''
+      actionWarning = ''
+      notice = ''
+    },
+    setActionError: (message) => (actionError = message),
+    preparePendingAccount: (providerId) => preparePendingAccount(providerId),
+    finishAuthentication: (providerId, providerName) =>
+      finishAuthentication(providerId, providerName),
+    discardPendingAccount: () => discardPendingAccount()
+  })
 
   async function checkAuth(): Promise<void> {
     checkingAuth = true
@@ -451,7 +284,7 @@
     search = ''
     apiKey = ''
     step = 'idle'
-    if (oauthLoginId !== null) void cancelOAuthSignIn()
+    if (oauth.loginId !== null) void oauth.cancel()
   }
 
   /** Store the pasted key in the harness's own auth file and refresh state. */
@@ -587,35 +420,9 @@
   }
 
   async function closeModal(): Promise<void> {
-    if (oauthLoginId) await cancelOAuthSignIn()
+    if (oauth.loginId) await oauth.cancel()
     else await discardPendingAccount()
     onClose()
-  }
-
-  function shellCommand(handoff: ProviderAccountLoginHandoff): string {
-    return [handoff.command, ...handoff.args]
-      .map((part) =>
-        /^[a-zA-Z0-9_./:@%+=,-]+$/u.test(part) ? part : `'${part.replaceAll("'", "'\\''")}'`
-      )
-      .join(' ')
-  }
-
-  function stateLabel(): string {
-    if (authStatus === null) return 'Not checked'
-    switch (authStatus.state) {
-      case 'authenticated':
-        return `${authStatus.accounts.length} authenticated provider${
-          authStatus.accounts.length === 1 ? '' : 's'
-        }`
-      case 'unauthenticated':
-        return 'No providers connected'
-      case 'unknown':
-        return 'Status unknown'
-      case 'error':
-        return authStatus.detail ?? 'Error'
-      case 'unsupported':
-        return 'Sign-in not supported by this harness'
-    }
   }
 
   onMount(() => {
@@ -632,7 +439,7 @@
       step = 'picking'
     })
     const unsubscribeOAuth = subscribe('providerAccounts:oauthEvent', (payload) =>
-      handleOAuthPayload(payload)
+      oauth.handlePayload(payload)
     )
     return unsubscribeOAuth
   })
@@ -640,128 +447,25 @@
 
 <Modal open size="lg" title={`Add provider   ${harness.name}`} onClose={() => void closeModal()}>
   {#snippet footer()}
-    <div class="flex w-full items-center justify-between gap-4">
-      {#if tab === 'custom'}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Add any OpenAI-compatible endpoint by base URL Ollama, LM Studio, llama.cpp, or a hosted
-          gateway. Models are ready in the picker as soon as you save.
-        </p>
-      {:else if antigravityConnected}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Antigravity is already connected through the Google account in your system keyring.
-        </p>
-      {:else if apiKeyEntry && canSignIn}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Pick any provider from {harness.name}’s catalog and paste its API key stored in
-          {harness.name}’s own credential file.
-        </p>
-      {:else if pickerLogin}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Runs {harness.name}’s own interactive provider picker in a built-in terminal choose any
-          provider there and follow the flow it shows (API key or OAuth).
-        </p>
-      {:else if canSignIn}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          Runs {harness.name}’s own sign-in flow in a built-in terminal rooted at your home
-          directory a browser window opens so you can authenticate.
-        </p>
-      {:else}
-        <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-          {harness.name} does not expose a login flow CodeInOven can run. Use the Custom base URL tab
-          to add an OpenAI-compatible provider instead.
-        </p>
-      {/if}
-      <div class="flex shrink-0 items-center gap-2">
-        {#if tab === 'custom'}
-          <button
-            class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
-            type="button"
-            onclick={() => onAddCustom(harness.id)}
-          >
-            <Server size={13} /> Open custom provider form
-          </button>
-        {:else if step === 'labeling'}
-          <button
-            class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            type="button"
-            disabled={finalizingAccount}
-            onclick={() => void saveAuthenticatedAccount()}
-          >
-            {#if finalizingAccount}<Loader2 size={13} class="animate-spin" />{/if}
-            Save account
-          </button>
-        {:else if step === 'running'}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
-            type="button"
-            onclick={cancelConnection}
-          >
-            <X size={13} /> Cancel connection
-          </button>
-        {:else if antigravityConnected}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-muted"
-            type="button"
-            disabled
-          >
-            <CheckCircle2 size={13} /> Already connected
-          </button>
-        {:else if canSignIn}
-          {#if apiKeyEntry}
-            <button
-              class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              type="button"
-              title={step === 'picking' && selectedProvider
-                ? `Store the API key for ${selectedProvider.name}`
-                : 'Select a provider first'}
-              disabled={storingKey ||
-                oauthLoginId !== null ||
-                (step === 'picking' && !selectedProvider)}
-              onclick={() => (step === 'idle' ? openPicker() : void connectWithKey())}
-            >
-              {#if storingKey}
-                <Loader2 size={13} class="animate-spin" />
-              {:else if step === 'idle'}
-                <Search size={13} /> Search providers
-              {:else}
-                <KeyRound size={13} /> Connect provider
-              {/if}
-            </button>
-          {:else}
-            <button
-              class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              type="button"
-              disabled={!pickerLogin && step === 'picking' && !selectedProvider}
-              onclick={() =>
-                pickerLogin
-                  ? void startConnect(null)
-                  : step === 'idle'
-                    ? openPicker()
-                    : selectedProvider
-                      ? void startConnect(selectedProvider)
-                      : null}
-            >
-              {#if !pickerLogin && step === 'picking' && selectedProvider}
-                <Plug size={13} /> Connect with {selectedProvider.name}
-              {:else if !pickerLogin && step === 'picking'}
-                <Search size={13} /> Search providers
-              {:else}
-                <KeyRound size={13} /> Connect provider
-              {/if}
-            </button>
-          {/if}
-        {:else}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-dimmed"
-            type="button"
-            disabled
-            title="This harness does not expose a login flow CodeInOven can run"
-          >
-            <KeyRound size={13} /> Connect provider
-          </button>
-        {/if}
-      </div>
-    </div>
+    <AddProviderModalFooter
+      {tab}
+      {step}
+      {harness}
+      {canSignIn}
+      {pickerLogin}
+      {apiKeyEntry}
+      {antigravityConnected}
+      {storingKey}
+      oauthLoginId={oauth.loginId}
+      {selectedProvider}
+      {finalizingAccount}
+      onOpenCustom={() => onAddCustom(harness.id)}
+      onSaveAccount={() => void saveAuthenticatedAccount()}
+      onCancelConnection={cancelConnection}
+      onStartConnect={(provider) => void startConnect(provider)}
+      onOpenPicker={openPicker}
+      onConnectWithKey={() => void connectWithKey()}
+    />
   {/snippet}
 
   <div class="mb-4 flex gap-1 rounded-lg bg-elevated p-1">
@@ -790,470 +494,51 @@
   </div>
 
   {#if tab === 'connect'}
-    <div class="space-y-4">
-      {#if step === 'idle'}
-        <div
-          class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5"
-        >
-          <div class="flex min-w-0 items-center gap-2">
-            {#if authStatus?.state === 'authenticated'}
-              <CheckCircle2 size={15} class="shrink-0 text-success" />
-            {:else}
-              <KeyRound size={15} class="shrink-0 text-dimmed" />
-            {/if}
-            <p class="truncate text-xs font-medium">{stateLabel()}</p>
-          </div>
-          <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
-            title="Re-check {harness.name} sign-in status"
-            disabled={checkingAuth}
-            onclick={() => void checkAuth()}
-          >
-            <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
-            Check
-          </button>
-        </div>
-        {#if authStatus?.accounts.length}
-          <div class="overflow-hidden rounded-xl border bg-surface">
-            <div
-              class="border-b bg-elevated px-3 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
-            >
-              Connected providers
-            </div>
-            {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.id)}
-              <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-                <CheckCircle2 size={14} class="shrink-0 text-success" />
-                <div class="min-w-0 flex-1">
-                  <p class="truncate text-xs font-medium text-foreground">{connected.label}</p>
-                  <p class="truncate font-mono text-[0.625rem] text-dimmed">
-                    {connected.providerId}{#if connected.method}
-                      · {connected.method}{/if}
-                  </p>
-                </div>
-                {#if accountForConnected(connected)}
-                  <button
-                    type="button"
-                    class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                    title={`Disconnect ${connected.label}`}
-                    onclick={() => (disconnectTarget = accountForConnected(connected) ?? null)}
-                  >
-                    <Unplug size={11} /> Disconnect
-                  </button>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-      {/if}
-
-      {#if actionError}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-          {actionError}
-        </p>
-      {/if}
-
-      {#if actionWarning}
-        <p
-          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
-          role="alert"
-        >
-          {actionWarning}
-        </p>
-      {/if}
-      {#if notice}
-        <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
-          {notice}
-        </p>
-      {/if}
-
-      {#if step === 'labeling' && authenticatedProvider}
-        <div class="space-y-3 rounded-xl border bg-surface p-4">
-          <div class="flex items-start gap-2">
-            <CheckCircle2 size={16} class="mt-0.5 shrink-0 text-success" />
-            <div>
-              <p class="text-sm font-medium text-foreground">
-                Label your newly logged in {authenticatedProvider.name} account
-              </p>
-              <p class="mt-0.5 text-xs text-muted">
-                Leave the label blank to use {authenticatedProvider.name}-N automatically.
-              </p>
-            </div>
-          </div>
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-            placeholder={`${authenticatedProvider.name}-N`}
-            maxlength="80"
-            autocomplete="off"
-            bind:value={accountLabel}
-            autofocus
-            onkeydown={(event: KeyboardEvent) => {
-              if (event.key === 'Enter') void saveAuthenticatedAccount()
-            }}
-          />
-        </div>
-      {:else if step === 'running' && loginHandoff}
-        <div class="space-y-2">
-          <div class="h-60 overflow-hidden rounded-xl border bg-app">
-            <ProviderLoginTerminal
-              {terminalId}
-              command={loginHandoff.command}
-              args={loginHandoff.args}
-              environment={loginHandoff.environment}
-              onExit={(exitCode) => void handleLoginExit(exitCode)}
-            />
-          </div>
-          <p class="font-mono text-[0.625rem] text-dimmed">
-            $ {shellCommand(loginHandoff)}
-          </p>
-        </div>
-      {:else if step === 'picking'}
-        <div class="space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <p class="text-[0.6875rem] font-medium text-dimmed">Providers {harness.name} offers</p>
-            <button
-              class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
-              type="button"
-              onclick={backToList}
-            >
-              <X size={11} /> Back
-            </button>
-          </div>
-          <div class="relative">
-            <Search
-              size={13}
-              class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-            />
-            <!-- svelte-ignore a11y_autofocus -->
-            <input
-              class="h-9 w-full rounded-lg border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
-              placeholder="Search providers"
-              autocomplete="off"
-              spellcheck="false"
-              bind:value={search}
-              autofocus
-            />
-          </div>
-
-          {#if offeredLoading && offered.length === 0}
-            <div class="flex h-24 items-center justify-center">
-              <Loader2 size={17} class="animate-spin text-dimmed" />
-            </div>
-          {:else if offeredError}
-            <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-              {offeredError}
-            </p>
-          {:else if filteredOffered.length === 0}
-            <div class="rounded-xl border border-dashed p-4 text-center">
-              <p class="text-xs text-muted">
-                {offered.length === 0
-                  ? 'No connectable providers were found for this harness.'
-                  : 'No providers match your search.'}
-              </p>
-            </div>
-          {:else}
-            <div class="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto pr-0.5">
-              {#each filteredOffered as provider (provider.id)}
-                <button
-                  type="button"
-                  class="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors {selectedProvider?.id ===
-                  provider.id
-                    ? 'border-primary bg-primary text-on-primary'
-                    : 'bg-surface text-foreground hover:bg-overlay'}"
-                  aria-pressed={selectedProvider?.id === provider.id}
-                  onclick={() => {
-                    if (oauthLoginId !== null) void cancelOAuthSignIn()
-                    selectedProvider = provider
-                  }}
-                >
-                  <span class="min-w-0">
-                    <span class="block truncate text-xs font-medium">{provider.name}</span>
-                    <span
-                      class="block truncate font-mono text-[0.625rem] {selectedProvider?.id ===
-                      provider.id
-                        ? 'text-on-primary/70'
-                        : 'text-dimmed'}"
-                    >
-                      {provider.id}
-                    </span>
-                  </span>
-                  {#if provider.authenticated}
-                    <span
-                      class="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
-                    >
-                      Connected
-                    </span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
-
-          {#snippet apiKeyField(providerName: string)}
-            <label
-              class="block text-[0.6875rem] font-medium text-foreground"
-              for="provider-api-key-input"
-            >
-              API key for {providerName}
-            </label>
-            <!-- svelte-ignore a11y_autofocus -->
-            <input
-              id="provider-api-key-input"
-              type="password"
-              autocomplete="off"
-              spellcheck="false"
-              class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-              placeholder="Paste the API key"
-              bind:value={apiKey}
-              autofocus
-              onkeydown={(event: KeyboardEvent) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void connectWithKey()
-                }
-              }}
-            />
-            <p class="text-[0.625rem] text-dimmed">
-              Stored by CodeInOven in {harness.name}’s own credential file never sent anywhere else.
-            </p>
-          {/snippet}
-
-          {#if apiKeyEntry && selectedProvider}
-            <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
-              {#if oauthLoginId !== null}
-                <div class="space-y-2">
-                  <div class="flex items-center gap-2">
-                    <Loader2 size={13} class="animate-spin text-primary" />
-                    <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
-                      {oauthStatus || 'Waiting for the provider…'}
-                    </p>
-                    <button
-                      class="shrink-0 rounded-lg border bg-elevated px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-overlay"
-                      type="button"
-                      title="Cancel the sign-in"
-                      onclick={() => void cancelOAuthSignIn()}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {#if oauthDeviceCode}
-                    <div class="rounded-lg border bg-surface p-2.5 text-center">
-                      <p class="text-[0.625rem] text-dimmed">
-                        Enter this code at
-                        <button
-                          class="font-medium text-primary underline underline-offset-2"
-                          type="button"
-                          title="Open {oauthDeviceCode.verificationUri}"
-                          onclick={() => void openInBrowser(oauthDeviceCode?.verificationUri ?? '')}
-                        >
-                          {oauthDeviceCode.verificationUri}
-                        </button>
-                      </p>
-                      <p
-                        class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground"
-                      >
-                        {oauthDeviceCode.userCode}
-                      </p>
-                    </div>
-                  {/if}
-                  {#if oauthPrompt}
-                    <div class="space-y-1.5">
-                      {#if oauthPrompt.type === 'select' && oauthPrompt.options}
-                        <p class="text-[0.6875rem] font-medium text-foreground">
-                          {oauthPrompt.message}
-                        </p>
-                        <div class="space-y-1">
-                          {#each oauthPrompt.options as option (option.id)}
-                            <button
-                              class="w-full rounded-lg border bg-elevated px-3 py-2 text-left text-xs text-foreground hover:bg-overlay"
-                              type="button"
-                              title="Choose {option.label}"
-                              onclick={() => void answerSelectPrompt(option.id)}
-                            >
-                              {option.label}
-                            </button>
-                          {/each}
-                        </div>
-                      {:else}
-                        <label
-                          class="block text-[0.6875rem] font-medium text-foreground"
-                          for="oauth-prompt-input"
-                        >
-                          {oauthPrompt.message}
-                        </label>
-                        <!-- svelte-ignore a11y_autofocus -->
-                        <input
-                          id="oauth-prompt-input"
-                          type={oauthPrompt.type === 'secret' ? 'password' : 'text'}
-                          autocomplete="off"
-                          spellcheck="false"
-                          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                          placeholder={oauthPrompt.placeholder ??
-                            (oauthPrompt.type === 'secret' ? 'Enter the value' : 'Paste the code')}
-                          bind:value={oauthPromptAnswer}
-                          autofocus
-                          onkeydown={(event: KeyboardEvent) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              void submitOAuthPrompt()
-                            }
-                          }}
-                        />
-                        <button
-                          class="flex h-8 w-full items-center justify-center rounded-lg bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                          type="button"
-                          title="Continue the sign-in"
-                          disabled={oauthPromptAnswer.trim() === ''}
-                          onclick={() => void submitOAuthPrompt()}
-                        >
-                          Continue
-                        </button>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {:else if selectedProviderIsOauth}
-                <p class="text-[0.6875rem] font-medium text-foreground">
-                  Sign in to {selectedProvider.name}
-                </p>
-                <p class="text-[0.625rem] text-dimmed">
-                  A browser window opens, you approve access, and this app finishes the rest no key
-                  pasting needed.
-                </p>
-                <button
-                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  type="button"
-                  title="Sign in to {selectedProvider.name} in your browser"
-                  onclick={() => void startProviderSignIn()}
-                >
-                  <KeyRound size={13} /> Sign in with browser
-                </button>
-                <p class="text-center text-[0.625rem] text-dimmed">or paste an API key</p>
-                {@render apiKeyField(selectedProvider.name)}
-              {:else}
-                <div class="text-[0.6875rem] font-medium text-foreground text-center">
-                  Connect to {selectedProvider.name}
-                  <button
-                    class="flex h-9 mx-auto mt-2 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                    type="button"
-                    title="Connect to {selectedProvider.name}"
-                    onclick={() => void startProviderSignIn()}
-                  >
-                    <KeyRound size={13} /> Connect
-                  </button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <div class="rounded-xl border border-dashed px-3 py-2.5">
-          {#if apiKeyEntry}
-            <p class="text-[0.6875rem] text-muted">
-              Click <strong class="font-medium text-foreground">Search providers</strong> below to
-              browse {harness.name}’s full provider catalog, then sign in or paste an API key to
-              connect.
-            </p>
-          {:else if pickerLogin}
-            <p class="text-[0.6875rem] text-muted">
-              Click <strong class="font-medium text-foreground">Connect provider</strong> below to
-              open {harness.name}’s own provider picker in the built-in terminal choose the provider
-              you want there.
-            </p>
-          {:else}
-            <p class="text-[0.6875rem] text-muted">
-              Click <strong class="font-medium text-foreground">Connect provider</strong> below to pick
-              a provider and sign in from here no copying commands.
-            </p>
-          {/if}
-        </div>
-      {/if}
-    </div>
+    <AddProviderModalConnectTab
+      {harness}
+      {step}
+      {authStatus}
+      {checkingAuth}
+      {actionError}
+      {actionWarning}
+      {notice}
+      {authenticatedProvider}
+      bind:accountLabel
+      {loginHandoff}
+      {terminalId}
+      bind:search
+      {offered}
+      {offeredLoading}
+      {offeredError}
+      {filteredOffered}
+      bind:selectedProvider
+      bind:apiKey
+      {apiKeyEntry}
+      {pickerLogin}
+      {oauth}
+      {accountForConnected}
+      onCheckAuth={() => void checkAuth()}
+      onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
+      onBackToList={backToList}
+      onConnectWithKey={() => void connectWithKey()}
+      onLoginExit={(exitCode) => void handleLoginExit(exitCode)}
+      onRequestDisconnect={(account) => (disconnectTarget = account)}
+    />
   {:else}
-    <div class="space-y-4">
-      <div class="flex items-center justify-between rounded-xl border bg-surface px-3 py-2.5">
-        <p class="text-xs">
-          <strong class="font-medium">Custom providers for {harness.name}</strong>
-          <span class="ml-1.5 text-dimmed">
-            {customCount} provider{customCount === 1 ? '' : 's'}
-          </span>
-        </p>
-      </div>
-
-      {#if customProviders.length > 0}
-        <div class="space-y-1.5">
-          <p class="text-[0.6875rem] font-medium text-dimmed">Custom providers</p>
-          {#each customProviders as provider (provider.id)}
-            <div
-              class="flex items-center justify-between gap-2 rounded-lg border bg-surface px-3 py-2"
-            >
-              <div class="flex min-w-0 items-center gap-2">
-                <Server size={13} class="shrink-0 text-dimmed" />
-                <span class="truncate text-xs">{provider.name}</span>
-                <span
-                  class="truncate rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] text-dimmed"
-                  title={provider.baseURL}
-                >
-                  {provider.baseURL}
-                </span>
-                {#if !provider.enabled}
-                  <span
-                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
-                  >
-                    Disabled
-                  </span>
-                {/if}
-              </div>
-              <button
-                class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
-                title="Edit {provider.name}"
-                type="button"
-                onclick={() => onEditCustom(provider)}
-              >
-                <Pencil size={11} /> Edit
-              </button>
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <div class="rounded-xl border border-dashed p-4 text-center">
-          <p class="text-xs text-muted">
-            No custom providers for {harness.name} yet. Click
-            <strong class="font-medium text-foreground">Open custom provider form</strong> below to add
-            one.
-          </p>
-        </div>
-      {/if}
-    </div>
+    <AddProviderModalCustomTab {harness} {customProviders} {customCount} {onEditCustom} />
   {/if}
 </Modal>
 
-<Modal
+<ConfirmDialog
   open={disconnectTarget !== null}
   title="Disconnect provider"
-  onClose={() => (disconnectTarget = null)}
+  confirmLabel="Disconnect"
+  busy={disconnecting}
+  onCancel={() => (disconnectTarget = null)}
+  onConfirm={disconnectProvider}
 >
-  {#snippet footer()}
-    <button
-      type="button"
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-      onclick={() => (disconnectTarget = null)}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-      disabled={disconnecting}
-      onclick={() => void disconnectProvider()}
-    >
-      {#if disconnecting}<Loader2 size={13} class="animate-spin" />{:else}<Unplug size={13} />{/if}
-      Disconnect
-    </button>
-  {/snippet}
-
-  <p class="text-sm text-muted">
-    Disconnect <strong class="text-foreground">{disconnectTarget?.label}</strong> from
-    {harness.name}? The provider credential will be removed from this account container.
+  <p>
+    Disconnect <strong class="text-foreground">{disconnectTarget?.label}</strong> from {harness.name}?
+    The provider credential will be removed from this account container.
   </p>
-</Modal>
+</ConfirmDialog>
