@@ -670,21 +670,30 @@ export class UtilityOrchestrationService {
       }
       return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
     })
-    const installed = await this.registry.createMany(definitions)
-    state.managedUtilities.push(...installed)
+    const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
     // Hot reload: make what this turn just installed reachable by the next search
     // or activation in the same turn, without waiting for a reload.
     await this.refreshEligible(state, { force: true })
     await this.audit(state, 'utility.managed', {
       action: 'install_bundle',
-      utilityIds: installed.map((utility) => utility.id)
+      utilityIds: outcomes.map((outcome) => outcome.utility.id),
+      updatedUtilityIds: outcomes
+        .filter((outcome) => outcome.action === 'updated')
+        .map((outcome) => outcome.utility.id),
+      removedUtilityIds: outcomes.flatMap((outcome) => outcome.removed.map(({ id }) => id))
+    })
+    // Reinstalling is reported apart from installing: the agent must not claim a
+    // second install when the bundle replaced what was already there.
+    const describe = (outcome: (typeof outcomes)[number]) => ({
+      id: outcome.utility.id,
+      kind: outcome.utility.kind,
+      name: outcome.utility.name
     })
     return {
-      installed: installed.map((utility) => ({
-        id: utility.id,
-        kind: utility.kind,
-        name: utility.name
-      }))
+      installed: outcomes.filter((outcome) => outcome.action === 'installed').map(describe),
+      updated: outcomes.filter((outcome) => outcome.action === 'updated').map(describe),
+      removed: outcomes.flatMap((outcome) => outcome.removed)
     }
   }
 

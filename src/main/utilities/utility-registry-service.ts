@@ -321,6 +321,70 @@ export class UtilityRegistryService {
     })
   }
 
+  /**
+   * Install a bundle the way a reinstall should behave: a definition that matches
+   * an entry the registry already holds updates that entry in place instead of
+   * adding a second one, and an install path that owns reconciliation (the agent
+   * bundle and the skills marketplace) also drops further copies of the same
+   * identity, so reinstalling a capability never leaves several entries competing
+   * for one name. Manual creation in the editor still uses `createMany`, because
+   * silently merging an entry the user just typed would be surprising there.
+   */
+  async installMany(
+    inputs: UtilityDefinitionInput[],
+    options: UtilityInstallOptions = {}
+  ): Promise<UtilityInstallOutcome[]> {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('Utility bundle must contain at least one utility')
+    }
+    const normalized = inputs.map((input) => normalizeInput(input, { acceptMissingScope: true }))
+    await this.ensureAppDefaultsSeeded()
+    return this.mutate(async (registry) => {
+      const now = Date.now()
+      const outcomes: UtilityInstallOutcome[] = []
+      /** Entries this call already wrote, excluded from later matching so a bundle
+       *  that installs one capability for two projects keeps both entries. */
+      const written = new Set<string>()
+      for (const input of normalized) {
+        // App-owned utilities are never reconciled: their identity, scope and
+        // bindings are locked, so an install must not try to take one over.
+        const matches = registry.utilities.filter(
+          (utility) =>
+            !utility.appOwned && !written.has(utility.id) && sameUtilityIdentity(utility, input)
+        )
+        const existing = matches[0]
+        const removed =
+          options.consolidate === true ? matches.slice(1).map(({ id, name }) => ({ id, name })) : []
+        const definition = existing
+          ? {
+              ...input,
+              // A reinstall must not detach the credentials the user already
+              // wired up in Utilities; the incoming definition carries none.
+              credentials: input.credentials?.length ? input.credentials : existing.credentials,
+              id: existing.id,
+              appOwned: false,
+              createdAt: existing.createdAt,
+              updatedAt: now
+            }
+          : { ...input, id: generateId(), appOwned: false, createdAt: now, updatedAt: now }
+        const utility = definition as UtilityDefinition
+        if (existing) registry.utilities[registry.utilities.indexOf(existing)] = utility
+        else registry.utilities.push(utility)
+        written.add(utility.id)
+        for (const duplicate of removed) {
+          const index = registry.utilities.findIndex((candidate) => candidate.id === duplicate.id)
+          if (index >= 0) registry.utilities.splice(index, 1)
+        }
+        outcomes.push({
+          utility: structuredClone(utility),
+          action: existing ? 'updated' : 'installed',
+          removed
+        })
+      }
+      return outcomes
+    })
+  }
+
   async update(id: string, patch: UtilityDefinitionPatch): Promise<UtilityDefinition> {
     assertId(id, 'Utility ID')
     assertUpdate(patch)
@@ -475,6 +539,48 @@ export class UtilityRegistryService {
       release?.()
     }
   }
+}
+
+/** One definition's arrival: a fresh entry, or the entry it replaced. */
+export interface UtilityInstallOutcome {
+  utility: UtilityDefinition
+  action: 'installed' | 'updated'
+  /** Extra copies of the same identity that consolidation removed. */
+  removed: Array<{ id: string; name: string }>
+}
+
+export interface UtilityInstallOptions {
+  /** Remove entries that duplicate a reinstalled utility's identity. */
+  consolidate?: boolean
+}
+
+/**
+ * Identity that decides whether an install is a reinstall. A definition that
+ * claims harness transport names is the same capability as an entry claiming one
+ * of those names; a definition claiming none falls back to its name, which is all
+ * a skill installed without bindings has to go on.
+ */
+function sameUtilityIdentity(
+  existing: UtilityDefinition,
+  incoming: UtilityDefinitionInput
+): boolean {
+  if (existing.kind !== incoming.kind) return false
+  // Scope is part of the identity: the same skill installed for two projects is
+  // two entries, while reinstalling it for one of those projects is one entry.
+  if (!scopesEqual(existing.scope, incoming.scope ?? { level: 'global' })) return false
+  const incomingNames = utilityTransportNames(incoming)
+  const existingNames = utilityTransportNames(existing)
+  if ([...incomingNames].some((name) => existingNames.has(name))) return true
+  if (incomingNames.size > 0 && existingNames.size > 0) return false
+  return existing.name.trim().toLocaleLowerCase() === incoming.name.trim().toLocaleLowerCase()
+}
+
+function utilityTransportNames(utility: UtilityDefinition | UtilityDefinitionInput): Set<string> {
+  return new Set(
+    (utility.harnessBindings ?? [])
+      .map((binding) => binding.transportName?.trim().toLocaleLowerCase() ?? '')
+      .filter(Boolean)
+  )
 }
 
 function parseRegistry(value: unknown): UtilityRegistryFile {

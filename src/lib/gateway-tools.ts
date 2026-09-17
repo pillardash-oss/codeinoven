@@ -107,7 +107,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_MANAGE_TOOL_NAME,
     description:
-      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden; tell the user to add them through Utilities after installation.',
+      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. Reinstalling an existing capability updates that entry in place and reports it as "updated", removing extra copies of it, so never install a second copy to work around one that already exists. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden; tell the user to add them through Utilities after installation.',
     inputSchema: {
       type: 'object',
       properties: {

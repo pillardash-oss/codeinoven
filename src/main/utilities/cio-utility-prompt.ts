@@ -15,7 +15,7 @@ const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
  * Versioned application-owned setup knowledge. This is deliberately source code rather
  * than a discoverable skill so its API contract cannot drift independently of the app.
  */
-export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 4)
+export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 5)
 
 The user explicitly invoked @cio-utility. You work in two roles, resolved from
 the user's request:
@@ -149,7 +149,11 @@ Install defaults, which you follow unless the user asks otherwise:
 - A skill is "on_demand" by default: the agent activates it when the task needs it. Use
   "always" only when the user wants its instructions present in every turn.
 - What you install is live for the rest of the turn. Search for it or activate it right after
-  install to confirm the tools work, and never tell the user to reload the app for it to appear.`
+  install to confirm the tools work, and never tell the user to reload the app for it to appear.
+- Reinstalling something that is already there updates that entry in place instead of adding a
+  second copy, and extra copies of it are removed. The result reports entries separately as
+  "installed", "updated", and "removed": read all three before saying what you did, and never
+  install a second copy to work around one that already exists.`
 
 /** Compact contract for turns that REUSE an earlier @cio-utility invocation in the
  *  same thread. Deliberately tiny: the full setup briefing above already ran in

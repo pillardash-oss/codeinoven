@@ -1840,8 +1840,19 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         ]
       }))
       const registry = new UtilityRegistryService(storage)
-      await registry.createMany(definitions)
-      return `Added ${definitions.length} CodeInOven-managed skill${definitions.length === 1 ? '' : 's'}`
+      // Reinstalling the same skill updates its entry and clears any extra copies,
+      // so the market cannot leave two entries competing for one name.
+      const outcomes = await registry.installMany(definitions, { consolidate: true })
+      const added = outcomes.filter((outcome) => outcome.action === 'installed').length
+      const updated = outcomes.length - added
+      const removed = outcomes.reduce((count, outcome) => count + outcome.removed.length, 0)
+      const skill = (count: number) => `skill${count === 1 ? '' : 's'}`
+      const parts = [
+        added > 0 ? `Added ${added} CodeInOven-managed ${skill(added)}` : '',
+        updated > 0 ? `updated ${updated} existing ${skill(updated)}` : '',
+        removed > 0 ? `removed ${removed} duplicate ${skill(removed)}` : ''
+      ].filter(Boolean)
+      return parts.join(', ')
     }
 
     const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
