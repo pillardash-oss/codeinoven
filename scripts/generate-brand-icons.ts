@@ -147,9 +147,10 @@ Logger.dev(`[generate-brand-icons] Wrote vendored opencode mark to ${vendorOutDi
 // transparent oven+code artwork (`icon-mark.svg`), whose ink strokes are flat
 // pure #000000 on light surfaces and pure #ffffff on dark (the SVG carries its
 // own embedded style keyed off the app's `.dark` document class, keeping the
-// mark sharp at small sizes). The squircle-tile app icon (`icon.svg`) is
-// platform artwork only and is NOT used here. Serves the model picker, custom
-// `cio-` providers, and the about-screen identity/link rows.
+// mark sharp at small sizes). The squircle-tile app icon (`icon.svg`) is the
+// in-app identity instead (`components/files/cio-folder-icons.ts`), not the
+// vendor mark. Serves the model picker, custom `cio-` providers, and the
+// about-screen identity/link rows.
 let cioMark = readFileSync(join(root, 'src/renderer/static/icon-mark.svg'), 'utf8')
 cioMark = cioMark
   .replace(/^<\?[\s\S]*?\?>\s*/i, '')

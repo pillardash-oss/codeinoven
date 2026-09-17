@@ -1,4 +1,4 @@
-import { CIO_MARK_DATA_URI, getCioMarkMarkup, isCioFolderName } from './cio-folder-icons'
+import { CIO_ICON_DATA_URI, getCioIconMarkup, isCioFolderName } from './cio-folder-icons'
 
 type FileExtensionIcons = typeof import('@baybreezy/file-extension-icon')
 
@@ -40,14 +40,12 @@ export async function getFileTypeIconDataUri(path: string): Promise<string | nul
  * e.g. `node_modules`, `src`, `api`), or `null` when only the generic folder
  * icon applies   letting the caller fall back to a Lucide folder icon.
  *
- * The `.cio` scratch folder carries the CodeInOven mark instead of a folder
- * glyph, in its `<img>`-safe form: a collapsed and an expanded `.cio` folder are
- * the same folder either way, so `open` does not change the mark. Callers that
- * can render markup should inline `getCioMarkMarkup` so the mark's ink follows
- * the surrounding text colour (see `FolderTypeIcon.svelte`).
+ * The `.cio` scratch folder carries the CodeInOven app icon instead of a folder
+ * glyph: a collapsed and an expanded `.cio` folder are the same folder either
+ * way, so `open` does not change the icon.
  */
 export async function getFolderTypeIconDataUri(name: string, open = false): Promise<string | null> {
-  if (isCioFolderName(name)) return CIO_MARK_DATA_URI
+  if (isCioFolderName(name)) return CIO_ICON_DATA_URI
   const key = `${open ? 'open' : 'closed'}:${name}`
   const cached = folderCache.get(key)
   if (cached !== undefined) return cached
@@ -77,7 +75,7 @@ export async function getInlineFileTypeIconSvg(path: string): Promise<string> {
 
 /** Resolve the complete colored folder icon used by compact inline badges. */
 export async function getInlineFolderTypeIconDataUri(name: string): Promise<string> {
-  if (isCioFolderName(name)) return CIO_MARK_DATA_URI
+  if (isCioFolderName(name)) return CIO_ICON_DATA_URI
   const cached = inlineFolderCache.get(name)
   if (cached) return cached
   const { getVSIFolderIcon } = await loadIconLibrary()
@@ -89,11 +87,11 @@ export async function getInlineFolderTypeIconDataUri(name: string): Promise<stri
 /** Inline-SVG variant of `getInlineFolderTypeIconDataUri`.
  *
  * The icon library's own entries are base64 `data:` URIs, which `dataUriToSvg`
- * decodes back to markup. The CodeInOven mark is not one of them (it is built
- * from markup in the first place), so it is returned directly instead of being
- * handed to the decoder as an undecodable URI. */
+ * decodes back to markup. The CodeInOven app icon is not one of them: it carries
+ * live gradient ids, so it is built by `getCioIconMarkup` instead of being
+ * decoded from a shared `data:` URI whose ids would collide across instances. */
 export async function getInlineFolderTypeIconSvg(name: string): Promise<string> {
-  if (isCioFolderName(name)) return getCioMarkMarkup()
+  if (isCioFolderName(name)) return getCioIconMarkup()
   return dataUriToSvg(await getInlineFolderTypeIconDataUri(name))
 }
 

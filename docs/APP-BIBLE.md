@@ -299,8 +299,8 @@ Motion is subtle and functional:
 
 - `@lucide/svelte` for interface icons; 14–18px in toolbars, 18–22px in cards and empty states; keep stroke widths consistent.
 - Use the brand icon component for the logo/app mark. Never recreate the logo in CSS or ad-hoc SVG markup.
-- The app mark renders in-app as the tile-free artwork (`src/renderer/static/icon-mark.svg`, bundled to the renderer as `vendor-icons/icons/cio.svg`). The squircle-tile app icon (`icon.svg`, `icon.png`) is platform artwork only: its plate pads the mark down to ~58% of the canvas, which is unreadable at file-tree sizes.
-- Mark ink follows its surface: `currentColor` wherever the mark is inlined, and a baked mid-tone where only an `<img>` can render it.
+- Two brand marks exist and neither substitutes for the other. Vendor surfaces (model picker, `cio-` providers, about rows) use the tile-free mark (`src/renderer/static/icon-mark.svg`, bundled as `vendor-icons/icons/cio.svg`), whose ink follows its surface. The `.cio` scratch folder wears the full app icon (`src/renderer/static/icon.svg`) with its tile, gloss and ember glow, because that is the artwork CodeInOven is recognised by.
+- Never recreate either mark in CSS or ad-hoc SVG markup.
 - The brand name flows from the single brand constant (`src/lib/brand.ts`). Never hardcode the product name in UI or build config.
 
 ### 3.10 Copywriting
