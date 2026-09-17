@@ -1,33 +1,15 @@
-import {
-  stat,
-  lstat,
-  open,
-  access,
-  readFile,
-  writeFile,
-  rename,
-  mkdir,
-  rm,
-  unlink
-} from 'fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'path'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { dirname, relative, resolve } from 'path'
 import { toPosixPath } from '../../lib/paths'
-import { realpathSync } from 'fs'
-import { createHash } from 'node:crypto'
-import { simpleGit } from 'simple-git'
-import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
+import type { LogOptions, SimpleGit } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
-  GitCommitRef,
   GitConflictAnalysis,
-  GitConflictHunk,
   GitConflictSide,
   GitConflictWorkFile,
-  GitConflictWorkHunkState,
   GitDiff,
   GitFileChange,
-  GitFileStatus,
   GitIdentity,
   GitMainSyncDirection,
   GitMainSyncResult,
@@ -44,24 +26,59 @@ import type {
   PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
-import { parseWorktreePorcelain } from './scope-worktree-service'
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
-}
-
-/** Whether a path exists on disk, symlinks included (broken ones still count). */
-async function pathExists(directory: string, relativePath: string): Promise<boolean> {
-  try {
-    await lstat(resolve(directory, relativePath))
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Upper bound on a single diff payload so the IPC contract never floods. */
-const MAX_DIFF_BYTES = 500 * 1024
+import {
+  createAuthenticatedGitClient,
+  createGitClient,
+  createGitClientWithoutEditor,
+  runGitCommand,
+  validateRepositoryDirectory,
+  withIndexLockRetry
+} from './git/git-service-runtime'
+import type { CommandKind } from './git/git-service-runtime'
+import type { PullRequestComposeContext } from './git/git-service-pull-request'
+import {
+  buildPullRequestComposeContext,
+  comparePullRequestBranches as comparePullRequestRefs
+} from './git/git-service-pull-request'
+import type { ConflictWorkMetadata } from './git/git-service-conflicts'
+import {
+  buildInitialConflictWorkFile,
+  conflictSourceHash,
+  hasConflictMarkers,
+  parseConflictHunks,
+  parseConflictWorkMetadata,
+  parseConflictWorkState
+} from './git/git-service-conflicts'
+import {
+  MAX_DIFF_BYTES,
+  assertRelativePath as assertRepositoryRelativePath,
+  assertTreeIsh,
+  diffVsParent,
+  fileDiffVsParent,
+  isAncestor,
+  isDirectory,
+  isUntracked,
+  pathExists,
+  readBlob as readGitBlob,
+  refExists as gitRefExists,
+  removePath,
+  untrackedDiff,
+  workingFileContent as readWorkingFileContent
+} from './git/git-service-diffs'
+import type { HistoryLogFields } from './git/git-service-status'
+import {
+  DEFAULT_LOG_LIMIT,
+  detectConflictState,
+  emptyMergeResult,
+  isUnbornBranchLogError,
+  mapCommit,
+  mapMergeResult,
+  mapStatus,
+  parseBranchRefs,
+  parseCommitParents,
+  parseCommitRefs,
+  worktreeBranchPaths
+} from './git/git-service-status'
 
 // Git read commands opportunistically refresh the index, which takes
 // `.git/index.lock`. This service shares the repository with agent git CLIs,
@@ -74,102 +91,7 @@ const MAX_DIFF_BYTES = 500 * 1024
 // default via buildProcessEnvironment.)
 process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
 
-/** Number of commits returned by `git log` by default. */
-const DEFAULT_LOG_LIMIT = 50
-
-/**
- * The `git log` fields this service reads. It mirrors simple-git's
- * `DefaultLogFields`   passing a custom `format` replaces those defaults
- * wholesale, so every field the mapper reads has to be listed here   and adds
- * `%P`, which carries the parent hashes the graph view draws its lanes from.
- */
-interface HistoryLogFields extends DefaultLogFields {
-  parents: string
-}
-
-const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
-const PR_COMPOSE_UNTRACKED_FILES = 24
-const PR_COMPOSE_READ_BATCH = 4
-
-export interface PullRequestComposeContext {
-  source: PrComposeInput['source']
-  baseRef: string
-  headRef: string
-  commits: string
-  diffSummary: string
-  patch: string
-  pendingPushBaseRef: string | null
-  pendingCommits: string
-  pendingDiffSummary: string
-  pendingPatch: string
-  worktreePatch: string
-  untrackedFiles: string
-  truncated: boolean
-}
-
-function boundedUtf8(value: string, maximumBytes: number): { text: string; truncated: boolean } {
-  const content = Buffer.from(value, 'utf-8')
-  if (content.byteLength <= maximumBytes) return { text: value, truncated: false }
-  return {
-    text: content.subarray(0, maximumBytes).toString('utf-8'),
-    truncated: true
-  }
-}
-
-/** Kind of git command for error classification. */
-type CommandKind = 'read' | 'mutation'
-
-interface GitCommandError extends Error {
-  /** Exit code reported by the git binary. */
-  code?: number
-  /** git's own error output. */
-  gitError?: string
-}
-
-interface ConflictWorkMetadata {
-  version: 1
-  sourceHash: string
-  draftSaved: boolean
-  hunks: GitConflictWorkHunkState[]
-}
-
-const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
-
-/** `%P` renders space-separated parent hashes; a root commit renders empty. */
-function parseCommitParents(raw: string): string[] {
-  return raw.split(' ').filter((hash) => hash.length > 0)
-}
-
-/**
- * `%D` renders decorations as `HEAD -> main, origin/main, tag: v1.0`.
- * Normalized to `{ name, kind, head }` so no renderer parses git's syntax.
- */
-function parseCommitRefs(raw: string): GitCommitRef[] {
-  const refs: GitCommitRef[] = []
-  for (const decoration of raw.split(',')) {
-    const trimmed = decoration.trim()
-    if (trimmed.length === 0) continue
-    if (trimmed === 'HEAD') {
-      refs.push({ name: 'HEAD', kind: 'branch', head: true })
-      continue
-    }
-    const isHead = trimmed.startsWith('HEAD -> ')
-    const name = isHead ? trimmed.slice('HEAD -> '.length) : trimmed
-    if (name.startsWith('tag: ')) {
-      refs.push({ name: name.slice('tag: '.length), kind: 'tag', head: isHead })
-      continue
-    }
-    refs.push({ name, kind: 'branch', head: isHead })
-  }
-  return refs
-}
-
-function isUnbornBranchLogError(failure: unknown): boolean {
-  if (!(failure instanceof Error)) return false
-  const error = failure as GitCommandError
-  const message = error.gitError ?? error.message
-  return message.includes('does not have any commits yet')
-}
+export type { PullRequestComposeContext } from './git/git-service-pull-request'
 
 /**
  * Main-process git runtime built on `simple-git`   the same thin wrapper over
@@ -200,120 +122,16 @@ export class GitService {
     return next
   }
 
-  /** Resolve a validated absolute directory, mirroring `RepositoryService`. */
-  private async validatedDirectory(projectPath: string): Promise<string> {
-    const candidate = projectPath.trim()
-    if (!candidate) throw new TypeError('Project path is required')
-    const absolutePath = resolve(candidate)
-    let metadata
-    try {
-      metadata = await stat(absolutePath)
-    } catch {
-      throw new Error(`Project directory does not exist: ${absolutePath}`)
-    }
-    if (!metadata.isDirectory()) {
-      throw new Error(`Project path is not a directory: ${absolutePath}`)
-    }
-    return absolutePath
-  }
-
   private client(directory: string, extraConfig: string[] = []): SimpleGit {
-    return simpleGit(directory, {
-      config: extraConfig,
-      maxConcurrentProcesses: 1
-    })
+    return createGitClient(directory, extraConfig)
   }
 
-  /**
-   * A client with git's editor replaced by a no-op, for the commands that commit
-   * on the user's behalf.
-   *
-   * `git rebase --continue` finishes a resolved conflict by committing it, and
-   * that commit runs the configured editor. Measured against real git: with
-   * nothing configured and no terminal it exits 1 with "Terminal is dumb, but
-   * EDITOR unset. Please supply the message using either -m or -F option", and
-   * with git's default `vi` it runs the editor with the message path as its
-   * argument and never returns. Either way the rebase the panel just offered to
-   * continue cannot continue, and in the blocking case the main process waits on
-   * a promise that never settles. `core.editor=true` is git's own no-op editor,
-   * and on the command line it outranks `VISUAL`, `EDITOR` and any configured
-   * `core.editor` such as `code --wait`.
-   *
-   * simple-git refuses to pass an editor through unless the caller opts in,
-   * because an editor value is arbitrary code. Every value here is ours (`true`),
-   * never anything a user typed, and the opt-in is on this client alone rather
-   * than the shared default, so no other command's argv can carry an editor.
-   * `GIT_EDITOR` still outranks a config entry, but only a process launched from
-   * a shell that exports it would carry one into the app.
-   */
   private clientWithoutEditor(directory: string): SimpleGit {
-    return simpleGit(directory, {
-      config: ['core.editor=true'],
-      maxConcurrentProcesses: 1,
-      unsafe: { allowUnsafeEditor: true }
-    })
+    return createGitClientWithoutEditor(directory)
   }
 
-  /**
-   * Backoff schedule for retries after an `index.lock` contention failure. The
-   * agent's own git CLI and this service are separate processes with no shared
-   * queue, so concurrent `git add`/`commit`/`status` writes race the same lock;
-   * the loser fails immediately with "index.lock: File exists". A short retry
-   * almost always wins once the other side finishes its write.
-   */
-  private static readonly INDEX_LOCK_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const
-  /** A lock file older than this is debris from a crashed or killed git process. */
-  private static readonly STALE_INDEX_LOCK_AGE_MS = 10_000
-
-  private static isIndexLockError(error: unknown): boolean {
-    if (!(error instanceof Error)) return false
-    const causeMessage =
-      error.cause instanceof Error ? error.cause.message : String(error.cause ?? '')
-    return `${error.message}\n${causeMessage}`.includes('index.lock')
-  }
-
-  /**
-   * Remove an abandoned `.git/index.lock` so a crashed git process cannot wedge
-   * every later command forever. Only locks older than the staleness window are
-   * removed   a fresh lock belongs to a live concurrent git write.
-   * `rev-parse --git-path` resolves the correct location even inside worktrees.
-   */
-  private async breakStaleIndexLock(directory: string): Promise<void> {
-    try {
-      const lockPath = (
-        await this.client(directory).raw(['rev-parse', '--git-path', 'index.lock'])
-      ).trim()
-      if (!lockPath) return
-      const absolute = resolve(directory, lockPath)
-      const metadata = await stat(absolute).catch(() => null)
-      if (!metadata || metadata.isDirectory()) return
-      if (Date.now() - metadata.mtimeMs <= GitService.STALE_INDEX_LOCK_AGE_MS) return
-      await rm(absolute, { force: true })
-      Logger.dev(`Removed stale git index lock: ${absolute}`)
-    } catch {
-      // Best effort   the retry loop re-reports the underlying git failure.
-    }
-  }
-
-  /**
-   * Run a git task, retrying with backoff when it loses an `index.lock` race.
-   * A stale lock (left by a crashed git process) is broken before each retry.
-   */
-  private async withIndexLockRetry<T>(directory: string, task: () => Promise<T>): Promise<T> {
-    let attempt = 0
-    for (;;) {
-      try {
-        return await task()
-      } catch (error) {
-        if (
-          attempt >= GitService.INDEX_LOCK_RETRY_DELAYS_MS.length ||
-          !GitService.isIndexLockError(error)
-        )
-          throw error
-        await this.breakStaleIndexLock(directory)
-        await sleep(GitService.INDEX_LOCK_RETRY_DELAYS_MS[attempt++])
-      }
-    }
+  private withAuthHeader(directory: string, token: string): SimpleGit {
+    return createAuthenticatedGitClient(directory, token)
   }
 
   private async wrapError<T>(
@@ -321,23 +139,11 @@ export class GitService {
     kind: CommandKind,
     task: () => Promise<T>
   ): Promise<T> {
-    try {
-      return await this.withIndexLockRetry(projectId, task)
-    } catch (failure) {
-      const error = failure as GitCommandError
-      const message = error.gitError ?? error.message ?? 'Unknown git error'
-      if (error.code === 127 || String(error.code) === 'ENOENT' || message.includes('ENOENT')) {
-        if (kind === 'mutation') {
-          Logger.error(`Git unavailable during mutation for project ${projectId}`)
-        }
-        throw new Error(GIT_UNAVAILABLE_MESSAGE, { cause: failure })
-      }
-      throw new Error(message, { cause: failure })
-    }
+    return runGitCommand(projectId, kind, task)
   }
 
   private async repo(projectPath: string): Promise<string> {
-    return this.validatedDirectory(projectPath)
+    return validateRepositoryDirectory(projectPath)
   }
 
   async getStatus(projectPath: string): Promise<GitStatus> {
@@ -351,7 +157,8 @@ export class GitService {
   private async readStatus(directory: string): Promise<GitStatus> {
     return this.wrapError(directory, 'read', async () => {
       const status = await this.client(directory).status()
-      return this.mapStatus(directory, status)
+      const conflictState = await detectConflictState(this.client(directory), directory)
+      return mapStatus(directory, status, conflictState)
     })
   }
 
@@ -372,9 +179,9 @@ export class GitService {
       return this.wrapError(projectPath, 'read', async () => {
         const safePath = this.assertRelativePath(directory, relativePath)
         const git = this.client(directory)
-        const isUntracked = await this.isUntracked(git, safePath)
-        if (isUntracked && !staged) {
-          return this.untrackedDiff(directory, safePath)
+        const pathIsUntracked = await isUntracked(git, safePath)
+        if (pathIsUntracked && !staged) {
+          return untrackedDiff(directory, safePath)
         }
         const args = staged ? ['--staged', '--', safePath] : ['--', safePath]
         const [content, summary] = await Promise.all([git.diff(args), git.diffSummary(args)])
@@ -754,7 +561,7 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
       if (safePaths.length === 0) return this.readStatus(directory)
-      const safeSource = this.assertTreeIsh(source)
+      const safeSource = assertTreeIsh(source)
       const args =
         target === 'staged'
           ? ['restore', '--staged', '--source', safeSource, '--', ...safePaths]
@@ -764,12 +571,6 @@ export class GitService {
       })
       return this.readStatus(directory)
     })
-  }
-
-  /** Reject anything that could be interpreted as an option by `git restore`. */
-  private assertTreeIsh(value: string): string {
-    if (!value || value.startsWith('-')) throw new TypeError('A valid revision is required')
-    return value
   }
 
   async commit(projectPath: string, message: string): Promise<GitStatus> {
@@ -808,10 +609,10 @@ export class GitService {
           git.getRemotes(),
           git.raw(['worktree', 'list', '--porcelain', '-z']).catch(() => '')
         ])
-        return this.parseBranchRefs(
+        return parseBranchRefs(
           Array.isArray(output) ? output.join('\n') : output,
           remotes.map(({ name }) => name),
-          this.worktreeBranchPaths(
+          worktreeBranchPaths(
             Array.isArray(worktreeRaw) ? worktreeRaw.join('\0') : worktreeRaw,
             directory
           )
@@ -999,7 +800,7 @@ export class GitService {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
         }
-        const matches = history.all.map((entry) => this.mapCommit(entry))
+        const matches = history.all.map((entry) => mapCommit(entry))
 
         // `--grep` searches commit messages, not object IDs. Resolve a hash-like
         // query separately, then pin that exact match above any title matches.
@@ -1015,19 +816,6 @@ export class GitService {
         return matches
       })
     })
-  }
-
-  private mapCommit(entry: HistoryLogFields): GitCommitInfo {
-    return {
-      hash: entry.hash,
-      shortHash: entry.hash.slice(0, 7),
-      author: entry.author_name ?? entry.author_email ?? 'unknown',
-      date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-      message: entry.message,
-      body: entry.body,
-      parents: parseCommitParents(entry.parents),
-      refs: parseCommitRefs(entry.refs)
-    }
   }
 
   private async commitForHash(git: SimpleGit, query: string): Promise<GitCommitInfo | null> {
@@ -1058,7 +846,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.diffVsParent(this.client(directory), hash)
+        diffVsParent(this.client(directory), hash)
       )
     })
   }
@@ -1068,7 +856,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.fileDiffVsParent(this.client(directory), directory, hash, relativePath)
+        fileDiffVsParent(this.client(directory), directory, hash, relativePath)
       )
     })
   }
@@ -1078,7 +866,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.diffVsParent(this.client(directory), id)
+        diffVsParent(this.client(directory), id)
       )
     })
   }
@@ -1088,7 +876,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.fileDiffVsParent(this.client(directory), directory, id, relativePath)
+        fileDiffVsParent(this.client(directory), directory, id, relativePath)
       )
     })
   }
@@ -1394,7 +1182,7 @@ export class GitService {
           const git = options.token
             ? this.withAuthHeader(directory, options.token)
             : this.client(directory)
-          await this.withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
+          await withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
           fetched = true
         } catch (failure) {
           // Reported as `fetched: false`   the local main branch is still synced.
@@ -1581,7 +1369,7 @@ export class GitService {
     return this.wrapError(projectPath, 'read', async () => {
       if (!(await this.refExists(git, remoteRef))) return localRef
       if (!(await this.refExists(git, localRef))) return remoteRef
-      return (await this.isAncestor(git, localRef, remoteRef)) ? remoteRef : localRef
+      return (await isAncestor(git, localRef, remoteRef)) ? remoteRef : localRef
     })
   }
 
@@ -1667,49 +1455,9 @@ export class GitService {
   ): Promise<PullRequestCompare | null> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const git = this.client(directory)
-        const localHead = `refs/heads/${head}`
-        if (!(await this.refExists(git, localHead))) return null
-
-        const remoteBase = `refs/remotes/origin/${base}`
-        const localBase = `refs/heads/${base}`
-        const baseRef = (await this.refExists(git, remoteBase))
-          ? remoteBase
-          : (await this.refExists(git, localBase))
-            ? localBase
-            : null
-        if (!baseRef) return null
-
-        const counts = await git.raw([
-          'rev-list',
-          '--left-right',
-          '--count',
-          `${baseRef}...${localHead}`
-        ])
-        const [behindBy = 0, aheadBy = 0] = counts
-          .trim()
-          .split(/\s+/u)
-          .map((value) => Number.parseInt(value, 10))
-        const status: PullRequestCompare['status'] =
-          aheadBy > 0 && behindBy > 0
-            ? 'diverged'
-            : aheadBy > 0
-              ? 'ahead'
-              : behindBy > 0
-                ? 'behind'
-                : 'identical'
-        const summary = await git.diffSummary([`${baseRef}...${localHead}`])
-        return {
-          source: 'local',
-          status,
-          aheadBy,
-          behindBy,
-          totalCommits: aheadBy,
-          filesChanged: summary.files.length,
-          hasChanges: aheadBy > 0
-        }
-      })
+      return this.wrapError(projectPath, 'read', async () =>
+        comparePullRequestRefs(this.client(directory), base, head)
+      )
     })
   }
 
@@ -1725,92 +1473,9 @@ export class GitService {
   ): Promise<PullRequestComposeContext> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const git = this.client(directory)
-        const remoteBase = `refs/remotes/origin/${input.base}`
-        const localBase = `refs/heads/${input.base}`
-        const baseRef = (await this.refExists(git, remoteBase))
-          ? remoteBase
-          : (await this.refExists(git, localBase))
-            ? localBase
-            : null
-        if (!baseRef) {
-          throw new Error(`The selected base branch ${input.base} is not available locally`)
-        }
-
-        const remoteHead = `refs/remotes/origin/${input.head}`
-        const localHead = `refs/heads/${input.head}`
-        const headRef =
-          input.source === 'remote'
-            ? (await this.refExists(git, remoteHead))
-              ? remoteHead
-              : null
-            : (await this.refExists(git, localHead))
-              ? localHead
-              : null
-        if (!headRef) {
-          const location = input.source === 'remote' ? `origin/${input.head}` : input.head
-          throw new Error(`The selected head branch ${location} is not available locally`)
-        }
-
-        const fullRange = `${baseRef}..${headRef}`
-        const fullDiffRange = `${baseRef}...${headRef}`
-        const pendingPushBaseRef =
-          input.source === 'local' && (await this.refExists(git, remoteHead)) ? remoteHead : null
-        const pendingRange = pendingPushBaseRef ? `${pendingPushBaseRef}..${headRef}` : fullRange
-
-        const readGit = async (args: string[]): Promise<string> => git.raw(args)
-        const [commitsRaw, diffSummary, patchRaw, pendingCommitsRaw, pendingSummary, pendingRaw] =
-          await Promise.all([
-            readGit(['log', '--max-count=100', '--format=%h%x09%s', fullRange]),
-            readGit(['diff', '--stat', fullDiffRange, '--']),
-            readGit(['diff', '--no-ext-diff', '--unified=2', fullDiffRange, '--']),
-            input.source === 'local'
-              ? readGit(['log', '--max-count=100', '--format=%h%x09%s', pendingRange])
-              : Promise.resolve(''),
-            input.source === 'local'
-              ? readGit(['diff', '--stat', pendingRange, '--'])
-              : Promise.resolve(''),
-            input.source === 'local'
-              ? readGit(['diff', '--no-ext-diff', '--unified=2', pendingRange, '--'])
-              : Promise.resolve('')
-          ])
-
-        const includeWorkingTree = input.source === 'local' && input.includeWorkingTree
-        const [worktreeRaw, untracked] = includeWorkingTree
-          ? await Promise.all([
-              readGit(['diff', '--no-ext-diff', '--unified=2', 'HEAD', '--']),
-              this.untrackedComposeContext(directory, git)
-            ])
-          : ['', { text: '', truncated: false }]
-
-        const commits = boundedUtf8(commitsRaw.trim(), 16 * 1024)
-        const patch = boundedUtf8(patchRaw.trim(), 56 * 1024)
-        const pendingCommits = boundedUtf8(pendingCommitsRaw.trim(), 12 * 1024)
-        const pendingPatch = boundedUtf8(pendingRaw.trim(), 20 * 1024)
-        const worktreePatch = boundedUtf8(worktreeRaw.trim(), 20 * 1024)
-        return {
-          source: input.source,
-          baseRef,
-          headRef,
-          commits: commits.text,
-          diffSummary: diffSummary.trim(),
-          patch: patch.text,
-          pendingPushBaseRef,
-          pendingCommits: pendingCommits.text,
-          pendingDiffSummary: pendingSummary.trim(),
-          pendingPatch: pendingPatch.text,
-          worktreePatch: worktreePatch.text,
-          untrackedFiles: untracked.text,
-          truncated:
-            commits.truncated ||
-            patch.truncated ||
-            pendingCommits.truncated ||
-            pendingPatch.truncated ||
-            worktreePatch.truncated ||
-            untracked.truncated
-        }
-      })
+      return this.wrapError(projectPath, 'read', async () =>
+        buildPullRequestComposeContext(this.client(directory), directory, input)
+      )
     })
   }
 
@@ -1836,7 +1501,7 @@ export class GitService {
               } satisfies MergeFailure
             }
           )
-        return this.mapMergeResult(result)
+        return mapMergeResult(result)
       })
     })
   }
@@ -1849,12 +1514,12 @@ export class GitService {
         const failure = await git.rebase([target]).catch((error: unknown) => error)
         if (failure) {
           const status = await git.status()
-          return this.mapMergeResult({
+          return mapMergeResult({
             conflicts: status.conflicted.map((path) => ({ file: path })),
             result: 'Rebase stopped due to conflicts.'
           })
         }
-        return this.emptyMergeResult('Rebase completed.')
+        return emptyMergeResult('Rebase completed.')
       })
     })
   }
@@ -2024,8 +1689,8 @@ export class GitService {
         const lines = existing ? existing.replace(/\r\n/gu, '\n').split('\n') : []
         const patterns: string[] = []
         for (const path of safePaths) {
-          const isDirectory = await this.isDirectory(directory, path)
-          const pattern = isDirectory ? `${path}/` : path
+          const pathIsDirectory = await isDirectory(directory, path)
+          const pattern = pathIsDirectory ? `${path}/` : path
           if (!lines.includes(pattern)) patterns.push(pattern)
         }
         if (patterns.length > 0) {
@@ -2080,35 +1745,11 @@ export class GitService {
         }
         for (const path of untracked) {
           const absolute = resolve(directory, path)
-          await this.removePath(absolute)
+          await removePath(absolute)
         }
       })
       return this.readStatus(directory)
     })
-  }
-
-  /** True when the path resolves to a directory inside the repository. */
-  private async isDirectory(directory: string, path: string): Promise<boolean> {
-    try {
-      const info = await stat(resolve(directory, path))
-      return info.isDirectory()
-    } catch {
-      return false
-    }
-  }
-
-  /** Recursively remove a file or directory that is not tracked by git. */
-  private async removePath(absolute: string): Promise<void> {
-    try {
-      const info = await stat(absolute)
-      if (info.isDirectory()) {
-        await rm(absolute, { recursive: true, force: true })
-      } else {
-        await unlink(absolute)
-      }
-    } catch {
-      // Nothing to remove   treat as already gone.
-    }
   }
 
   /** List stashes newest-first, e.g. `stash@{0}` → `stash@{n}`. */
@@ -2166,165 +1807,11 @@ export class GitService {
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
-  /** Read small previews of untracked text files without adding them to Git. */
-  private async untrackedComposeContext(
-    directory: string,
-    git: SimpleGit
-  ): Promise<{ text: string; truncated: boolean }> {
-    const status = await git.status()
-    const candidates = status.not_added.slice(0, PR_COMPOSE_UNTRACKED_FILES)
-    let remainingBytes = PR_COMPOSE_UNTRACKED_BYTES
-    let truncated = status.not_added.length > candidates.length
-    const sections: string[] = []
-
-    for (
-      let index = 0;
-      index < candidates.length && remainingBytes > 0;
-      index += PR_COMPOSE_READ_BATCH
-    ) {
-      const batch = candidates.slice(index, index + PR_COMPOSE_READ_BATCH)
-      const previews = await Promise.all(
-        batch.map(async (relativePath) => {
-          const safePath = this.assertRelativePath(directory, relativePath)
-          const absolutePath = resolve(directory, safePath)
-          const metadata = await lstat(absolutePath).catch(() => null)
-          if (!metadata?.isFile() || metadata.isSymbolicLink())
-            return { path: safePath, text: '', binary: true, truncated: false }
-          const maximum = Math.min(8 * 1024, remainingBytes)
-          const handle = await open(absolutePath, 'r')
-          try {
-            const buffer = Buffer.allocUnsafe(maximum)
-            const { bytesRead } = await handle.read(buffer, 0, maximum, 0)
-            const content = buffer.subarray(0, bytesRead)
-            const binary = content.includes(0)
-            return {
-              path: safePath,
-              text: binary ? '' : content.toString('utf-8'),
-              binary,
-              truncated: metadata.size > bytesRead
-            }
-          } finally {
-            await handle.close()
-          }
-        })
-      )
-      for (const preview of previews) {
-        const body = preview.binary ? '[binary or unreadable file]' : preview.text
-        const section = `File ${JSON.stringify(preview.path)}\n${body}`
-        const bounded = boundedUtf8(section, remainingBytes)
-        sections.push(bounded.text)
-        remainingBytes -= Buffer.byteLength(bounded.text, 'utf-8')
-        truncated ||= preview.truncated || bounded.truncated
-        if (bounded.truncated) break
-      }
-    }
-    return { text: sections.join('\n\n'), truncated }
-  }
-
-  /** Files changed by any commit-like ref (hash or `stash@{n}`), vs its first parent. */
-  private async diffVsParent(git: SimpleGit, ref: string): Promise<GitFileChange[]> {
-    const safeRef = ref.trim()
-    const result = await git.show([`${safeRef}^!`, '--stat', '--format='])
-    const lines = result.split('\n').filter((line) => line.trim())
-    const changes: GitFileChange[] = []
-    for (const line of lines) {
-      const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+)/u.exec(line)
-      if (match) {
-        const path = match[1]?.trim() ?? ''
-        const statusChar = match[3]?.[0] ?? 'M'
-        const status: GitFileStatus =
-          statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
-        changes.push({ path, status, staged: false })
-      }
-    }
-    return changes
-  }
-
-  /** Per-file diff for any commit-like ref (hash or `stash@{n}`), vs its first parent. */
-  private async fileDiffVsParent(
-    git: SimpleGit,
-    directory: string,
-    ref: string,
-    relativePath: string
-  ): Promise<GitDiff> {
-    const safeRef = ref.trim()
-    const safePath = this.assertRelativePath(directory, relativePath)
-    const parentRef = `${safeRef}^`
-    const parentExists = await this.refExists(git, parentRef)
-    if (!parentExists) {
-      // Root commit: the whole file is new, reuse the untracked/added shape.
-      const blob = await this.readBlob(git, `${safeRef}:${safePath}`)
-      if (!blob) return this.emptyDiff(safePath, false)
-      const additions = blob.content.length === 0 ? 0 : blob.content.split('\n').length
-      return {
-        path: safePath,
-        staged: false,
-        content: blob.content
-          .split('\n')
-          .map((line) => `+${line}`)
-          .join('\n'),
-        before: '',
-        after: blob.content,
-        binary: blob.content.includes('\0'),
-        additions,
-        deletions: 0,
-        truncated: blob.truncated
-      }
-    }
-    const content = await git.diff([parentRef, safeRef, '--', safePath])
-    const summary = await git.diffSummary([parentRef, safeRef, '--', safePath])
-    const file = summary.files[0]
-    const additions =
-      file && 'insertions' in file && typeof file.insertions === 'number' ? file.insertions : 0
-    const deletions =
-      file && 'deletions' in file && typeof file.deletions === 'number' ? file.deletions : 0
-    const binary = file?.binary ?? false
-    const truncated = Buffer.byteLength(content, 'utf-8') > MAX_DIFF_BYTES
-    const boundedContent = truncated
-      ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
-      : content
-
-    let before: string | undefined
-    let after: string | undefined
-    let sideTruncated = false
-    if (!binary) {
-      const beforeBlob = await this.readBlob(git, `${parentRef}:${safePath}`)
-      const afterBlob = await this.readBlob(git, `${safeRef}:${safePath}`)
-      before = beforeBlob?.content
-      after = afterBlob?.content
-      sideTruncated = (beforeBlob?.truncated ?? false) || (afterBlob?.truncated ?? false)
-    }
-
-    return {
-      path: safePath,
-      staged: false,
-      content: boundedContent,
-      binary,
-      additions,
-      deletions,
-      truncated: truncated || sideTruncated,
-      before,
-      after
-    }
-  }
+  // ─── Private helpers ─────────────────────────────────────────────────────
 
   /** Resolve a project-relative path and forbid escaping the repository root. */
   private assertRelativePath(directory: string, path: string): string {
-    const candidate = path.trim()
-    if (!candidate || candidate.includes('\0')) {
-      throw new TypeError('Invalid repository path')
-    }
-    const absolute = isAbsolute(candidate) ? candidate : resolve(directory, candidate)
-    const relativePath = relative(directory, absolute)
-    if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
-      throw new TypeError('Repository path escapes the project root')
-    }
-    return toPosixPath(relativePath)
-  }
-
-  private async isUntracked(git: SimpleGit, path: string): Promise<boolean> {
-    const status = await git.status()
-    return status.not_added.includes(path)
+    return assertRepositoryRelativePath(directory, path)
   }
 
   /**
@@ -2336,202 +1823,7 @@ export class GitService {
    * is not a reliable existence signal here.
    */
   private async refExists(git: SimpleGit, rev: string): Promise<boolean> {
-    const resolved = await git.raw(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]).then(
-      (value) => value.trim(),
-      () => ''
-    )
-    return resolved.length > 0
-  }
-
-  /** True when `ancestor` is reachable from `descendant` (stdout-only check). */
-  private async isAncestor(git: SimpleGit, ancestor: string, descendant: string): Promise<boolean> {
-    const [mergeBase, tip] = await Promise.all([
-      git
-        .raw(['merge-base', ancestor, descendant])
-        .then((value) => value.trim())
-        .catch(() => ''),
-      git
-        .raw(['rev-parse', ancestor])
-        .then((value) => value.trim())
-        .catch(() => '')
-    ])
-    // `git merge-base --is-ancestor` signals through its exit code, which is not
-    // surfaced reliably here   comparing the merge base with the ancestor's own
-    // tip gives the same answer from stdout alone.
-    return mergeBase.length > 0 && mergeBase === tip
-  }
-
-  private async mapStatus(directory: string, status: StatusResult): Promise<GitStatus> {
-    const conflictState = await this.detectConflictState(directory)
-    const conflicted = status.conflicted
-    const changes: GitFileChange[] = []
-    for (const file of status.files) {
-      const path = toPosixPath(file.path)
-      const indexMarker = file.index?.trim() ?? ''
-      const workMarker = file.working_dir?.trim() ?? ''
-      const staged = indexMarker.length > 0 && indexMarker !== '?'
-      const untracked = workMarker === '?' || status.not_added.includes(path)
-
-      const push = (entry: GitFileChange): void => {
-        changes.push(entry)
-      }
-
-      if (conflicted.includes(path)) {
-        push({
-          path,
-          ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
-          status: 'conflicted',
-          staged
-        })
-        continue
-      }
-      if (untracked) {
-        push({ path, status: 'untracked', staged: false })
-        continue
-      }
-
-      const statusKind: GitFileStatus = file.from
-        ? 'renamed'
-        : file.index === 'D' || file.working_dir === 'D'
-          ? 'deleted'
-          : staged
-            ? 'added'
-            : 'modified'
-      push({
-        path,
-        ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
-        status: statusKind,
-        staged
-      })
-      // git reports a file staged AND modified again as one entry with both
-      // index and worktree markers ("MM"). Surface the unstaged half too so the
-      // panel shows both the staged snapshot and the further modifications.
-      if (staged && workMarker.length > 0 && workMarker !== '?' && workMarker !== 'D') {
-        push({ path, status: 'modified', staged: false })
-      }
-    }
-
-    const stagedChanges = changes.filter(
-      (change) => change.staged && change.status !== 'conflicted'
-    ).length
-    const untrackedChanges = changes.filter((change) => change.status === 'untracked').length
-    const unstagedChanges = changes.filter(
-      (change) => !change.staged && change.status !== 'untracked' && change.status !== 'conflicted'
-    ).length
-
-    return {
-      repositoryRoot: directory,
-      branch: status.current ? status.current : null,
-      detached: Boolean(status.current && status.current === 'HEAD'),
-      upstream: status.tracking ?? null,
-      conflictState,
-      clean: status.isClean(),
-      changes,
-      stagedChanges,
-      unstagedChanges,
-      untrackedChanges,
-      conflicted,
-      ahead: status.ahead ?? 0,
-      behind: status.behind ?? 0
-    }
-  }
-
-  /** Map branch short names to the worktree paths that hold them. The entry for the checkout
-   *  being operated on (`directory`) is skipped: its branch is the panel's current branch and
-   *  already carries `current`, so it must not be double-flagged as a foreign worktree. Every
-   *  other checkout   including the primary repository when viewed from a linked worktree  
-   *  flags its branch, because git refuses checking that branch out anywhere else. */
-  private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
-    const entries = parseWorktreePorcelain(raw).entries
-    const paths = new Map<string, string>()
-    const directoryKey = this.worktreePathKey(directory)
-    for (const entry of entries) {
-      if (!entry.head?.startsWith('refs/heads/')) continue
-      // Git reports realpaths; the operating directory may still contain symlinks, so both
-      // sides are normalized before comparing (lexical fallback for vanished worktrees).
-      if (this.worktreePathKey(entry.path) === directoryKey) continue
-      paths.set(entry.head.slice('refs/heads/'.length), entry.path)
-    }
-    return paths
-  }
-
-  /** Stable comparison key for a worktree path: real location, or lexical resolution when the
-   *  path no longer exists on disk. */
-  private worktreePathKey(path: string): string {
-    try {
-      return realpathSync(path)
-    } catch {
-      return resolve(path)
-    }
-  }
-
-  private parseBranchRefs(
-    raw: string,
-    remoteNames: string[],
-    worktreePaths: ReadonlyMap<string, string>
-  ): GitBranchInfo[] {
-    // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
-    // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
-    // operational branch `name` must be derived from the full ref instead
-    // `git branch -d heads/nightly` fails with "branch not found".
-    const localRefPrefix = 'refs/heads/'
-    const remoteRefPrefix = 'refs/remotes/'
-    const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
-    const branches: GitBranchInfo[] = []
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue
-      const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
-      if (!fullRef || !ref) continue
-      if (fullRef.startsWith(localRefPrefix)) {
-        const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-        const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-        const name = fullRef.slice(localRefPrefix.length)
-        branches.push({
-          kind: 'local',
-          name,
-          ref,
-          current: head?.trim() === '*',
-          remote: remoteName || null,
-          upstream: upstream || null,
-          ahead: Number.parseInt(ahead, 10) || 0,
-          behind: Number.parseInt(behind, 10) || 0,
-          worktreePath: worktreePaths.get(name) ?? null
-        })
-        continue
-      }
-      if (!fullRef.startsWith(remoteRefPrefix) || symbolicTarget) continue
-      const relativeRef = fullRef.slice(remoteRefPrefix.length)
-      const remote = namesBySpecificity.find((name) => relativeRef.startsWith(`${name}/`))
-      if (!remote) continue
-      const name = relativeRef.slice(remote.length + 1)
-      if (!name || name === 'HEAD') continue
-      branches.push({
-        kind: 'remote',
-        name,
-        ref,
-        current: false,
-        remote,
-        upstream: null,
-        ahead: 0,
-        behind: 0,
-        worktreePath: null
-      })
-    }
-    return branches
-  }
-
-  private emptyDiff(path: string, staged: boolean): GitDiff {
-    return {
-      path,
-      staged,
-      content: '',
-      binary: false,
-      additions: 0,
-      deletions: 0,
-      truncated: false,
-      before: '',
-      after: ''
-    }
+    return gitRefExists(git, rev)
   }
 
   /**
@@ -2543,25 +1835,7 @@ export class GitService {
     git: SimpleGit,
     ref: string
   ): Promise<{ content: string; truncated: boolean } | null> {
-    let size: number | null
-    try {
-      const sizeOutput = await git.raw(['cat-file', '-s', ref])
-      size = Number.parseInt(String(sizeOutput).trim(), 10)
-    } catch {
-      return null
-    }
-    if (size === null || !Number.isFinite(size) || size < 0) return null
-    if (size === 0) return { content: '', truncated: false }
-    if (size > MAX_DIFF_BYTES * 8) return { content: '', truncated: true }
-    let output: unknown
-    try {
-      output = await git.raw(['cat-file', 'blob', ref])
-    } catch {
-      return null
-    }
-    const text = String(output ?? '')
-    const truncated = size > MAX_DIFF_BYTES
-    return { content: truncated ? text.slice(0, MAX_DIFF_BYTES) : text, truncated }
+    return readGitBlob(git, ref)
   }
 
   /**
@@ -2572,318 +1846,6 @@ export class GitService {
     directory: string,
     path: string
   ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
-    const filePath = resolve(directory, path)
-    const metadata = await stat(filePath).catch(() => null)
-    if (!metadata) return null
-
-    const readHead = async (): Promise<string | null> => {
-      const size = Math.min(metadata.size, MAX_DIFF_BYTES + 1)
-      const buffer = Buffer.alloc(size)
-      try {
-        const handle = await open(filePath, 'r')
-        try {
-          await handle.read(buffer, 0, size, 0)
-        } finally {
-          await handle.close()
-        }
-      } catch {
-        return null
-      }
-      return buffer.toString('utf-8')
-    }
-
-    const head = await readHead()
-    if (head === null) return null
-    const truncated = metadata.size > MAX_DIFF_BYTES
-    return {
-      content: truncated ? head.slice(0, MAX_DIFF_BYTES) : head,
-      truncated,
-      binary: head.includes('\0')
-    }
+    return readWorkingFileContent(directory, path)
   }
-
-  /** Build a bounded `+` diff for an untracked file, detecting binary content. */
-  private async untrackedDiff(directory: string, path: string): Promise<GitDiff> {
-    const file = await this.workingFileContent(directory, path)
-    if (!file) return this.emptyDiff(path, false)
-    if (file.binary) return { ...this.emptyDiff(path, false), binary: true }
-    const additions = file.content.split('\n').length
-    return {
-      path,
-      staged: false,
-      content: file.content
-        .split('\n')
-        .map((line) => `+${line}`)
-        .join('\n'),
-      before: '',
-      after: file.content,
-      binary: false,
-      additions,
-      deletions: 0,
-      truncated: file.truncated
-    }
-  }
-
-  /**
-   * Detect an in-progress merge or rebase from git's control files.
-   *
-   * The control file is located through Git (`rev-parse --git-path`) rather
-   * than assumed at `<checkout>/.git`: in a linked worktree `.git` is a file
-   * pointing at `.git/worktrees/<name>`, so probing the checkout path would
-   * report `none` for a worktree that is mid-merge and hide the conflict
-   * controls (abort, resolve) the panel offers.
-   */
-  private async detectConflictState(directory: string): Promise<'merge' | 'rebase' | 'none'> {
-    const git = this.client(directory)
-    const controlPath = async (name: string): Promise<string> => {
-      const resolved = await git
-        .raw(['rev-parse', '--git-path', name])
-        .then((value) => value.trim())
-        .catch(() => '')
-      if (!resolved) return resolve(directory, '.git', name)
-      return isAbsolute(resolved) ? resolved : resolve(directory, resolved)
-    }
-    const probe = async (candidate: string): Promise<boolean> => {
-      try {
-        await access(candidate)
-        return true
-      } catch {
-        return false
-      }
-    }
-    if (await probe(await controlPath('MERGE_HEAD'))) return 'merge'
-    const rebaseMerge = await probe(await controlPath('rebase-merge'))
-    const rebaseApply = await probe(await controlPath('rebase-apply'))
-    if (rebaseMerge || rebaseApply) return 'rebase'
-    return 'none'
-  }
-
-  private mapMergeResult(result: {
-    conflicts?: Array<{ file?: string | null; reason?: string }>
-    result?: string
-    conflicted?: boolean
-  }): MergeSummary {
-    const conflicts = result.conflicts ?? []
-    const conflictedFiles = conflicts
-      .map((conflict) => ({
-        path: conflict.file ?? '',
-        ...(conflict.reason ? { reason: conflict.reason } : {})
-      }))
-      .filter((entry) => entry.path.length > 0)
-    const resultText = result.result ?? 'Merge completed.'
-    const conflicted = result.conflicted ?? conflictedFiles.length > 0
-    return {
-      conflicted: conflictedFiles,
-      merged: [],
-      result: conflicted ? `${resultText} (${conflictedFiles.length} conflicted)` : resultText,
-      aborted: false
-    }
-  }
-
-  private emptyMergeResult(result: string): MergeSummary {
-    return { conflicted: [], merged: [], result, aborted: false }
-  }
-
-  /** Transient auth header via per-command `-c` config   never persisted, never logged. */
-  private withAuthHeader(directory: string, token: string): SimpleGit {
-    return simpleGit(directory, {
-      maxConcurrentProcesses: 1,
-      config: [`http.extraheader=Authorization: Bearer ${token}`]
-    })
-  }
-}
-
-/**
- * True when a text file still contains git conflict markers. A resolved file
- * has none of the `<<<<<<<`, `=======`, or `>>>>>>>` marker lines, so presence
- * of any of them means resolution is not complete.
- */
-function conflictSourceHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex')
-}
-
-function lineStartOffsets(content: string): number[] {
-  const offsets = [0]
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index] === '\n') offsets.push(index + 1)
-  }
-  return offsets
-}
-
-function buildInitialConflictWorkFile(analysis: GitConflictAnalysis): {
-  content: string
-  hunks: GitConflictWorkHunkState[]
-} {
-  const offsets = lineStartOffsets(analysis.content)
-  const parts: string[] = []
-  const hunks: GitConflictWorkHunkState[] = []
-  let sourceCursor = 0
-  let outputLength = 0
-  for (let index = 0; index < analysis.hunks.length; index += 1) {
-    const hunk = analysis.hunks[index]
-    if (!hunk) continue
-    const sourceFrom = offsets[hunk.startLine - 1] ?? analysis.content.length
-    const sourceTo = offsets[hunk.endLine] ?? analysis.content.length
-    const before = analysis.content.slice(sourceCursor, sourceFrom)
-    parts.push(before)
-    outputLength += before.length
-    const from = outputLength
-    parts.push(hunk.ours)
-    outputLength += hunk.ours.length
-    const to = outputLength
-    if (sourceTo < analysis.content.length && !hunk.ours.endsWith('\n')) {
-      parts.push('\n')
-      outputLength += 1
-    }
-    hunks.push({
-      index,
-      from,
-      to,
-      acceptedIncoming: false,
-      acceptedCurrent: false,
-      edited: false
-    })
-    sourceCursor = sourceTo
-  }
-  parts.push(analysis.content.slice(sourceCursor))
-  return { content: parts.join(''), hunks }
-}
-
-function isConflictWorkHunkState(
-  value: unknown,
-  contentLength: number
-): value is GitConflictWorkHunkState {
-  if (!value || typeof value !== 'object') return false
-  const state = value as Record<string, unknown>
-  return (
-    Number.isInteger(state.index) &&
-    typeof state.index === 'number' &&
-    state.index >= 0 &&
-    Number.isInteger(state.from) &&
-    typeof state.from === 'number' &&
-    state.from >= 0 &&
-    Number.isInteger(state.to) &&
-    typeof state.to === 'number' &&
-    state.to >= state.from &&
-    state.to <= contentLength &&
-    typeof state.acceptedIncoming === 'boolean' &&
-    typeof state.acceptedCurrent === 'boolean' &&
-    typeof state.edited === 'boolean'
-  )
-}
-
-function parseConflictWorkState(
-  stateJson: string,
-  contentLength: number
-): GitConflictWorkHunkState[] {
-  const parsed: unknown = JSON.parse(stateJson)
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every((item) => isConflictWorkHunkState(item, contentLength))
-  ) {
-    throw new TypeError('Conflict work state is invalid')
-  }
-  return parsed
-}
-
-function parseConflictWorkMetadata(
-  metadataText: string,
-  sourceHash: string,
-  hunkCount: number,
-  contentLength: number
-): ConflictWorkMetadata | null {
-  const parsed: unknown = JSON.parse(metadataText)
-  if (!parsed || typeof parsed !== 'object') return null
-  const metadata = parsed as Record<string, unknown>
-  if (
-    metadata.version !== 1 ||
-    metadata.sourceHash !== sourceHash ||
-    metadata.draftSaved !== true ||
-    !Array.isArray(metadata.hunks) ||
-    metadata.hunks.length !== hunkCount ||
-    !metadata.hunks.every((item) => isConflictWorkHunkState(item, contentLength))
-  ) {
-    return null
-  }
-  return {
-    version: 1,
-    sourceHash,
-    draftSaved: true,
-    hunks: metadata.hunks
-  }
-}
-
-function hasConflictMarkers(content: string): boolean {
-  return /^(?:<<<<<<<[ \t].*|=======$|>>>>>>>[ \t].*)$/mu.test(content)
-}
-
-/**
- * Parse the well-formed conflict blocks (`<<<<<<<` … `>>>>>>>`) out of a
- * working file so the resolution panel can render each one. Handles both the
- * classic two-way shape and the diff3 shape (a `|||||||` base block between
- * ours and theirs). Returns hunks with 1-based inclusive line spans covering
- * the whole block including its markers.
- */
-function parseConflictHunks(content: string): GitConflictHunk[] {
-  const lines = content.split('\n')
-  const hunks: GitConflictHunk[] = []
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i] ?? ''
-    if (!line.startsWith('<<<<<<<')) {
-      i += 1
-      continue
-    }
-    const startLine = i + 1
-    const oursLabel = line.replace(/^<{7,}(?: |$)/u, '') || 'ours'
-    const ours: string[] = []
-    let base: string[] | null = null
-    const theirs: string[] = []
-    let j = i + 1
-    // Ours side: everything up to `=======` or a diff3 `|||||||` base marker.
-    while (
-      j < lines.length &&
-      !(lines[j] ?? '').startsWith('=======') &&
-      !(lines[j] ?? '').startsWith('|||||||')
-    ) {
-      ours.push(lines[j] ?? '')
-      j += 1
-    }
-    // Diff3 base: between `|||||||` and `=======`.
-    if (j < lines.length && (lines[j] ?? '') !== '=======') {
-      j += 1
-      const baseLines: string[] = []
-      while (j < lines.length && !(lines[j] ?? '').startsWith('=======')) {
-        baseLines.push(lines[j] ?? '')
-        j += 1
-      }
-      base = baseLines
-    }
-    if (j >= lines.length) {
-      i = startLine
-      continue // Malformed block   skip forward so we never loop forever.
-    }
-    j += 1 // consume `=======`
-    while (j < lines.length && !(lines[j] ?? '').startsWith('>>>>>>>')) {
-      theirs.push(lines[j] ?? '')
-      j += 1
-    }
-    if (j >= lines.length) {
-      i = startLine
-      continue // Unclosed block   not a usable hunk.
-    }
-    const endLine = j + 1
-    const theirsLabel = (lines[j] ?? '').replace(/^>{7,}(?: |$)/u, '') || 'theirs'
-    hunks.push({
-      startLine,
-      endLine,
-      oursLabel,
-      theirsLabel,
-      ours: ours.join('\n'),
-      theirs: theirs.join('\n'),
-      base: base === null ? null : base.join('\n')
-    })
-    i = j + 1
-  }
-  return hunks
 }
