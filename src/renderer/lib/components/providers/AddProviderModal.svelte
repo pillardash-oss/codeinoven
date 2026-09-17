@@ -20,7 +20,11 @@
   import AddProviderModalCustomTab from './AddProviderModalCustomTab.svelte'
   import AddProviderModalFooter from './AddProviderModalFooter.svelte'
   import { AddProviderModalOAuthController } from './add-provider-modal-oauth.svelte'
-  import { type AddTab, type ConnectStep } from './add-provider-modal-helpers'
+  import {
+    type AddTab,
+    type ConnectStep,
+    providerMatchesSearch
+  } from './add-provider-modal-helpers'
 
   interface Props {
     harness: ProviderConnectionInfo
@@ -31,9 +35,9 @@
     onEditCustom: (provider: BaseUrlProvider) => void
     /** Tab shown on open   e.g. 'custom' when returning here via the editor's Back button. */
     initialTab?: AddTab
-    /** Provider search the connect list opens with. Non-empty opens that list
-     *  straight away with the filter applied, which is how the first-run setup
-     *  card lands a new user on OpenAI instead of an empty connect screen. */
+    /** Provider-search text the connect list starts with. Pre-filled only when
+     *  the harness actually offers a match, so a first-run user lands on the
+     *  familiar connect screen with their own providers, not on an empty list. */
     initialSearch?: string
     /** Fired once a provider finished connecting and its account was saved. */
     onProviderConnected?: () => void
@@ -117,11 +121,7 @@
 
   let filteredOffered = $derived(
     offered.filter(
-      (provider) =>
-        !hiddenIds.includes(provider.id) &&
-        (search.trim() === '' ||
-          provider.name.toLowerCase().includes(search.toLowerCase()) ||
-          provider.id.toLowerCase().includes(search.toLowerCase()))
+      (provider) => !hiddenIds.includes(provider.id) && providerMatchesSearch(provider, search)
     )
   )
 
@@ -428,15 +428,14 @@
   onMount(() => {
     void baseUrlProviderStore.load()
     void loadHidden()
-    // A caller that names a provider search wants the provider list on screen
-    // with that filter applied, so wait for the sign-in probe and the offered
-    // list before opening it   otherwise the step would be decided from an
-    // auth state that has not landed yet.
+    // A caller that names a provider search wants it waiting in the search box
+    // for the next time the provider list is opened   never applied on top of
+    // the connect screen itself. Jumping straight to the filtered list hid the
+    // sign-in status and the already-connected providers, which is exactly what
+    // a user who has accounts needs to see first.
     void Promise.all([checkAuth(), loadOffered()]).then(() => {
       const query = initialSearch.trim()
-      if (!query || !canSignIn || pickerLogin) return
-      search = query
-      step = 'picking'
+      search = offered.some((provider) => providerMatchesSearch(provider, query)) ? query : ''
     })
     const unsubscribeOAuth = subscribe('providerAccounts:oauthEvent', (payload) =>
       oauth.handlePayload(payload)

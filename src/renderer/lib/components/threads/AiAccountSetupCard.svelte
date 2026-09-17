@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, Plug, Sparkles, X } from '@lucide/svelte'
+  import { Plug, Sparkles, X } from '@lucide/svelte'
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'
   import { APP_NAME } from '$shared/brand'
@@ -13,8 +13,6 @@
     providers: ProviderCatalog[]
     settings: ThreadSettings
     projectId: string
-    /** True while the project's harness catalogs are being re-probed. */
-    refreshing?: boolean
     favoriteModels?: string[]
     recentModels?: string[]
     onRemoveRecent?: (modelKey: string) => void
@@ -34,7 +32,6 @@
     providers,
     settings,
     projectId,
-    refreshing = false,
     favoriteModels = [],
     recentModels = [],
     onRemoveRecent,
@@ -107,8 +104,10 @@
         {#if !connected}
           {APP_NAME} works through the AI accounts you already have. Connect OpenAI, Anthropic, Google,
           or another provider, then pick a model and send your message.
-        {:else}
+        {:else if connectedNames}
           {connectedNames} connected. Pick the model this thread should use.
+        {:else}
+          Pick the model this thread should use.
         {/if}
       </p>
 
@@ -126,11 +125,6 @@
             Signing in happens inside {APP_NAME}. Credentials are stored by {APP_NAME} in
             {harnessName}'s own credential file on this machine.
           </p>
-        {:else if refreshing}
-          <div class="flex h-9 items-center gap-2 text-xs text-muted">
-            <Loader2 size={14} class="shrink-0 animate-spin" />
-            <span class="truncate">Loading {connectedNames} models…</span>
-          </div>
         {:else}
           <ModelPicker
             {providers}

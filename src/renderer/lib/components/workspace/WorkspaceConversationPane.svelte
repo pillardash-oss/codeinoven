@@ -224,7 +224,6 @@
               providers={chatProviders}
               settings={chatComposerSettings}
               projectId={chatInboxId ?? INBOX_PROJECT_ID}
-              refreshing={chatInboxId ? providerCatalog.refreshing(chatInboxId) : false}
               favoriteModels={rendererRecovery.chatFavoriteModels}
               recentModels={rendererRecovery.chatRecentModels}
               onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}

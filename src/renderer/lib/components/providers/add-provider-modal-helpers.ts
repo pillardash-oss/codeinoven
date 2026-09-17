@@ -1,7 +1,18 @@
-import type { ProviderAccountAuthStatus, ProviderAccountLoginHandoff } from '$shared/types'
+import type {
+  OfferedProvider,
+  ProviderAccountAuthStatus,
+  ProviderAccountLoginHandoff
+} from '$shared/types'
 
 export type AddTab = 'connect' | 'custom'
 export type ConnectStep = 'idle' | 'picking' | 'running' | 'labeling'
+
+/** True when an offered provider matches a provider-search query. */
+export function providerMatchesSearch(provider: OfferedProvider, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return provider.name.toLowerCase().includes(needle) || provider.id.toLowerCase().includes(needle)
+}
 
 export function shellCommand(handoff: ProviderAccountLoginHandoff): string {
   return [handoff.command, ...handoff.args]

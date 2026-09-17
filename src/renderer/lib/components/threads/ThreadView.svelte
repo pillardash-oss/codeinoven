@@ -11112,7 +11112,6 @@
                   {providers}
                   {settings}
                   projectId={thread.projectId}
-                  refreshing={providerCatalog.refreshing(thread.projectId)}
                   favoriteModels={chatMode
                     ? rendererRecovery.chatFavoriteModels
                     : rendererRecovery.favoriteModels}
