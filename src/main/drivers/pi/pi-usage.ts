@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   AgentRateLimitWindow,
   AgentTokenUsage,
+  NormalizedUsage,
   SessionAgentEvent
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
@@ -11,7 +12,16 @@ import { numberValue, record } from './pi-values'
 
 /** Pi token, cost, context, and provider rate-limit accounting. */
 
-/** Parse a Pi token/cost accounting object into the shared usage shape. */
+/**
+ * Parse a Pi token/cost accounting object into the shared usage shape.
+ *
+ * The aggregate total sums every reported category, including `reasoning`,
+ * which Pi reports on its own field beside `output` (the shared accumulator in
+ * `pi-compaction-extension.ts` carries it as a separate field too). Pi's own
+ * `totalTokens` for the turn is preserved on the normalized payload as
+ * `rawTotal` rather than being trusted as the display total, so this aggregate
+ * never drops a billed category.
+ */
 function mapPiUsage(value: unknown): AgentTokenUsage | undefined {
   const usage = record(value)
   if (!usage) return undefined
@@ -27,6 +37,47 @@ function mapPiUsage(value: unknown): AgentTokenUsage | undefined {
     cacheRead,
     cacheWrite,
     total: input + output + reasoning + cacheRead + cacheWrite
+  }
+}
+
+/**
+ * Map a Pi turn's usage into the canonical normalized contract.
+ *
+ * Pi reports the prompt cache as separate categories beside the uncached
+ * input, which its own cache statistics treat as disjoint parts of one prompt
+ * (`promptTokens = input + cacheRead + cacheWrite`), so `input` is the uncached
+ * remainder and no subtraction is needed. Pi also reports its own `totalTokens`
+ * for the turn; the composition of that total is the provider's business, so it
+ * is recorded as `rawTotal` with `provider_defined` semantics instead of being
+ * asserted as cache-inclusive, and the whole raw object is kept so the
+ * provider's own evidence survives alongside the normalized categories.
+ */
+function mapPiNormalizedUsage(value: unknown): NormalizedUsage | undefined {
+  const usage = record(value)
+  if (!usage) return undefined
+  const input = numberValue(usage['input'])
+  const output = numberValue(usage['output'])
+  const reasoning = numberValue(usage['reasoning'])
+  const cachedInput = numberValue(usage['cacheRead'])
+  const cacheWrite = numberValue(usage['cacheWrite'])
+  const rawTotal = numberValue(usage['totalTokens']) ?? numberValue(usage['total'])
+  const reported =
+    input !== undefined ||
+    output !== undefined ||
+    reasoning !== undefined ||
+    cachedInput !== undefined ||
+    cacheWrite !== undefined ||
+    rawTotal !== undefined
+  if (!reported) return undefined
+  return {
+    uncachedInput: input ?? null,
+    cachedInput: cachedInput ?? null,
+    cacheWrite: cacheWrite ?? null,
+    output: output ?? null,
+    reasoning: reasoning ?? null,
+    rawProviderUsage: { ...usage },
+    rawTotal: rawTotal ?? null,
+    totalSemantics: rawTotal === undefined ? 'unavailable' : 'provider_defined'
   }
 }
 
@@ -254,6 +305,7 @@ export function mapPiRateLimitHeaders(payload: unknown): AgentRateLimitWindow[] 
 
 export {
   mapPiUsage,
+  mapPiNormalizedUsage,
   mapPiCost,
   isUsagelessAssistantStatsError,
   mirroredSessionCost,

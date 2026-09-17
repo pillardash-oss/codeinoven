@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
+import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
@@ -80,6 +81,7 @@ export class Database {
     this.applySchema()
     this.startMaintenanceWorker()
     await this.migrateIndependentUsageLedger()
+    await this.migrateUsageEventFeatures()
     this.db.pragma('optimize = 0x10002')
 
     Logger.info('SQLite database initialised', {
@@ -731,6 +733,7 @@ export class Database {
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
+      this.migrateAgentMessageNormalizedUsageColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -962,6 +965,23 @@ export class Database {
     }
   }
 
+  /**
+   * Message mirrors predate the canonical usage payload. Without the column a
+   * reloaded message loses the provider's own categories and raw evidence, so
+   * sub-agent turns (and any reconciliation after a restart) would have to be
+   * recorded from the aggregate alone.
+   */
+  private migrateAgentMessageNormalizedUsageColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('normalized_usage_json')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN normalized_usage_json TEXT')
+    }
+  }
+
   /** Existing databases predate the append-only usage snapshot fields. */
   private migrateUsageEventColumns(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -1098,6 +1118,78 @@ export class Database {
     const result = await this.transactionViaWorker(statements)
     if (!result.ok) throw new Error(result.error ?? 'Could not migrate the usage ledger')
   }
+
+  /**
+   * Rebuild the usage ledger when its CHECK constraint predates a feature value
+   * CodeInOven now records (sub-agent and ephemeral work). The CHECK is part of
+   * the table SQL, so SQLite rejects a new value inside an old constraint; the
+   * ledger write catches and dev-logs that rejection, which would silently drop
+   * the row. Detecting the missing value in the stored SQL and rebuilding the
+   * table keeps every recorded turn admissible.
+   */
+  private async migrateUsageEventFeatures(): Promise<void> {
+    const connection = this.requireDb()
+    const stored = connection
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_events'")
+      .get() as { sql?: string } | undefined
+    const tableSql = stored?.sql
+    if (!tableSql) return
+    const missing = USAGE_EVENT_FEATURES.filter((feature) => !tableSql.includes(`'${feature}'`))
+    if (missing.length === 0) return
+
+    const legacyColumns = new Set(
+      (connection.prepare('PRAGMA table_info(usage_events)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    const targetColumns = parseColumnNames(USAGE_EVENTS_COLUMNS_SQL)
+    const carried = targetColumns.filter((column) => legacyColumns.has(column) && column !== 'id')
+    const columnList = ['id', ...carried].join(', ')
+    const projectIndex = `CREATE INDEX IF NOT EXISTS idx_usage_events_project
+      ON usage_events(project_id, created_at, id)`
+    const result = await this.transactionViaWorker([
+      { sql: 'ALTER TABLE usage_events RENAME TO usage_events_feature_legacy', params: [] },
+      { sql: `CREATE TABLE usage_events (${USAGE_EVENTS_COLUMNS_SQL})`, params: [] },
+      {
+        sql: `INSERT INTO usage_events(${columnList})
+        SELECT ${columnList}
+        FROM usage_events_feature_legacy`,
+        params: []
+      },
+      { sql: 'DROP TABLE usage_events_feature_legacy', params: [] },
+      ...USAGE_EVENTS_INDEXES_SQL.split(';')
+        .map((sql) => sql.trim())
+        .filter(Boolean)
+        .map((sql) => ({ sql, params: [] })),
+      { sql: projectIndex, params: [] }
+    ])
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Could not migrate the usage event feature values')
+    }
+    Logger.info('Usage ledger rebuilt for new feature values', {
+      features: missing.join(',')
+    })
+  }
+}
+
+/** Column names declared in a CREATE TABLE column list.
+ *
+ * Reads only the top-level column declarations and stops at the first
+ * table-level constraint, so a constraint line or its continuation is never
+ * mistaken for a column.
+ */
+function parseColumnNames(columnsSql: string): string[] {
+  const names: string[] = []
+  for (const rawLine of columnsSql.split('\n')) {
+    const line = rawLine.trim().replace(/,$/u, '')
+    if (!line || line.startsWith('--')) continue
+    if (line.startsWith('CHECK') || line.startsWith('UNIQUE') || line.startsWith('PRIMARY KEY')) {
+      break
+    }
+    const [name] = line.split(/\s+/u)
+    if (name && /^[a-z_][a-z0-9_]*$/u.test(name)) names.push(name)
+  }
+  return names
 }
 
 /** Statement text attributed in slow-op logs; capped and normalized to a single line. */

@@ -172,6 +172,7 @@ import type {
   AgentRunningProcess,
   NativeMcpContent,
   TaskManagerSnapshot,
+  UsageBearingMessage,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentTask,
@@ -660,6 +661,10 @@ export class ChatEngine {
   private childSessionOwners = new Map<string, ChildSessionInfo>()
 
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
+
+  /** Sub-agent usage events already written in this process, so a repeated
+   *  sweep records each worker turn once without re-reading it from the ledger. */
+  private readonly recordedSubagentUsageIds = new Set<string>()
 
   /** Latest provider lifecycle status reported for each child session id, so
    *  transcript loads can tell an in-flight worker (transcript not flushed
@@ -4989,6 +4994,15 @@ export class ChatEngine {
             sessionId,
             merged
           )
+          // Account the worker's turns the moment its transcript lands, so a
+          // worker that finishes after its parent turn ended is still recorded
+          // instead of waiting for another turn of the thread.
+          await this.recordSubagentTurnUsage(
+            owner.projectId,
+            owner.threadId,
+            this.subagentTurnKey(owner, sessionId),
+            merged
+          ).catch((error: unknown) => Logger.dev('Sub-agent usage recording failed:', error))
         }
         return merged
       } catch (error) {
@@ -7675,6 +7689,15 @@ export class ChatEngine {
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
         reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
       })
+      // A temporary chat is disposable, so its turn never reaches the durable
+      // ledger through the normal finalization path. Record it here.
+      this.recordEphemeralTurnUsage({
+        projectId,
+        threadId,
+        sessionId: temporary.sessionId,
+        callId: response.id,
+        message: response
+      })
       this.refreshTemporaryChatExpiry(temporary)
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'completed')
       return response
@@ -7822,6 +7845,15 @@ export class ChatEngine {
           modelId: response.modelId ?? settings.modelId ?? null,
           reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
           reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+        })
+        // A virtual task owns no thread row, so its spend is recorded against
+        // the disposable session it ran in and the project it served.
+        this.recordEphemeralTurnUsage({
+          projectId,
+          threadId: null,
+          sessionId,
+          callId: key,
+          message: response
         })
       }
 
@@ -12357,6 +12389,14 @@ export class ChatEngine {
       throw error
     } finally {
       if (sessionId) {
+        await this.recordEphemeralSessionUsage({
+          projectId,
+          threadId,
+          sessionId,
+          projectPath,
+          driver,
+          isolated
+        })
         this.clearCompletionWaiter(sessionId)
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
@@ -13097,6 +13137,14 @@ export class ChatEngine {
           })
         }
       } finally {
+        await this.recordEphemeralSessionUsage({
+          projectId,
+          threadId,
+          sessionId,
+          projectPath,
+          driver,
+          isolated
+        })
         this.clearCompletionWaiter(sessionId)
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
@@ -13456,6 +13504,14 @@ export class ChatEngine {
           )
         }
       } finally {
+        await this.recordEphemeralSessionUsage({
+          projectId,
+          threadId,
+          sessionId,
+          projectPath,
+          driver,
+          isolated
+        })
         this.clearCompletionWaiter(sessionId)
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
@@ -13708,6 +13764,14 @@ export class ChatEngine {
           })
         }
       } finally {
+        await this.recordEphemeralSessionUsage({
+          projectId,
+          threadId: coordinatorThreadId,
+          sessionId,
+          projectPath,
+          driver,
+          isolated
+        })
         this.clearCompletionWaiter(sessionId)
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
@@ -20340,6 +20404,16 @@ export class ChatEngine {
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
       await this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
+      // A sub-agent worker runs as a nested session billed separately from the
+      // parent turn, and its tokens live only in the child transcript mirrored
+      // into this thread. Fold them into the same turn so nothing a worker
+      // spent stays unattributed.
+      await this.recordSubagentTurnUsage(
+        info.projectId,
+        info.threadId,
+        parentTurnId ?? turnAssistant?.id ?? info.threadId,
+        await this.threadManager.listSubagentUsageMessages(info.projectId, info.threadId)
+      )
       // The harness demonstrably ran   confirm its behavior manifest in use so
       // the reliable declared baseline becomes a validated runtime confirmation
       // (unless the user explicitly overrode it). Fire-and-forget: never let
@@ -20933,20 +21007,57 @@ export class ChatEngine {
       reportedInputTokens: normalizedUsage?.uncachedInput ?? null,
       reportedTotalTokens: normalizedUsage?.rawTotal ?? null
     })
+    this.recordAssistantUsageEvent({
+      idPrefix: 'message',
+      threadId,
+      projectId: null,
+      parentTurnId: parentTurnId ?? message.id,
+      feature,
+      featureCallId: message.id,
+      message,
+      thinkingLevelFallback: thread?.settings?.thinkingLevel ?? null,
+      failure
+    })
+  }
+
+  /**
+   * Record one assistant turn in the durable usage ledger.
+   *
+   * Shared by real thread turns, nested sub-agent worker sessions and
+   * disposable sessions, so every assistant message that reports usage reaches
+   * the same place with the same cost accounting. The event id is derived from
+   * the feature and the message, and the ledger ignores a replayed id, which is
+   * what lets the sub-agent sweep run repeatedly without double counting.
+   */
+  private recordAssistantUsageEvent(input: {
+    idPrefix: string
+    threadId: string
+    /** Stated project for work with no owning thread, taken from the caller. */
+    projectId: string | null
+    parentTurnId: string
+    feature: UsageEventFeature
+    featureCallId: string
+    message: UsageBearingMessage
+    thinkingLevelFallback: ThinkingLevel | null
+    failure?: string
+  }): void {
+    const { message } = input
+    const normalizedUsage = message.normalizedUsage
     const { costUsd: knownCost, costStatus } = assistantTurnCostAccounting(message)
     const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
-      id: `message:${message.id}`,
-      threadId,
-      parentTurnId: parentTurnId ?? message.id,
-      featureCallId: message.id,
+      id: `${input.idPrefix}:${message.id}`,
+      threadId: input.threadId,
+      parentTurnId: input.parentTurnId,
+      featureCallId: input.featureCallId,
       attempt: 1,
-      feature,
+      feature: input.feature,
+      projectId: input.projectId,
       harnessId: message.harnessId ?? null,
       accountId: message.accountId ?? null,
       providerId: message.providerId ?? null,
       modelId: message.modelId ?? null,
-      thinkingLevel: message.thinkingLevel ?? thread?.settings?.thinkingLevel ?? null,
+      thinkingLevel: message.thinkingLevel ?? input.thinkingLevelFallback,
       utilityId: null,
       rawProviderUsage: normalizedUsage?.rawProviderUsage ?? {},
       tokens: normalizedUsage
@@ -20967,8 +21078,8 @@ export class ChatEngine {
       rawTotal: normalizedUsage?.rawTotal ?? null,
       totalSemantics: normalizedUsage?.totalSemantics ?? 'unavailable',
       toolFeeUsd: null,
-      success: !failure && !message.error,
-      retryCause: failure ?? message.error ?? null,
+      success: !input.failure && !message.error,
+      retryCause: input.failure ?? message.error ?? null,
       durationMs: Math.max(
         0,
         Math.floor((message.completedAt ?? message.createdAt) - message.createdAt)
@@ -20996,6 +21107,140 @@ export class ChatEngine {
           capturedAt: message.completedAt ?? message.createdAt
         } satisfies UsagePricingProvenance)
     })
+  }
+
+  /**
+   * Record every sub-agent turn of a thread that reports usage, and fold those
+   * tokens into the thread's harness totals.
+   *
+   * A worker runs as a nested session billed separately from the parent turn,
+   * and its mirrored transcript is the only place those tokens exist. The
+   * harness ledger (guarded by `harness_usage_messages`) and the usage ledger
+   * (guarded by its stable event id) both ignore a replay, so this sweep is safe
+   * to run after every child capture and at every parent turn end. Messages the
+   * harness never reported usage for are skipped rather than recorded as zero,
+   * because an invented zero would be indistinguishable from real silence.
+   */
+  private async recordSubagentTurnUsage(
+    projectId: string,
+    threadId: string,
+    parentTurnId: string,
+    subagentMessages: readonly UsageBearingMessage[]
+  ): Promise<void> {
+    const billable = subagentMessages.filter(
+      (message) =>
+        message.role === 'assistant' &&
+        Boolean(message.harnessId) &&
+        message.tokens !== undefined &&
+        !this.recordedSubagentUsageIds.has(message.id)
+    )
+    if (billable.length === 0) return
+    for (const message of billable) {
+      this.recordedSubagentUsageIds.add(message.id)
+      this.recordAssistantUsageEvent({
+        idPrefix: 'subagent',
+        threadId,
+        projectId,
+        parentTurnId,
+        feature: 'subagent',
+        featureCallId: message.id,
+        message,
+        thinkingLevelFallback: null
+      })
+    }
+    await this.threadManager
+      .accumulateHarnessUsage(projectId, threadId, billable)
+      .catch((error: unknown) => Logger.dev('Sub-agent usage accumulation failed:', error))
+  }
+
+  /** The parent turn a worker's spend belongs to.
+   *
+   * A worker is spawned from a parent turn, and the session registry tracks the
+   * user message that started that turn. When no turn of the parent is
+   * registered any more (a worker that outlived its turn) the worker session
+   * itself becomes the anchor, which keeps the spend in the ledger and out of
+   * any other turn's per-turn totals.
+   */
+  private subagentTurnKey(owner: ChildSessionInfo, sessionId: string): string {
+    const parent = owner.parentSessionId
+      ? this.sessionRegistry.get(owner.parentSessionId)
+      : undefined
+    return (
+      parent?.activeTurnUserMessageId ??
+      parent?.activeTurnId ??
+      parent?.lastTurnId ??
+      `subagent:${sessionId}`
+    )
+  }
+
+  /**
+   * Record one disposable session's usage.
+   *
+   * Ephemeral sessions own no user turn, so they are anchored to the owning
+   * thread when one exists and to a synthetic `virtual:` scope otherwise, with
+   * the session id as the turn key. That keeps their spend in the profile,
+   * model and daily totals while never matching a real thread turn in the
+   * per-turn KPIs.
+   */
+  private recordEphemeralTurnUsage(input: {
+    projectId: string | null
+    threadId: string | null
+    sessionId: string
+    /** Identity of the call inside the disposable session (turn or attempt). */
+    callId: string
+    message: AgentMessage | undefined
+  }): void {
+    const message = input.message
+    if (!message || message.role !== 'assistant' || !message.harnessId) return
+    if (message.tokens === undefined && message.normalizedUsage === undefined) return
+    this.recordAssistantUsageEvent({
+      idPrefix: 'ephemeral',
+      threadId: input.threadId ?? `virtual:${input.sessionId}`,
+      projectId: input.projectId,
+      parentTurnId: `ephemeral:${input.sessionId}`,
+      feature: 'ephemeral',
+      featureCallId: input.callId,
+      message,
+      thinkingLevelFallback: null
+    })
+  }
+
+  /**
+   * Record every usage-bearing turn of a disposable generation session.
+   *
+   * PRD, brainstorm, spec and assignment drafts run in sessions that own no
+   * user turn and never finalize through `onSessionIdle`, so their spend is only
+   * visible while the session transcript is still readable. Runs before the
+   * session is torn down, so a generation that failed still records what it
+   * spent.
+   */
+  private async recordEphemeralSessionUsage(input: {
+    projectId: string
+    threadId: string
+    sessionId: string
+    projectPath: string
+    driver: HarnessDriver
+    isolated?: IsolatedHandle
+  }): Promise<void> {
+    try {
+      const messages =
+        input.isolated && input.driver instanceof OpenCodeDriver
+          ? await input.driver.loadMessages(input.projectPath, input.sessionId, input.isolated)
+          : await input.driver.loadMessages(input.projectPath, input.sessionId)
+      for (const message of messages) {
+        if (message.role !== 'assistant') continue
+        if (message.tokens === undefined && message.normalizedUsage === undefined) continue
+        this.recordEphemeralTurnUsage({
+          projectId: input.projectId,
+          threadId: input.threadId,
+          sessionId: input.sessionId,
+          callId: message.id,
+          message
+        })
+      }
+    } catch (error) {
+      Logger.dev('Disposable session usage read failed:', error)
+    }
   }
 
   /**

@@ -27,6 +27,7 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentPart,
+  UsageBearingMessage,
   AgentQuestion,
   AgentQuestionResolution,
   AgentProviderIssue,
@@ -964,11 +965,11 @@ export function chatSkillPaths(driverId: string): string[] {
     )
 }
 
-export function assistantTurnCostAccounting(message: AgentMessage): {
+export function assistantTurnCostAccounting(message: UsageBearingMessage): {
   costUsd: number | null
   costStatus: 'known' | 'estimated' | 'unavailable'
 } {
-  const stepCosts = message.parts.filter(
+  const stepCosts = (message.parts ?? []).filter(
     (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
       part.type === 'step-finish' && typeof part.cost === 'number'
   )

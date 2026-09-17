@@ -338,3 +338,27 @@ export interface TranscriptExportResult {
   /** Where the transcript was stored   project scratch vs. chat temp dir. */
   location: 'project' | 'chat'
 }
+
+/** The subset of an assistant message that usage accounting reads.
+ *
+ * Usage recording and harness-total accumulation accept this instead of a full
+ * `AgentMessage`, so a mirrored turn can be accounted from a narrow row
+ * projection without reading, transferring, or parsing its message parts.
+ */
+export interface UsageBearingMessage {
+  id: string
+  role: 'user' | 'assistant'
+  createdAt: number
+  completedAt?: number
+  cost?: number
+  costProvenance?: UsagePricingProvenance
+  tokens?: AgentTokenUsage
+  normalizedUsage?: NormalizedUsage
+  error?: string
+  harnessId?: string
+  providerId?: string
+  modelId?: string
+  thinkingLevel?: ThinkingLevel
+  accountId?: string
+  parts?: AgentPart[]
+}

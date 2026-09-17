@@ -17,6 +17,8 @@ import {
   aggregateModelUsage,
   latestClaudeRateLimits,
   latestIterationContextUsed,
+  mapClaudeNormalizedUsage,
+  preserveNormalizedReasoning,
   preserveReasoningUsage,
   rateLimitWindows,
   tokenUsage
@@ -187,19 +189,26 @@ export function mapClaudeCodeRecord(
       .join('\n')
       .trim()
     const authenticationFailure = entry['error'] === 'authentication_failed'
+    // The per-message assistant record reports its own usage before the final
+    // result folds in the cumulative one; carry the normalized payload here too
+    // so an interrupted turn still reaches the ledger with real categories.
+    const normalizedUsage = mapped.tokens
+      ? mapClaudeNormalizedUsage(rawMessage['usage'])
+      : undefined
     const usageEvent = mapped.tokens
       ? [
           {
             type: 'usage.updated' as const,
             sessionId: context.sessionId,
             messageId: mapped.id,
-            tokens: mapped.tokens
+            tokens: mapped.tokens,
+            ...(normalizedUsage ? { normalizedUsage } : {})
           }
         ]
       : []
     return {
       nativeSessionId,
-      messages: [mapped],
+      messages: [normalizedUsage ? { ...mapped, normalizedUsage } : mapped],
       events: [
         { type: 'session.status', sessionId: context.sessionId, status: { state: 'working' } },
         ...mapped.parts.map((part) => ({
@@ -362,6 +371,7 @@ export function mapClaudeCodeRecord(
     }
     if (eventType === 'message_delta' && current) {
       const tokens = tokenUsage(event?.['usage'])
+      const normalizedUsage = tokens ? mapClaudeNormalizedUsage(event?.['usage']) : undefined
       return tokens
         ? {
             nativeSessionId,
@@ -370,7 +380,8 @@ export function mapClaudeCodeRecord(
                 type: 'usage.updated',
                 sessionId: context.sessionId,
                 messageId: current.id,
-                tokens
+                tokens,
+                ...(normalizedUsage ? { normalizedUsage } : {})
               }
             ]
           }
@@ -454,6 +465,13 @@ export function mapClaudeCodeRecord(
       tokenUsage(entry['usage']) ?? modelUsage.tokens,
       latest?.tokens
     )
+    // The streamed delta can report thinking tokens the final result usage
+    // omits; keep the normalized reasoning aligned with the preserved display
+    // count so the ledger records what the turn actually spent.
+    const normalizedUsage = preserveNormalizedReasoning(
+      mapClaudeNormalizedUsage(entry['usage']) ?? modelUsage.normalizedUsage,
+      tokens
+    )
     const cost = numberProperty(entry, 'total_cost_usd', 'totalCostUsd') ?? modelUsage.cost
     const contextWindow =
       numberProperty(entry, 'context_window', 'contextWindow') ?? modelUsage.contextWindow
@@ -494,6 +512,7 @@ export function mapClaudeCodeRecord(
         ? [
             ...terminalSubagentEvents,
             ...(tokens ||
+            normalizedUsage ||
             cost !== undefined ||
             contextWindow !== undefined ||
             contextUsed !== undefined ||
@@ -504,6 +523,7 @@ export function mapClaudeCodeRecord(
                     sessionId: context.sessionId,
                     messageId: latest.id,
                     ...(tokens ? { tokens } : {}),
+                    ...(normalizedUsage ? { normalizedUsage } : {}),
                     ...(cost === undefined ? {} : { cost }),
                     ...(contextWindow === undefined ? {} : { contextWindow }),
                     ...(contextUsed === undefined ? {} : { contextUsed }),
@@ -517,6 +537,7 @@ export function mapClaudeCodeRecord(
               messageId: latest.id,
               error,
               ...(tokens ? { tokens } : {}),
+              ...(normalizedUsage ? { normalizedUsage } : {}),
               ...(contextWindow === undefined ? {} : { contextWindow }),
               ...(contextUsed === undefined ? {} : { contextUsed }),
               ...(rateLimits.length > 0 ? { rateLimits } : {}),

@@ -11,18 +11,37 @@ export interface AgentTokenUsage {
   total: number
 }
 
+/**
+ * Every model or utility operation that can persist a usage event.
+ *
+ * This list is the single source of truth: the union below is derived from it
+ * and the `usage_events` CHECK constraint in `src/main/database/schema.ts` is
+ * generated from it, so a new feature value cannot be added without the
+ * database accepting it.
+ */
+export const USAGE_EVENT_FEATURES = [
+  'main',
+  'title',
+  'turn_grade',
+  'memory',
+  'image_descriptor',
+  'search_nudge',
+  'computer_use',
+  'web',
+  'audit',
+  'assignment',
+  /** Work a main turn delegated to a nested sub-agent session. */
+  'subagent',
+  /**
+   * A disposable session that owns no user turn of its own: temporary chats,
+   * virtual tasks (PR compose, utility setup), and generated PRD, brainstorm,
+   * spec or assignment drafts.
+   */
+  'ephemeral'
+] as const
+
 /** Model or utility operation responsible for one persisted usage event. */
-export type UsageEventFeature =
-  | 'main'
-  | 'title'
-  | 'turn_grade'
-  | 'memory'
-  | 'image_descriptor'
-  | 'search_nudge'
-  | 'computer_use'
-  | 'web'
-  | 'audit'
-  | 'assignment'
+export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number]
 
 /** Whether and how a provider-reported total can be interpreted. */
 export type UsageTotalSemantics =
@@ -74,6 +93,13 @@ export interface UsageEventDetails {
   id: string
   threadId: string
   parentTurnId: string
+  /**
+   * Project the attempt belongs to. The ledger derives it from the owning
+   * thread, so only work with no thread of its own (a disposable session or a
+   * virtual task) has to state it. Null and undefined both fall back to the
+   * thread lookup.
+   */
+  projectId?: string | null
   /** Stable caller-provided identity that separates multiple calls of the same feature. */
   featureCallId: string
   attempt: number

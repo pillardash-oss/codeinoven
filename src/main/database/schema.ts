@@ -13,6 +13,11 @@
  *   db_meta           Internal database metadata
  */
 
+import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
+
+/** Quoted feature list for the usage ledger's CHECK constraint. */
+const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${feature}'`).join(',')
+
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS db_meta (
@@ -208,6 +213,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  normalized_usage_json TEXT,
   tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
@@ -750,7 +756,7 @@ export const USAGE_EVENTS_COLUMNS_SQL = `
   project_name          TEXT,
   feature_call_id       TEXT NOT NULL,
   attempt               INTEGER NOT NULL CHECK(attempt >= 1),
-  feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
+  feature               TEXT NOT NULL CHECK(feature IN (${USAGE_EVENT_FEATURE_LIST_SQL})),
   harness_id            TEXT,
   account_id            TEXT,
   provider_id           TEXT,

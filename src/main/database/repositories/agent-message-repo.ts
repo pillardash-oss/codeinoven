@@ -6,9 +6,12 @@ import type {
   AgentMessageOrigin,
   AgentMessageVisibility,
   AgentPart,
+  AgentTokenUsage,
+  NormalizedUsage,
   ThinkingLevel,
   ThreadMessageCursor,
   ThreadMessagePage,
+  UsageBearingMessage,
   UserMessageSummary
 } from '../../../lib/types'
 import { attachmentGrantStatements, syncAttachmentGrants } from './attachment-grant-repo'
@@ -76,6 +79,7 @@ export interface PersistedMessageRow {
   completed_at: number | null
   cost: number | null
   tokens_json: string | null
+  normalized_usage_json: string | null
   rate_limits_json: string | null
   usage_credits_json: string | null
   context_window: number | null
@@ -113,6 +117,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     String(row.completed_at ?? ''),
     String(row.cost ?? ''),
     row.tokens_json ?? '',
+    row.normalized_usage_json ?? '',
     row.rate_limits_json ?? '',
     row.usage_credits_json ?? '',
     String(row.context_window ?? ''),
@@ -149,6 +154,7 @@ export interface AgentMessageRow {
   completed_at: number | null
   cost: number | null
   tokens_json: string | null
+  normalized_usage_json: string | null
   rate_limits_json: string | null
   usage_credits_json: string | null
   context_window: number | null
@@ -217,6 +223,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     completedAt: row.completed_at ?? undefined,
     cost: row.cost ?? undefined,
     tokens: row.tokens_json ? JSON.parse(row.tokens_json) : undefined,
+    normalizedUsage: row.normalized_usage_json ? JSON.parse(row.normalized_usage_json) : undefined,
     rateLimits: row.rate_limits_json ? JSON.parse(row.rate_limits_json) : undefined,
     credits: row.usage_credits_json ? JSON.parse(row.usage_credits_json) : undefined,
     contextWindow: row.context_window ?? undefined,
@@ -264,6 +271,7 @@ export interface EncodedAgentMessage {
   completedAt: number | null
   cost: number | null
   tokensJson: string | null
+  normalizedUsageJson: string | null
   tokensTotal: number | null
   rateLimitsJson: string | null
   creditsJson: string | null
@@ -306,6 +314,9 @@ export function encodeAgentMessage(
   const completedAt = message.completedAt ?? null
   const cost = message.cost ?? null
   const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
+  const normalizedUsageJson = message.normalizedUsage
+    ? JSON.stringify(message.normalizedUsage)
+    : null
   const tokensTotal = message.tokens?.total ?? null
   const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
   const creditsJson = message.credits ? JSON.stringify(message.credits) : null
@@ -336,6 +347,7 @@ export function encodeAgentMessage(
     completed_at: completedAt,
     cost,
     tokens_json: tokensJson,
+    normalized_usage_json: normalizedUsageJson,
     rate_limits_json: rateLimitsJson,
     usage_credits_json: creditsJson,
     context_window: contextWindow,
@@ -369,6 +381,7 @@ export function encodeAgentMessage(
     completedAt,
     cost,
     tokensJson,
+    normalizedUsageJson,
     tokensTotal,
     rateLimitsJson,
     creditsJson,
@@ -393,9 +406,9 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       model_id, provider_id, harness_id, account_id, account_label, thinking_level,
       references_json, project_references_json,
       created_at, completed_at, cost,
-      tokens_json, tokens_total, rate_limits_json, usage_credits_json,
+      tokens_json, normalized_usage_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, context_estimated, generation_ms, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -417,6 +430,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       completed_at = excluded.completed_at,
       cost = excluded.cost,
       tokens_json = excluded.tokens_json,
+      normalized_usage_json = excluded.normalized_usage_json,
       tokens_total = excluded.tokens_total,
       rate_limits_json = excluded.rate_limits_json,
       usage_credits_json = excluded.usage_credits_json,
@@ -450,6 +464,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.completedAt,
       encoded.cost,
       encoded.tokensJson,
+      encoded.normalizedUsageJson,
       encoded.tokensTotal,
       encoded.rateLimitsJson,
       encoded.creditsJson,
@@ -614,7 +629,7 @@ export class AgentMessageRepo {
         model_id, provider_id, harness_id,
         references_json, project_references_json,
         created_at, completed_at, cost,
-        tokens_json, rate_limits_json, usage_credits_json,
+        tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json,
         context_window, context_used, context_estimated, error, structured_output
        FROM agent_messages WHERE id = ?`,
       message.id
@@ -933,7 +948,7 @@ const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibilit
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
   account_id, account_label,
   thinking_level, references_json, project_references_json, created_at, completed_at, cost,
-  tokens_json, rate_limits_json, usage_credits_json, context_window, context_used,
+  tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json, context_window, context_used,
   context_estimated, generation_ms, error, structured_output`
 
 /**
@@ -1001,6 +1016,77 @@ export function buildLoadSessionPageSql(
     sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages WHERE thread_id = ? AND session_id = ?${cursor}
       ORDER BY created_at ASC, id ASC`,
     params
+  }
+}
+
+/** SQL for every child-agent (subagent) turn of a thread that reported usage.
+ *
+ * Deliberately narrow: usage accounting reads a handful of columns, so this
+ * projection never transfers message parts. Turns the harness reported no usage
+ * for are excluded rather than recorded as zero, so silence stays
+ * distinguishable from a genuinely free turn.
+ */
+export function buildLoadThreadSubagentUsageSql(threadId: string): {
+  sql: string
+  params: unknown[]
+} {
+  return {
+    sql: `SELECT id, role, harness_id, provider_id, model_id, thinking_level, account_id,
+      cost, tokens_json, normalized_usage_json, created_at, completed_at, error
+      FROM agent_messages
+      WHERE thread_id = ? AND session_id IS NOT NULL AND role = 'assistant'
+        AND tokens_total > 0
+      ORDER BY created_at ASC, id ASC`,
+    params: [threadId]
+  }
+}
+
+/** Decode one narrow usage-projection row into the accounting subset. */
+export function decodeUsageBearingRow(row: Record<string, unknown>): UsageBearingMessage {
+  const text = (key: string): string | undefined => {
+    const value = row[key]
+    return typeof value === 'string' && value.length > 0 ? value : undefined
+  }
+  const number = (key: string): number | undefined => {
+    const value = row[key]
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  }
+  const json = (key: string): unknown => {
+    const raw = row[key]
+    if (typeof raw !== 'string' || raw.length === 0) return undefined
+    try {
+      return JSON.parse(raw) as unknown
+    } catch {
+      return undefined
+    }
+  }
+  const tokens = json('tokens_json')
+  const normalizedUsage = json('normalized_usage_json')
+  const createdAt = number('created_at') ?? 0
+  const completedAt = number('completed_at')
+  const cost = number('cost')
+  const error = text('error')
+  const harnessId = text('harness_id')
+  const providerId = text('provider_id')
+  const modelId = text('model_id')
+  const accountId = text('account_id')
+  const thinkingLevel = text('thinking_level')
+  return {
+    id: typeof row['id'] === 'string' ? row['id'] : '',
+    role: row['role'] === 'assistant' ? 'assistant' : 'user',
+    createdAt,
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(cost !== undefined ? { cost } : {}),
+    ...(tokens !== undefined ? { tokens: tokens as AgentTokenUsage } : {}),
+    ...(normalizedUsage !== undefined
+      ? { normalizedUsage: normalizedUsage as NormalizedUsage }
+      : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(harnessId !== undefined ? { harnessId } : {}),
+    ...(providerId !== undefined ? { providerId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(accountId !== undefined ? { accountId } : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel: thinkingLevel as ThinkingLevel } : {})
   }
 }
 

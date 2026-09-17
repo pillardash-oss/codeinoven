@@ -1,4 +1,9 @@
-import type { AgentRateLimitWindow, AgentTokenUsage, AgentUsageCredits } from '../../../lib/types'
+import type {
+  AgentRateLimitWindow,
+  AgentTokenUsage,
+  AgentUsageCredits,
+  NormalizedUsage
+} from '../../../lib/types'
 import type { CliLineParseContext } from '../persistent-cli-driver'
 import { epochMilliseconds, numberProperty, record, string } from './claude-values'
 
@@ -13,22 +18,103 @@ export type ClaudeAccountUsage = {
   contextUsed?: number
 }
 
-export function tokenUsage(value: unknown): AgentTokenUsage | undefined {
+/** One Claude usage object's categories, each undefined when it was not reported. */
+interface ClaudeUsageFields {
+  input?: number
+  output?: number
+  reasoning?: number
+  cacheRead?: number
+  cacheWrite?: number
+  /** Provider-reported token total, when a compatible payload supplies one. */
+  rawTotal?: number
+  raw: Record<string, unknown>
+}
+
+/**
+ * Read the token categories shared by Anthropic `usage`, per-iteration usage
+ * entries, and Claude Code `modelUsage` records. Thinking tokens surface either
+ * as a top-level `reasoning_tokens` on OpenAI-compatible passthroughs or as
+ * `thinking_tokens` under `output_tokens_details` (and as the `thinkingTokens`
+ * key on `modelUsage` records).
+ */
+function usageFields(value: unknown): ClaudeUsageFields | undefined {
   const usage = record(value)
   if (!usage) return undefined
-  const input = numberProperty(usage, 'input_tokens', 'inputTokens') ?? 0
-  const output = numberProperty(usage, 'output_tokens', 'outputTokens') ?? 0
-  const cacheRead = numberProperty(usage, 'cache_read_input_tokens', 'cacheReadInputTokens') ?? 0
-  const cacheWrite =
-    numberProperty(usage, 'cache_creation_input_tokens', 'cacheCreationInputTokens') ?? 0
   const outputDetails = record(usage['output_tokens_details'] ?? usage['outputTokensDetails'])
-  const reasoning =
-    numberProperty(usage, 'reasoning_tokens', 'reasoningTokens') ??
-    numberProperty(outputDetails ?? {}, 'thinking_tokens', 'thinkingTokens') ??
-    0
-  const total =
-    numberProperty(usage, 'total_tokens', 'totalTokens') ?? input + output + cacheRead + cacheWrite
+  return {
+    input: numberProperty(usage, 'input_tokens', 'inputTokens'),
+    output: numberProperty(usage, 'output_tokens', 'outputTokens'),
+    cacheRead: numberProperty(usage, 'cache_read_input_tokens', 'cacheReadInputTokens'),
+    cacheWrite: numberProperty(usage, 'cache_creation_input_tokens', 'cacheCreationInputTokens'),
+    reasoning:
+      numberProperty(usage, 'reasoning_tokens', 'reasoningTokens') ??
+      numberProperty(usage, 'thinking_tokens', 'thinkingTokens') ??
+      numberProperty(outputDetails ?? {}, 'thinking_tokens', 'thinkingTokens'),
+    rawTotal: numberProperty(usage, 'total_tokens', 'totalTokens'),
+    raw: usage
+  }
+}
+
+/**
+ * Parse a Claude usage object into the shared aggregate shape.
+ *
+ * Anthropic reports `input_tokens` exclusive of both cache categories, so the
+ * cache counts sit beside the input and are additive rather than a subset of
+ * it; `aggregateModelUsage` treats them the same way. Thinking tokens are
+ * reported as their own field (`reasoning_tokens`, or `thinking_tokens` under
+ * the output details), and CodeInOven carries reasoning as its own normalized
+ * category the way `aggregateModelUsage` and the analytics KPI that sums output
+ * and reasoning already do, so the synthesized total adds it to the reported
+ * output. A provider-reported `total_tokens` is used as-is when a compatible
+ * payload carries one.
+ */
+export function tokenUsage(value: unknown): AgentTokenUsage | undefined {
+  const fields = usageFields(value)
+  if (!fields) return undefined
+  const input = fields.input ?? 0
+  const output = fields.output ?? 0
+  const reasoning = fields.reasoning ?? 0
+  const cacheRead = fields.cacheRead ?? 0
+  const cacheWrite = fields.cacheWrite ?? 0
+  const total = fields.rawTotal ?? input + output + reasoning + cacheRead + cacheWrite
   return total > 0 ? { input, output, reasoning, cacheRead, cacheWrite, total } : undefined
+}
+
+/**
+ * Map a Claude usage object into the canonical normalized contract.
+ *
+ * Anthropic reports the prompt cache as separate additive categories beside
+ * `input_tokens` (verified against the usage schema and the Anthropic message
+ * accounting that maps `input_tokens`, `cache_read_input_tokens` and
+ * `cache_creation_input_tokens` independently), so uncached input is the
+ * reported input with no cache subtraction. Thinking tokens share the output
+ * details and are carried as their own category. Claude's native usage defines
+ * no token total; a `total_tokens` supplied by a compatible payload is
+ * preserved as `rawTotal` and, because the categories it would cover include
+ * the cache counts, declared `includes_cache`. Without one the semantics are
+ * `unavailable`.
+ */
+export function mapClaudeNormalizedUsage(value: unknown): NormalizedUsage | undefined {
+  const fields = usageFields(value)
+  if (!fields) return undefined
+  const reported =
+    fields.input !== undefined ||
+    fields.output !== undefined ||
+    fields.reasoning !== undefined ||
+    fields.cacheRead !== undefined ||
+    fields.cacheWrite !== undefined ||
+    fields.rawTotal !== undefined
+  if (!reported) return undefined
+  return {
+    uncachedInput: fields.input ?? null,
+    cachedInput: fields.cacheRead ?? null,
+    cacheWrite: fields.cacheWrite ?? null,
+    output: fields.output ?? null,
+    reasoning: fields.reasoning ?? null,
+    rawProviderUsage: { ...fields.raw },
+    rawTotal: fields.rawTotal ?? null,
+    totalSemantics: fields.rawTotal === undefined ? 'unavailable' : 'includes_cache'
+  }
 }
 
 /**
@@ -52,6 +138,22 @@ export function preserveReasoningUsage(
   return { ...reported, reasoning: existing.reasoning }
 }
 
+/**
+ * Carry a reasoning count preserved from the delta stream onto the normalized
+ * payload. Claude's streamed deltas can report the thinking tokens that the
+ * final result usage omits, and `preserveReasoningUsage` already keeps that
+ * larger count on the display tokens; without this the ledger would record a
+ * null reasoning category for a turn that really spent the tokens.
+ */
+export function preserveNormalizedReasoning(
+  normalized: NormalizedUsage | undefined,
+  tokens: AgentTokenUsage | undefined
+): NormalizedUsage | undefined {
+  if (!normalized || !tokens) return normalized
+  if (tokens.reasoning <= (normalized.reasoning ?? 0)) return normalized
+  return { ...normalized, reasoning: tokens.reasoning }
+}
+
 export function modelUsageRecords(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value))
     return value.map(record).filter((item): item is Record<string, unknown> => item !== null)
@@ -63,8 +165,17 @@ export function modelUsageRecords(value: unknown): Record<string, unknown>[] {
     : []
 }
 
+/**
+ * Sum Claude Code's per-model `modelUsage` records into display aggregates and
+ * the canonical normalized contract. The synthesized total adds every reported
+ * category once, including the per-model `thinkingTokens` that the earlier
+ * read of `reasoningTokens` alone dropped, so a reasoning-heavy turn cannot
+ * lose tokens from the analytics ledger. `modelUsage` carries no token total of
+ * its own, so `rawTotal` stays null and its semantics are `unavailable`.
+ */
 export function aggregateModelUsage(value: unknown): {
   tokens?: AgentTokenUsage
+  normalizedUsage?: NormalizedUsage
   cost?: number
   contextWindow?: number
 } {
@@ -74,22 +185,59 @@ export function aggregateModelUsage(value: unknown): {
   let reasoning = 0
   let cacheRead = 0
   let cacheWrite = 0
+  let hasInput = false
+  let hasOutput = false
+  let hasReasoning = false
+  let hasCacheRead = false
+  let hasCacheWrite = false
   let cost = 0
   let contextWindow: number | undefined
   for (const entry of entries) {
-    input += numberProperty(entry, 'inputTokens', 'input_tokens') ?? 0
-    output += numberProperty(entry, 'outputTokens', 'output_tokens') ?? 0
-    reasoning += numberProperty(entry, 'reasoningTokens', 'reasoning_tokens') ?? 0
-    cacheRead += numberProperty(entry, 'cacheReadInputTokens', 'cache_read_input_tokens') ?? 0
-    cacheWrite +=
-      numberProperty(entry, 'cacheCreationInputTokens', 'cache_creation_input_tokens') ?? 0
+    const fields = usageFields(entry)
+    if (fields) {
+      if (fields.input !== undefined) {
+        input += fields.input
+        hasInput = true
+      }
+      if (fields.output !== undefined) {
+        output += fields.output
+        hasOutput = true
+      }
+      if (fields.reasoning !== undefined) {
+        reasoning += fields.reasoning
+        hasReasoning = true
+      }
+      if (fields.cacheRead !== undefined) {
+        cacheRead += fields.cacheRead
+        hasCacheRead = true
+      }
+      if (fields.cacheWrite !== undefined) {
+        cacheWrite += fields.cacheWrite
+        hasCacheWrite = true
+      }
+    }
     cost += numberProperty(entry, 'costUSD', 'costUsd', 'cost_usd') ?? 0
     const candidateWindow = numberProperty(entry, 'contextWindow', 'context_window')
     if (candidateWindow !== undefined) contextWindow = Math.max(contextWindow ?? 0, candidateWindow)
   }
   const total = input + output + reasoning + cacheRead + cacheWrite
+  const reported = hasInput || hasOutput || hasReasoning || hasCacheRead || hasCacheWrite
+  const raw = record(value)
+  const normalizedUsage: NormalizedUsage | undefined = reported
+    ? {
+        uncachedInput: hasInput ? input : null,
+        cachedInput: hasCacheRead ? cacheRead : null,
+        cacheWrite: hasCacheWrite ? cacheWrite : null,
+        output: hasOutput ? output : null,
+        reasoning: hasReasoning ? reasoning : null,
+        rawProviderUsage: raw ? { ...raw } : { modelUsage: value },
+        rawTotal: null,
+        totalSemantics: 'unavailable'
+      }
+    : undefined
   return {
     ...(total > 0 ? { tokens: { input, output, reasoning, cacheRead, cacheWrite, total } } : {}),
+    ...(normalizedUsage ? { normalizedUsage } : {}),
     ...(cost > 0 ? { cost } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {})
   }

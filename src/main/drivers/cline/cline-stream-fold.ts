@@ -9,7 +9,7 @@ import type {
   CliLineParseContext,
   CliLineParseResult
 } from '../persistent-cli/persistent-cli-types'
-import { mapClineUsage } from './cline-usage'
+import { mapClineNormalizedUsage, mapClineUsage } from './cline-usage'
 import {
   numberValue,
   record,
@@ -228,6 +228,7 @@ export function mapCurrentClineRecord(
     }
     const model = record(entry['model'])
     const usage = mapClineUsage(entry['usage'])
+    const normalizedUsage = mapClineNormalizedUsage(entry['usage'])
     const cost = numberValue(record(entry['usage'])?.['totalCost'])
     const message: AgentMessage = {
       ...clineMessage(state),
@@ -235,6 +236,7 @@ export function mapCurrentClineRecord(
       modelId: stringValue(model?.['id']),
       providerId: stringValue(model?.['provider']),
       ...(usage ? { tokens: usage } : {}),
+      ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(cost !== undefined ? { cost } : {}),
       ...(failed ? { error: finalText || 'Cline turn failed' } : {})
     }
@@ -250,6 +252,7 @@ export function mapCurrentClineRecord(
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId: state.messageId,
+      ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(failed ? { error: finalText || 'Cline turn failed' } : {})
     })
     return {

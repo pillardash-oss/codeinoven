@@ -8,12 +8,15 @@ import {
   buildLoadSessionPageSql,
   buildLoadUserMessagesPageSql,
   buildSaveMessagesStatements,
-  buildSaveSubagentStatements
+  buildSaveSubagentStatements,
+  buildLoadThreadSubagentUsageSql,
+  decodeUsageBearingRow
 } from '../../main/database/repositories/agent-message-repo'
 import type {
   AgentMessage,
   ThreadMessageCursor,
   ThreadMessagePage,
+  UsageBearingMessage,
   UserMessageSummary
 } from '../types'
 
@@ -28,6 +31,8 @@ export class ThreadTranscriptStore {
   private static readonly TRANSCRIPT_PAGE_SIZE = 1000
   /** Safety cap on the number of cursor pages read through the worker. */
   private static readonly MAX_TRANSCRIPT_PAGES = 100_000
+  /** Row cap for the narrow sub-agent usage read (analytics, not display). */
+  private static readonly SUBAGENT_USAGE_MAX_ROWS = 20_000
 
   /**
    * Per-thread cache of the full user-message jump list (keyed by
@@ -191,6 +196,22 @@ export class ThreadTranscriptStore {
     )
     if (!page.ok) return this.agentMessageRepo.loadBySession(threadId, sessionId)
     return page.messages
+  }
+
+  /**
+   * Every sub-agent turn of a thread that reported usage, read as a narrow
+   * projection through the database worker. Used by usage accounting, which
+   * needs a handful of columns per turn and never the message parts.
+   */
+  async listSubagentUsageMessages(threadId: string): Promise<UsageBearingMessage[]> {
+    const built = buildLoadThreadSubagentUsageSql(threadId)
+    const result = await this.db.queryViaWorker(
+      built.sql,
+      built.params,
+      ThreadTranscriptStore.SUBAGENT_USAGE_MAX_ROWS
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => decodeUsageBearingRow(row))
   }
 
   /**

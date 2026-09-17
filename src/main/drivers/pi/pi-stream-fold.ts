@@ -22,7 +22,7 @@ import {
   subagentActivityFromPayload,
   subagentTimeRange
 } from './pi-subagent'
-import { mapPiCost, mapPiUsage } from './pi-usage'
+import { mapPiCost, mapPiNormalizedUsage, mapPiUsage } from './pi-usage'
 import type { PiStreamContext, PiTurnState } from './pi-stream-types'
 import { errorText, messageTimestamp, numberValue, record, stringValue } from './pi-values'
 
@@ -447,6 +447,7 @@ export function mapPiRecord(
       })
     }
     const usage = mapPiUsage(message['usage'])
+    const normalizedUsage = mapPiNormalizedUsage(message['usage'])
     const cost = mapPiCost(message['usage'])
     const rawError = errorText(message)
     const continuable =
@@ -459,6 +460,7 @@ export function mapPiRecord(
       sessionId: context.sessionId,
       messageId,
       ...(usage ? { tokens: usage } : {}),
+      ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(cost !== undefined ? { cost } : {}),
       // A continuable finish-reason flake is neutralized here; the driver
       // reads the marker back when deciding whether to silently re-prompt.
@@ -679,6 +681,7 @@ function buildAssistantMessage(
     events.push({ type: 'message.part.updated', sessionId, part })
   })
   const usage = mapPiUsage(message['usage'])
+  const normalizedUsage = mapPiNormalizedUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
   const rawError = errorText(message)
   const continuableError =
@@ -698,6 +701,7 @@ function buildAssistantMessage(
     modelId: stringValue(message['model']),
     providerId: stringValue(message['provider']),
     ...(usage ? { tokens: usage } : {}),
+    ...(normalizedUsage ? { normalizedUsage } : {}),
     ...(cost !== undefined ? { cost } : {}),
     // A continuable finish-reason flake must not mark the mirrored message as
     // failed: the driver silently re-prompts and the turn keeps going.

@@ -29,6 +29,7 @@ import {
   type AgentMessage,
   type ThreadMessageCursor,
   type ThreadMessagePage,
+  type UsageBearingMessage,
   type UserMessageSummary,
   isOrchestrationChildThread
 } from '../types'
@@ -159,9 +160,18 @@ export class ThreadManager {
   accumulateHarnessUsage(
     projectId: string,
     threadId: string,
-    messages: AgentMessage[]
+    messages: readonly UsageBearingMessage[]
   ): Promise<{ ok: boolean; error?: string }> {
     return this.harnessUsageRepo.accumulateTurn(projectId, threadId, messages)
+  }
+
+  /**
+   * Sub-agent turns of a thread that reported usage, as a narrow projection for
+   * the usage ledger. Never contacts a provider.
+   */
+  listSubagentUsageMessages(projectId: string, threadId: string): Promise<UsageBearingMessage[]> {
+    if (!this.getOwnedThread(projectId, threadId)) return Promise.resolve([])
+    return this.transcripts.listSubagentUsageMessages(threadId)
   }
 
   private getOwnedThread(projectId: string, threadId: string): Thread | null {
