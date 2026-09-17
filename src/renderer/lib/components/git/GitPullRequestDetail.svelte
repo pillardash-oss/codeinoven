@@ -14,6 +14,7 @@
     MessageSquare,
     Merge,
     MessagesSquare,
+    MoreHorizontal,
     RefreshCw,
     Rocket,
     RotateCcw,
@@ -24,7 +25,7 @@
     X
   } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -44,6 +45,13 @@
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
   import PrAvatar from './PrAvatar.svelte'
+  import PrCommentActionsMenu from './PrCommentActionsMenu.svelte'
+  import { copyText } from '$lib/copy-text'
+  import {
+    githubAbuseReportUrl,
+    githubBlockUserUrl,
+    githubNewIssueUrl
+  } from '$lib/github-references'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -55,7 +63,9 @@
   import type {
     GitHubDeploymentJobLog,
     PrAgentReport,
+    PrCommentKind,
     PrMergeMethod,
+    PrMinimizeReason,
     PrReviewEvent,
     PullRequestCheck,
     PullRequestFile,
@@ -197,6 +207,11 @@
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
+  /** The conversation row whose body is being rewritten in place, if any. */
+  let editingKey = $state<string | null>(null)
+  let editBody = $state('')
+  /** The row a Delete confirmation is open for, or null. */
+  let deletingEntry = $state<ConversationEntry | null>(null)
   let expandedCommit = $state<string | null>(null)
   let commitFiles = $state<Record<string, PullRequestFile[]>>({})
   let loadingCommit = $state<string | null>(null)
@@ -236,6 +251,18 @@
   const checks = $derived(bundle?.checks ?? null)
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
+  const savingComment = $derived(gitState.isBusy('pr-comment-edit'))
+  const removingComment = $derived(gitState.isBusy('pr-comment-delete'))
+  const hidingComment = $derived(gitState.isBusy('pr-comment-hide'))
+  /** Any per-comment action in flight, so one row's menu cannot double-fire. */
+  const commentActionBusy = $derived(
+    savingComment || removingComment || hidingComment || gitState.isBusy('pr-update')
+  )
+  /**
+   * The repository this conversation was authored in, for GitHub reference
+   * linkification inside a comment body (`#150`, `@login`).
+   */
+  const repository = $derived({ owner: identity.owner, repo: identity.repo })
   const reviewing = $derived(gitState.isBusy('pr-review'))
   /**
    * True while the merge is actively running OR while the detail view is still
@@ -269,53 +296,80 @@
    * Conversation as one chronological stream: the PR description, issue
    * comments, submitted reviews, and inline code comments   the same context
    * GitHub shows, so a merge decision never needs the browser.
+   *
+   * Each entry also carries everything the per-comment actions need: the
+   * provider's own permalink, the id and collection a mutation addresses, the
+   * GraphQL node id hiding needs, and the author's declared picture. Assembling
+   * that here means the menu and the row read one shape instead of each of them
+   * reaching back into the bundle and guessing which provider field applies.
    */
   const conversation = $derived.by(() => {
     if (!bundle) return []
-    const entries: Array<{
-      key: string
-      author: string
-      at: string
-      body: string
-      kind: 'description' | 'comment' | 'review' | 'inline'
-      meta?: string
-    }> = []
+    const entries: ConversationEntry[] = []
     if (bundle.detail.body.trim()) {
       entries.push({
         key: 'body',
         author: bundle.detail.authorLogin,
+        avatarUrl: bundle.detail.authorAvatarUrl ?? null,
+        isBot: bundle.detail.authorIsBot === true,
         at: bundle.detail.createdAt,
+        updatedAt: null,
         body: bundle.detail.body,
-        kind: 'description'
+        kind: 'description',
+        url: summary.url,
+        commentId: null,
+        commentKind: 'issue',
+        nodeId: null
       })
     }
     for (const comment of bundle.comments) {
       entries.push({
         key: `c${comment.id}`,
         author: comment.authorLogin,
+        avatarUrl: comment.authorAvatarUrl,
+        isBot: comment.authorIsBot,
         at: comment.createdAt,
+        updatedAt: comment.updatedAt,
         body: comment.body,
-        kind: 'comment'
+        kind: 'comment',
+        url: comment.url,
+        commentId: comment.id,
+        commentKind: 'issue',
+        nodeId: comment.nodeId
       })
     }
     for (const review of bundle.reviews) {
       entries.push({
         key: `r${review.id}`,
         author: review.authorLogin,
+        avatarUrl: review.authorAvatarUrl,
+        isBot: review.authorIsBot,
         at: review.submittedAt,
+        updatedAt: null,
         body: review.body,
         kind: 'review',
-        meta: review.state.replace(/_/gu, ' ').toLowerCase()
+        meta: review.state.replace(/_/gu, ' ').toLowerCase(),
+        url: review.url,
+        commentId: null,
+        commentKind: 'issue',
+        nodeId: review.nodeId
       })
     }
     for (const comment of bundle.reviewComments) {
       entries.push({
         key: `rc${comment.id}`,
         author: comment.authorLogin,
+        avatarUrl: comment.authorAvatarUrl,
+        isBot: comment.authorIsBot,
         at: comment.createdAt,
+        updatedAt: comment.updatedAt,
         body: comment.body,
         kind: 'inline',
-        meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`
+        meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
+        url: comment.url,
+        commentId: comment.id,
+        commentKind: 'review',
+        nodeId: comment.nodeId
       })
     }
     return entries
@@ -335,6 +389,213 @@
     }))
   )
   type EntryKind = 'description' | 'comment' | 'review' | 'inline'
+
+  /**
+   * One row of the conversation, with everything its actions need already
+   * resolved from whichever provider shape it came from.
+   */
+  interface ConversationEntry {
+    key: string
+    author: string
+    /** The author's picture as the provider declared it, preferred over the login. */
+    avatarUrl: string | null
+    /** True for app accounts, which GitHub labels with a `Bot` badge. */
+    isBot: boolean
+    at: string
+    /** Last edit time, or null when the entry has never been edited. */
+    updatedAt: string | null
+    body: string
+    kind: EntryKind
+    meta?: string
+    /** Permalink GitHub itself uses for this exact entry. */
+    url: string
+    /**
+     * Provider id of the comment, or null for the description.
+     *
+     * The description is not a comment: it is a field on the pull request, so it
+     * is edited through the pull request update instead of a comment endpoint, and
+     * GitHub offers no delete or hide for it at all. Null is what a row reads to
+     * know which of the two it is, rather than a flag that could disagree.
+     */
+    commentId: number | null
+    /** Which collection `commentId` lives in. Meaningless when it is null. */
+    commentKind: PrCommentKind
+    /** GraphQL id, the only handle GitHub's minimise mutation accepts. */
+    nodeId: string | null
+  }
+
+  /**
+   * Whether the viewer may rewrite this entry.
+   *
+   * GitHub gives a comment body to its author and the description to the pull
+   * request's author, and nothing else. A submitted review is never editable, so
+   * it stays excluded however the logins compare.
+   */
+  function canEditEntry(entry: ConversationEntry): boolean {
+    if (entry.kind === 'review') return false
+    return entry.commentId === null
+      ? gitState.githubViewerLogin === summary.authorLogin
+      : gitState.githubViewerLogin === entry.author
+  }
+
+  /** GitHub allows deleting a comment you wrote, and never a description. */
+  function canDeleteEntry(entry: ConversationEntry): boolean {
+    return entry.commentId !== null && gitState.githubViewerLogin === entry.author
+  }
+
+  /** Hiding needs a node id, which a description does not expose here. */
+  function canHideEntry(entry: ConversationEntry): boolean {
+    return entry.nodeId !== null
+  }
+
+  /** The quote-reply block GitHub builds from a comment's body. */
+  function quoteBlockFor(entry: ConversationEntry): string {
+    const quoted = entry.body
+      .trim()
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    return `> **@${entry.author}** wrote:\n>\n${quoted}\n\n`
+  }
+
+  function openEntryOnGitHub(entry: ConversationEntry): void {
+    if (entry.url) void openInBrowser(entry.url)
+  }
+
+  async function copyEntryLink(entry: ConversationEntry): Promise<void> {
+    if (!entry.url) return
+    await copyText(entry.url)
+    notice = 'Comment link copied'
+  }
+
+  async function copyEntryMarkdown(entry: ConversationEntry): Promise<void> {
+    await copyText(entry.body.trim())
+    notice = 'Comment Markdown copied'
+  }
+
+  /**
+   * Quote a comment into the composer, the way GitHub's own action does.
+   *
+   * The composer is a disclosure in the dock, so it has to be opened first, and
+   * the editor only exists after the next tick   which is also what lets the caret
+   * land at the end of the inserted quote instead of nowhere.
+   */
+  async function quoteEntry(entry: ConversationEntry): Promise<void> {
+    tab = 'conversation'
+    composerOpen = true
+    const block = quoteBlockFor(entry)
+    commentBody = commentBody.trim() ? `${commentBody.trim()}\n\n${block}` : block
+    await tick()
+    commentEditor?.focusAtBookmark(null)
+  }
+
+  /**
+   * GitHub's "Reference in new issue" carries the comment into a new issue. There
+   * is no issue composer in this app, so the reference is copied as markdown and
+   * the repository's new-issue page opens with the same text prefilled: the same
+   * result, with the writing still happening where issues are written.
+   */
+  async function referenceInNewIssue(entry: ConversationEntry): Promise<void> {
+    const reference = `${entry.body.trim()}\n\n_Originally posted by @${entry.author} in ${entry.url}_`
+    await copyText(reference)
+    await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
+    notice = 'Reference copied, new issue opened on GitHub'
+  }
+
+  function startEdit(entry: ConversationEntry): void {
+    editingKey = entry.key
+    editBody = entry.body
+    notice = ''
+  }
+
+  function cancelEdit(): void {
+    editingKey = null
+    editBody = ''
+  }
+
+  async function saveEdit(entry: ConversationEntry): Promise<void> {
+    const body = editBody.trim()
+    if (!body || body === entry.body.trim()) {
+      cancelEdit()
+      return
+    }
+    const saved =
+      entry.commentId === null
+        ? (await gitState.updatePullRequest(
+            projectId,
+            identity.owner,
+            identity.repo,
+            number,
+            undefined,
+            body
+          )) !== null
+        : await gitState.editPrComment(
+            projectId,
+            identity.owner,
+            identity.repo,
+            number,
+            entry.commentKind,
+            entry.commentId,
+            body
+          )
+    if (!saved) return
+    cancelEdit()
+    notice = entry.commentId === null ? 'Description saved' : 'Comment saved'
+    await refresh()
+  }
+
+  async function deleteEntry(entry: ConversationEntry): Promise<void> {
+    if (entry.commentId === null) return
+    const commentId = entry.commentId
+    deletingEntry = null
+    const deleted = await gitState.deletePrComment(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number,
+      entry.commentKind,
+      commentId
+    )
+    if (!deleted) return
+    notice = 'Comment deleted'
+    await refresh()
+  }
+
+  async function hideEntry(entry: ConversationEntry, reason: PrMinimizeReason): Promise<void> {
+    if (!entry.nodeId) return
+    const hidden = await gitState.minimizePrComment(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number,
+      entry.nodeId,
+      reason
+    )
+    if (!hidden) return
+    notice = 'Comment hidden'
+    await refresh()
+  }
+
+  /**
+   * The two abuse actions leave the app on purpose: the account's OAuth scope is
+   * `repo`, and blocking an account needs `user`, so github.com is the only place
+   * either can actually be carried out.
+   *
+   * The report form asks which content is being reported, so the comment's link is
+   * copied first: the user pastes it there instead of hunting for it again.
+   */
+  async function reportEntry(entry: ConversationEntry): Promise<void> {
+    if (entry.url) await copyText(entry.url)
+    await openInBrowser(githubAbuseReportUrl())
+    notice = entry.url
+      ? 'Comment link copied, GitHub abuse report form opened'
+      : 'Opened the GitHub abuse report form'
+  }
+
+  async function blockAuthor(entry: ConversationEntry): Promise<void> {
+    await openInBrowser(githubBlockUserUrl(entry.author))
+    notice = `Opened GitHub's blocked-accounts settings for @${entry.author}`
+  }
 
   /** Human label for a conversation entry's badge. */
   function kindLabel(kind: EntryKind, meta?: string): string {
@@ -363,6 +624,11 @@
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
     agentReport = await gitState.loadAgentReport(projectId, number)
+    // The per-comment actions have to know whether a row is the viewer's own:
+    // GitHub offers Edit and Delete only to an author, and blocking only on
+    // somebody else. Asked once, and only while the login is still unknown, so a
+    // reader that opens after the panel already probed costs nothing.
+    if (gitState.githubViewerLogin === null) void gitState.githubAuthStatus()
   }
 
   async function toggleCommit(sha: string): Promise<void> {
@@ -738,6 +1004,10 @@
     const owner = identity.owner
     const repo = identity.repo
     void gitState.ensurePullRequestBundle(projectId, owner, repo, number)
+    // The mount path never goes through `refresh`, so the viewer login is asked
+    // for here too. Otherwise the first comment a user opens in a fresh session
+    // would offer no Edit or Delete on their own text.
+    if (gitState.githubViewerLogin === null) void gitState.githubAuthStatus()
   })
 
   // Seed the merge method from the configured default (squash by default).
@@ -1111,22 +1381,95 @@
               )}"
             >
               <header
-                class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
+                class="flex items-start gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
               >
-                <PrAvatar login={entry.author} />
-                <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                  >{entry.author}</span
-                >
-                <span
-                  class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
-                    entry.kind,
-                    entry.meta
-                  )}"
-                >
-                  {kindLabel(entry.kind, entry.meta)}
-                </span>
-                <span class="flex-1"></span>
-                <span class="shrink-0 text-[0.5625rem] text-dimmed">{relativeTime(entry.at)}</span>
+                <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
+                <div class="min-w-0 flex-1">
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                      >{entry.author}</span
+                    >
+                    {#if entry.isBot}
+                      <!--
+                        GitHub's own badge for an app account. It is what tells a
+                        reader that the next paragraph was written by a bot and not
+                        by a colleague, which the login alone (`name[bot]`) only
+                        hints at.
+                      -->
+                      <span
+                        class="shrink-0 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted"
+                        title="This account is an App, not a person"
+                      >
+                        Bot
+                      </span>
+                    {/if}
+                    <span
+                      class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
+                        entry.kind,
+                        entry.meta
+                      )}"
+                    >
+                      {kindLabel(entry.kind, entry.meta)}
+                    </span>
+                  </div>
+                  <p class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
+                    <button
+                      type="button"
+                      class="cursor-pointer hover:text-foreground hover:underline"
+                      title="Open this comment on GitHub"
+                      aria-label="Open {entry.author}'s comment on GitHub"
+                      onclick={() => openEntryOnGitHub(entry)}
+                    >
+                      {relativeTime(entry.at)}
+                    </button>
+                    {#if entry.updatedAt && entry.updatedAt !== entry.at}
+                      <!--
+                        GitHub marks an edited comment here rather than only
+                        changing the timestamp, so a reader can tell that what they
+                        are looking at is not what was first posted.
+                      -->
+                      <span title="Edited {relativeTime(entry.updatedAt)}">· edited</span>
+                    {/if}
+                  </p>
+                </div>
+                {#if editingKey !== entry.key}
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger
+                      class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+                      aria-label="Actions for {entry.author}'s comment"
+                      title="Comment actions"
+                    >
+                      <MoreHorizontal size={13} />
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        class="z-50 min-w-52 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                        side="bottom"
+                        align="end"
+                        sideOffset={4}
+                        collisionPadding={8}
+                      >
+                        <PrCommentActionsMenu
+                          author={entry.author}
+                          viewerLogin={gitState.githubViewerLogin}
+                          canEdit={canEditEntry(entry)}
+                          canDelete={canDeleteEntry(entry)}
+                          canHide={canHideEntry(entry)}
+                          busy={commentActionBusy}
+                          onCopyLink={() => void copyEntryLink(entry)}
+                          onCopyMarkdown={() => void copyEntryMarkdown(entry)}
+                          onQuote={() => void quoteEntry(entry)}
+                          onReferenceInNewIssue={() => void referenceInNewIssue(entry)}
+                          onEdit={() => startEdit(entry)}
+                          onDelete={() => (deletingEntry = entry)}
+                          onHide={(reason) => void hideEntry(entry, reason)}
+                          onReport={() => void reportEntry(entry)}
+                          onBlock={() => void blockAuthor(entry)}
+                        />
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                {/if}
               </header>
               {#if entry.kind === 'inline' && entry.meta}
                 <p
@@ -1135,15 +1478,58 @@
                   {entry.meta}
                 </p>
               {/if}
-              {#if entry.body.trim()}
+              {#if editingKey === entry.key}
+                <!--
+                  Edit swaps the rendered body for the same composer the panel
+                  posts with, so an edit looks and behaves like writing rather than
+                  like a second, plainer textarea.
+                -->
+                <div class="p-2">
+                  <RichMarkdownEditor
+                    class="max-h-72 overflow-y-auto rounded-lg border border-border bg-elevated px-2.5 py-2"
+                    bind:value={editBody}
+                    placeholder="Edit this comment…"
+                    ariaLabel="Edit comment"
+                    autofocus
+                  />
+                  <div class="mt-1.5 flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      class="h-7 cursor-pointer rounded-lg border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
+                      title="Discard this edit"
+                      onclick={cancelEdit}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
+                      title="Save this comment"
+                      disabled={!editBody.trim() || savingComment}
+                      onclick={() => void saveEdit(entry)}
+                    >
+                      {#if savingComment}
+                        <Loader2 size={12} class="animate-spin" />
+                        Saving…
+                      {:else}
+                        <Check size={12} />
+                        Save
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+              {:else if entry.body.trim()}
                 <div class="px-2.5 py-2">
                   <!-- GitHub's dialect includes HTML, so PR prose needs it to
                        read correctly; the sanitizer still strips anything
-                       executable. Agent-authored text elsewhere keeps it off. -->
+                       executable. Agent-authored text elsewhere keeps it off, and
+                       `repository` is what turns #150 and @login into links the way
+                       github.com does. -->
                   <MarkdownView
                     text={entry.body}
                     class="text-[0.6875rem] leading-relaxed"
                     allowHtml
+                    {repository}
                   />
                 </div>
               {/if}
@@ -1613,6 +1999,41 @@
     {@render panelMerge()}
   </div>
 {/if}
+
+<AlertDialog.Root
+  open={deletingEntry !== null}
+  onOpenChange={(value) => (deletingEntry = value ? deletingEntry : null)}
+>
+  <AlertDialog.Portal>
+    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Delete this comment?
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        Your comment by
+        <strong class="text-foreground">{deletingEntry?.author ?? ''}</strong>
+        will be removed from pull request #{number}. This runs on GitHub and cannot be undone from
+        here.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+          onclick={() => deletingEntry && void deleteEntry(deletingEntry)}
+        >
+          Delete
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>
 
 <AlertDialog.Root open={mergeConfirm} onOpenChange={(value) => (mergeConfirm = value)}>
   <AlertDialog.Portal>
