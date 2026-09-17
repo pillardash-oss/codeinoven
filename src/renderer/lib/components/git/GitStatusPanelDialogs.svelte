@@ -23,7 +23,8 @@
     status: GitStatus | null
     primaryRemote: GitRemoteInfo | null
     remoteBranchExists: boolean
-    syncBusy: boolean
+    /** Push is unavailable: another remote action is running, or a fetch is. */
+    pushBlocked: boolean
     pullStrategyOpen: boolean
     pullStrategyError: string
     syncMainOpen: boolean
@@ -96,7 +97,7 @@
     status,
     primaryRemote,
     remoteBranchExists,
-    syncBusy,
+    pushBlocked,
     pullStrategyOpen,
     pullStrategyError,
     syncMainOpen,
@@ -198,7 +199,7 @@
       <button
         type="button"
         class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-        disabled={syncBusy}
+        disabled={pushBlocked}
         onclick={() => void confirmPushUpstream()}
       >
         {remoteBranchExists ? 'Push' : 'Publish branch'}

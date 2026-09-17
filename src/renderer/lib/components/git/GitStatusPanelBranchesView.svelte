@@ -228,7 +228,8 @@
                             checkoutLabel={branch.kind === 'local'
                               ? 'Check out'
                               : 'Create local branch'}
-                            busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                            busy={gitState.isBusy('checkout')}
+                            fetchBusy={gitState.isBusy('fetch')}
                             remoteBusy={gitState.isBusy('push')}
                             onCheckout={() => onRequestCheckout(branch)}
                             onFetch={() => onFetchBranch(branch)}
@@ -263,7 +264,8 @@
                     canDeleteRemote={branch.kind === 'remote'}
                     {canFetch}
                     checkoutLabel={branch.kind === 'local' ? 'Check out' : 'Create local branch'}
-                    busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                    busy={gitState.isBusy('checkout')}
+                    fetchBusy={gitState.isBusy('fetch')}
                     remoteBusy={gitState.isBusy('push')}
                     onCheckout={() => onRequestCheckout(branch)}
                     onFetch={() => onFetchBranch(branch)}

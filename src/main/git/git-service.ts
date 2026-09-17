@@ -111,19 +111,62 @@ function uncommittedCount(status: GitStatus): number {
  *
  * All repository mutations are serialized per project through a promise queue
  * (the `project-files-service` pattern) so concurrent IPC-driven operations can
- * never interleave and corrupt the working tree.
+ * never interleave and corrupt the working tree. Operations that talk to a
+ * remote get a second lane of their own; see `enqueueRemote`.
  */
 export class GitService {
   private readonly queues = new Map<string, Promise<unknown>>()
 
   /**
+   * The remote lane, one per project, deliberately separate from `queues`.
+   *
+   * Fetch is the only git operation that spends its whole life on the network
+   * while touching nothing a user is working with: it writes remote-tracking
+   * refs and `FETCH_HEAD`, never the index or the working tree. On the shared
+   * lane it held every local operation behind it for the length of the round
+   * trip, so a panel-open fetch meant no staging, committing, stashing or even
+   * a diff until the network answered, for work that has nothing to do with the
+   * remote.
+   *
+   * Every remote round trip shares this lane instead: a bare fetch takes it
+   * alone, and a local operation that is also a remote round trip (push, pull,
+   * the peer sync's fetch, the PR-conflict prepare and finish) takes it from
+   * inside the local lane. Two remote round trips in one repository would race
+   * `FETCH_HEAD` and the refs they prune or publish, which is the only thing
+   * they have to be serialized against.
+   */
+  private readonly remoteQueues = new Map<string, Promise<unknown>>()
+
+  /**
    * Run `task` against a repository in strict FIFO order per project id.
    * Reads and mutations share the queue so a status read never races a commit.
+   * Remote round trips are not here; see `enqueueRemote`.
    */
   private enqueue<T>(projectId: string, task: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(projectId) ?? Promise.resolve()
     const next = previous.then(task, task)
     this.queues.set(
+      projectId,
+      next.then(
+        () => undefined,
+        () => undefined
+      )
+    )
+    return next
+  }
+
+  /**
+   * Take this repository's turn to talk to a remote.
+   *
+   * The lane is FIFO, so awaiting it waits for whatever remote round trip is
+   * already running or queued, and holding it keeps every later one behind this
+   * task. Acquisition is always local lane then remote lane, and a task on this
+   * lane never takes the local one, so the two cannot deadlock.
+   */
+  private enqueueRemote<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.remoteQueues.get(projectId) ?? Promise.resolve()
+    const next = previous.then(task, task)
+    this.remoteQueues.set(
       projectId,
       next.then(
         () => undefined,
@@ -722,10 +765,14 @@ export class GitService {
   async deleteRemoteBranch(projectPath: string, remote: string, name: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        const git = this.client(directory)
-        await git.push([remote, '--delete', name])
-      })
+      // A remote mutation, like a push: it publishes against refs a fetch may be
+      // in the middle of pruning, so it takes the remote lane.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const git = this.client(directory)
+          await git.push([remote, '--delete', name])
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1010,8 +1057,14 @@ export class GitService {
     })
   }
 
+  /**
+   * Refresh every remote-tracking ref. Runs on the remote lane, so it is queued
+   * behind other remote round trips and behind nothing else: the status read at
+   * the end of this task is the only local git it does, and that read never
+   * takes a lock.
+   */
   async fetch(projectPath: string): Promise<GitStatus> {
-    return this.enqueue(projectPath, async () => {
+    return this.enqueueRemote(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         // Prune so remote-tracking refs for branches deleted on the server
@@ -1025,7 +1078,7 @@ export class GitService {
 
   /** Updates just one branch's remote-tracking ref   doesn't touch the working tree. */
   async fetchBranch(projectPath: string, remote: string, branch: string): Promise<GitStatus> {
-    return this.enqueue(projectPath, async () => {
+    return this.enqueueRemote(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.client(directory).fetch(remote, branch)
@@ -1037,9 +1090,14 @@ export class GitService {
   async pull(projectPath: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).pull()
-      })
+      // A pull fetches before it integrates, so it takes the remote lane for the
+      // round trip rather than running beside a fetch that is moving the same
+      // remote-tracking refs.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          await this.client(directory).pull()
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1075,7 +1133,10 @@ export class GitService {
         ? this.withAuthHeader(directory, options.token)
         : this.client(directory)
       try {
-        await git.pull(args)
+        // The round trip is the only part that talks to the remote, so it takes
+        // the remote lane; the conflicted-status read and the error mapping in
+        // the catch below are local and stay on this lane.
+        await this.enqueueRemote(projectPath, () => git.pull(args))
       } catch (failure) {
         const status = await this.readStatus(directory).catch(() => null)
         if (status && status.conflicted.length > 0) return status
@@ -1095,16 +1156,22 @@ export class GitService {
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        const args: string[] = []
-        if (options.setUpstream) args.push('--set-upstream')
-        if (options.remote) args.push(options.remote)
-        if (options.branch) args.push(options.branch)
-        const git = options.token
-          ? this.withAuthHeader(directory, options.token)
-          : this.client(directory)
-        await git.push(args)
-      })
+      // Push decides from the remote-tracking refs whether it is a fast-forward
+      // and whether there is anything to send at all, so it takes the remote
+      // lane: a fetch in flight finishes first, and one asked for now waits for
+      // this push. This is the one local operation the panel blocks on a fetch.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const args: string[] = []
+          if (options.setUpstream) args.push('--set-upstream')
+          if (options.remote) args.push(options.remote)
+          if (options.branch) args.push(options.branch)
+          const git = options.token
+            ? this.withAuthHeader(directory, options.token)
+            : this.client(directory)
+          await git.push(args)
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1211,7 +1278,12 @@ export class GitService {
           const git = options.token
             ? this.withAuthHeader(directory, options.token)
             : this.client(directory)
-          await withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
+          // Through the remote lane, so this refresh cannot overlap a fetch the
+          // panel started. The integration that follows is local and stays on
+          // this lane.
+          await this.enqueueRemote(projectPath, () =>
+            withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
+          )
           fetched = true
         } catch (failure) {
           // Reported as `fetched: false` - the local branch is still synced.
@@ -1665,21 +1737,26 @@ export class GitService {
       const git = this.client(directory)
       const localBranch = `pr-${options.pullNumber}`
       const baseRef = `${options.remote}/${options.baseBranch}`
-      await this.wrapError(projectPath, 'mutation', async () => {
-        // Check out the PR head as a local branch (force-refresh the ref so a
-        // stale `pr-<n>` from an earlier attempt always tracks the latest head).
-        await git.raw([
-          'fetch',
-          options.remote,
-          `+pull/${options.pullNumber}/head:refs/heads/${localBranch}`
-        ])
-        await git.raw(['checkout', localBranch])
-        // Fetch the latest base and merge it in to reproduce the PR's conflict.
-        await git.raw(['fetch', options.remote, options.baseBranch])
-        // A conflicted merge rejects; the refreshed status below still reports
-        // the conflict state, so this is expected and swallowed.
-        await git.merge([baseRef]).catch(() => {})
-      })
+      // The whole sequence is one remote-owned transaction: a `fetch --prune`
+      // landing between the head fetch and the base fetch could drop the
+      // remote-tracking ref the merge is about to integrate.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          // Check out the PR head as a local branch (force-refresh the ref so a
+          // stale `pr-<n>` from an earlier attempt always tracks the latest head).
+          await git.raw([
+            'fetch',
+            options.remote,
+            `+pull/${options.pullNumber}/head:refs/heads/${localBranch}`
+          ])
+          await git.raw(['checkout', localBranch])
+          // Fetch the latest base and merge it in to reproduce the PR's conflict.
+          await git.raw(['fetch', options.remote, options.baseBranch])
+          // A conflicted merge rejects; the refreshed status below still reports
+          // the conflict state, so this is expected and swallowed.
+          await git.merge([baseRef]).catch(() => {})
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1708,11 +1785,18 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       const localBranch = `pr-${options.pullNumber}`
+      // The push publishes to the PR's head branch, so it takes the remote lane;
+      // checking the original branch back out and dropping the temporary one are
+      // local writes and stay on this lane.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const pushClient = options.token
+            ? this.withAuthHeader(directory, options.token)
+            : this.client(directory)
+          await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
+        })
+      )
       await this.wrapError(projectPath, 'mutation', async () => {
-        const pushClient = options.token
-          ? this.withAuthHeader(directory, options.token)
-          : this.client(directory)
-        await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
         const git = this.client(directory)
         await git.checkout(options.returnBranch)
         await git.deleteLocalBranch(localBranch, true)

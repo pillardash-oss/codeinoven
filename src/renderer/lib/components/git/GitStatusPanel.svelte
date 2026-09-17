@@ -1405,7 +1405,27 @@
         branch.remote === primaryRemote?.name
     )
   )
-  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync']))
+  /**
+   * Whether a fetch is in flight.
+   *
+   * Fetch has its own lane in main (`GitService.enqueueRemote`), so it holds up
+   * nothing local: staging, committing, stashing, checking a branch out and
+   * reading a diff all keep working while the network answers. It only gates
+   * what a fetch can actually make stale, which is Push.
+   */
+  const fetching = $derived(gitState.isBusy('fetch'))
+  /**
+   * The branch actions that publish or integrate. Each one reads what a fetch
+   * writes, so they stand aside while another is running. Fetch itself is not in
+   * this set; see `fetching`.
+   */
+  const branchSyncBusy = $derived(gitState.isBusy(['pull', 'push', 'sync']))
+  /**
+   * Push waits for an in-flight fetch. It decides from the remote-tracking refs
+   * whether it is a fast-forward and whether there is anything to send at all,
+   * and both answers change the moment the fetch lands.
+   */
+  const pushBlocked = $derived(branchSyncBusy || fetching)
   /** Commits the remote does not have yet, according to the last fetch. */
   const commitsAhead = $derived(status?.ahead ?? 0)
   /**
@@ -1418,11 +1438,18 @@
   const hasWorkToPush = $derived(
     commitsAhead > 0 || (needsUpstreamPush && commitHistory.length > 0)
   )
-  /** Push copy: a count when there is one, otherwise what the push sets up. */
+  /**
+   * Push copy: a count when there is one, otherwise what the push sets up. While
+   * a fetch is in flight it says why the button is unavailable, because Push is
+   * the one control a fetch blocks and an unexplained disabled button reads as a
+   * broken panel.
+   */
   const pushTitle = $derived(
-    commitsAhead > 0
-      ? `Push ${String(commitsAhead)} commit(s) to the remote`
-      : 'Push this branch and track it on the remote'
+    fetching
+      ? 'Push is waiting for the fetch in progress'
+      : commitsAhead > 0
+        ? `Push ${String(commitsAhead)} commit(s) to the remote`
+        : 'Push this branch and track it on the remote'
   )
 
   /**
@@ -2950,7 +2977,7 @@
           {#if showsSync}
             <GitSyncButton
               busy={gitState.isBusy('sync')}
-              blocked={syncBusy || conflicted.length > 0}
+              blocked={branchSyncBusy || conflicted.length > 0}
               onSync={(direction) => void syncMainAction(direction)}
               onPickPeer={openSyncPeer}
             />
@@ -3032,7 +3059,7 @@
                     {#if showsPull}
                       <DropdownMenu.Item
                         class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                        disabled={syncBusy}
+                        disabled={branchSyncBusy}
                         onSelect={() => void pullAction()}
                       >
                         <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
@@ -3042,7 +3069,7 @@
                     {#if showsPush}
                       <DropdownMenu.Item
                         class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                        disabled={syncBusy || gitState.isBusy('push')}
+                        disabled={pushBlocked}
                         onSelect={() => void pushAction()}
                       >
                         <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
@@ -3052,7 +3079,7 @@
                   {/if}
                   <DropdownMenu.Item
                     class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                    disabled={remotes.length === 0 || syncBusy}
+                    disabled={remotes.length === 0 || fetching}
                     onSelect={() => void gitState.fetch(projectId)}
                   >
                     <Download size={12} class="shrink-0 text-dimmed" />
@@ -3113,7 +3140,7 @@
               type="button"
               class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
-              disabled={syncBusy}
+              disabled={branchSyncBusy}
               onclick={() => void pullAction()}
             >
               {#if gitState.isBusy('pull')}
@@ -3129,7 +3156,7 @@
               type="button"
               class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={pushTitle}
-              disabled={syncBusy || gitState.isBusy('push')}
+              disabled={pushBlocked}
               onclick={() => void pushAction()}
             >
               {#if gitState.isBusy('push')}
@@ -3380,7 +3407,7 @@
     {status}
     {primaryRemote}
     {remoteBranchExists}
-    {syncBusy}
+    {pushBlocked}
     {pullStrategyOpen}
     {pullStrategyError}
     {syncMainOpen}
