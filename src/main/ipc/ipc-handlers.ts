@@ -31,6 +31,7 @@ import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { resolveAvatars } from '../git/github-avatars'
+import { resolveImages } from '../git/github-images'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
 import { resolveDeploymentProvider } from '../providers/registry'
@@ -112,7 +113,12 @@ import {
   validatePrNumber,
   validatePrState,
   validatePrPage,
+  validatePrCommentKind,
+  validatePrCommentId,
+  validatePrMinimizeReason,
+  validateGraphqlNodeId,
   validatePrReviewEvent,
+  validateRemoteImageUrls,
   validateWorkflowRerunMode,
   validatePrCommentBody,
   validatePushOptions,
@@ -4671,6 +4677,14 @@ export function registerIpcHandlers(
     return resolveAvatars(logins)
   })
 
+  // Images embedded in provider-authored markdown (a pull request body, a comment
+  // with a pasted screenshot). Same CSP constraint again, and the URLs come from
+  // third-party content, so the resolver re-validates every one of them itself
+  // rather than trusting the renderer's filtering.
+  ipcMain.handle('github:image', async (_event, rawUrls: unknown) => {
+    return resolveImages(validateRemoteImageUrls(rawUrls))
+  })
+
   // Reveal a chat artifact (uploaded or agent-created file) in the system file
   // manager. The path must resolve inside a registered project, the config root,
   // or a user-selected scope.
@@ -7070,14 +7084,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'deployment:rerunRun',
-    async (
-      _,
-      projectId: unknown,
-      owner: unknown,
-      repo: unknown,
-      runId: unknown,
-      mode: unknown
-    ) => {
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown, mode: unknown) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       if (!provider) throw new Error('Sign in to GitHub to re-run workflow runs')
       const target = {
@@ -7823,6 +7830,83 @@ export function registerIpcHandlers(
           body: validatePrCommentBody(body)
         })
       )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentEdit',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      const text = validatePrCommentBody(body)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        if (comment.kind === 'review') {
+          await provider.updatePullRequestReviewComment({ ...comment, body: text })
+        } else {
+          await provider.updatePullRequestComment({ ...comment, body: text })
+        }
+        // The reader refetches the bundle either way, so the edited entity is not
+        // worth serializing   only whether the write landed.
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentDelete',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.deletePullRequestComment(comment)
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentMinimize',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      nodeId: unknown,
+      reason: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const id = validateGraphqlNodeId(nodeId)
+      const classifier = validatePrMinimizeReason(reason)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.minimizePullRequestComment({ nodeId: id, reason: classifier })
+        return true
+      })
     }
   )
 

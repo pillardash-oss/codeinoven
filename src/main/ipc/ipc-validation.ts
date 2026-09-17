@@ -734,6 +734,16 @@ const PR_REVIEW_EVENTS = new Set<import('../../lib/types').PrReviewEvent>([
   'REQUEST_CHANGES',
   'COMMENT'
 ])
+/** Which collection a comment mutation addresses. */
+const PR_COMMENT_KINDS = new Set<import('../../lib/types').PrCommentKind>(['issue', 'review'])
+/** GitHub's own minimisation classifiers, and the only values it accepts. */
+const PR_MINIMIZE_REASONS = new Set<import('../../lib/types').PrMinimizeReason>([
+  'ABUSE',
+  'OFF_TOPIC',
+  'OUTDATED',
+  'RESOLVED',
+  'SPAM'
+])
 const WORKFLOW_RERUN_MODES = new Set<import('../../lib/types').WorkflowRerunMode>(['all', 'failed'])
 
 /** Validate a PR merge method (merge|squash|rebase). */
@@ -889,6 +899,39 @@ export function validatePrState(value: unknown): import('../../lib/types').PrSta
 /** Validate a PR review verdict. */
 export function validatePrReviewEvent(value: unknown): import('../../lib/types').PrReviewEvent {
   return assertEnum(value, PR_REVIEW_EVENTS, 'PR review event')
+}
+
+/** Validate which comment collection a mutation addresses (issue|review). */
+export function validatePrCommentKind(value: unknown): import('../../lib/types').PrCommentKind {
+  return assertEnum(value, PR_COMMENT_KINDS, 'PR comment kind')
+}
+
+/** Validate a comment id, which GitHub issues as a positive integer. */
+export function validatePrCommentId(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError('Invalid PR comment id')
+  }
+  return value
+}
+
+/** Validate why a comment is being hidden (GitHub's classifier values). */
+export function validatePrMinimizeReason(
+  value: unknown
+): import('../../lib/types').PrMinimizeReason {
+  return assertEnum(value, PR_MINIMIZE_REASONS, 'PR minimise reason')
+}
+
+/**
+ * Validate a GraphQL global node id.
+ *
+ * GitHub hands these out as base64, so it is opaque here   but it is not a
+ * capability, and rejecting anything that is not the expected base64 alphabet
+ * keeps an arbitrary string from being smuggled into a GraphQL document.
+ */
+export function validateGraphqlNodeId(value: unknown): string {
+  const id = validateBoundedString(value, 'Node id', 8, 256)
+  if (!/^[A-Za-z0-9+/=_-]+$/u.test(id)) throw new TypeError('Invalid Node id')
+  return id
 }
 
 /** Validate which jobs a workflow re-run replays (all|failed). */
@@ -1462,6 +1505,12 @@ const IPV6_HOST_PATTERN = /^\[[0-9a-f:.]+:[0-9a-f:.]*\](?::\d{1,5})?$/iu
 /** Max entries the renderer may ask for in a single favicon resolution call. */
 const MAX_FAVICON_HOSTNAMES = 64
 
+/** Matches the renderer store's batch size, so one batch is never truncated. */
+const MAX_REMOTE_IMAGE_URLS = 32
+
+/** Longer than any real image URL; the resolver only needs the origin and path. */
+const MAX_REMOTE_IMAGE_URL_LENGTH = 2_048
+
 /** Absolute upper bound of a host entry, including brackets and an optional port. */
 const MAX_FAVICON_HOSTNAME_LENGTH = 253 + 6 + 8
 
@@ -1553,6 +1602,41 @@ export function validateGitHubLogins(value: unknown): string[] {
     if (!logins.includes(entry)) logins.push(entry)
   }
   return logins
+}
+
+/**
+ * Validate the image URLs found inside provider-authored markdown.
+ *
+ * Only `https:` survives. The resolver re-checks this and additionally refuses
+ * literal private hosts, because it is the side that actually opens the
+ * connection; this pass exists so an obviously unusable URL never reaches the
+ * network layer at all. Malformed entries are skipped rather than failing the
+ * batch: the list is derived from arbitrary comment text, and one bad URL must
+ * not blank out every other picture in the same message.
+ */
+export function validateRemoteImageUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Image URLs must be an array')
+  if (value.length === 0 || value.length > MAX_REMOTE_IMAGE_URLS) {
+    throw new TypeError(`Image URLs must contain between 1 and ${MAX_REMOTE_IMAGE_URLS} entries`)
+  }
+  const urls: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > MAX_REMOTE_IMAGE_URL_LENGTH
+    ) {
+      Logger.dev(`Skipping invalid image URL at index ${index}`)
+      continue
+    }
+    if (!entry.startsWith('https://')) {
+      Logger.dev(`Skipping non-HTTPS image URL at index ${index}`)
+      continue
+    }
+    if (!urls.includes(entry)) urls.push(entry)
+  }
+  return urls
 }
 
 // ─── Privileged-IPC validation wrapper ──────────────────────────────────────

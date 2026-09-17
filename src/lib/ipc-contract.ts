@@ -94,8 +94,10 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrCommentKind,
   PrComposeReport,
   PrMergeMethod,
+  PrMinimizeReason,
   PrReviewEvent,
   PrResolveOptions,
   PrState,
@@ -1964,6 +1966,47 @@ export const IPC_INVOKE_CONTRACT = {
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     GitHubMutationResult<PullRequestComment>
   >,
+  /**
+   * Rewrite a comment you authored. `kind` picks the collection: GitHub files
+   * conversation comments and inline diff comments in two unrelated endpoints
+   * with independent id sequences.
+   */
+  'pr:commentEdit': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number,
+      body: string
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Permanently delete a comment you authored. */
+  'pr:commentDelete': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Hide a comment behind GitHub's minimised treatment, by GraphQL node id. */
+  'pr:commentMinimize': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      nodeId: string,
+      reason: PrMinimizeReason
+    ],
+    GitHubMutationResult<boolean>
+  >,
   'pr:review': {} as Contract<
     [
       projectId: string,
@@ -2001,6 +2044,12 @@ export const IPC_INVOKE_CONTRACT = {
    * comes back as null, which the UI draws as its monogram.
    */
   'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>,
+  /**
+   * Resolve images embedded in provider-authored markdown, as `data:` URLs, for
+   * the same CSP reason. Only `https:` is accepted, and main additionally refuses
+   * literal private hosts because it is the side that opens the connection.
+   */
+  'github:image': {} as Contract<[urls: string[]], Record<string, string | null>>,
   'history:search': {} as Contract<
     [query: string, projectId?: string, limit?: number],
     HistoryEntry[]
