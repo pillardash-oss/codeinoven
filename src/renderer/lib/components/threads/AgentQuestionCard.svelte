@@ -592,39 +592,44 @@
       {/if}
     </div>
 
-    <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
+    <!-- Shrinkable footer: the row never lets one control paint over another.
+         The chat actions give way first, the speech control keeps its slot, and
+         the model switch ellipsizes instead of pushing into its neighbour. -->
+    <div
+      class="question-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
+    >
       <div class="flex min-w-0 items-center gap-2">
         {#if onExplain || onQuickChat}
-          <div class="flex shrink-0 items-center gap-1">
+          <div class="flex min-w-0 items-center gap-1">
             {#if onExplain}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={working}
                 onclick={() => openQuestionChat(onExplain)}
                 title="Explain this question to help you decide"
                 aria-label="Explain this question in a temporary read-only chat"
               >
-                <HelpCircle size={13} />
-                Explain
+                <HelpCircle size={13} class="shrink-0" />
+                <span class="question-footer-action-label min-w-0 truncate">Explain</span>
               </button>
             {/if}
             {#if onQuickChat}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={working}
                 onclick={() => openQuestionChat(onQuickChat)}
                 title="Start a temporary read-only quick chat about this question"
                 aria-label="Start a temporary read-only quick chat about this question"
               >
-                <MessageSquareDashed size={13} />
-                Quick chat
+                <MessageSquareDashed size={13} class="shrink-0" />
+                <span class="question-footer-action-label min-w-0 truncate">Quick chat</span>
               </button>
             {/if}
           </div>
         {:else}
-          <p class="min-w-0 text-[0.6875rem] text-muted">
+          <p class="min-w-0 truncate text-[0.6875rem] text-muted">
             {#if !currentAnswers.length}
               Answer this question to continue
             {:else if !allAnswered}
@@ -641,7 +646,7 @@
           disabled={working}
         />
       </div>
-      <div class="flex shrink-0 items-center gap-2">
+      <div class="flex min-w-0 shrink items-center justify-end gap-2">
         <EngineeringModelSwitch
           {settings}
           {providers}
@@ -654,7 +659,7 @@
           {onReorderFavorite}
         />
         <button
-          class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!allAnswered || working}
           onclick={() => void handleSubmit()}
         >
@@ -669,3 +674,22 @@
     </div>
   {/if}
 </section>
+
+<style>
+  /*
+    The footer row is the query container so its controls retreat before the row
+    runs out of room (a wide side panel, a split pane). The chat actions drop
+    their words first: the glyph and the tooltip always still say what they do,
+    which leaves the speech control and the model switch their space instead of
+    letting one control overlap the other.
+  */
+  .question-card-footer {
+    container: question-card-footer / inline-size;
+  }
+
+  @container question-card-footer (max-width: 40rem) {
+    .question-footer-action-label {
+      display: none;
+    }
+  }
+</style>

@@ -235,17 +235,17 @@
    *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+      ? 'flex w-full min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? 'flex items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
-        : 'flex items-center rounded-lg transition-colors hover:bg-elevated'
+        ? 'flex min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+        : 'flex min-w-0 items-center rounded-lg transition-colors hover:bg-elevated'
   )
   let modelButtonClasses = $derived(
     variant === 'field'
-      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
+      ? 'flex min-w-0 flex-auto items-center gap-1 px-3 py-2 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
       : variant === 'action'
-        ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
-        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
+        ? 'flex min-w-0 flex-auto items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
+        : 'flex min-w-0 flex-auto items-center gap-1 px-2 py-1.5 text-[0.6875rem] text-muted transition-colors hover:text-foreground'
   )
 
   function close(): void {
@@ -383,7 +383,7 @@
   })
 </script>
 
-<div class="min-w-0">
+<div class="flex min-w-0">
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
     <div
       class="min-w-0 {triggerClasses}"
@@ -409,7 +409,7 @@
         {:else}
           <Cpu size={12} />
         {/if}
-        <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
+        <span class="min-w-0 flex-auto truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
           <span
             class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
@@ -435,13 +435,13 @@
       {#if supportsThinking}
         <DropdownMenu.Root bind:open={thinkingMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Thinking level: ${currentThinkingLabel}`}
             title="Thinking level"
             {disabled}
           >
-            <Brain size={10} />
-            <span class="capitalize">{currentThinkingLabel}</span>
+            <Brain size={10} class="shrink-0" />
+            <span class="min-w-0 truncate capitalize">{currentThinkingLabel}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -491,7 +491,7 @@
             {disabled}
           >
             <UserRound size={10} class="shrink-0" />
-            <span class="max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
+            <span class="min-w-0 max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
