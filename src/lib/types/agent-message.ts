@@ -83,32 +83,13 @@ export type AgentQuestionResolution = 'answered' | 'dismissed' | 'timed_out'
 
 /**
  * One secret value the user pasted into a `cio_ask_secret` card. The value is
- * transient: it is consumed by the main process (vault + harness env) and never
- * persisted in the thread transcript or returned to the renderer.
+ * transient: it is consumed by the main process (vault + harness environment)
+ * and never persisted in the thread transcript or returned to the renderer.
  */
 export interface AgentSecretSubmission {
   /** Id of the secret question the value answers. */
   secretId: string
   value: string
-}
-
-/** One collected secret handed to the harness so it can expose it as an env var. */
-export interface AgentSecretReplySecret {
-  secretId: string
-  /** Environment variable name the harness sets for this session. */
-  environmentVariable: string
-  /** Plaintext value; consumed in-process by the harness, never by the model. */
-  value: string
-}
-
-/**
- * Reply to a pending `cio_ask_secret` request. The harness round-trips the
- * values back into the session's process environment and answers the model with
- * the environment variable names only.
- */
-export interface AgentSecretReply {
-  status: 'set' | 'dismissed'
-  secrets: AgentSecretReplySecret[]
 }
 
 /** A renderable piece of an agent message. */

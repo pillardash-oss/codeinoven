@@ -36,12 +36,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.interface'
-import type {
-  AgentSecretReply,
-  HarnessCommand,
-  PermissionReply,
-  ThreadSettings
-} from '../../lib/types'
+import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
 import { classifyProviderIssue, presentProviderError } from '../../lib/provider-issue'
 import {
   PersistentCliDriver,
@@ -99,11 +94,7 @@ import {
   reconcileNativeCompactions
 } from './pi/pi-native-session'
 import { composePiAttachments } from './pi/pi-prompt-assembly'
-import {
-  permissionMarkerPayload,
-  questionMarkerPayload,
-  secretMarkerPayload
-} from './pi/pi-ui-markers'
+import { permissionMarkerPayload, questionMarkerPayload } from './pi/pi-ui-markers'
 
 export { isContinuableFinishReasonError, isOversizedRequestError } from './pi/pi-errors'
 export { mapPiRateLimitHeaders } from './pi/pi-usage'
@@ -2623,20 +2614,6 @@ export class PiDriver extends PersistentCliDriver {
       this.emit({ type: 'question.asked', sessionId, requestId, questions: markedQuestions })
       return
     }
-    // `cio_ask_secret` rides the same dialog channel with its own envelope. The
-    // answered values are only ever handed back through `replyToSecret`, so they
-    // never become a question answer or enter the model's context.
-    const markedSecrets = secretMarkerPayload(record)
-    if (markedSecrets) {
-      this.pendingUiRequests.set(requestId, {
-        sessionId,
-        method: 'cio-secret',
-        client,
-        request: record
-      })
-      this.emit({ type: 'question.asked', sessionId, requestId, questions: markedSecrets })
-      return
-    }
     const questions = normalizeAgentQuestions({
       questions: [
         {
@@ -2706,27 +2683,6 @@ export class PiDriver extends PersistentCliDriver {
     } else {
       request.client.respondToExtensionUiRequest(rawId, { value: answer })
     }
-    this.pendingUiRequests.delete(requestId)
-  }
-
-  /** Deliver the collected secret values to the `cio_ask_secret` card. The
-   *  harness extension puts each one into the session's process environment and
-   *  the model only ever sees the environment variable names. */
-  async replyToSecret(
-    _projectPath: string,
-    sessionId: string,
-    requestId: string,
-    payload: AgentSecretReply
-  ): Promise<void> {
-    const request = this.pendingUiRequests.get(requestId)
-    if (!request || request.sessionId !== sessionId || request.method !== 'cio-secret') {
-      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
-    }
-    const rawId = request.request['id']
-    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
-      throw new Error(`Pi secret request has an invalid id: ${requestId}`)
-    }
-    request.client.respondToExtensionUiRequest(rawId, { value: JSON.stringify(payload) })
     this.pendingUiRequests.delete(requestId)
   }
 

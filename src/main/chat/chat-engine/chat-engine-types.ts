@@ -4,6 +4,7 @@ import type { PermissionDecisionResult } from '../../permissions/permission-poli
 import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/driver.interface'
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
+import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -298,6 +299,12 @@ export interface PendingQuestionInfo {
   timer?: ReturnType<typeof setTimeout>
   resolution?: AgentQuestionResolution
   answers?: string[][]
+  /**
+   * Set for an app-owned `cio_ask_secret` request. The gateway tool call that
+   * asked is still open, so it settles here instead of being answered through a
+   * harness: the values never travel to a driver.
+   */
+  settleSecret?: (resolution: AgentSecretResolution) => void
 }
 
 /** How the user resolved a failed image-descriptor call. */

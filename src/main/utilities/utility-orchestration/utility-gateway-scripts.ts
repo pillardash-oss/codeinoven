@@ -178,6 +178,12 @@ for await (const line of lines) {
       const path = routes[name]
       if (!path) throw new Error('Unknown utility gateway tool')
       const result = await bridge(path, args)
+      // A secret result can carry collected values out of band for an in-process
+      // gateway transport. No MCP transport may forward them, so the reserved
+      // field is dropped here, before the tool result reaches the harness.
+      if (result && typeof result === 'object' && 'environment' in result) {
+        delete result.environment
+      }
       const content = Array.isArray(result?.content)
         ? result.content
         : [{ type: 'text', text: JSON.stringify(result) }]

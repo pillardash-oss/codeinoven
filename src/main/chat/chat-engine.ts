@@ -4,7 +4,7 @@ import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { createHash, randomBytes, randomInt } from 'crypto'
+import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { Logger } from '../system/logger'
@@ -107,7 +107,11 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
-import { AgentSecretService } from '../utilities/agent-secret-service'
+import {
+  AgentSecretService,
+  type AgentSecretResolution,
+  type AgentStoredSecret
+} from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
@@ -127,10 +131,17 @@ import { UtilityOrchestrationService } from '../utilities/utility-orchestration-
 import type {
   BrowserUtilityExecutor,
   ScopeToolExecutor,
+  SecretRequestContext,
   UtilityResultAttribution,
   UtilityTurnBudgetContext,
   UtilityTurnGateway
 } from '../utilities/utility-orchestration-service'
+import {
+  deriveSecretEnvironmentVariable,
+  normalizeAgentSecretRequests,
+  secretRequestQuestions,
+  type AgentSecretPlanEntry
+} from '../../lib/secret-request'
 import {
   imageDescriptorInactivityTimeoutMs,
   resolveVisionAttachment
@@ -209,8 +220,6 @@ import type {
   PromptProjectReference,
   PromptReference,
   ProviderCatalog,
-  AgentSecretReply,
-  AgentSecretReplySecret,
   AgentSecretSubmission,
   SessionAgentEvent,
   SpecGenerationRequest,
@@ -1214,7 +1223,7 @@ export class ChatEngine {
     this.secretVault = new SecretVault(storage)
     this.utilityRuntime = new UtilityRuntimeService(storage)
     this.utilityRegistry = new UtilityRegistryService(storage)
-    this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry)
+    this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry, storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
@@ -1222,6 +1231,12 @@ export class ChatEngine {
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
+    )
+    // Secret collection is an app-owned gateway tool, so the tool call has to be
+    // able to wait for the user: the engine registers the card and settles a
+    // promise when it is submitted or dismissed.
+    this.utilityOrchestration.setSecretRequestExecutor((input, context) =>
+      this.requestUtilitySecrets(input, context)
     )
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
@@ -2091,10 +2106,10 @@ export class ChatEngine {
   }
 
   /**
-   * Store the secrets a user pasted into a `cio_ask_secret` card, then hand them
-   * to the harness so its extension can expose them as environment variables for
-   * the session. The values never reach the transcript or the model: the card is
-   * resolved with a placeholder, and the tool answers with the variable names only.
+   * Store the secrets a user pasted into a `cio_ask_secret` card and settle the
+   * gateway tool call that asked for them. The values never reach the transcript
+   * or the model: the card is resolved with a placeholder, and the tool answers
+   * with the variable names only.
    */
   async answerSecret(
     projectId: string,
@@ -2108,51 +2123,83 @@ export class ChatEngine {
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const submissions = validateSecretSubmissions(secrets, pending.request.questions)
-    const driver = this.driverForRuntime(
-      pending.driverId,
-      this.sessionRegistry.get(pending.request.sessionId)?.accountId
-    )
-    if (!driver) {
-      throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
-    }
-    const replyToSecret = driver.replyToSecret?.bind(driver)
-    if (!replyToSecret) {
-      throw new Error(`This harness cannot collect secrets: ${pending.driverId}`)
-    }
-    const replySecrets: AgentSecretReplySecret[] = []
+    const stored: AgentStoredSecret[] = []
     for (const submission of submissions) {
       const question = pending.request.questions.find(
         (candidate) => candidate.secretId === submission.secretId
       )
       const environmentVariable = question?.secretEnvironmentVariable
       if (!question || !environmentVariable) continue
-      const stored = await this.agentSecrets.store({
-        environmentVariable,
-        value: submission.value,
-        label: question.header ?? question.prompt,
-        ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {})
-      })
-      replySecrets.push({
-        secretId: submission.secretId,
-        environmentVariable: stored.environmentVariable,
-        value: submission.value
-      })
+      stored.push(
+        await this.agentSecrets.store({
+          secretId: submission.secretId,
+          environmentVariable,
+          value: submission.value,
+          label: question.header ?? question.prompt,
+          ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
+          threadId
+        })
+      )
     }
     const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
-    const reply: AgentSecretReply = { status: 'set', secrets: replySecrets }
-    try {
-      await this.resolvePendingQuestion(pending, 'answered', answers, () =>
-        replyToSecret(pending.projectPath, pending.request.sessionId, requestId, reply)
-      )
-    } catch (error) {
-      // The turn that asked is gone, so there is nothing left to hand the values
-      // to. The secrets are already stored; resolve the card instead of hanging.
-      if (error instanceof InactiveQuestionTurnError || error instanceof QuestionRequestGoneError) {
-        this.finalizePendingQuestion(requestId, 'answered', answers)
-        return
+    await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
+      pending.settleSecret?.({
+        status: stored.length > 0 ? 'set' : 'dismissed',
+        secrets: stored
+      })
+    })
+  }
+
+  /**
+   * Surface one `cio_ask_secret` card and wait for the user.
+   *
+   * The request is app-owned, so nothing is sent to a harness: this registers
+   * the pending question, broadcasts it, and settles a promise when the card is
+   * submitted or dismissed. Storing is deliberately left to `answerSecret`, which
+   * is the single deterministic path from a submitted value to vault state.
+   */
+  private async requestUtilitySecrets(
+    input: Record<string, unknown>,
+    context: SecretRequestContext
+  ): Promise<AgentSecretResolution> {
+    const requests = normalizeAgentSecretRequests(input)
+    const entries: AgentSecretPlanEntry[] = requests.map((request) => {
+      const id = randomUUID().replace(/-/gu, '').slice(0, 8).toUpperCase()
+      return {
+        id,
+        title: request.title,
+        ...(request.description ? { description: request.description } : {}),
+        environmentVariable:
+          request.environmentVariable ?? deriveSecretEnvironmentVariable(id, request.title),
+        ...(request.utilityId ? { utilityId: request.utilityId } : {})
       }
-      throw error
-    }
+    })
+    const requestId = `cio-secret-${randomUUID()}`
+    const pending = this.registerPendingQuestion(
+      context.harnessId,
+      context.projectId,
+      context.threadId,
+      context.projectPath,
+      {
+        requestId,
+        sessionId: context.sessionId,
+        questions: secretRequestQuestions(entries)
+      },
+      DEFAULT_QUESTION_TIMEOUT_MS
+    )
+    const settled = new Promise<AgentSecretResolution>((resolve) => {
+      pending.settleSecret = resolve
+    })
+    await this.threadManager.setStatus(context.projectId, context.threadId, 'awaiting_approval', {
+      read: false
+    })
+    this.broadcast({
+      type: 'question.asked',
+      sessionId: context.sessionId,
+      requestId,
+      questions: pending.request.questions
+    })
+    return settled
   }
 
   /**
@@ -2232,6 +2279,14 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    if (pending.request.questions.some(isSecretQuestion)) {
+      // An app-owned secret card has no harness side to reject: settle the
+      // waiting tool call so the agent continues without the value.
+      await this.resolvePendingQuestion(pending, 'dismissed', undefined, async () => {
+        pending.settleSecret?.({ status: 'dismissed', secrets: [] })
+      })
+      return
+    }
     const driver = this.driverForRuntime(
       pending.driverId,
       this.sessionRegistry.get(pending.request.sessionId)?.accountId
@@ -2615,6 +2670,13 @@ export class ChatEngine {
     // turns instead of restarting it twice per turn (prepare + cleanup), which
     // is what produced the transient "fetch failed" history-mirror errors.
     if (skipRuntime) return ''
+    // Re-expose this thread's stored secrets for the turn that is starting: the
+    // hook lands before the transport split so a direct-gateway harness (Pi,
+    // codex) interpolates exactly the same file paths as a runtime harness, and
+    // a thread that never asked for a secret pays one small read.
+    await this.agentSecrets
+      .materializeSecretFiles(threadId)
+      .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
     const nativeCapabilities = Object.entries(driver.capabilities ?? {})
       .filter(([, supported]) => supported === true)
       .map(([name]) => name)
@@ -2697,7 +2759,15 @@ export class ChatEngine {
         gateway = undefined
         return [utilityContract, ...skillInstructions].filter(Boolean).join('\n\n')
       }
-      const environment = { ...(overlay.env ?? {}) }
+      const environment = {
+        ...(overlay.env ?? {}),
+        // Free-standing secrets the app launchers must expose for this thread.
+        // Pi and codex never reach this branch: Pi applies the same values to
+        // its own session environment through the gateway extension instead.
+        ...(await this.agentSecrets
+          .secretEnvironment(threadId)
+          .catch(() => ({}) as Record<string, string>))
+      }
       for (const { utility } of resolvedUtilities) {
         for (const credential of utility.credentials) {
           if (!credential.environmentVariable) continue
@@ -2748,7 +2818,11 @@ export class ChatEngine {
       } catch (error) {
         Logger.error('Harness utility runtime cleanup failed:', error)
       } finally {
-        await Promise.allSettled([turn.runtime?.cleanup(), turn.gateway.cleanup()])
+        await Promise.allSettled([
+          turn.runtime?.cleanup(),
+          turn.gateway.cleanup(),
+          this.agentSecrets.purgeSecretFiles(turn.threadId)
+        ])
         if (this.utilityTurns.get(sessionId) === turn) this.utilityTurns.delete(sessionId)
       }
     })()
@@ -10227,6 +10301,13 @@ export class ChatEngine {
     await this.utilityOrchestration
       .deleteThreadBank(threadId)
       .catch((error: unknown) => Logger.dev('Thread utilities bank cleanup failed:', error))
+
+    // Secrets collected for this thread (vault entries, their runtime files and
+    // the registry that re-exposes them) are thread state too: a deleted thread
+    // must not leave a readable secret behind.
+    await this.agentSecrets
+      .deleteThreadSecrets(threadId)
+      .catch((error: unknown) => Logger.error('Thread secret cleanup failed:', error))
   }
 
   /** Reply to a pending permission request (from the UI permission card). */
@@ -18095,6 +18176,10 @@ export class ChatEngine {
     if (!pending) return
     if (pending.timer) clearTimeout(pending.timer)
     this.pendingQuestions.delete(requestId)
+    // A gateway `cio_ask_secret` call is still awaiting this card. Nothing else
+    // can answer it once the request is gone, so settle it as dismissed and let
+    // the harness turn continue instead of hanging on an unreachable question.
+    pending.settleSecret?.({ status: 'dismissed', secrets: [] })
   }
 
   private clearPendingQuestionsForSession(sessionId: string): void {

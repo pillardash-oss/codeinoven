@@ -19,7 +19,7 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
-import { GATEWAY_TOOLS } from '../../lib/gateway-tools'
+import { ASK_SECRET_TOOL_NAME, GATEWAY_TOOLS } from '../../lib/gateway-tools'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
@@ -1241,7 +1241,9 @@ export class CodexDriver extends PersistentCliDriver {
           'content-type': 'application/json'
         },
         body: JSON.stringify(recordValue(params['arguments']) ?? {}),
-        signal: AbortSignal.timeout(120_000)
+        // The secret card is human-paced, so that one call outlives the short
+        // gateway timeout every other tool is bounded by.
+        signal: AbortSignal.timeout(tool.name === ASK_SECRET_TOOL_NAME ? 600_000 : 120_000)
       })
       const result: unknown = await response.json()
       const body = recordValue(result)

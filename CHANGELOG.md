@@ -8,15 +8,18 @@ All notable changes to CodeInOven are documented here. This project follows
 ### Added
 
 - The agent can now collect secrets without ever seeing them. A new
-  `cio_ask_secret` tool asks for one or more values by title and description; the
-  app renders a password card with an in-field reveal toggle and a
-  "Secrets are not sent to the agent" note, stores each value in the encrypted
-  vault, and exposes it to the session as an OS environment variable
-  (`CIO_<ID>_<TITLE_SLUG>`, or the exact name the target expects). Passing a
-  `utility_id` binds the value to an installed capability as its credential,
-  exactly as the Utilities page does, so an MCP that needs a key can be finished
-  in one turn. The model receives only `Secret set, you may proceed.` and the
-  variable names.
+  `cio_ask_secret` **gateway** tool (the utility gateway every harness already
+  reaches, not a per-harness tool) asks for one or more values by title and
+  description; the app renders a password card with an in-field reveal toggle and
+  a "Secrets are not sent to the agent" note and stores each value in the
+  encrypted vault. A value bound to a capability by `utility_id` is stored
+  exactly as the Utilities page stores it, so an MCP that needs a key can be
+  finished in one turn. A plain value is re-exposed to the thread each turn as an
+  OS environment variable (`CIO_<ID>_<TITLE_SLUG>`, or the exact name the target
+  expects) and as an owner-only `0600` file the agent interpolates with
+  `"$(cat secret_path)"`, so CLI work needs no plaintext in chat. Neither the
+  tool result nor any MCP transport ever carries the value: the model receives
+  only `Secret set, you may proceed.` and the names.
 
 ### Changed
 

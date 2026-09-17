@@ -1,5 +1,6 @@
 import { isQuotedMentionPosition } from '../../lib/mention-context'
 import {
+  ASK_SECRET_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -15,7 +16,7 @@ const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
  * Versioned application-owned setup knowledge. This is deliberately source code rather
  * than a discoverable skill so its API contract cannot drift independently of the app.
  */
-export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 5)
+export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 6)
 
 The user explicitly invoked @cio-utility. You work in two roles, resolved from
 the user's request:
@@ -44,12 +45,13 @@ Rules (both roles):
 - Research official upstream documentation when configuration details are
   uncertain and cite the source in your response.
 - Never put API keys, tokens, passwords, Authorization values, or other secrets
-  in a definition. Install the secret-free definition, then collect the value
-  with \`cio_ask_secret\` when that tool is in your session, naming the
-  capability with \`utility_id\` and the variable the server expects with
-  \`environment_variable\`; the app stores it in the encrypted vault exactly as
-  the Utilities page does. When the tool is unavailable, tell the user which
-  environment variables or credentials to add in Utilities.
+  in a definition. Install the secret-free definition, then collect each value
+  with the app's ${ASK_SECRET_TOOL_NAME} gateway tool, naming the capability with
+  \`utility_id\` and the variable the server expects with \`environment_variable\`;
+  the app stores it in the encrypted vault exactly as the Utilities page does.
+  The tool answers with the environment variable name (and, for a plain value, a
+  0600 \`secret_path\`), never with the value. When the tool is unavailable, tell
+  the user which environment variables or credentials to add in Utilities.
 - Never edit harness config files or stored CodeInOven app data directly.
   Utility installation and configuration must use the CodeInOven API.
   Diagnostics remain read-only; this does not prohibit source edits in the
@@ -166,7 +168,7 @@ export const CIO_UTILITY_REUSE_PROMPT = `CodeInOven utility contract (reuse)
 
 The user invoked @cio-utility earlier in this thread; the contract stays active for reuse without repeating the setup briefing:
 - ${UTILITY_DIAGNOSTICS_TOOL_NAME} is available for app debugging and is strictly read-only (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql); it never modifies app data.
-- ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free. When a capability needs a secret, collect it with \`cio_ask_secret\` (title, description, optional \`utility_id\` and \`environment_variable\`) instead of asking the user to paste it in chat.
+- ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free. When a capability needs a secret, collect it with ${ASK_SECRET_TOOL_NAME} (title, description, optional \`utility_id\` and \`environment_variable\`) instead of asking the user to paste it in chat.
 - Utilities activated earlier in this thread are registered in the thread utilities bank: invoke them directly with ${UTILITY_INVOKE_TOOL_NAME} by id (no re-activation), and re-list capability docs after compaction with ${UTILITY_DOCS_TOOL_NAME} (accepts only the utility id).
 - Install defaults stay as briefed: global scope for both kinds, and an MCP server always "on_demand" behind the utility gateway (never a native harness entry).
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`

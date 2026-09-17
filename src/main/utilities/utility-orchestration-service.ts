@@ -21,6 +21,7 @@ import {
 } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
+  ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
@@ -47,6 +48,7 @@ import {
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
+import type { AgentSecretResolution } from './agent-secret-service'
 import { instanceRegistry } from '../system/instance-registry'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
@@ -177,6 +179,28 @@ export type ScopeToolExecutor = (
   context: ScopeToolContext
 ) => Promise<unknown>
 
+/**
+ * Runs one `cio_ask_secret` gateway request for the turn that made it: it
+ * surfaces the secret card, awaits the user's submission, stores the values
+ * (vault, and a utility credential when the agent named a capability) and
+ * returns them so the calling tool can report the names without the values.
+ * The chat engine supplies it because it owns the pending-question machinery
+ * and the secret store.
+ */
+export type SecretRequestExecutor = (
+  input: Record<string, unknown>,
+  context: SecretRequestContext
+) => Promise<AgentSecretResolution>
+
+/** Which turn is asking, so the card is bound to the right thread and session. */
+export interface SecretRequestContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
 interface TurnState {
   id: string
   request: UtilityTurnRequest
@@ -246,6 +270,7 @@ export class UtilityOrchestrationService {
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
+  private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -287,6 +312,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
         return (state, input) => this.runDiagnostics(state, input)
+      case ASK_SECRET_TOOL_NAME:
+        return (state, input) => this.askSecret(state, input)
       default:
         return null
     }
@@ -315,6 +342,17 @@ export class UtilityOrchestrationService {
    */
   setScopeToolExecutor(executor: ScopeToolExecutor | null): void {
     this.scopeToolExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio_ask_secret` gateway tool.
+   * Secret collection is an app capability rather than a utility operation: the
+   * agent asks, the user pastes into the card, and the value never travels back
+   * through the tool result. The chat engine supplies the executor because it
+   * owns pending questions, the vault and the utility registry.
+   */
+  setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
+    this.secretRequestExecutor = executor
   }
 
   /**
@@ -413,6 +451,11 @@ export class UtilityOrchestrationService {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
       }
+      // Asking for a secret is an app capability rather than a utility
+      // operation, and it never needs a secret to be installed: it is offered on
+      // every turn that carries the gateway at all, plus every explicit setup
+      // turn, where the capability being installed is what needs the value.
+      if (name === ASK_SECRET_TOOL_NAME) return hasOnDemand || request.allowManagement === true
       return hasOnDemand
     })
     if (gatewayTools.length === 0) {
@@ -458,6 +501,7 @@ export class UtilityOrchestrationService {
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
@@ -493,7 +537,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: collect them with the cio_ask_secret tool when it is in your session (passing the installed id as utility_id and the server's variable as environment_variable), and otherwise tell the user to add them through Utilities.`,
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`,
             `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
           ]
         : [])
@@ -736,6 +780,55 @@ export class UtilityOrchestrationService {
       threadTitle: request.threadTitle ?? '',
       permissionLevel: request.permissionLevel
     })
+  }
+
+  /**
+   * Collect one or more secrets from the user on the agent's behalf.
+   *
+   * The executor owns the card, the waiting and the storing; this handler owns
+   * the tool contract. It returns the environment variable names   plus the
+   * owner-only file paths for plain secrets   and never a value. The reserved
+   * `environment` field is attached only for a transport that applies it to its
+   * own process, and every MCP transport strips it before the result reaches a
+   * model.
+   */
+  private async askSecret(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.secretRequestExecutor
+    if (!executor) throw new Error('Secret collection is unavailable in this deployment')
+    const resolution = await executor(input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+    const result: Record<string, unknown> =
+      resolution.status === 'dismissed'
+        ? {
+            status: 'dismissed',
+            message:
+              'The user dismissed the secret request without providing a value. Continue without it, and ask again only if the secret is essential.'
+          }
+        : {
+            status: 'set',
+            message: 'Secret set, you may proceed.',
+            secrets: resolution.secrets.map((secret) => ({
+              label: secret.label,
+              environment_variable: secret.environmentVariable,
+              ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
+              ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {})
+            })),
+            note: `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
+          }
+    if (input['apply_environment'] !== true || resolution.status === 'dismissed') return result
+    // Only an in-process gateway transport asks for this, and it applies the map
+    // to its own session environment before the result is shown to the model.
+    return {
+      ...result,
+      environment: Object.fromEntries(
+        resolution.secrets.map((secret) => [secret.environmentVariable, secret.value])
+      )
+    }
   }
 
   /** Read-only app diagnostics, available only on explicit @cio-utility turns. */

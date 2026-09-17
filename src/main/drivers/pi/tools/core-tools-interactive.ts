@@ -1,12 +1,11 @@
 /**
- * Generated definitions and handlers for the interactive tools: cio_ask_user, cio_todo_write, cio_request_files, and cio_ask_secret.
+ * Generated definitions and handlers for the interactive tools: cio_ask_user, cio_todo_write, and cio_request_files.
  *
  * The returned text is one fragment of the generated core-tools extension
  * source; pi-core-tools-extension.ts concatenates every fragment in order so
  * the emitted module is byte-for-byte identical to the original single string.
  */
 import {
-  CIO_ASK_SECRET_TOOL_NAME,
   CIO_ASK_USER_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_TODO_WRITE_TOOL_NAME
@@ -202,114 +201,6 @@ export function piCoreToolsInteractiveSource(): string {
         note: files.every((file) => !file.exists)
           ? 'None of the given paths exist; ask the user to double-check them.'
           : 'Read the existing files before continuing.'
-      })
-    }
-  })
-
-  pi.registerTool({
-    name: '${CIO_ASK_SECRET_TOOL_NAME}',
-    label: 'Request a secret from the user',
-    description:
-      'Collect one or more secret values (API keys, tokens, passwords) from the user without the value ever entering this conversation. Each value is stored in the encrypted device vault, bound to the utility you name when you pass utility_id, and exposed to this session as an environment variable. Use it right after installing a capability that needs a credential, or whenever a task needs a secret you do not have.',
-    promptSnippet: 'Collect secret values from the user without ever seeing them',
-    promptGuidelines: [
-      'Use ${CIO_ASK_SECRET_TOOL_NAME} whenever you need a secret value (an API key, token, or password) to finish a task; never ask the user to paste a secret into the chat.',
-      'Give each secret a short title and, when it helps, a one-line description with a link to where the user obtains the key.',
-      'Pass environment_variable when the target expects a specific name (an MCP server variable or a CLI flag); otherwise the tool derives a CIO_ name and reports the exact name to reference.',
-      'Pass utility_id to bind the secret to an installed capability as its credential, exactly as the Utilities page stores it.',
-      'After the tool reports the secret is set, reference the value only as $ENVIRONMENT_VARIABLE at the target. Never print, echo, log, or read the value, and never paste it into the chat.'
-    ],
-    parameters: Type.Object({
-      secrets: Type.Array(
-        Type.Object({
-          title: Type.String({ description: 'Short human label, e.g. "Authorization Key".' }),
-          description: Type.Optional(
-            Type.String({ description: 'One line on what the value is and where to obtain it.' })
-          ),
-          environment_variable: Type.Optional(
-            Type.String({
-              description:
-                'Environment variable name the target expects. Omit to receive a derived CIO_ name.'
-            })
-          ),
-          utility_id: Type.Optional(
-            Type.String({
-              description: 'Installed utility id to bind this secret to as its credential.'
-            })
-          )
-        }),
-        { description: 'Secrets to collect, in order.', minItems: 1, maxItems: 5 }
-      )
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const requests = params.secrets.map((secret, index) => {
-        const id = randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()
-        return {
-          id,
-          index,
-          title: secret.title,
-          environmentVariable: secretEnvName(secret.environment_variable, secret.title, id),
-          ...(typeof secret.description === 'string' && secret.description.trim()
-            ? { description: secret.description.trim() }
-            : {}),
-          ...(typeof secret.utility_id === 'string' && secret.utility_id.trim()
-            ? { utilityId: secret.utility_id.trim() }
-            : {})
-        }
-      })
-      // The secret card lives in the app. The user pastes each value there, the
-      // app stores it in the encrypted vault, and only the resolved environment
-      // variable names travel back through this dialog for the model to read.
-      const value = await ctx.ui.input(
-        secretDialogTitle(requests),
-        'Paste the value(s) in the secret card above, then submit.'
-      )
-      let parsed
-      try {
-        parsed = typeof value === 'string' && value.trim() ? JSON.parse(value) : null
-      } catch {
-        parsed = null
-      }
-      if (!parsed || parsed.status !== 'set' || !Array.isArray(parsed.secrets)) {
-        return textResult({
-          status: 'dismissed',
-          message:
-            'The user dismissed the secret request. Continue without it, and ask again only if the secret is essential.'
-        })
-      }
-      const applied = []
-      for (const entry of parsed.secrets) {
-        if (
-          !entry ||
-          typeof entry.secretId !== 'string' ||
-          typeof entry.environmentVariable !== 'string' ||
-          typeof entry.value !== 'string' ||
-          !entry.value
-        ) {
-          continue
-        }
-        // The value is interpolated into this session's process environment and
-        // never into the tool result the model reads.
-        process.env[entry.environmentVariable] = entry.value
-        const request = requests.find((candidate) => candidate.id === entry.secretId)
-        applied.push({
-          title: request ? request.title : entry.environmentVariable,
-          environment_variable: entry.environmentVariable,
-          ...(request && request.utilityId ? { bound_to_utility: request.utilityId } : {})
-        })
-      }
-      if (applied.length === 0) {
-        return textResult({
-          status: 'dismissed',
-          message: 'No secret value was provided. Continue without it.'
-        })
-      }
-      return textResult({
-        status: 'set',
-        message: 'Secret set, you may proceed.',
-        secrets: applied,
-        note:
-          'Each value is available to your shell as $ENVIRONMENT_VARIABLE and is stored in the encrypted device vault. Reference it only at the target; never print, echo, log, or read it.'
       })
     }
   })

@@ -13,7 +13,6 @@ import {
 
 export function piCoreToolsHeaderSource(): string {
   return `import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import { open, readdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -32,7 +31,6 @@ import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
-const CIO_SECRET_MARKER = 'cio-secret:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
 
@@ -390,29 +388,6 @@ function textResult(value) {
  * carries the native question contract through its existing dialog channel. */
 function questionDialogTitle(questions) {
   return CIO_QUESTION_MARKER + JSON.stringify({ questions })
-}
-
-/** Same transport trick for the secret card: pi's dialog signature only has a
- * single title string, so the request batch rides inside it. */
-function secretDialogTitle(secrets) {
-  return CIO_SECRET_MARKER + JSON.stringify({ secrets })
-}
-
-/**
- * Environment variable one collected secret is exposed under. An explicit name
- * wins when the target (an MCP server variable, a CLI flag) needs that exact
- * spelling; otherwise derive CIO_<ID>_<TITLE_SLUG> as the app contract promises.
- */
-function secretEnvName(explicit, title, id) {
-  if (typeof explicit === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(explicit.trim())) {
-    return explicit.trim()
-  }
-  const slug = String(title || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 24)
-  return 'CIO_' + id + '_' + (slug || 'SECRET')
 }
 
 export default function codeInOvenCoreToolsExtension(pi) {
