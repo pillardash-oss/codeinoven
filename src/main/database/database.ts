@@ -827,10 +827,13 @@ export class Database {
 
   /**
    * Databases created before the anchor tag carry an `anchor_message_id`-less
-   * snapshot queue. Add the column in place (nullable, no backfill needed  
-   * a null anchor means "unknown", which keeps the pre-anchor behaviour of
-   * registering the next completed exchange as a follow-up). Idempotent and
-   * safe to re-run.
+   * snapshot queue. Add the column in place and point each still-open row at
+   * the same visible user message the capture path would resolve today: the
+   * thread's most recent user-origin message. Without the backfill a queued row
+   * would treat its next turn as a follow-up and keep the pre-fix behaviour for
+   * one more exchange. Rows whose thread is gone (or that are already closed)
+   * keep a null anchor, which reads as "unknown". Idempotent and safe to
+   * re-run.
    */
   migrateModelRankingSnapshotAnchorMessageId(connection?: DatabaseType): void {
     const target = connection ?? this.requireDb()
@@ -843,6 +846,19 @@ export class Database {
     )
     if (columns.size === 0 || columns.has('anchor_message_id')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN anchor_message_id TEXT')
+    target
+      .prepare(
+        `UPDATE model_ranking_snapshots
+         SET anchor_message_id = (
+           SELECT candidate.id FROM agent_messages candidate
+           WHERE candidate.thread_id = model_ranking_snapshots.thread_id
+             AND candidate.role = 'user' AND candidate.origin = 'user'
+           ORDER BY candidate.created_at DESC, candidate.id DESC
+           LIMIT 1
+         )
+         WHERE closed_at_ms IS NULL`
+      )
+      .run()
   }
 
   /**

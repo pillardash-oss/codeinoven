@@ -154,6 +154,14 @@ export class ModelRankingSnapshotRepo {
    * slides, so the window stays open   a conversation is graded exactly once,
    * at close. A plain update, never a failure marker.
    *
+   * One statement, deliberately: the database worker owns a second connection
+   * to the same file, so a read-then-write could have another connection's
+   * write land in between. Every CASE reads the pre-update row, and the answer
+   * is refreshed only while the window holds a single exchange (`first_shot`,
+   * where the prompt being answered again IS the window's own) and only with
+   * real text, because a text-less continuation turn must never erase the
+   * answer the user received.
+   *
    * If the drain had already claimed the row ('processing', inactivity
    * deadline elapsed mid-conversation), the row is reset to 'pending' and its
    * claim token cleared, so the in-flight judge result is discarded (its
@@ -168,47 +176,37 @@ export class ModelRankingSnapshotRepo {
     endedAt: number,
     nextDueAtMs: number
   ): void {
-    const open = this.db.get<{ anchor_message_id: string | null }>(
-      `SELECT anchor_message_id FROM model_ranking_snapshots
-       WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
-      id
-    )
-    if (!open) return
-    if (open.anchor_message_id === promptMessageId) {
-      // Same user prompt answered again: keep the shot category and the judge
-      // context, but make the graded answer the one the user actually received
-      // (an incomplete turn is captured before its continuation runs, and a
-      // nudge turn replaces an answer the app itself rejected).
-      this.db.run(
-        `UPDATE model_ranking_snapshots
-         SET assistant_output_text = ?,
-             ended_at = ?,
-             due_at_ms = ?,
-             status = 'pending',
-             claim_token = NULL
-         WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
-        assistantOutputText,
-        endedAt,
-        nextDueAtMs,
-        id
-      )
-      return
-    }
     this.db.run(
       `UPDATE model_ranking_snapshots
-       SET shot_category = 'multi_shot',
-           follow_up_text = substr(
-             CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
-                  THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
-             -12000),
+       SET shot_category = CASE
+             WHEN anchor_message_id = ? THEN shot_category
+             ELSE 'multi_shot'
+           END,
+           follow_up_text = CASE
+             WHEN anchor_message_id = ? THEN follow_up_text
+             ELSE substr(
+               CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
+                    THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
+               -12000)
+           END,
+           assistant_output_text = CASE
+             WHEN anchor_message_id = ? AND shot_category = 'first_shot' AND ? <> ''
+               THEN ?
+             ELSE assistant_output_text
+           END,
            anchor_message_id = ?,
            ended_at = ?,
            due_at_ms = ?,
            status = 'pending',
            claim_token = NULL
        WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
+      promptMessageId,
+      promptMessageId,
       followUpText,
       followUpText,
+      promptMessageId,
+      assistantOutputText,
+      assistantOutputText,
       promptMessageId,
       endedAt,
       nextDueAtMs,
