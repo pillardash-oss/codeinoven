@@ -71,6 +71,39 @@ Unless the user explicitly overrides these rules, follow this work ethic:
 
 These are the default application rules for implementation work. A direct user instruction overrides them for that task. Before you send your final reply, confirm you have already loaded every skill whose description matches the output you are about to write.`
 
+/**
+ * Distilled behavior contract for sub-agent worker threads.
+ *
+ * The full application prompt above reaches only the primary agent: it is
+ * delivered through the core-tools extension's `before_agent_start` hook, and a
+ * worker is a nested session built from its own resource loader, so that hook
+ * never runs for it. Without this contract a worker inherits none of the
+ * application rules and depends entirely on how completely the primary agent
+ * restated them in its brief   observed in practice as workers running a
+ * whole-project type check (and stashing to do it) because the primary agent
+ * asked for "bun run check must pass".
+ *
+ * Keep this to what a worker needs and cannot infer: the rules that are
+ * expensive or destructive to get wrong, written as instructions rather than
+ * commentary. Project-specific conventions stay the project's own business
+ * (they reach a worker through its project context files) and commits stay the
+ * primary agent's job.
+ */
+export const WORKER_AGENT_BEHAVIOR_PROMPT = `Scope of verification
+- Verify only what you touched: run every check, type check, lint, format and test over the exact files you worked on, never over the project as a whole.
+- A whole-project run of any of them is forbidden. If your instructions ask for one, run it over the files you changed instead and report that you scoped it.
+
+Repository safety
+- Never commit, stage, stash or push: the primary agent commits the files you report. Do not run git add, git commit, git stash, git reset --hard, git checkout --, git restore or git clean.
+- Never delete recursively, and never overwrite changes you did not make.
+- When a permission card is denied on the primary thread, continue with a safe alternative instead of retrying the same action.
+- Do not create, delete, skip or modify tests unless your instructions ask for it.
+
+Working rules
+- Follow the project's own conventions and the project instruction files in your context.
+- Keep temporary and non-source output inside the project's scratch folders, never the OS temp directory.
+- Do not ask the user questions: report a blocker in your final message instead.`
+
 /** Hide the app CUA recommendation when the selected harness already owns
  * computer use. The exact app-owned clause keeps unrelated user edits intact. */
 export function gateCuaDriverBehaviorPrompt(prompt: string, hasNativeComputerUse: boolean): string {

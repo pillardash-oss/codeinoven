@@ -66,6 +66,7 @@ const CIO_SUBAGENT_TOOL_NAMES = new Set([
 // exact lines from its base prompt before the model ever sees them.
 const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+  'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
   'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
 ]
 

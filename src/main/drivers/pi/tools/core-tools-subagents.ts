@@ -26,6 +26,11 @@ export function piCoreToolsSubagentSource(): string {
   const subAgents = new Map()
   let subAgentCounter = 0
 
+  // Distilled behavior contract injected into every worker prompt. Assembled by
+  // the app from its single source of truth rather than written here, so the
+  // worker rules stay in one reviewable place beside the primary agent rules.
+  const CIO_WORKER_CONTRACT = __CIO_WORKER_CONTRACT_LITERAL__
+
   // ── App-owned stop requests ──────────────────────────────────────────
   // Pi's abort RPC reaches only the root run; workers are nested in-process
   // sessions the app cannot address. The driver publishes a stop request into
@@ -572,9 +577,60 @@ export function piCoreToolsSubagentSource(): string {
     )
   }
 
+  /**
+   * Verification targets that default to the whole project when they are given
+   * no explicit paths. A worker must name the files it touched: several workers
+   * plus the primary each starting a project-wide type check is what monopolizes
+   * the machine, and a primary agent's brief routinely asks for "check must
+   * pass" without scoping it, so the worker contract alone is not enough.
+   */
+  const CIO_WORKSPACE_WIDE_VERIFICATIONS = new Set([
+    'check', 'typecheck', 'type-check', 'types', 'lint', 'lint:fix', 'format', 'format:check',
+    'test', 'tests', 'test:unit', 'test:e2e', 'test:all', 'verify', 'validate',
+    'svelte-check', 'tsc', 'tsgo', 'eslint', 'prettier', 'vitest', 'jest', 'stylelint'
+  ])
+  const CIO_PACKAGE_RUNNERS = new Set(['bun', 'npm', 'pnpm', 'yarn', 'npx', 'bunx', 'pnpx', 'node'])
+
+  /** True when one shell segment runs a verification target with no path argument. */
+  function isWorkspaceWideVerification(segment) {
+    const tokens = segment
+      .trim()
+      .split(/\\s+/u)
+      .filter(function (token) { return token.length > 0 })
+    // Leading VAR=value assignments are environment, not the command.
+    while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[0])) tokens.shift()
+    if (tokens.length === 0) return false
+    const runner = tokens[0].replace(/^.*\\//u, '')
+    if (!CIO_PACKAGE_RUNNERS.has(runner)) return false
+    const rest = tokens.slice(1)
+    // A package-runner script, a wrapper binary and a script invoked by path
+    // all name the same target; only the path form carries a directory here.
+    const afterRunner = rest[0] === 'run' || rest[0] === 'x' ? rest.slice(1) : rest
+    const target = (afterRunner[0] || '').replace(/^.*\\//u, '').replace(/\\.(?:[cm]?ts|js)$/u, '')
+    if (!target || !CIO_WORKSPACE_WIDE_VERIFICATIONS.has(target)) return false
+    const paths = afterRunner.slice(1).filter(function (token) {
+      return token.charAt(0) !== '-' && !/^[0-9]*[<>]/u.test(token)
+    })
+    // A lone dot (or the project root) is the whole project, not a scope.
+    if (paths.length === 0) return true
+    return paths.length === 1 && (paths[0] === '.' || paths[0] === './')
+  }
+
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
   function gatedWorkerTools(parentCtx, touchedFiles) {
     async function gate(toolName, params) {
+      if (toolName === 'bash' && recordValue(params) && typeof params['command'] === 'string') {
+        const workspaceWide = params['command']
+          .split(/&&|;|\\|\\||\\|/u)
+          .find(function (segment) { return isWorkspaceWideVerification(segment) })
+        if (workspaceWide) {
+          return (
+            'Not run: a project-wide verification is not available to a sub-agent. ' +
+            'Run the check, type check, lint, format or test over the files you actually changed by passing their explicit paths, then report which files you verified. ' +
+            'If a project-wide run is genuinely required, say so in your final message and the primary agent will run it.'
+          )
+        }
+      }
       const hit = evaluateGate(toolName, recordValue(params) ?? {}, parentCtx.cwd)
       if (!hit) return null
       const payload = {
@@ -947,6 +1003,13 @@ export function piCoreToolsSubagentSource(): string {
       'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
       'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands   the primary agent is responsible for committing the work and needs this list.',
       '',
+      // The app-owned contract reaches a worker here and nowhere else: a worker
+      // is a nested session built from its own resource loader, so the
+      // extension's before_agent_start hook   the only carrier of the primary
+      // agent's system prompt   never runs for it. It stays ahead of the
+      // primary agent's instructions because it constrains them.
+      CIO_WORKER_CONTRACT,
+      '',
       'Instructions from the primary agent:',
       '',
       spec.instructions
@@ -965,7 +1028,8 @@ export function piCoreToolsSubagentSource(): string {
         description: 'Short task category, e.g. explore, implementation, tests, cleanup, documentation.'
       }),
       instructions: Type.String({
-        description: 'The complete, self-contained task instructions for the sub-agent.'
+        description:
+          'The complete, self-contained task instructions for the sub-agent. It inherits the project rules: name the files it owns, scope its verification to those files, and leave committing to the primary agent.'
       }),
       model: Type.Optional(
         Type.String({

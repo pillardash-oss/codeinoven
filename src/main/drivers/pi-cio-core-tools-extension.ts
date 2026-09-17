@@ -80,6 +80,12 @@ export interface CioCoreToolsExtensionOptions {
    *  forwards token deltas for those children only, so a worker nobody is
    *  looking at does not re-serialize a stream only a view would consume. */
   subagentWatchPath: string
+  /** Distilled project-and-app behavior contract injected into every spawned
+   *  worker's prompt. A worker is a nested session with its own resource
+   *  loader, so the extension's `before_agent_start` hook never runs for it and
+   *  the primary agent's system prompt (work ethics, working scope, preferences)
+   *  never reaches the worker   the worker contract is the only channel. */
+  workerContractPrompt: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -213,6 +219,11 @@ __CIO_STRIP_BUILTINS__  })
       .replace(
         '__CIO_SUBAGENT_WATCH_PATH__',
         JSON.stringify(options.subagentWatchPath).slice(1, -1)
+      )
+      // Inserted as a complete JSON string literal (its own quotes included),
+      // so no character in the contract can terminate the generated source.
+      .replace('__CIO_WORKER_CONTRACT_LITERAL__', () =>
+        JSON.stringify(options.workerContractPrompt)
       )
       // One-shot sessions strip the interactive tool factories at generation
       // time (not runtime), so the materialized module never even imports them.
