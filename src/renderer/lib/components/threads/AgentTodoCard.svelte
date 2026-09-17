@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronDown, Circle, ListChecks, Loader2 } from '@lucide/svelte'
+  import { Check, ChevronDown, Circle, ListChecks, Loader2, X } from '@lucide/svelte'
   import {
     activeAgentTodoIndex,
     agentTodoProgressLabel,
@@ -10,9 +10,11 @@
     items: AgentTodoItem[]
     signature: string
     busy: boolean
+    /** Dismiss the card after the thread stopped working. */
+    onClose: () => void
   }
 
-  let { items, signature, busy }: Props = $props()
+  let { items, signature, busy, onClose }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
@@ -56,27 +58,45 @@
   class="overflow-hidden rounded-t-xl border border-b-0 border-info/20 bg-elevated/50"
   aria-label="Agent task progress"
 >
-  <button
-    type="button"
-    class="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-elevated"
-    aria-expanded={open}
-    onclick={toggleOpen}
-  >
-    <ListChecks size={14} class="shrink-0 text-info" />
-    <span class="shrink-0 text-xs font-semibold text-foreground">Tasks</span>
-    <span class="shrink-0 text-[0.6875rem] tabular-nums text-dimmed">
-      {progressLabel}
-    </span>
-    {#if !open && currentItem}
-      <span class="min-w-0 flex-1 truncate text-xs text-muted">{currentItem.label}</span>
-    {:else}
-      <span class="flex-1"></span>
+  <!-- Header is a row rather than one full-width button so the close control can
+  sit beside the fold toggle instead of inside it. -->
+  <div class="flex items-center">
+    <button
+      type="button"
+      class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-elevated"
+      aria-expanded={open}
+      onclick={toggleOpen}
+    >
+      <ListChecks size={14} class="shrink-0 text-info" />
+      <span class="shrink-0 text-xs font-semibold text-foreground">Tasks</span>
+      <span class="shrink-0 text-[0.6875rem] tabular-nums text-dimmed">
+        {progressLabel}
+      </span>
+      {#if !open && currentItem}
+        <span class="min-w-0 flex-1 truncate text-xs text-muted">{currentItem.label}</span>
+      {:else}
+        <span class="flex-1"></span>
+      {/if}
+      <ChevronDown
+        size={13}
+        class="shrink-0 text-dimmed transition-transform {open ? '' : 'rotate-180'}"
+      />
+    </button>
+
+    <!-- Only offered once the turn stops, so a closed card can never hide live
+    task progress. -->
+    {#if !busy}
+      <button
+        type="button"
+        class="mr-2 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Close task list"
+        title="Close task list"
+        onclick={onClose}
+      >
+        <X size={13} />
+      </button>
     {/if}
-    <ChevronDown
-      size={13}
-      class="shrink-0 text-dimmed transition-transform {open ? '' : 'rotate-180'}"
-    />
-  </button>
+  </div>
 
   {#if open}
     <div class="max-h-56 overflow-y-auto border-t px-3 py-2" aria-live="polite">

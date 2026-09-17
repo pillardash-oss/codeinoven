@@ -1037,6 +1037,15 @@
     return [...messages, streamMessage]
   })
   let activeTodo = $derived(latestAgentTodo(todoMessages))
+  /**
+   * Signature of a task list the user closed while the thread was idle. A
+   * different task list shows again, and a running turn always shows the card,
+   * so closing it can never hide live progress.
+   */
+  let closedTodoSignature = $state<string | null>(null)
+  let visibleTodo = $derived(
+    activeTodo && (busy || activeTodo.signature !== closedTodoSignature) ? activeTodo : null
+  )
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
@@ -11509,8 +11518,13 @@
               />
             {:else}
               {#if !failureRetryVisible}
-                {#if activeTodo}
-                  <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
+                {#if visibleTodo}
+                  <AgentTodoCard
+                    items={visibleTodo.items}
+                    signature={visibleTodo.signature}
+                    {busy}
+                    onClose={() => (closedTodoSignature = activeTodo?.signature ?? null)}
+                  />
                 {/if}
                 {#key composerRestoreKey}
                   <ChatComposer
