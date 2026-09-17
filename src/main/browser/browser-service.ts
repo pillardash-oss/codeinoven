@@ -27,12 +27,17 @@ import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
+  permissionCheckKey,
   permissionGrantKeys,
-  permissionKey,
   permissionOrigin,
   permissionResolutions,
+  rememberedPermissionOutcome,
   type PermissionResolution
 } from './browser-service/browser-permissions'
+import {
+  BrowserPermissionMemory,
+  type PermissionMemoryPersistence
+} from './browser-service/browser-permission-memory'
 import type { BrowserTab, PendingBrowserPermission } from './browser-service/browser-types'
 import {
   BROWSER_PARTITION_PREFIX,
@@ -63,6 +68,7 @@ export class BrowserService {
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly downloadTracker: BrowserDownloadTracker
   private readonly siteData: BrowserSiteDataService
+  private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
@@ -79,9 +85,11 @@ export class BrowserService {
 
   constructor(
     private readonly window: BrowserWindow,
-    db: Database
+    db: Database,
+    permissionPersistence: PermissionMemoryPersistence
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
+    this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
     this.downloadTracker = new BrowserDownloadTracker({
@@ -101,6 +109,20 @@ export class BrowserService {
       clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
       cancelProjectDownloads: (projectId) => this.downloadTracker.cancelProject(projectId)
     })
+  }
+
+  /**
+   * Merge the permission decisions the user already made into the live
+   * ledgers. The bootstrap awaits this before the service accepts browser IPC,
+   * so a site's permission request can never race the read and re-prompt for a
+   * permission the user already granted.
+   */
+  async hydratePermissionMemory(): Promise<void> {
+    try {
+      await this.permissionMemory.load(this.permissionLedgers())
+    } catch (error: unknown) {
+      Logger.error('Browser permission memory could not be loaded:', error)
+    }
   }
 
   register(): void {
@@ -499,14 +521,9 @@ export class BrowserService {
     browserSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
       const origin = permissionOrigin(requestingOrigin)
       if (!origin) return false
-      const mediaType = Reflect.get(details, 'mediaType')
-      const scope = permissionKey(
-        origin,
-        permission,
-        typeof mediaType === 'string' ? mediaType : ''
-      )
+      const key = permissionCheckKey(origin, permission, Reflect.get(details, 'mediaType'))
       // A remembered "Don't allow" wins over any cached grant for the same key.
-      return !denies.has(scope) && grants.has(scope)
+      return !denies.has(key) && grants.has(key)
     })
     browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       const tabEntry = [...this.tabs.entries()].find(
@@ -540,13 +557,23 @@ export class BrowserService {
         permission,
         mediaTypes
       }
-      // A remembered "Don't allow" for any of these keys: refuse silently so the
-      // site is not re-prompted, without suspending the view or showing a modal.
+      // Electron calls this handler for every request even when the check
+      // handler already answered, so the remembered decision is the gate here:
+      // a remembered "Don't allow" refuses silently, and a decision that
+      // already covers the request grants silently instead of prompting the
+      // user for a permission they have given before.
       const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
-      if (
-        permissionGrantKeys(request).some((key) => this.permissionDenies.get(partition)?.has(key))
-      ) {
+      const outcome = rememberedPermissionOutcome(
+        permissionGrantKeys(request),
+        this.permissionGrants.get(partition),
+        this.permissionDenies.get(partition)
+      )
+      if (outcome === 'deny') {
         callback(false)
+        return
+      }
+      if (outcome === 'grant') {
+        callback(true)
         return
       }
       const timer = setTimeout(
@@ -570,6 +597,22 @@ export class BrowserService {
     return browserSession
   }
 
+  /** The live grant/deny ledgers the permission handlers read and write. */
+  private permissionLedgers(): {
+    grants: Map<string, Set<string>>
+    denies: Map<string, Set<string>>
+  } {
+    return { grants: this.permissionGrants, denies: this.permissionDenies }
+  }
+
+  /** Persist the ledgers after a decision. Writes are rare (one per user
+   *  answer), so they go straight to disk and never block the handler. */
+  private persistPermissionMemory(): void {
+    void this.permissionMemory.save(this.permissionLedgers()).catch((error: unknown) => {
+      Logger.error('Browser permission memory could not be saved:', error)
+    })
+  }
+
   /** Dismiss every pending permission prompt that belongs to a project. */
   private dismissProjectPermissions(projectId: string): void {
     for (const [requestId, pending] of this.pendingPermissions) {
@@ -583,6 +626,7 @@ export class BrowserService {
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     this.permissionGrants.get(partition)?.clear()
     this.permissionDenies.get(partition)?.clear()
+    this.persistPermissionMemory()
   }
 
   private resolvePermission(requestId: string, resolution: PermissionResolution): void {
@@ -603,6 +647,7 @@ export class BrowserService {
           grants?.add(key)
         }
       }
+      this.persistPermissionMemory()
     }
     pending.callback(resolution.granted)
     // Show the next queued request, or drop the prompt when the queue is empty.

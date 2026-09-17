@@ -224,8 +224,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }).origin
   })
   if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-    const service = new BrowserService(state.mainWindow, database)
+    const service = new BrowserService(state.mainWindow, database, storage)
     state.browserService = service
+    // Remembered permission decisions load before the service accepts browser
+    // IPC, so a site is never re-prompted for a permission the user already
+    // granted in this or an earlier run.
+    await service.hydratePermissionMemory()
     service.register()
     state.chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
       service.executeUtility(operation, input, browserContext)

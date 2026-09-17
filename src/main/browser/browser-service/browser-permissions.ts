@@ -35,9 +35,38 @@ export function permissionKey(origin: string, permission: string, scope = ''): s
 
 export function permissionGrantKeys(request: BrowserPermissionRequest): string[] {
   if (request.permission === 'media' && request.mediaTypes.length > 0) {
-    return request.mediaTypes.map((mediaType) =>
+    return [...new Set(request.mediaTypes)].map((mediaType) =>
       permissionKey(request.origin, request.permission, mediaType)
     )
   }
   return [permissionKey(request.origin, request.permission)]
+}
+
+/** The key a synchronous permission check uses. Electron reports the media
+ *  scope as `mediaType` on checks and as `mediaTypes` on requests, so both
+ *  paths have to reduce to the same key for a remembered decision to apply. */
+export function permissionCheckKey(origin: string, permission: string, mediaType: unknown): string {
+  return permissionKey(origin, permission, typeof mediaType === 'string' ? mediaType : '')
+}
+
+/** What a request needs from the browser's remembered decisions. */
+export type RememberedPermissionOutcome = 'grant' | 'deny' | 'ask'
+
+/**
+ * How a request resolves against what the user already decided.
+ *
+ * Electron calls the permission *request* handler for every web API call, even
+ * when the synchronous check handler already answered, so this is the only
+ * place a remembered decision can actually spare the user a prompt. A
+ * remembered "Don't allow" wins; a decision that covers every scope of the
+ * request grants silently; anything else still needs the user.
+ */
+export function rememberedPermissionOutcome(
+  keys: readonly string[],
+  grants: ReadonlySet<string> | undefined,
+  denies: ReadonlySet<string> | undefined
+): RememberedPermissionOutcome {
+  if (keys.some((key) => denies?.has(key) === true)) return 'deny'
+  if (keys.length > 0 && keys.every((key) => grants?.has(key) === true)) return 'grant'
+  return 'ask'
 }
