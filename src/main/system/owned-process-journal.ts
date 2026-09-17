@@ -11,6 +11,13 @@ export interface OwnedRoot {
   pid: number
   command: string
   cwd: string
+  /**
+   * True for a process the app did not spawn but adopted as its own (a daemon a
+   * harness re-parented to launchd, such as an `adb` fork-server). Adopted
+   * entries are only reaped at launch, never by the running orphan sweep: the
+   * app may be talking to that daemon right now.
+   */
+  adopted?: boolean
 }
 
 interface OwnedRootStore {
@@ -48,8 +55,21 @@ export class OwnedProcessJournal {
 
   /** Register a root process the app has spawned. */
   register(pid: number, command: string, cwd: string): void {
+    this.setRoot(pid, { pid, command, cwd })
+  }
+
+  /**
+   * Register a process the app adopted rather than spawned. See
+   * {@link OwnedRoot.adopted}: the flag keeps a repeated orphan sweep from
+   * SIGTERM'ing a daemon a harness re-parented and the app may still be using.
+   */
+  registerAdopted(pid: number, command: string): void {
+    this.setRoot(pid, { pid, command, cwd: '', adopted: true })
+  }
+
+  private setRoot(pid: number, root: OwnedRoot): void {
     if (pid <= 0) return
-    this.roots.set(pid, { pid, command, cwd })
+    this.roots.set(pid, root)
     this.ownPids.add(pid)
     this.droppedPids.delete(pid)
     if (this.roots.size > MAX_ROOTS) this.pruneOldest()
@@ -138,9 +158,7 @@ export class OwnedProcessJournal {
       if (!this.ownPids.has(root.pid) || this.droppedPids.has(root.pid)) continue
       merged.set(root.pid, root)
     }
-    const roots = [...merged.values()]
-      .sort((left, right) => left.pid - right.pid)
-      .slice(-MAX_ROOTS)
+    const roots = [...merged.values()].sort((left, right) => left.pid - right.pid).slice(-MAX_ROOTS)
     const payload: OwnedRootStore = { version: STORE_VERSION, roots }
     await atomicWrite(this.filePath, payload)
     this.forgetPersistedDrops(stored)
@@ -207,12 +225,18 @@ function parseStore(raw: string): OwnedRoot[] {
   const parsed: OwnedRoot[] = []
   for (const entry of roots) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-    const { pid, command, cwd } = entry as { pid?: unknown; command?: unknown; cwd?: unknown }
+    const { pid, command, cwd, adopted } = entry as {
+      pid?: unknown
+      command?: unknown
+      cwd?: unknown
+      adopted?: unknown
+    }
     if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) continue
     parsed.push({
       pid,
       command: typeof command === 'string' ? command : '',
-      cwd: typeof cwd === 'string' ? cwd : ''
+      cwd: typeof cwd === 'string' ? cwd : '',
+      ...(adopted === true ? { adopted: true } : {})
     })
   }
   return parsed

@@ -119,6 +119,7 @@ import {
 } from '../providers/harness-account-registry'
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
+import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import type {
   BrowserUtilityExecutor,
@@ -1009,6 +1010,19 @@ export class ChatEngine {
   private static readonly IDLE_REAP_INTERVAL_MS = 60_000
 
   // 1 minute
+
+  /**
+   * How often a running instance reclaims harness processes orphaned by an
+   * instance that died while this one kept running. The startup reap only runs
+   * once, so without this sweep such an orphan stays resident (holding its port
+   * and memory) until the next launch.
+   */
+  private static readonly ORPHAN_SWEEP_INTERVAL_MS = 5 * 60_000
+
+  // 5 minutes
+
+  /** Timestamp of the last orphan sweep (see {@link sweepOrphanedProcesses}). */
+  private lastOrphanSweepAt = 0
 
   /** Timestamp of the last user interaction (e.g. sendPrompt, answerQuestion). */
   private lastUserActivityAt = 0
@@ -2278,8 +2292,30 @@ export class ChatEngine {
    * quit, or the shutdown failsafe) before this session spawns any new servers.
    * Only kills processes the app owns   never a user's external harness.
    */
-  reapOrphanProcesses(): Promise<import('../agents/agent-process-service').ReapOrphansResult> {
-    return this.agentProcesses.reapOrphans()
+  reapOrphanProcesses(options?: ReapOrphansOptions): Promise<ReapOrphansResult> {
+    return this.agentProcesses.reapOrphans(options)
+  }
+
+  /**
+   * Reclaim harness processes orphaned by an instance that died while this one
+   * stayed up (its shared servers keep their ports and memory otherwise).
+   * Ownership must be proven: a sweep repeats for hours, so a journaled pid the
+   * OS has recycled must never be signalled on the orphan check alone.
+   */
+  private async sweepOrphanedProcesses(): Promise<void> {
+    const now = Date.now()
+    if (now - this.lastOrphanSweepAt < ChatEngine.ORPHAN_SWEEP_INTERVAL_MS) return
+    this.lastOrphanSweepAt = now
+    try {
+      const reaped = await this.agentProcesses.reapOrphans({ requireOwnershipProof: true })
+      if (reaped.killed.length > 0) {
+        Logger.info('Reaped orphaned harness processes of a sibling instance', {
+          killed: reaped.killed
+        })
+      }
+    } catch (error) {
+      Logger.error('Orphaned harness process sweep failed:', error)
+    }
   }
 
   /** Kill all pooled driver resources (called on app quit). */
@@ -5511,6 +5547,8 @@ export class ChatEngine {
         this.outboundMessageIdsBySession.delete(sessionId)
       }
     }
+
+    await this.sweepOrphanedProcesses()
   }
 
   /**
