@@ -23,7 +23,6 @@ import {
   SCOPE_CAPABILITY_NAME,
   SCOPE_CAPABILITY_SUMMARY
 } from '../../lib/scope-tool'
-import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
@@ -107,7 +106,6 @@ export class UtilityRegistryService {
     const registry = await this.loadRaw()
     const migrated = this.migrateLegacyAppUtilities(registry)
     const now = Date.now()
-    const harnesses = listHarnesses()
     const defaults: UtilityDefinition[] = [
       {
         id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -120,11 +118,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: { harnessId: '', providerId: '', modelId: '' },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'native',
-          nativeCapability: 'image_descriptor'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native',
+            nativeCapability: 'image_descriptor'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -142,11 +142,13 @@ export class UtilityRegistryService {
           instructions: `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
         },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'skill',
-          transportName: RETRIEVE_MCP_HOST_TOOL_NAME
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'skill',
+            transportName: RETRIEVE_MCP_HOST_TOOL_NAME
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -162,11 +164,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: { backend: 'codeinoven-browser' },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'native',
-          nativeCapability: 'browser'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native',
+            nativeCapability: 'browser'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -186,12 +190,14 @@ export class UtilityRegistryService {
           args: ['mcp']
         },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'mcp' as const,
-          nativeCapability: 'computer_use',
-          transportName: 'cua-driver'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'mcp' as const,
+            nativeCapability: 'computer_use',
+            transportName: 'cua-driver'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -206,11 +212,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: { instructions: SCOPE_CAPABILITY_DOCS },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'native' as const,
-          nativeCapability: 'scope'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native' as const,
+            nativeCapability: 'scope'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -218,11 +226,40 @@ export class UtilityRegistryService {
     ]
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
-    if (missing.length > 0 || migrated) {
+    const rebound = this.normalizeAppOwnedBindings(registry)
+    if (missing.length > 0 || migrated || rebound) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true
+  }
+
+  /**
+   * Collapses an app-owned utility's per-harness bindings into the single
+   * all-harness binding its seed already means. An app-owned capability belongs
+   * to every harness the app runs, including one registered after this install,
+   * so a harness list captured at first seed must not keep it frozen out.
+   */
+  private normalizeAppOwnedBindings(registry: UtilityRegistryFile): boolean {
+    let changed = false
+    for (let index = 0; index < registry.utilities.length; index += 1) {
+      const utility = registry.utilities[index]
+      if (!utility.appOwned) continue
+      const [first] = utility.harnessBindings
+      if (
+        !first ||
+        (utility.harnessBindings.length === 1 && first.harnessId === ALL_HARNESSES_BINDING_ID)
+      ) {
+        continue
+      }
+      registry.utilities[index] = {
+        ...utility,
+        harnessBindings: [{ ...first, harnessId: ALL_HARNESSES_BINDING_ID }],
+        updatedAt: Date.now()
+      }
+      changed = true
+    }
+    return changed
   }
 
   /**
