@@ -1,8 +1,9 @@
-import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
+import { revealInOsFileManager } from '$lib/os-file-manager'
 import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -127,54 +128,38 @@ export class ScopeActionsController {
       })
   }
 
-  async confirmDelete(): Promise<void> {
+  /**
+   * Hand the confirmed deletion to the app-level worktree dock, mirroring how a
+   * create or adopt runs: the threads, the checkout and the scope record are
+   * removed by a job the user can background while they keep working. Every
+   * value the run needs is read BEFORE the dialog state is cleared, because the
+   * dock panel outlives this dialog.
+   */
+  confirmDelete(): void {
     const target = this.deleteTarget
     if (!target || target.id === DEFAULT_SCOPE_BUCKET_ID) return
-    try {
-      const affectedThreads = scopeState.currentProjectThreads.filter(
-        (thread) => scopeState.bucketForThread(thread) === target.id
-      )
-      if (this.deleteThreads) {
-        await Promise.all(
-          affectedThreads.map((thread) => invoke('thread:delete', thread.projectId, thread.id))
-        )
-        for (const thread of affectedThreads) {
-          scopeState.removeThread(thread.id)
-          if (workspaceState.selectedThread?.id === thread.id) {
-            workspaceState.clearThread()
-          }
-        }
-      } else {
-        const reassigned = await Promise.all(
-          affectedThreads.map((thread) =>
-            invoke('thread:update', thread.projectId, thread.id, {
-              scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-            })
-          )
-        )
-        for (const thread of reassigned) {
-          scopeState.updateThread(thread)
-          workspaceState.updateThread(thread)
-        }
-      }
-      const projectId = this.getProjectId()
-      if (target.root.kind === 'worktree' && projectId) {
-        // Full cleanup for worktree-backed scopes   the worktree and its branch
-        // are removed through the guarded lifecycle. The token is minted here
-        // (fresh) rather than reusing the dialog's display preflight, so it can
-        // never be stale by the time the user confirms.
-        const preflight = await scopeState.preflightWorktree(projectId, target.id, 'delete-scope')
-        await scopeState.confirmDeleteScope(projectId, target.id, preflight.confirmationId, true)
-      } else {
-        await scopeState.removeBucket(target.id)
-      }
+    const projectId = this.getProjectId()
+    if (!projectId) return
+    // A second confirmation for a scope already being removed would only fail
+    // inside the dock, so the dialog closes on the run in progress instead.
+    if (scopeJobs.isRemoving(projectId, target.id)) {
       this.deleteTarget = null
       this.deleteThreads = false
       this.deletePreflight = null
-      this.redockIfScoped(target)
-    } catch (error) {
-      this.fail(this.message(error, 'The scope could not be deleted.'))
+      return
     }
+    const input = {
+      bucketId: target.id,
+      title: target.name,
+      isolated: target.root.kind === 'worktree',
+      deleteThreads: this.deleteThreads
+    }
+    this.deleteTarget = null
+    this.deleteThreads = false
+    this.deletePreflight = null
+    scopeJobs.remove(projectId, input, {
+      onRemoved: () => this.redockIfScoped(target)
+    })
   }
 
   /** Never leave the scoped-threads sidebar pointing at a scope that is gone. */
@@ -190,6 +175,31 @@ export class ScopeActionsController {
 
   askMerge(bucket: ScopeBucket): void {
     this.mergeTarget = bucket
+  }
+
+  /**
+   * Open this scope's managed checkout in the OS file manager. Health is the
+   * authority for where the checkout is (it reports `expectedPath`, and the
+   * actual path when Git disagrees), and the reveal itself runs through the
+   * same `shell:revealPath` contract every file surface uses, which re-validates
+   * the path in main.
+   */
+  async revealWorktree(bucket: ScopeBucket): Promise<void> {
+    const projectId = this.getProjectId()
+    if (!projectId || bucket.root.kind !== 'worktree') return
+    try {
+      const health = await scopeState.revalidateWorktreeHealth(projectId, bucket.id, {
+        force: true
+      })
+      const path = health?.actualPath ?? health?.expectedPath
+      if (!path) throw new Error('This scope has no worktree folder on disk to reveal')
+      const revealed = await revealInOsFileManager(path)
+      if (!revealed) {
+        throw new Error(`The file manager could not open ${path}`)
+      }
+    } catch (error) {
+      this.fail(this.message(error, 'The worktree folder could not be revealed.'))
+    }
   }
 
   /**

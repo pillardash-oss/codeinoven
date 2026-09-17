@@ -188,6 +188,26 @@ its `cio/` branch, not the project root:
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.
 
+## 6b. Long worktree runs live in the dock
+
+Creating, adopting, re-running setup for, and deleting a scope all mutate a
+checkout, so none of them is instant. Each one runs as an **app-level job**
+(`src/renderer/lib/stores/scope-jobs.svelte.ts`) rendered by
+`src/renderer/lib/components/scope/ScopeJobDockHost.svelte` at the app root, not
+as a modal the user has to sit through. A job survives navigation, can be
+minimized to a dock chip that still names what it is doing, states its outcome
+in the panel (branch and directory for a created or adopted worktree, the
+removed checkout for a deletion), and can be dismissed once it is finished.
+
+Worktree stages stream from main on `scope:worktree:progress`, so a job a user
+started and a job an agent started through `cio:scope` render identically. A
+removal has no streamed stages main can send: the renderer performs it as an
+ordered sequence of its own steps (settle the scope's threads, remove the
+managed checkout and its branch when the scope has one, drop the scope from the
+board), and the checklist reports those steps instead. A removal job never
+absorbs worktree progress events, so a create or adopt running in the same
+project still shows its own live stages.
+
 ## 7. Health states
 
 Managed scopes expose a typed health result:
@@ -272,6 +292,17 @@ stale or mismatched IDs are rejected.
   action. The dialog also offers to permanently delete the scope's threads
   (otherwise they return to the Default scope). Deleting a project-rooted
   scope just removes the bucket; its threads follow the same choice.
+
+  The confirmation stays a dialog, but the removal itself is a dock job
+  (section 6b), exactly like a create or an adopt: confirming closes the dialog
+  and hands the work to a run the user can background. Every value the run needs
+  (the scope's threads, whether it owns a checkout, the thread disposition) is
+  read before the dialog closes, and the removal mints its own fresh preflight
+  token rather than reusing the dialog's display-only one, so the token can
+  never be stale by the time the checkout is removed. Because it is a job, the
+  dialog closes on the run already in progress instead of queueing a second
+  removal that could only fail.
+
 - **Archive / Restore:** never destructive. Hides or restores the scope on the
   board without touching Git, the worktree, or threads; archiving never
   implies removal.
@@ -279,8 +310,19 @@ stale or mismatched IDs are rejected.
   silently orphaning a registered worktree.
 
 The scope actions menu intentionally exposes only the non-overlapping
-operations (merge-into-project, merge-from-project, remove-worktree-keep-scope,
-archive, delete). _Merge from project…_ is the peer sync described in section
+operations (reveal-in-file-manager, merge-into-project, merge-from-project,
+remove-worktree-keep-scope, archive, delete). It is a portaled popup
+(`bits-ui` `DropdownMenu`, `collisionPadding`), not a panel positioned inside
+the sidebar's own overflow, so it cannot be clipped when a scope sits near an
+edge of the board or the scoped sidebar; while it is open the trigger stays
+visible through its own open state rather than hover. **Reveal in File Manager**
+opens a managed scope's checkout in the OS file manager through the same shared
+helper (`src/renderer/lib/os-file-manager.ts`) and the same re-validating
+`shell:revealPath` contract the file surfaces use. It takes the path from the
+scope's health (the actual path when Git disagrees with the expected one), so a
+relocated checkout still reveals correctly, and a refusal from main is reported
+as a failure instead of passing as a silent no-op. _Merge from project…_ is the
+peer sync described in section
 6a run from this scope's checkout with the project root preselected, so bringing
 the project root's commits into a worktree never requires opening the Git panel
 from a thread in that scope. A leftover

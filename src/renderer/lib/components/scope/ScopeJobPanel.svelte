@@ -2,10 +2,10 @@
   import { Circle, CircleCheck, Loader2, TriangleAlert } from '@lucide/svelte'
   import DockableModal from '$lib/components/ui/DockableModal.svelte'
   import {
-    scopeJobActiveStage,
-    scopeJobStageLabel,
+    scopeJobActiveStepId,
+    scopeJobStatusLabel,
     type ScopeJob,
-    type ScopeWorktreeStage
+    type ScopeJobStepId
   } from '$lib/stores/scope-jobs.svelte'
 
   interface Props {
@@ -21,35 +21,40 @@
   const running = $derived(job.status === 'running')
   const done = $derived(job.status === 'succeeded')
   const failed = $derived(job.status === 'failed')
+  const removing = $derived(job.kind === 'remove')
   /** Step the run is on right now, or the one it stopped on. */
-  const active = $derived(scopeJobActiveStage(job))
+  const active = $derived(scopeJobActiveStepId(job))
 
-  const heading = $derived(
-    job.kind === 'agent'
-      ? running
-        ? `An agent is preparing “${job.title}”…`
-        : done
-          ? `“${job.title}” is ready`
-          : `“${job.title}” could not be prepared`
-      : job.kind === 'create'
-        ? running
-          ? `Creating “${job.title}”…`
-          : done
-            ? `“${job.title}” is ready`
-            : `“${job.title}” could not be created`
-        : running
-          ? `Adopting a worktree for “${job.title}”…`
-          : done
-            ? `“${job.title}” has a worktree`
-            : `“${job.title}” could not adopt the worktree`
-  )
+  /** Panel title: who the run belongs to and where it stands. */
+  function headingFor(job: ScopeJob): string {
+    const outcome =
+      job.kind === 'remove'
+        ? { present: 'Deleting', done: 'is deleted', failed: 'could not be deleted' }
+        : job.kind === 'create'
+          ? { present: 'Creating', done: 'is ready', failed: 'could not be created' }
+          : job.kind === 'agent'
+            ? {
+                present: 'An agent is preparing',
+                done: 'is ready',
+                failed: 'could not be prepared'
+              }
+            : {
+                present: 'Adopting a worktree for',
+                done: 'has a worktree',
+                failed: 'could not adopt the worktree'
+              }
+    if (running) return `${outcome.present} “${job.title}”…`
+    return done ? `“${job.title}” ${outcome.done}` : `“${job.title}” ${outcome.failed}`
+  }
+
+  const heading = $derived(headingFor(job))
 
   /** Where one checklist step sits relative to the run. */
-  function stateFor(step: ScopeWorktreeStage): 'complete' | 'active' | 'failed' | 'pending' {
+  function stateFor(step: ScopeJobStepId): 'complete' | 'active' | 'failed' | 'pending' {
     if (done) return 'complete'
     if (!active) return 'pending'
-    const activeIndex = job.steps.indexOf(active)
-    const index = job.steps.indexOf(step)
+    const activeIndex = job.steps.findIndex((candidate) => candidate.id === active)
+    const index = job.steps.findIndex((candidate) => candidate.id === step)
     if (index < activeIndex) return 'complete'
     if (index > activeIndex) return 'pending'
     return failed ? 'failed' : 'active'
@@ -57,13 +62,28 @@
 
   /** Setup commands run in order; `detail` carries the 1-based command number. */
   const setupProgress = $derived(
-    job.stage.stage === 'setup' && job.setupCommandCount > 0 && job.stage.detail
+    job.stage?.stage === 'setup' && job.setupCommandCount > 0 && job.stage.detail
       ? ` (${job.stage.detail} of ${job.setupCommandCount})`
       : ''
   )
 
-  const statusLabel = $derived(
-    running ? `${scopeJobStageLabel(job.stage.stage)}${setupProgress}` : done ? 'Ready' : 'Failed'
+  const statusLabel = $derived(`${scopeJobStatusLabel(job)}${setupProgress}`)
+
+  /** What the finished run leaves behind, stated for its kind. */
+  const doneNote = $derived(
+    removing
+      ? job.isolated
+        ? 'The worktree, its branch and the scope are gone.'
+        : 'The scope is gone.'
+      : job.isolated
+        ? 'Threads you move into this scope work in the new checkout.'
+        : 'This scope shares the project directory with the Default scope.'
+  )
+
+  const openNote = $derived(
+    removing
+      ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
+      : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
   )
 </script>
 
@@ -94,8 +114,8 @@
     </p>
 
     <ol class="space-y-1.5">
-      {#each job.steps as step (step)}
-        {@const state = stateFor(step)}
+      {#each job.steps as step (step.id)}
+        {@const state = stateFor(step.id)}
         <li class="flex items-center gap-2 text-[0.6875rem]">
           {#if state === 'complete'}
             <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
@@ -107,7 +127,7 @@
             <Circle size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
           <span class={state === 'pending' ? 'text-dimmed' : 'text-foreground'}>
-            {scopeJobStageLabel(step)}{step === 'setup' && state === 'active' ? setupProgress : ''}
+            {step.label}{step.id === 'setup' && state === 'active' ? setupProgress : ''}
           </span>
           {#if state === 'complete'}
             <span class="sr-only">completed</span>
@@ -143,10 +163,8 @@
       {running
         ? 'You can keep working. The run continues in the background.'
         : done
-          ? job.isolated
-            ? 'Threads you move into this scope work in the new checkout.'
-            : 'This scope shares the project directory with the Default scope.'
-          : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'}
+          ? doneNote
+          : openNote}
     </p>
   </div>
 

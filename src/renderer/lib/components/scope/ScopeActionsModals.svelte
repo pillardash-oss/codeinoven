@@ -8,6 +8,7 @@
   import ScopeCreateModal from './ScopeCreateModal.svelte'
   import ScopeAdoptModal from './ScopeAdoptModal.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import type { ScopeActionsController } from './ScopeActionsController.svelte'
 
   interface Props {
@@ -20,6 +21,13 @@
   const editFormId = `${componentId}-edit-scope-form`
 
   let projectId = $derived(actions.projectId)
+
+  /** True while this same scope's removal is already running in the dock. */
+  const removing = $derived(
+    Boolean(
+      projectId && actions.deleteTarget && scopeJobs.isRemoving(projectId, actions.deleteTarget.id)
+    )
+  )
 </script>
 
 <Modal
@@ -95,10 +103,11 @@
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger hover:bg-danger-hover"
-      onclick={() => void actions.confirmDelete()}
+      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger hover:bg-danger-hover disabled:cursor-default disabled:opacity-50"
+      disabled={removing}
+      onclick={() => actions.confirmDelete()}
     >
-      Delete
+      {removing ? 'Deleting…' : 'Delete'}
     </button>
   {/snippet}
 
@@ -109,6 +118,10 @@
     {#if actions.deleteTarget?.root.kind === 'worktree'}
       The worktree and its branch are also removed.
     {/if}
+  </p>
+
+  <p class="mt-2 text-xs text-dimmed">
+    Removing it runs in the dock, so you can keep working while it finishes.
   </p>
 
   <div class="mt-4 flex items-center justify-between rounded-lg border bg-elevated/50 px-3 py-2.5">

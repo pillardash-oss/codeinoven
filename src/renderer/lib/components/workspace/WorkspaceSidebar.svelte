@@ -31,6 +31,7 @@
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { copyText } from '$lib/copy-text'
   import { keymapKeys } from '$lib/keymap/keymap'
+  import { osFileManagerLabel, revealInOsFileManager } from '$lib/os-file-manager'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { hasProjectNameCollision } from '$lib/project-location'
@@ -194,7 +195,7 @@
   async function revealProjectInFileManager(projectId: string): Promise<void> {
     const project = projects.find((p) => p.id === projectId)
     if (!project || !project.path) return
-    await invoke('shell:revealPath', project.path)
+    await revealInOsFileManager(project.path)
   }
 
   // Folder ellipsis menu
@@ -347,7 +348,6 @@
               actions={scopeActions}
               triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
               triggerTitle="Scope actions"
-              menuClass="right-0 top-6"
             >
               {#snippet trigger()}
                 <ScopeBadge bucket={scopeBucket} size="xs" />
@@ -451,9 +451,16 @@
                     {/if}
                     <span class="truncate">{bucket.name}</span>
                   </button>
-                  <div class="opacity-0 transition-opacity group-hover:opacity-100">
-                    <ScopeActionsMenu {bucket} actions={scopeActions} />
-                  </div>
+                  <!--
+                    The ellipsis is a hover affordance, and its popup lives in a
+                    portal now: while the menu is open the row is no longer hovered,
+                    so `data-state` is what keeps the trigger visible under it.
+                  -->
+                  <ScopeActionsMenu
+                    {bucket}
+                    actions={scopeActions}
+                    triggerClass="flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                  />
                 </div>
               {/each}
             </div>
@@ -875,9 +882,7 @@
                           onSelect={() => revealProjectInFileManager(project.id)}
                         >
                           <FolderOpen size={14} class="text-muted" />
-                          {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                            ? 'Reveal in File Manager'
-                            : 'Show in Explorer'}
+                          {osFileManagerLabel()}
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
@@ -1089,9 +1094,7 @@
                       onSelect={() => revealProjectInFileManager(project.id)}
                     >
                       <FolderOpen size={14} class="text-muted" />
-                      {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                        ? 'Reveal in File Manager'
-                        : 'Show in Explorer'}
+                      {osFileManagerLabel()}
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
