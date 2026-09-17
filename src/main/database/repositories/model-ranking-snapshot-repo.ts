@@ -1,10 +1,7 @@
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import type { Database } from '../database'
-import type {
-  ModelRankingSnapshotRow,
-  RankingShotCategory
-} from '../../../lib/types'
+import type { ModelRankingSnapshotRow, RankingShotCategory } from '../../../lib/types'
 
 /** Input for one newly captured conversation-window snapshot. */
 export interface OpenRankingSnapshotInput {
@@ -134,7 +131,12 @@ export class ModelRankingSnapshotRepo {
    * delete guard no longer matches) and the conversation is graded later with
    * the full follow-up context.
    */
-  registerCompletedExchange(id: string, followUpText: string, endedAt: number, nextDueAtMs: number): void {
+  registerCompletedExchange(
+    id: string,
+    followUpText: string,
+    endedAt: number,
+    nextDueAtMs: number
+  ): void {
     this.db.run(
       `UPDATE model_ranking_snapshots
        SET shot_category = 'multi_shot',
@@ -211,7 +213,8 @@ export class ModelRankingSnapshotRepo {
       )
       if (!claimed) return false
       this.db.run(
-        'DELETE FROM model_ranking_snapshots WHERE id = ? AND status = ' + "'processing' AND claim_token = ?",
+        'DELETE FROM model_ranking_snapshots WHERE id = ? AND status = ' +
+          "'processing' AND claim_token = ?",
         id,
         claimToken
       )
@@ -234,36 +237,105 @@ export class ModelRankingSnapshotRepo {
     retryBaseMs: number,
     nowMs: number
   ): void {
+    const attemptCount = this.claimedAttemptCount(id, claimToken)
+    if (attemptCount === null) return
+    const statement = this.deferOrParkStatement(
+      id,
+      claimToken,
+      attemptCap,
+      rankingRetryDelayMs(attemptCount, retryBaseMs),
+      nowMs
+    )
+    this.db.run(statement.sql, ...statement.params)
+  }
+
+  /**
+   * The same judge-failure bookkeeping, executed on the database worker's
+   * connection so a retry write can never stall the Electron main thread on a
+   * contended database. The retry/park decision and the next attempt count are
+   * derived inside the statement from the row's own persisted state, guarded by
+   * the claim generation, so the worker path and the primary path write exactly
+   * the same record. Only the attempt-count read stays on the primary
+   * connection: it is a primary-key lookup, and the worker's bounded-query
+   * path cannot host the claim's `UPDATE … RETURNING`.
+   */
+  async deferOrParkViaWorker(
+    id: string,
+    claimToken: string,
+    attemptCap: number,
+    retryBaseMs: number,
+    nowMs: number
+  ): Promise<void> {
+    const attemptCount = this.claimedAttemptCount(id, claimToken)
+    if (attemptCount === null) return
+    const statement = this.deferOrParkStatement(
+      id,
+      claimToken,
+      attemptCap,
+      rankingRetryDelayMs(attemptCount, retryBaseMs),
+      nowMs
+    )
+    await this.db.executeViaWorker(statement.sql, statement.params)
+  }
+
+  /** Attempt count of a row still owned by the given claim generation, or null. */
+  private claimedAttemptCount(id: string, claimToken: string): number | null {
     const row = this.db.get<{ attempt_count: number }>(
       "SELECT attempt_count FROM model_ranking_snapshots WHERE id = ? AND status = 'processing' AND claim_token = ?",
       id,
       claimToken
     )
-    if (!row) return
-    const nextAttempt = row.attempt_count + 1
-    if (nextAttempt >= attemptCap) {
-      this.db.run(
-        `UPDATE model_ranking_snapshots
-         SET status = 'failed', attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
-         WHERE id = ? AND status = 'processing' AND claim_token = ?`,
-        nextAttempt,
-        nowMs,
-        id,
-        claimToken
-      )
-      return
-    }
-    const retryDelay = retryBaseMs * 2 ** Math.min(row.attempt_count, 4)
-    this.db.run(
-      `UPDATE model_ranking_snapshots
-       SET status = 'pending', due_at_ms = ?, attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
+    return row === undefined ? null : row.attempt_count
+  }
+
+  /**
+   * One statement for both outcomes: when the next attempt reaches the cap the
+   * row parks as 'failed' and keeps its deadline (recovery re-queues it), and
+   * otherwise it returns to 'pending' at the caller's retry deadline.
+   */
+  private deferOrParkStatement(
+    id: string,
+    claimToken: string,
+    attemptCap: number,
+    retryDelayMs: number,
+    nowMs: number
+  ): { sql: string; params: unknown[] } {
+    return {
+      sql: `UPDATE model_ranking_snapshots
+       SET status = CASE WHEN attempt_count + 1 >= ? THEN 'failed' ELSE 'pending' END,
+           due_at_ms = CASE WHEN attempt_count + 1 >= ? THEN due_at_ms ELSE ? END,
+           attempt_count = attempt_count + 1,
+           last_attempt_at_ms = ?,
+           claim_token = NULL
        WHERE id = ? AND status = 'processing' AND claim_token = ?`,
-      nowMs + retryDelay,
-      nextAttempt,
-      nowMs,
-      id,
-      claimToken
+      params: [attemptCap, attemptCap, nowMs + retryDelayMs, nowMs, id, claimToken]
+    }
+  }
+
+  /**
+   * Hold back one harness's due queue   every pending row whose deadline has
+   * already arrived   until a cooldown deadline, spreading the released rows by
+   * up to `jitterMs` so a judge that recovers does not re-judge a whole backlog
+   * in one burst. Rows whose own deadline is already later than the cooldown are
+   * untouched, and the failing row itself is covered because its retry deadline
+   * is the earliest one in the queue. Unbounded sweep: routed through the
+   * database worker.
+   */
+  async deferQueuedHarnessCooldown(
+    harnessId: string,
+    dueAtMs: number,
+    jitterMs: number,
+    nowMs: number
+  ): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ? + ABS(RANDOM() % ?)
+       WHERE harness_id = ? AND status = 'pending' AND due_at_ms <= ?`,
+      [dueAtMs, Math.max(1, Math.floor(jitterMs)), harnessId, nowMs]
     )
+    if (!result.ok) {
+      Logger.dev('Ranking harness cooldown sweep failed:', result.error)
+    }
   }
 
   /**
@@ -275,7 +347,7 @@ export class ModelRankingSnapshotRepo {
   async requeueFailedForRecovery(cooldownMs: number, nowMs: number): Promise<void> {
     const result = await this.db.executeViaWorker(
       `UPDATE model_ranking_snapshots
-       SET status = 'pending', due_at_ms = ?, attempt_count = 0
+       SET status = 'pending', due_at_ms = ?, attempt_count = 0, claim_token = NULL
        WHERE status = 'failed' AND last_attempt_at_ms IS NOT NULL AND last_attempt_at_ms <= ?`,
       [nowMs, nowMs - cooldownMs]
     )
@@ -318,6 +390,15 @@ export class ModelRankingSnapshotRepo {
     )
     return row?.count ?? 0
   }
+}
+
+/**
+ * Retry delay for a judge failure at the given persisted attempt count:
+ * bounded exponential backoff, so a judge that keeps failing backs off to
+ * roughly an hour between attempts instead of hammering a fixed cadence.
+ */
+export function rankingRetryDelayMs(attemptCount: number, retryBaseMs: number): number {
+  return retryBaseMs * 2 ** Math.min(attemptCount, 4)
 }
 
 /** Deterministic snapshot id so a replayed capture stays a no-op. */

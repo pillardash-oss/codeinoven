@@ -222,7 +222,8 @@ import type {
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance,
-  BrainstormPrototypeFidelity
+  BrainstormPrototypeFidelity,
+  ModelRankingSnapshotRow
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -596,6 +597,39 @@ export class ChatEngine {
 
   /** Bound each drain so model ranking never monopolizes the main process. */
   private static readonly RANKING_DRAIN_BATCH_SIZE = 3
+
+  /**
+   * Consecutive judge failures for one harness before its whole due queue is
+   * held back. A judge that cannot run   an unauthenticated first-party
+   * transport, a provider usage limit whose reset is hours away, a candidate
+   * list whose credentials are rejected   fails identically for every row of
+   * that harness, so retrying each row on its own schedule only spawns harness
+   * processes for work that cannot succeed.
+   */
+  private static readonly RANKING_JUDGE_FAILURE_THRESHOLD = 3
+
+  /**
+   * Cooldown for a harness whose judge keeps failing: doubles per threshold
+   * crossing up to the cap, so a persistently blocked judge costs attempts
+   * logarithmically instead of linearly.
+   */
+  private static readonly RANKING_JUDGE_COOLDOWN_BASE_MS = 30 * 60_000
+  private static readonly RANKING_JUDGE_COOLDOWN_MAX_MS = 6 * 60 * 60_000
+
+  /**
+   * Spread added to a held-back or retried deadline. Conversations that closed
+   * in the same session share one inactivity deadline, so without this a whole
+   * batch of them expires together and is judged as one back-to-back burst  
+   * each run being another full harness process. Jitter only ever moves a
+   * deadline later, so nothing is graded early to compensate.
+   */
+  private static readonly RANKING_DEADLINE_JITTER_RATIO = 0.2
+
+  /**
+   * Breath between full drain batches. Judging runs a harness process per row,
+   * so batches never chain back to back even while a backlog is being cleared.
+   */
+  private static readonly RANKING_DRAIN_RESTART_MS = 2_000
 
   /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
    *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
@@ -1059,6 +1093,13 @@ export class ChatEngine {
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
   private gradeDrainRunning = false
+
+  /**
+   * Consecutive judge failures per harness. Deliberately in-memory: a restart
+   * gives a blocked judge one fresh attempt, which is cheap, and a single
+   * scored row clears the record.
+   */
+  private rankingJudgeFailures = new Map<string, number>()
 
   private utilityTurns = new Map<
     string,
@@ -20986,7 +21027,9 @@ export class ChatEngine {
    * pass (bounded batching; never blocks the main process), scores each one,
    * and on success applies exactly one aggregate increment plus the snapshot
    * hard-delete in one transaction. Failed judges retry with bounded backoff
-   * up to the attempt cap, then park as failed for the recovery pass.
+   * up to the attempt cap, then park as failed for the recovery pass; a harness
+   * whose judge keeps failing has its queue held back instead of being retried
+   * row by row (see `deferJudgeFailure`).
    */
   private async drainRankingQueue(requeueStale = false): Promise<void> {
     if (this.gradeDrainRunning) return
@@ -21006,6 +21049,7 @@ export class ChatEngine {
         const candidate = toRankingCandidate(row)
         const score = await this.gradeCandidateCore(candidate)
         if (score !== null) {
+          this.rankingJudgeFailures.delete(row.harness_id)
           const durationMs = Math.max(0, row.ended_at - row.started_at)
           const applied = this.rankingSnapshotRepo.deleteScoredInTransaction(
             row.id,
@@ -21029,19 +21073,70 @@ export class ChatEngine {
           if (applied) processed += 1
           continue
         }
-        this.rankingSnapshotRepo.deferOrPark(
-          row.id,
-          row.claim_token ?? '',
-          ChatEngine.RANKING_ATTEMPT_CAP,
-          ChatEngine.RANKING_RETRY_BASE_MS,
-          Date.now()
-        )
+        await this.deferJudgeFailure(row)
         processed += 1
       }
     } finally {
       this.gradeDrainRunning = false
-      this.scheduleRankingDrain(processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE ? 100 : undefined)
+      this.scheduleRankingDrain(
+        processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE
+          ? ChatEngine.RANKING_DRAIN_RESTART_MS
+          : undefined
+      )
     }
+  }
+
+  /**
+   * Record one judge failure and hold the harness back once it has failed
+   * repeatedly.
+   *
+   * The retry write itself goes to the database worker: a retry is bookkeeping,
+   * and a contended main connection was observed stalling the Electron main
+   * thread on it for over half a second. The cooldown then pushes every due row
+   * of that harness   including this one, whose retry deadline is the earliest
+   * in the queue   out to a jittered deadline, so the herd that used to arrive
+   * every five minutes becomes a slowly backed-off schedule. The queue is only
+   * deferred, never dropped: a judge that recovers scores its backlog, and an
+   * exhausted row still parks for the recovery pass.
+   */
+  private async deferJudgeFailure(row: ModelRankingSnapshotRow): Promise<void> {
+    const now = Date.now()
+    await this.rankingSnapshotRepo.deferOrParkViaWorker(
+      row.id,
+      row.claim_token ?? '',
+      ChatEngine.RANKING_ATTEMPT_CAP,
+      ChatEngine.spreadDeadline(ChatEngine.RANKING_RETRY_BASE_MS),
+      now
+    )
+    const consecutive = (this.rankingJudgeFailures.get(row.harness_id) ?? 0) + 1
+    this.rankingJudgeFailures.set(row.harness_id, consecutive)
+    if (consecutive < ChatEngine.RANKING_JUDGE_FAILURE_THRESHOLD) return
+    const cooldownMs = Math.min(
+      ChatEngine.RANKING_JUDGE_COOLDOWN_BASE_MS *
+        2 ** (consecutive - ChatEngine.RANKING_JUDGE_FAILURE_THRESHOLD),
+      ChatEngine.RANKING_JUDGE_COOLDOWN_MAX_MS
+    )
+    const cooldownUntilMs = now + cooldownMs
+    Logger.info('Ranking judge held back after repeated failures', {
+      harnessId: row.harness_id,
+      consecutiveFailures: consecutive,
+      cooldownMs
+    })
+    await this.rankingSnapshotRepo.deferQueuedHarnessCooldown(
+      row.harness_id,
+      cooldownUntilMs,
+      cooldownMs * ChatEngine.RANKING_DEADLINE_JITTER_RATIO,
+      now
+    )
+  }
+
+  /**
+   * Spread a deadline by up to the configured ratio, never pulling it forward.
+   * Applied to every retry and to each conversation's inactivity close so that
+   * work that was queued together is never judged together.
+   */
+  private static spreadDeadline(delayMs: number): number {
+    return delayMs + Math.floor(Math.random() * delayMs * ChatEngine.RANKING_DEADLINE_JITTER_RATIO)
   }
 
   /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
@@ -21156,7 +21251,7 @@ export class ChatEngine {
         open.id,
         parentText.slice(0, 6_000),
         endedAt,
-        endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS
+        endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS)
       )
       this.scheduleRankingDrain()
       return
@@ -21176,7 +21271,7 @@ export class ChatEngine {
       thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? '',
       startedAt: parentMessage.createdAt ?? endedAt,
       endedAt,
-      dueAtMs: endedAt + ChatEngine.RANKING_INACTIVITY_CLOSE_MS,
+      dueAtMs: endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS),
       userMessageText: parentText.slice(0, 6_000),
       assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000),
       costUsd,
