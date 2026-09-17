@@ -22,6 +22,7 @@ import { spawnInUtilityHost } from './harness-utility-host'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
+  AuxiliaryModelCandidate,
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
@@ -70,6 +71,7 @@ import {
   TitleTurnRegistry
 } from './persistent-cli/persistent-cli-title'
 import {
+  auxiliaryBlockUntil,
   runOneShotWithCandidates,
   type AuxiliaryQuotaBlock
 } from './persistent-cli/persistent-cli-one-shot'
@@ -89,6 +91,13 @@ export type {
 
 const ABORT_TERM_GRACE_MS = 1_500
 const ABORT_KILL_GRACE_MS = 1_500
+/**
+ * How long a resolved auxiliary route stays usable as a closed-route verdict.
+ * A provider catalog can gain a free candidate while a route is held back, and
+ * a stale list would postpone rows that can already be judged, so the route is
+ * re-resolved by the next run rather than trusted indefinitely.
+ */
+export const AUXILIARY_ROUTE_TTL_MS = 10 * 60 * 1000
 
 /**
  * Base class for headless, one-process-per-turn harness CLIs.
@@ -134,6 +143,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * it and probes afresh, so a stale block can never outlive the session.
    */
   private readonly auxiliaryQuotaBlocks = new Map<string, AuxiliaryQuotaBlock>()
+  /**
+   * The candidate list this driver's own auxiliary runs resolved last, kept so
+   * the ranking drain can tell whether a harness's whole route is inside a
+   * provider window without paying for discovery again. Null until a run
+   * resolves one, and read as unknown once it is stale.
+   */
+  private auxiliaryRoute: { at: number; candidates: TitleModelCandidate[] } | null = null
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private lastGradeTurnAttempts: TitleAttemptAccounting[] = []
@@ -241,6 +257,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     options: GenerateTitleOptions,
     candidates: TitleModelCandidate[]
   ): Promise<string | null> {
+    if (!options.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       options,
@@ -258,6 +275,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     options: GradeTurnOptions,
     candidates: TitleModelCandidate[]
   ): Promise<number | null> {
+    if (!options.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
@@ -289,6 +307,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     request: CheapModelRequest
   ): Promise<CheapModelResult> {
     const candidates = request.candidates ?? (await this.cheapCandidateModels(projectPath))
+    if (!request.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
@@ -310,6 +329,35 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         failure: attempt.fallbackReason
       }))
     }
+  }
+
+  /**
+   * Until when every candidate of the given auxiliary route is inside a
+   * provider usage window, or null while one of them is free. See the
+   * `HarnessDriver` contract: the caller names the complete route, because a
+   * candidate left out would flip the verdict.
+   */
+  auxiliaryWindowUntil(candidates: readonly AuxiliaryModelCandidate[]): number | null {
+    return auxiliaryBlockUntil(candidates, this.auxiliaryQuotaBlocks, Date.now())
+  }
+
+  /** The route this driver's own auxiliary runs resolved, or null when unknown. */
+  auxiliaryRouteCandidates(): readonly AuxiliaryModelCandidate[] | null {
+    const route = this.auxiliaryRoute
+    if (!route) return null
+    if (Date.now() - route.at > AUXILIARY_ROUTE_TTL_MS) return null
+    return route.candidates
+  }
+
+  /**
+   * Remember the candidates an unpinned auxiliary run resolved, for
+   * `auxiliaryRouteCandidates`. An empty resolution forgets the route instead
+   * of keeping the previous list, because a harness whose cheap models just
+   * failed to resolve has an unknown route, not a closed one.
+   */
+  private recordAuxiliaryRoute(candidates: readonly TitleModelCandidate[]): void {
+    this.auxiliaryRoute =
+      candidates.length > 0 ? { at: Date.now(), candidates: [...candidates] } : null
   }
 
   /** Cheapest auxiliary candidates for this harness; subclasses override. */

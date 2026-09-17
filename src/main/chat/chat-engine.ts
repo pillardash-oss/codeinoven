@@ -73,6 +73,7 @@ import {
   QuestionRequestGoneError
 } from '../drivers/driver.interface'
 import type {
+  AuxiliaryModelCandidate,
   HarnessDriver,
   SendPromptOptions,
   SteerPromptOptions,
@@ -82,6 +83,7 @@ import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
+import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
 import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -340,6 +342,7 @@ import type {
   QueuedCoordinatorHandoff,
   RankingGradeCandidate,
   RankingJudgeOutcome,
+  RankingPassPlan,
   RejectedSpecArtifact,
   SessionCompletionWaiter,
   SessionInfo,
@@ -599,6 +602,22 @@ export class ChatEngine {
 
   /** Bound each drain so model ranking never monopolizes the main process. */
   private static readonly RANKING_DRAIN_BATCH_SIZE = 3
+
+  /**
+   * How far past the batch size one pass looks into the due queue. A pass reads
+   * this window, holds back the rows whose judge route the provider already
+   * reported closed, and claims only what remains, so a blocked head cannot
+   * hide judgeable rows behind it. The window carries no conversation payload.
+   */
+  private static readonly RANKING_QUEUE_SCAN_SIZE = 48
+
+  /**
+   * Retry interval for a pass whose held-back rows could not be re-dated in the
+   * queue. The rows stay due, so the pass has to pace itself instead of waking
+   * on them again, and the interval is short enough that a recovered database
+   * is noticed promptly.
+   */
+  private static readonly RANKING_HELD_RETRY_MS = 60_000
 
   /**
    * Consecutive judge failures for one harness before its whole due queue is
@@ -1099,6 +1118,13 @@ export class ChatEngine {
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
   private gradeDrainRunning = false
+
+  /**
+   * Earliest moment the next ranking pass may run, set while rows a pass could
+   * not re-date are still due in the queue. Read by every `scheduleRankingDrain`
+   * call, so no external trigger can bypass it; cleared as soon as it passes.
+   */
+  private rankingHeldRetryAtMs: number | null = null
 
   /**
    * Consecutive judge failures per harness. Deliberately in-memory: a restart
@@ -21253,44 +21279,72 @@ export class ChatEngine {
     await this.drainRankingQueue(true)
   }
 
-  /** Arm one process-wide wake-up for the earliest durable queue row. */
+  /**
+   * Arm one process-wide wake-up for the earliest durable queue row.
+   *
+   * `delayOverrideMs` forces a wait (a full pass restarts sooner than the next
+   * deadline), and a pending held-row retry floor raises every wait, so a wake
+   * triggered from anywhere   a capture, a turn end, a thread deletion   cannot
+   * restart the drain on rows whose deferral never landed.
+   */
   private scheduleRankingDrain(delayOverrideMs?: number): void {
     if (this.gradeDrainTimer) clearTimeout(this.gradeDrainTimer)
+    const now = Date.now()
+    if (this.rankingHeldRetryAtMs !== null && this.rankingHeldRetryAtMs <= now) {
+      this.rankingHeldRetryAtMs = null
+    }
+    const holdMs = this.rankingHeldRetryAtMs === null ? 0 : this.rankingHeldRetryAtMs - now
     const nextDeadline = this.rankingSnapshotRepo.nextDueDeadline()
-    if (nextDeadline === null) {
+    if (nextDeadline === null && holdMs <= 0) {
       this.gradeDrainTimer = null
       return
     }
-    const delay = delayOverrideMs ?? Math.max(0, Math.min(2_147_483_647, nextDeadline - Date.now()))
-    this.gradeDrainTimer = setTimeout(() => {
-      this.gradeDrainTimer = null
-      void this.drainRankingQueue()
-    }, delay)
+    const queuedMs = nextDeadline === null ? 0 : Math.max(0, nextDeadline - now)
+    const delay = Math.max(delayOverrideMs ?? queuedMs, holdMs)
+    this.gradeDrainTimer = setTimeout(
+      () => {
+        this.gradeDrainTimer = null
+        void this.drainRankingQueue()
+      },
+      Math.min(2_147_483_647, delay)
+    )
   }
 
   /**
-   * Independent grading runner. Claims at most three closed snapshots per
-   * pass (bounded batching; never blocks the main process), scores each one,
-   * and on success applies exactly one aggregate increment plus the snapshot
-   * hard-delete in one transaction. Failed judges retry with bounded backoff
-   * up to the attempt cap, then park as failed for the recovery pass; a harness
-   * whose judge keeps failing has its queue held back instead of being retried
-   * row by row (see `deferJudgeFailure`).
+   * Independent grading runner. Each pass reads a bounded window of the due
+   * queue, decides which rows it may judge before it claims anything (a route
+   * whose provider already reported its usage window closed is held back
+   * unclaimed, see `planRankingPass`), claims at most three of the rest, and
+   * scores each one: on success exactly one aggregate increment plus the
+   * snapshot hard-delete in one transaction. Failed judges retry with bounded
+   * backoff up to the attempt cap, then park as failed for the recovery pass; a
+   * harness whose judge keeps failing has its queue held back instead of being
+   * retried row by row (see `deferJudgeFailure`).
    */
   private async drainRankingQueue(requeueStale = false): Promise<void> {
     if (this.gradeDrainRunning) return
     this.gradeDrainRunning = true
     let processed = 0
+    let plan: RankingPassPlan = { claimIds: [], heldBack: [] }
+    let planFailed = false
+    let heldBackDeferral: { failed: boolean; earliestUntilMs: number } | null = null
     try {
       if (requeueStale) await this.rankingSnapshotRepo.requeueStaleProcessing()
+      const nowMs = Date.now()
       await this.rankingSnapshotRepo.requeueFailedForRecovery(
         ChatEngine.RANKING_RECOVERY_COOLDOWN_MS,
-        Date.now()
+        nowMs
       )
-      const rows = this.rankingSnapshotRepo.claimDueBatch(
-        Date.now(),
-        ChatEngine.RANKING_DRAIN_BATCH_SIZE
-      )
+      try {
+        plan = await this.planRankingPass(nowMs)
+      } catch (error) {
+        // Planning must never take the queue down with it: judge nothing this
+        // pass, say so, and retry at the held-row interval rather than looping.
+        planFailed = true
+        Logger.dev('Ranking queue planning failed:', rawErrorMessage(error))
+      }
+      heldBackDeferral = await this.deferHeldBackRankingRows(plan.heldBack, nowMs)
+      const rows = this.rankingSnapshotRepo.claimRows(nowMs, plan.claimIds)
       for (const row of rows) {
         const candidate = toRankingCandidate(row)
         const outcome = await this.gradeCandidateCore(candidate)
@@ -21325,12 +21379,186 @@ export class ChatEngine {
       }
     } finally {
       this.gradeDrainRunning = false
+      // Rows a failed deferral left due would be planned again the instant the
+      // timer fired, so a pass that judged nothing waits a bounded retry
+      // interval instead of spinning on rows it cannot claim.
+      // Rows a failed deferral (or a failed plan) left due would be planned
+      // again the instant any trigger armed the timer, so the retry floor is
+      // kept on the instance where every `scheduleRankingDrain` call sees it.
+      const needsFloor = planFailed || heldBackDeferral?.failed === true
+      this.rankingHeldRetryAtMs = needsFloor
+        ? Math.min(
+            heldBackDeferral?.earliestUntilMs ?? Number.POSITIVE_INFINITY,
+            Date.now() + ChatEngine.RANKING_HELD_RETRY_MS
+          )
+        : null
       this.scheduleRankingDrain(
         processed >= ChatEngine.RANKING_DRAIN_BATCH_SIZE
           ? ChatEngine.RANKING_DRAIN_RESTART_MS
           : undefined
       )
     }
+  }
+
+  /**
+   * Decide what this pass may judge, before any row is claimed or any harness
+   * process is spent.
+   *
+   * A row is held back only when every route it would take is inside a provider
+   * usage window the provider already reported closed: the user-assigned
+   * auxiliary model when one exists, and otherwise the graded harness's own
+   * discovered candidates. Everything else   a driver that cannot be resolved
+   * or cannot name its route, no auxiliary assignment, one free candidate, a
+   * window that already reopened   keeps the row judgeable, so a wrong guess can
+   * only ever postpone a row whose route was genuinely closed.
+   */
+  private async planRankingPass(nowMs: number): Promise<RankingPassPlan> {
+    const head = this.rankingSnapshotRepo.dueQueueHead(nowMs, ChatEngine.RANKING_QUEUE_SCAN_SIZE)
+    if (head.length === 0) return { claimIds: [], heldBack: [] }
+    const projectPath = await this.auxiliaryWorkingDirectory()
+    const drivers = new Map<string, Promise<HarnessDriver | null>>()
+    const routes = new Map<string, Promise<AuxiliaryRoute | null>>()
+    // One resolution per harness for the whole window: the routes and their
+    // drivers are the same for every row of a harness, only the graded model
+    // differs, and re-resolving them per row would re-read the config.
+    const driverFor = (harnessId: string): Promise<HarnessDriver | null> => {
+      const cached = drivers.get(harnessId)
+      if (cached) return cached
+      const pending = Promise.resolve(this.driverForAccount(harnessId)).catch(() => null)
+      drivers.set(harnessId, pending)
+      return pending
+    }
+    const routeFor = (harnessId: string): Promise<AuxiliaryRoute | null> => {
+      const cached = routes.get(harnessId)
+      if (cached) return cached
+      const pending = this.resolveAuxiliaryRoute({ threadHarnessId: harnessId, projectPath })
+      routes.set(harnessId, pending)
+      return pending
+    }
+    const claimIds: string[] = []
+    const heldBack = new Map<number, string[]>()
+    for (const row of head) {
+      const native = await driverFor(row.harness_id)
+      const auxiliary = await routeFor(row.harness_id)
+      const untilMs = this.rankingRowBlockedUntil(row, native, auxiliary)
+      if (untilMs === null) {
+        claimIds.push(row.id)
+        // A full batch ends the pass: the window is scanned again one pass
+        // later, which keeps the work per pass bounded.
+        if (claimIds.length >= ChatEngine.RANKING_DRAIN_BATCH_SIZE) break
+        continue
+      }
+      const group = heldBack.get(untilMs)
+      if (group) group.push(row.id)
+      else heldBack.set(untilMs, [row.id])
+    }
+    return {
+      claimIds,
+      heldBack: [...heldBack].map(([untilMs, ids]) => ({ untilMs, ids }))
+    }
+  }
+
+  /**
+   * The moment the judge routes of one queued row reopen, or null while at
+   * least one route can still judge it.
+   */
+  private rankingRowBlockedUntil(
+    row: RankingQueueHead,
+    native: HarnessDriver | null,
+    auxiliary: AuxiliaryRoute | null
+  ): number | null {
+    const nativeUntil = this.nativeRouteWindowUntil(row, native)
+    if (!auxiliary) return nativeUntil
+    // An auxiliary assignment pins exactly one candidate, so its route is known
+    // in full and needs no discovery.
+    const auxiliaryUntil = this.windowUntil(auxiliary.driver, [
+      { providerId: auxiliary.providerId, modelId: auxiliary.modelId }
+    ])
+    // Either route being free is enough: an auxiliary judge held back by its own
+    // window still falls through to the graded harness's candidates.
+    if (auxiliaryUntil === null || nativeUntil === null) return null
+    return Math.min(auxiliaryUntil, nativeUntil)
+  }
+
+  /**
+   * Window covering the graded harness's own grading route: the candidates its
+   * driver discovered, plus the graded model the one-shot runner appends as the
+   * settings fallback. An unknown route reports null, because a route reported
+   * closed without knowing it would postpone work that can run.
+   */
+  private nativeRouteWindowUntil(
+    row: RankingQueueHead,
+    native: HarnessDriver | null
+  ): number | null {
+    const route = native?.auxiliaryRouteCandidates?.() ?? null
+    if (!route || !native) return null
+    return this.windowUntil(native, [
+      ...route,
+      { providerId: row.provider_id, modelId: row.model_id }
+    ])
+  }
+
+  /**
+   * Ask one driver about one route, treating a driver that throws as a driver
+   * that knows nothing: the contract says an unknown route must keep callers
+   * judging, and a planning pass must never fail the drain.
+   */
+  private windowUntil(
+    driver: HarnessDriver,
+    candidates: readonly AuxiliaryModelCandidate[]
+  ): number | null {
+    if (!driver.auxiliaryWindowUntil) return null
+    try {
+      return driver.auxiliaryWindowUntil(candidates)
+    } catch (error) {
+      Logger.dev('Auxiliary window check failed; judging normally:', rawErrorMessage(error))
+      return null
+    }
+  }
+
+  /**
+   * Hold back the rows whose window is still closed, one worker write per
+   * distinct deadline.
+   *
+   * The rows are never claimed first: a queue that has to wait must not consume
+   * judge attempts on work that cannot run, and must not report the null scores
+   * that make a blocked window look like a failing judge. The write moves their
+   * deadline, which is also what stops the drain from waking up on them again.
+   * The returned flag says whether every write landed; the pass needs it because
+   * a row that is still due after a failed write would otherwise be re-planned
+   * the instant its window was discovered.
+   */
+  private async deferHeldBackRankingRows(
+    heldBack: RankingPassPlan['heldBack'],
+    nowMs: number
+  ): Promise<{ failed: boolean; earliestUntilMs: number } | null> {
+    if (heldBack.length === 0) return null
+    let failed = false
+    for (const group of heldBack) {
+      const result = await this.rankingSnapshotRepo.deferPendingRowsViaWorker(
+        group.ids,
+        group.untilMs,
+        nowMs
+      )
+      failed = failed || !result.ok
+    }
+    const earliestUntilMs = Math.min(...heldBack.map((group) => group.untilMs))
+    const rows = heldBack.reduce((total, group) => total + group.ids.length, 0)
+    if (failed) {
+      // The rows are still due in the queue and only this process holds their
+      // pacing, so the lost write has to be visible rather than logged as a
+      // hold-back that landed.
+      Logger.error('Ranking rows could not be re-dated past their usage window', {
+        rows,
+        until: new Date(earliestUntilMs).toISOString()
+      })
+    } else {
+      Logger.info('Ranking rows held back until their provider usage window reopens', {
+        rows,
+        until: new Date(earliestUntilMs).toISOString()
+      })
+    }
+    return { failed, earliestUntilMs }
   }
 
   /**

@@ -486,3 +486,19 @@ export interface RankingJudgeOutcome {
   /** True when the attempt ran on the user-assigned auxiliary model. */
   viaAuxiliary: boolean
 }
+
+/**
+ * What one ranking drain pass may judge, decided before it claims anything.
+ *
+ * A row whose every judge route sits inside a provider usage window the
+ * provider itself reported is held back unclaimed: claiming it would consume a
+ * judge attempt on work that cannot run and would report a null score no user
+ * asked for. Held rows are keyed by the moment their window reopens, so the
+ * pass writes one deadline per distinct window rather than one per row.
+ */
+export interface RankingPassPlan {
+  /** Ids this pass may judge, in queue order. */
+  claimIds: string[]
+  /** Held-back rows grouped by the deadline they wait for. */
+  heldBack: Array<{ untilMs: number; ids: string[] }>
+}

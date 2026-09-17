@@ -25,6 +25,20 @@ export interface OpenRankingSnapshotInput {
 }
 
 /**
+ * One queued row's identity and deadline, without its conversation payload.
+ *
+ * A drain pass reads this window before it claims anything, so the rows it must
+ * hold back are decided without loading transcripts the pass may never judge.
+ */
+export interface RankingQueueHead {
+  id: string
+  harness_id: string
+  provider_id: string
+  model_id: string
+  due_at_ms: number
+}
+
+/**
  * Transient grading queue for model-ranking conversations. Snapshots are
  * captured while a conversation window is open, closed for grading by thread
  * deletion or the inactivity deadline, claimed in bounded batches by the
@@ -172,29 +186,92 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
-   * Atomically claim up to `limit` due pending snapshots: the SELECT picks the
-   * oldest due rows and the outer UPDATE flips them to 'processing' in the
-   * same statement, so overlapping drains can never claim the same row twice.
+   * Claim up to `limit` due pending snapshots: the oldest due rows are read,
+   * then flipped to 'processing' in one statement that is guarded by the
+   * pending status, so overlapping drains can never claim the same row twice.
    * Every claim carries a unique generation token; score, delete, and defer
    * operations are guarded by it, so a stale judge result from a previous
    * claim generation can never apply to a re-claimed row.
+   *
+   * The drain plans its batch from `dueQueueHead` plus its own judge-route
+   * checks and claims it with `claimRows`; this stays as the plain
+   * "take the head of the queue" form, and delegates to those two so one
+   * implementation owns the token and the guards.
    */
   claimDueBatch(nowMs: number, limit = 3): ModelRankingSnapshotRow[] {
-    const claimToken = randomUUID()
-    return this.db.all<ModelRankingSnapshotRow>(
-      `UPDATE model_ranking_snapshots
-       SET status = 'processing', claim_token = ?
-       WHERE id IN (
-         SELECT id FROM model_ranking_snapshots
-         WHERE status = 'pending' AND due_at_ms <= ?
-         ORDER BY due_at_ms ASC, created_at ASC, id ASC
-         LIMIT ?
-       )
-       RETURNING *`,
-      claimToken,
+    return this.claimRows(
+      nowMs,
+      this.dueQueueHead(nowMs, limit).map((row) => row.id)
+    )
+  }
+
+  /**
+   * The head of the pending queue, in the same order `claimDueBatch` would take
+   * it, carrying only the columns a pass needs to decide what to claim. Read
+   * only: nothing is flipped to 'processing' until the pass has planned.
+   */
+  dueQueueHead(nowMs: number, limit: number): RankingQueueHead[] {
+    return this.db.all<RankingQueueHead>(
+      `SELECT id, harness_id, provider_id, model_id, due_at_ms
+       FROM model_ranking_snapshots
+       WHERE status = 'pending' AND due_at_ms <= ?
+       ORDER BY due_at_ms ASC, created_at ASC, id ASC
+       LIMIT ?`,
       nowMs,
       limit
     )
+  }
+
+  /**
+   * Claim exactly the rows a pass planned to judge, under one generation token
+   * so a stale judge result can never apply to a re-claimed row. Guarded by the
+   * pending status and the deadline, so a row that was closed by a new exchange
+   * or already claimed while the pass was planning is silently left alone.
+   */
+  claimRows(nowMs: number, ids: readonly string[]): ModelRankingSnapshotRow[] {
+    if (ids.length === 0) return []
+    const claimToken = randomUUID()
+    const placeholders = ids.map(() => '?').join(', ')
+    return this.db.all<ModelRankingSnapshotRow>(
+      `UPDATE model_ranking_snapshots
+       SET status = 'processing', claim_token = ?
+       WHERE id IN (${placeholders}) AND status = 'pending' AND due_at_ms <= ?
+       RETURNING *`,
+      claimToken,
+      ...ids,
+      nowMs
+    )
+  }
+
+  /**
+   * Push still-pending rows to a later deadline without touching their status
+   * or attempt count.
+   *
+   * A row whose provider already reported its usage window closed is not a
+   * judge failure: claiming it would consume one of its attempts on work that
+   * cannot run, and would report a null score the queue never asked for. The
+   * rows keep their pending state and simply wait, grouped by the moment their
+   * window reopens. Routed through the database worker because the pass defers
+   * every due row of the blocked route at once. The write outcome is returned so
+   * the caller can pace itself when a deferral does not land.
+   */
+  async deferPendingRowsViaWorker(
+    ids: readonly string[],
+    dueAtMs: number,
+    nowMs: number
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (ids.length === 0) return { ok: true }
+    const placeholders = ids.map(() => '?').join(', ')
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ?
+       WHERE id IN (${placeholders}) AND status = 'pending' AND due_at_ms <= ?`,
+      [dueAtMs, ...ids, nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking window deferral write failed:', result.error)
+    }
+    return result
   }
 
   /**

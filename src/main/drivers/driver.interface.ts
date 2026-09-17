@@ -392,6 +392,32 @@ export interface HarnessDriver {
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
 
   /**
+   * The candidate list this driver's own auxiliary one-shot runs would try when
+   * the caller pins no candidates   its discovered cheap models   or null until
+   * it has discovered one.
+   *
+   * A caller that also appends the settings' own provider/model can therefore
+   * name a run's complete route. Null is the honest answer for a route that is
+   * not known, and callers must treat it as "do not know", never as "closed":
+   * a route wrongly reported closed postpones work that could run.
+   */
+  auxiliaryRouteCandidates?(): readonly AuxiliaryModelCandidate[] | null
+
+  /**
+   * Until when every given candidate sits inside a provider usage window the
+   * provider itself reported, or null while at least one of them is free (or
+   * when nothing is known about them).
+   *
+   * The caller names the complete route: for an auxiliary assignment that is
+   * the single pinned model, and for a harness's own route it is
+   * `auxiliaryRouteCandidates()` plus the settings' provider/model. Background
+   * work consults this before it spends a harness process, so an account whose
+   * provider already said "try again at <time>" is not probed once per queued
+   * job. Drivers without auxiliary one-shot work omit both methods.
+   */
+  auxiliaryWindowUntil?(candidates: readonly AuxiliaryModelCandidate[]): number | null
+
+  /**
    * Send a single disposable "ping" completion pinned to the exact model in
    * `options.settings` (no cheap-candidate substitution) so a configured
    * Heartbeat keeps that specific provider's usage window warm. Resolves

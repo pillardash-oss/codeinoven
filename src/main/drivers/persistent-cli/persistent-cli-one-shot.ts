@@ -56,6 +56,34 @@ export function auxiliaryCandidateKey(candidate: TitleModelCandidate): string {
 }
 
 /**
+ * Verdict for one auxiliary route: the earliest moment every named candidate is
+ * probeable again, or null while at least one of them is free.
+ *
+ * Pure by design, so the same decision a one-shot run makes when it skips a
+ * blocked candidate can be asked about a whole route before any work is queued
+ * for it. The caller must name the complete route: a candidate left out of the
+ * list would make a closed route look open, or an open one look closed.
+ */
+export function auxiliaryBlockUntil(
+  candidates: readonly TitleModelCandidate[],
+  blocks: ReadonlyMap<string, AuxiliaryQuotaBlock>,
+  nowMs: number
+): number | null {
+  let blockedUntil: number | null = null
+  let tested = 0
+  for (const candidate of candidates) {
+    if (!candidate.providerId || !candidate.modelId) continue
+    tested += 1
+    const block = blocks.get(auxiliaryCandidateKey(candidate))
+    // Exact parity with the runner's own skip test (`block.resetAt > now`): a
+    // missing, expired, or unusable deadline means the candidate is probed.
+    if (!block || !(block.resetAt > nowMs)) return null
+    blockedUntil = blockedUntil === null ? block.resetAt : Math.min(blockedUntil, block.resetAt)
+  }
+  return tested === 0 ? null : blockedUntil
+}
+
+/**
  * Remember a provider-reported usage reset for one candidate.
  *
  * An account-level limit fails identically for every queued background job, so
@@ -73,7 +101,7 @@ function rememberQuotaBlock(
   if (!issue || !isUsageResetWaitIssue(issue)) return
   const resetAt = issue.retryAt ?? parseUsageResetAt(issue.message)
   const now = Date.now()
-  if (resetAt === undefined || resetAt <= now) return
+  if (resetAt === undefined || !Number.isFinite(resetAt) || resetAt <= now) return
   const blockedUntil = Math.min(resetAt, now + AUXILIARY_QUOTA_BLOCK_MAX_MS)
   host.quotaBlocks.set(candidateKey, {
     resetAt: blockedUntil,
