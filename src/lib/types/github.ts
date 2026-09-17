@@ -1,0 +1,416 @@
+/** Filter for pull request listings. */
+export type PrState = 'open' | 'closed' | 'all'
+
+/** Draft-shaped request to create a pull request on the provider. */
+export interface PrDraft {
+  owner: string
+  repo: string
+  title: string
+  body?: string
+  head: string
+  base: string
+  draft?: boolean
+}
+
+/** PR create request as the renderer sends it; owner/repo resolve from the origin. */
+export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
+
+/** GitHub App installation access needed before a repository mutation can run. */
+export interface GitHubPermissionRequired {
+  status: 'permission_required'
+  message: string
+  settingsUrl: string
+}
+
+/** Typed boundary for GitHub writes, including recoverable installation access. */
+export type GitHubMutationResult<T> = { status: 'completed'; value: T } | GitHubPermissionRequired
+
+/** Result of submitting a pull-request review through the GitHub App. */
+export type PullRequestReviewResult = GitHubMutationResult<null>
+
+/** Renderer-safe PR reference created or merged by a provider. */
+export interface PullRequestReference {
+  number: number
+  url: string
+  title: string
+}
+
+/**
+ * Pull request as shown in the sidebar list.
+ *
+ * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves a
+ * picture from `authorLogin` through main, which inlines it as a `data:` URL, and
+ * draws a monogram of the login until it arrives (see `PrAvatar.svelte`).
+ */
+export interface PullRequestSummary {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  draft: boolean
+  authorLogin: string
+  headRef: string
+  baseRef: string
+  createdAt: string
+  updatedAt: string
+  /** Issue-comment count as reported by the provider (review comments excluded). */
+  comments: number
+  /**
+   * Whether the provider has computed the PR as mergeable (`false` = conflicts).
+   * Populated from list payloads where available; absent for locally-constructed
+   * summaries (e.g. a just-created PR). Null when not yet computed.
+   */
+  mergeable?: boolean | null
+  /**
+   * GitHub's `mergeable_state` from list payloads   `dirty` means the PR has
+   * conflicts even when `mergeable` hasn't been computed yet (it is frequently
+   * null in list responses). `clean` | `dirty` | `behind` | `unstable` |
+   * `draft` | `unknown`.
+   */
+  mergeableState?: string | null
+}
+
+/** One page of pull requests, with a cursor the UI can advance. */
+export interface PullRequestPage {
+  items: PullRequestSummary[]
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+}
+
+/**
+ * GitHub compare result for two refs, used to gate pull request creation.
+ * A PR only makes sense when the head actually has commits the base lacks.
+ */
+export interface PullRequestCompare {
+  /** Whether the comparison reflects GitHub or commits that only exist locally. */
+  source: 'remote' | 'local'
+  status: 'ahead' | 'behind' | 'diverged' | 'identical'
+  /** Commits the head has that the base does not. */
+  aheadBy: number
+  /** Commits the base has that the head does not. */
+  behindBy: number
+  totalCommits: number
+  /** Changed files between the two refs. */
+  filesChanged: number
+  /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
+  hasChanges: boolean
+  /**
+   * An already-open pull request for the exact head→base pair, when one exists.
+   * GitHub rejects a second open PR for the same pair with a 422, so the form
+   * can warn and offer to open the existing PR instead of hitting that error.
+   */
+  existing?: PullRequestSummary | null
+}
+
+/** Full pull request view, loaded when one is opened in the sidebar. */
+export interface PullRequestDetail extends PullRequestSummary {
+  body: string
+  /** Null when the provider has not finished computing mergeability yet. */
+  mergeable: boolean | null
+  merged: boolean
+  additions: number
+  deletions: number
+  changedFiles: number
+  commitCount: number
+}
+
+/** One commit belonging to a pull request. */
+export interface PullRequestCommit {
+  sha: string
+  /** Seven-character short sha, precomputed for display. */
+  shortSha: string
+  message: string
+  authorName: string
+  date: string
+}
+
+/** One issue comment on a pull request. */
+export interface PullRequestComment {
+  id: number
+  authorLogin: string
+  body: string
+  createdAt: string
+  url: string
+}
+
+/**
+ * An account that can be @-mentioned in a pull request conversation. Built from
+ * the repository's assignable users, the widest list GitHub exposes to a read
+ * token; app accounts arrive as `login[bot]`.
+ */
+export interface RepositoryMentionUser {
+  login: string
+  /** Display name, when the account publishes one. */
+  name: string | null
+  avatarUrl: string | null
+  /** True for app/bot accounts, which GitHub renders as an app mention. */
+  bot: boolean
+}
+
+/** Review verdict submitted from the sidebar. */
+export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+
+/** One changed file in a pull request or commit, with its unified patch. */
+export interface PullRequestFile {
+  path: string
+  /** Provider status: added, modified, removed, renamed… */
+  status: string
+  additions: number
+  deletions: number
+  /** Unified diff hunk text; null for binary files or oversized patches. */
+  patch: string | null
+}
+
+/** A submitted review (approval, change request, or review comment). */
+export interface PullRequestReview {
+  id: number
+  authorLogin: string
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
+  state: string
+  body: string
+  submittedAt: string
+}
+
+/** An inline code comment attached to a line of the diff. */
+export interface PullRequestReviewComment {
+  id: number
+  authorLogin: string
+  body: string
+  path: string
+  /** Line in the file the comment anchors to; null once outdated. */
+  line: number | null
+  createdAt: string
+}
+
+/** One CI check or commit status on the PR head. */
+export interface PullRequestCheck {
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'timed_out'
+    | 'action_required'
+    | 'skipped'
+    | null
+  /** Provider page for the run, when one exists. */
+  url: string | null
+  /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
+  workflowRunId: number | null
+  /**
+   * GitHub Actions job id for this exact check, when its provider URL names one.
+   * A run has many jobs (one per matrix leg), so this is what lets the panel read
+   * the log of the check that was clicked rather than the run's first job.
+   */
+  jobId: number | null
+}
+
+/** Rolled-up CI state for a pull request head. */
+export interface PullRequestChecks {
+  state: 'success' | 'failure' | 'pending' | 'none'
+  checks: PullRequestCheck[]
+}
+
+/**
+ * Everything the PR detail view renders, fetched in one round trip.
+ *
+ * The sidebar shows this as a single unit, so bundling avoids six sequential
+ * spinners and lets the renderer cache one object per pull request.
+ */
+export interface PullRequestBundle {
+  detail: PullRequestDetail
+  commits: PullRequestCommit[]
+  comments: PullRequestComment[]
+  reviews: PullRequestReview[]
+  reviewComments: PullRequestReviewComment[]
+  files: PullRequestFile[]
+  checks: PullRequestChecks
+  /** Epoch ms this bundle was fetched, for cache staleness display. */
+  fetchedAt: number
+}
+
+/** An agent's review report read back from `.cio/git/pr/<number>/review.md`. */
+export interface PrAgentReport {
+  /** Absolute path to the report file. */
+  path: string
+  content: string
+  /** Epoch ms of the last write, or null when no report exists yet. */
+  updatedAt: number | null
+  /** Thread the review was handed to, so the UI can jump back into it. */
+  threadId: string | null
+}
+
+/** An agent-composed PR title/description produced by a disposable virtual task. */
+export interface PrComposeReport {
+  title: string
+  description: string
+  /** Disposable task that produced the report; it is not a persisted Thread id. */
+  taskId: string
+}
+
+/** Branch selection and optional existing copy for one isolated PR composition. */
+export interface PrComposeInput {
+  base: string
+  head: string
+  /** Remote uses cached origin refs only; local also includes unpushed commits and worktree changes. */
+  source: 'remote' | 'local'
+  includeWorkingTree: boolean
+  currentTitle?: string
+  currentDescription?: string
+}
+
+/** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
+export interface GitRepositoryIdentity {
+  owner: string
+  repo: string
+}
+
+/** Result of a provider credential status query   presence only, never plaintext. */
+export interface GitCredentialStatus {
+  configured: boolean
+  secureStorageAvailable: boolean
+}
+
+/** Device-code request payload returned by the GitHub device flow. */
+export interface GitHubDeviceCode {
+  deviceCode: string
+  userCode: string
+  verificationUri: string
+  expiresIn: number
+  interval: number
+}
+
+/** Result of one poll of the GitHub device flow token endpoint. */
+export type GitHubPollResult =
+  | { status: 'pending' }
+  | { status: 'authorized' }
+  | { status: 'expired' }
+  | { status: 'error'; message: string }
+
+/** Presence-only status of the GitHub OAuth connection. Never carries plaintext. */
+export interface GitHubAuthStatus {
+  connected: boolean
+  /** Whether the app has a GitHub App client ID configured to sign in with. */
+  configured: boolean
+  /** Public profile of the signed-in user, when connected. */
+  user?: GitHubUser | null
+}
+
+/** Public GitHub user profile, safe to surface in the UI. */
+export interface GitHubUser {
+  login: string
+  name: string | null
+  /**
+   * Avatar as a `data:` URL   the renderer's CSP blocks remote image hosts, so
+   * the main process downloads and inlines it. Null when the download failed;
+   * the UI falls back to the GitHub mark.
+   */
+  avatarUrl: string | null
+}
+
+/** One recent GitHub Actions workflow run shown in deployment monitoring. */
+export interface GitHubWorkflowRun {
+  id: number
+  name: string
+  displayTitle: string
+  runNumber: number
+  event: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+  branch: string
+  headSha: string
+  url: string
+  actorLogin: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Latest status recorded for one GitHub deployment. */
+export interface GitHubDeploymentStatus {
+  state: string
+  description: string
+  environmentUrl: string | null
+  logUrl: string | null
+  createdAt: string
+}
+
+/** One recent GitHub deployment and its latest status. */
+export interface GitHubDeployment {
+  id: number
+  environment: string
+  description: string
+  ref: string
+  sha: string
+  createdAt: string
+  updatedAt: string
+  latestStatus: GitHubDeploymentStatus | null
+}
+
+/** Read-only GitHub Actions and Deployments snapshot for a repository. */
+export interface GitHubDeploymentOverview {
+  workflowRuns: GitHubWorkflowRun[]
+  deployments: GitHubDeployment[]
+  fetchedAt: number
+}
+
+/**
+ * `deployment:overview` IPC result. `hasDeployments` is derived from the
+ * snapshot and drives whether the Deployments tab is shown at all.
+ */
+export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview {
+  hasDeployments: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+}
+
+/** One step inside a workflow run job   the granular "why did it fail" data. */
+export interface GitHubDeploymentJobStep {
+  number: number
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+}
+
+/** One workflow run job, with its step-level breakdown. */
+export interface GitHubDeploymentJob {
+  id: number
+  name: string
+  status: string
+  conclusion: string | null
+  startedAt: string
+  completedAt: string | null
+  url: string
+  steps: GitHubDeploymentJobStep[]
+}
+
+/** Everything the in-app deployment detail view needs. */
+export interface GitHubDeploymentDetail {
+  deployment: GitHubDeployment
+  statuses: GitHubDeploymentStatus[]
+  workflowRun: GitHubWorkflowRun | null
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
+}
+
+/**
+ * Raw log text for one workflow run job, capped at roughly 200 KB. An oversized log
+ * keeps its head and its tail with an omission line between them, because the step
+ * that failed is at the end.
+ */
+export interface GitHubDeploymentJobLog {
+  jobId: number
+  log: string
+  truncated: boolean
+}
+
+/** Everything the in-app workflow-run detail view needs. */
+export interface GitHubWorkflowRunDetail {
+  run: GitHubWorkflowRun
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
+}
