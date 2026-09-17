@@ -1485,7 +1485,13 @@ export class PiDriver extends PersistentCliDriver {
       await this.resumeNativePiSession(projectPath, sessionId, client)
       await Promise.allSettled([
         client.setAutoRetry(true),
-        client.setAutoCompaction(true),
+        // CodeInOven owns compaction for this session. Pi's own threshold is
+        // `contextWindow - reserveTokens` (a flat 16k), which is far above what
+        // a provider that bills the completion budget against the same window
+        // actually accepts, so it never fires in time; leaving it on would race
+        // our page checkpoints and could rewrite the transcript we keep. Manual
+        // compaction (the `compact` RPC) is unaffected by this switch.
+        client.setAutoCompaction(false),
         this.syncNativeSessionId(projectPath, sessionId)
       ])
     } catch (error) {

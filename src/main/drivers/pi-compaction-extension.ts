@@ -3,7 +3,7 @@ export const PI_COMPACTION_EXTENSION_KEY = 'codeinoven-compaction'
 
 export function piCompactionExtension(): string {
   return String.raw`import type { ExtensionAPI, SessionEntry, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'
+import { convertToLlm, findCutPoint, serializeConversation } from '@earendil-works/pi-coding-agent'
 import { randomUUID } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import type { TextContent } from '@earendil-works/pi-ai'
@@ -25,6 +25,19 @@ const MAX_TEXT_BYTES = 384_000
 // tightest known cap so steering between images cannot push a request over.
 const MAX_REQUEST_IMAGES = 24
 const IMAGE_BUDGET_MARKER = '[image removed from the provider request: the request image budget was exceeded; the original image is preserved in the session transcript]'
+// The share of the model window at which the driver checkpoints the session.
+// It covers the WHOLE request, not just the messages: a provider bills the
+// reserved completion against the same window, so a 1M-window model that
+// reserves a 384k completion only accepts ~664k of messages. Pi's own
+// threshold (contextWindow minus a flat 16384) sits far above that and never
+// fires in time, which is why the app owns the trigger.
+const COMPACT_WINDOW_SHARE = 0.85
+// Verbatim trace retained when the active task page, or the current transcript
+// with no page boundary yet, has to be cut. Never below Pi's own 20k default,
+// and never a large share of the window, so the checkpoint plus the retained
+// trace stays well inside the provider's usable input budget.
+const MIN_RETAINED_TRACE_TOKENS = 20_000
+const RETAINED_TRACE_WINDOW_SHARE = 0.2
 let cachedArmed = false
 let cachedMtimeMs = -1
 
@@ -135,6 +148,45 @@ function isUser(entry: SessionEntry): boolean {
   return entry.type === 'message' && entry.message.role === 'user'
 }
 
+/** True for the entry types that carry conversation content into the request. */
+function carriesContext(entry: SessionEntry): boolean {
+  return entry.type === 'message' || entry.type === 'custom_message' || entry.type === 'branch_summary'
+}
+
+/** Whether the whole request   the messages plus the completion budget the
+ *  harness reserves   has reached the checkpoint share of the model window. */
+function requestOverThreshold(ctx: ExtensionContext): boolean {
+  const usage = ctx.getContextUsage()
+  const window = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0
+  if (window <= 0 || usage?.tokens == null) return false
+  return usage.tokens + (ctx.model?.maxTokens ?? 0) >= window * COMPACT_WINDOW_SHARE
+}
+
+/** Tokens kept verbatim when a cut has to move inside the active task page. */
+function retainedTraceTokens(model: { contextWindow: number }): number {
+  return Math.max(MIN_RETAINED_TRACE_TOKENS, Math.floor(model.contextWindow * RETAINED_TRACE_WINDOW_SHARE))
+}
+
+/** First entry index retained verbatim by this checkpoint.
+ *
+ *  The start of the CURRENT task page wins whenever the page fits the retained
+ *  budget, so an affordable in-flight task survives whole. When that page alone
+ *  exceeds the budget, or no page boundary exists yet   which is what a
+ *  transcript that never settles a page looks like   the cut moves to a token
+ *  boundary inside it. Without that second case a single unfinished task can
+ *  never be compacted at all, and the session has no way out once its request
+ *  outgrows what the provider accepts. Cutting inside a turn is what Pi's own
+ *  compaction does too; the summary below covers everything before the cut. */
+function compactionCutIndex(
+  entries: SessionEntry[],
+  pages: Page[],
+  model: { contextWindow: number }
+): number {
+  const pageStart = pages.length ? entries.indexOf(pages[pages.length - 1].entries[0]) : -1
+  const tokenCut = findCutPoint(entries, 0, entries.length, retainedTraceTokens(model)).firstKeptEntryIndex
+  return Math.max(pageStart < 0 ? 0 : pageStart, tokenCut)
+}
+
 async function pagesFrom(entries: SessionEntry[]): Promise<Page[]> {
   const pages: Page[] = []
   let page: Page = { entries: [], users: [] }
@@ -142,7 +194,7 @@ async function pagesFrom(entries: SessionEntry[]): Promise<Page[]> {
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]
     if (index % 32 === 0) await yieldBatch()
-    if (entry.type !== 'message' && entry.type !== 'custom_message' && entry.type !== 'branch_summary') continue
+    if (!carriesContext(entry)) continue
     const assistant = entry.type === 'message' && entry.message.role === 'assistant'
     // Tool results stay with the assistant that requested them. A new user
     // after a final answer starts a new task; a user mid-work is steering.
@@ -168,16 +220,13 @@ export default function (pi: ExtensionAPI): void {
   let requestedAt: string | null = null
   let checking = false
   const reportThreshold = async (ctx: ExtensionContext, resume: boolean) => {
-    const usage = ctx.getContextUsage()
-    if (checking || compacting || usage?.percent == null || usage.percent < 85) return
+    if (checking || compacting || !requestOverThreshold(ctx)) return
     checking = true
     try {
       const pages = await pagesFrom(ctx.sessionManager.buildContextEntries())
       const boundary = pages.at(-1)?.entries[0]?.id
       if (!boundary || requestedAt === boundary) return
       requestedAt = boundary
-      // A lone active page cannot be shrunk without violating retention.
-      if (pages.length < 2) return
       ctx.ui.setStatus(KEY, JSON.stringify({ type: 'threshold', resume }))
     } finally {
       checking = false
@@ -221,11 +270,18 @@ export default function (pi: ExtensionAPI): void {
   })
 
   pi.on('session_before_compact', async (event, ctx) => {
-    // Pi may reach its fixed reserve before our percentage threshold.
-    if (event.reason === 'threshold' && event.preparation.tokensBefore < (ctx.model?.contextWindow ?? 0) * 0.85) return { cancel: true }
+    // A threshold request this hook would refuse is cancelled outright: the
+    // checkpoint below could only rewrite the transcript the caller asked for.
+    const model = ctx.model
+    if (
+      event.reason === 'threshold' &&
+      model &&
+      event.preparation.tokensBefore + (model.maxTokens ?? 0) < model.contextWindow * COMPACT_WINDOW_SHARE
+    ) {
+      return { cancel: true }
+    }
     compacting = true
     try {
-      const model = ctx.model
       if (!model) throw new Error('No model available for page compaction')
       const branch = event.branchEntries
       const checkpointIndex = branch.findLastIndex((entry) => entry.type === 'compaction')
@@ -234,8 +290,18 @@ export default function (pi: ExtensionAPI): void {
       const start = previous ? branch.findIndex((entry) => entry.id === previous.firstKeptEntryId) : 0
       const entries = branch.slice(start < 0 ? checkpointIndex + 1 : start).filter((entry) => entry.type !== 'compaction')
       const pages = await pagesFrom(entries)
-      const current = pages.pop()
-      if (!current || pages.length === 0) throw new Error('No older page to compact; last working trace has been preserved')
+      const cutIndex = compactionCutIndex(entries, pages, model)
+      const summarized = cutIndex > 0 && cutIndex < entries.length ? entries.slice(0, cutIndex) : []
+      // Nothing older than the retained trace carries content. Defer to Pi's
+      // summarizer instead of failing: a cancelled compaction hands the caller
+      // an unchanged transcript and no way forward, while Pi cuts a split turn
+      // with its own turn-prefix summary.
+      if (!summarized.some(carriesContext)) return undefined
+      const current: Page = { entries: entries.slice(cutIndex), users: [] }
+      for (const entry of current.entries) {
+        if (isUser(entry)) current.users.push(entry)
+      }
+      const summarizePages = await pagesFrom(summarized)
       const firstKeptEntryId = current.entries[0].id
       const firstEntry = current.entries[0]
       const firstKeptCreatedAt = firstEntry.type === 'message' && 'timestamp' in firstEntry.message && typeof firstEntry.message.timestamp === 'number' ? firstEntry.message.timestamp : Date.parse(firstEntry.timestamp)
@@ -295,8 +361,8 @@ export default function (pi: ExtensionAPI): void {
       // Walk backwards until the task changes or the previous checkpoint.
       // Older pages are folded into the same bounded rolling summary rather
       // than silently discarded. Requests are sequential and cancellable.
-      for (let index = pages.length - 1; index >= 0; index--) {
-        const page = pages[index]
+      for (let index = summarizePages.length - 1; index >= 0; index--) {
+        const page = summarizePages[index]
         pageIndex.push({ firstEntryId: page.entries[0].id, lastEntryId: page.entries[page.entries.length - 1].id, userEntryIds: page.users.map((entry) => entry.id) })
         let comparePage = related
         const summarizeBatch = async (text: string) => {
@@ -332,16 +398,21 @@ export default function (pi: ExtensionAPI): void {
         firstKeptEntryId,
         tokensBefore: event.preparation.tokensBefore,
         usage,
-        details: { version: 1, kind: 'cio-page-checkpoint', previousCheckpointId: previous?.id, sourceSession, relatedPages, pageCount: pages.length, pageIndex, lastWorkingTrace: { firstKeptEntryId, firstKeptCreatedAt, userEntryIds: current.users.map((entry) => entry.id) } }
+        details: { version: 1, kind: 'cio-page-checkpoint', previousCheckpointId: previous?.id, sourceSession, relatedPages, pageCount: summarizePages.length, pageIndex, lastWorkingTrace: { firstKeptEntryId, firstKeptCreatedAt, userEntryIds: current.users.map((entry) => entry.id) } }
       } }
     } catch (error) {
+      // A cancelled compaction is the caller's own abort: never summarize
+      // behind its back. Every other failure defers to Pi's summarizer, so a
+      // transcript this hook cannot cut still shrinks instead of stalling the
+      // thread with an unchanged transcript and a cancelled compaction.
+      if (event.signal.aborted) return { cancel: true }
       try {
-        if (!event.signal.aborted) ctx.ui.notify(error instanceof Error ? error.message : String(error), 'warning')
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), 'warning')
       } catch {
         // Notification failure must not escape the hook: Pi catches thrown
         // extension errors and would fall back to its default summarizer.
       }
-      return { cancel: true }
+      return undefined
     } finally {
       compacting = false
     }

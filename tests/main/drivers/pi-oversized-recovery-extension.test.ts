@@ -27,17 +27,32 @@ async function loadExtension(armed: boolean): Promise<{
   roots.push(root)
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'flag.json'), JSON.stringify({ armed }))
-  // Pi injects its extension API module. Load only the two real helpers here:
-  // importing the package root outside Pi also loads its optional server SDK.
+  // Pi injects its extension API module. Load only the real helpers the
+  // extension imports here: importing the package root outside Pi also loads
+  // its optional server SDK.
   const sdk = join(process.cwd(), 'node_modules/@earendil-works/pi-coding-agent/dist/core')
+  const sdkFileFor = (binding: string): string => {
+    if (binding === 'serializeConversation') return 'compaction/utils.js'
+    if (binding === 'findCutPoint') return 'compaction/compaction.js'
+    return 'messages.js'
+  }
   const source = piCompactionExtension()
     // JSON-escape like the production composer does: a raw Windows path
     // contains backslash sequences (\t, \b) that corrupt the generated
     // string literal and silently disarm the extension.
     .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(join(root, 'flag.json')).slice(1, -1))
     .replace(
-      "import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'",
-      `import { convertToLlm } from '${pathToFileURL(join(sdk, 'messages.js')).href}'\nimport { serializeConversation } from '${pathToFileURL(join(sdk, 'compaction/utils.js')).href}'`
+      /^import \{ ([^}]+) \} from '@earendil-works\/pi-coding-agent'$/mu,
+      (_line: string, bindings: string) =>
+        bindings
+          .split(',')
+          .map((binding) => binding.trim())
+          .filter((binding) => binding.length > 0)
+          .map(
+            (binding) =>
+              `import { ${binding} } from '${pathToFileURL(join(sdk, sdkFileFor(binding))).href}'`
+          )
+          .join('\n')
     )
   await writeFile(join(root, 'ext.ts'), source)
   type ContextHook = (
