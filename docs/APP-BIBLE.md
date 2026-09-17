@@ -106,6 +106,40 @@ state in `AppHeaderNavigationController.svelte.ts`.
 inference and permission pickers, and plus menu, with input handling split across
 `chat-composer-{mentions,keydown,drop,paste,slash,attachments,settings,preview}`.
 
+**Shared contracts** (`src/lib/`)
+`types.ts` and `ipc-contract.ts` are barrels. The types live in
+`src/lib/types/<domain>.ts` (one module per domain: common, project, scope, thread,
+context, plan, provider, agent, agent-parts, usage, account, agent-message,
+agent-events, checkpoints, brainstorm, prd, spec, assignment, audit, settings, git,
+github, cloud, paths, cua, utility and the base-url provider). The IPC contract
+lives in `src/lib/ipc/` as one partial contract per channel group plus `events.ts`.
+Every consumer keeps importing `$shared/types` and `$shared/ipc-contract`.
+
+**Common-process services** (`src/main/`)
+- `chat/chat-engine.ts` keeps the `ChatEngine` class and composes
+  `chat-engine/chat-engine-{prompts,changes,errors,constants,types,pure,message-merge,message-text,generated-artifacts,images}.ts`.
+- `ipc/ipc-handlers.ts` is the composition root over one registrar per domain in
+  `ipc/handlers/`; `ipc/ipc-validation.ts` is a barrel over `ipc/validation/`.
+- Drivers compose per-harness module folders: `drivers/pi/` (+ `drivers/pi/tools/`),
+  `drivers/codex/`, `drivers/claude-code/`, alongside the shared
+  `drivers/persistent-cli-driver.ts` base.
+- `git/git-service.ts` composes `git/git/`; `git/scope-worktree-service.ts` composes
+  `git/scope-worktree/` (porcelain parsing, environment, git ops, setup, health, merge).
+
+**Renderer stores** (`src/renderer/lib/stores/`)
+Each store is the composition root over its own prefixed modules:
+`context-sidebar.svelte.ts` over `context-sidebar-{types,persistence,browser,tabs}`,
+`project-files.svelte.ts` over `project-files-{state,explorer}`,
+`thread-messages.svelte.ts` over `thread-messages-{merge,cache,events}`,
+`scope.svelte.ts` over `scope-{board,threads,worktrees}`, and
+`git.svelte.ts` over the `git-store-*` modules.
+
+**App shell and Spec Studio**
+`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,os-handoff,ipc-subscriptions}`.
+`components/specs/SpecStudio.svelte` composes
+`SpecStudio{Document,ResolutionSection,ContextSection,EditableListSection,EditableMiniList,AnnotationBubbles}.svelte`
+plus `spec-studio-{document-anchors,draft-edits,formatting,context-picker}`.
+
 ---
 
 ## 2. Product Personality
