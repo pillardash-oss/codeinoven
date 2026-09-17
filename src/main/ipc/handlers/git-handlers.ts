@@ -1,0 +1,483 @@
+import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import {
+  validateBoolean,
+  validateBoundedInteger,
+  validateBoundedString,
+  validateBranchName,
+  validateCommitMessage,
+  validateConflictResolutionContent,
+  validateEntityId,
+  validateGitConflictSide,
+  validateGitIdentity,
+  validateGitPathArray,
+  validateGitRelativePath,
+  validateGitResetMode,
+  validateGitRestoreTarget,
+  validateGitRevision,
+  validateRemoteName
+} from '../ipc-validation'
+import type { IpcHandlerContext } from './context'
+
+export function registerGitHandlers(ctx: IpcHandlerContext): void {
+  const { threadManager, repositoryService, gitService, resolveProjectPath } = ctx
+
+  ipcMain.handle('git:status', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getStatus(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle(
+    'git:diff',
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      staged: unknown,
+      scopeBucketId?: unknown
+    ) =>
+      gitService.getDiff(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath),
+        validateBoolean(staged, 'Staged')
+      )
+  )
+  ipcMain.handle(
+    'git:analyzeConflict',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      gitService.analyzeConflict(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
+    'git:prepareConflictWorkFile',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      gitService.prepareConflictWorkFile(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
+    'git:saveConflictDraft',
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      stateJson: unknown,
+      scopeBucketId?: unknown
+    ) =>
+      gitService.saveConflictDraft(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath),
+        validateConflictResolutionContent(content),
+        validateConflictResolutionContent(stateJson)
+      )
+  )
+  ipcMain.handle(
+    'git:saveConflictResolution',
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      scopeBucketId?: unknown
+    ) =>
+      gitService.saveConflictResolution(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath),
+        validateConflictResolutionContent(content)
+      )
+  )
+  ipcMain.handle(
+    'git:stage',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.stage(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:resolveConflicted',
+    async (_, projectId: unknown, path: unknown, scopeBucketId?: unknown) =>
+      gitService.resolveConflicted(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(path)
+      )
+  )
+  ipcMain.handle(
+    'git:acceptConflictSide',
+    async (_, projectId: unknown, side: unknown, scopeBucketId?: unknown) =>
+      gitService.acceptConflictSide(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitConflictSide(side)
+      )
+  )
+  ipcMain.handle(
+    'git:unstage',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.unstage(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:restoreFiles',
+    async (
+      _,
+      projectId: unknown,
+      source: unknown,
+      paths: unknown,
+      target: unknown,
+      scopeBucketId?: unknown
+    ) =>
+      gitService.restoreFiles(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRevision(source),
+        validateGitPathArray(paths),
+        validateGitRestoreTarget(target)
+      )
+  )
+  ipcMain.handle(
+    'git:commit',
+    async (_, projectId: unknown, message: unknown, scopeBucketId?: unknown) =>
+      gitService.commit(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateCommitMessage(message)
+      )
+  )
+  ipcMain.handle('git:init', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.initialize(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle('git:branches', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listBranches(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle('git:defaultBranch', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getDefaultBranch(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle(
+    'git:checkout',
+    async (_, projectId: unknown, branch: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.checkout(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateBranchName(branch)
+      )
+      // Keep thread.branch coherent when the app drives a checkout (D7): update
+      // every owned thread whose working directory is this project.
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
+    'git:createBranch',
+    async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.createBranch(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateBranchName(name)
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
+    'git:createTrackingBranch',
+    async (
+      _,
+      projectId: unknown,
+      remote: unknown,
+      branch: unknown,
+      localName: unknown,
+      scopeBucketId?: unknown
+    ) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.createTrackingBranch(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(remote),
+        validateBranchName(branch, 'Remote branch'),
+        validateBranchName(localName, 'Local branch')
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
+    'git:deleteBranch',
+    async (_, projectId: unknown, name: unknown, force?: unknown, scopeBucketId?: unknown) => {
+      return gitService.deleteBranch(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateBranchName(name),
+        force === undefined ? false : validateBoolean(force, 'Force delete')
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:deleteRemoteBranch',
+    async (_, projectId: unknown, remote: unknown, name: unknown, scopeBucketId?: unknown) =>
+      gitService.deleteRemoteBranch(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(remote),
+        validateBranchName(name)
+      )
+  )
+  ipcMain.handle(
+    'git:log',
+    async (
+      _,
+      projectId: unknown,
+      limit?: unknown,
+      offset?: unknown,
+      query?: unknown,
+      scopeBucketId?: unknown
+    ) => {
+      const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
+      const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)
+      const safeQuery =
+        query === undefined
+          ? undefined
+          : validateBoundedString(query, 'Commit search query', 1, 256)
+      return gitService.log(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        bounded,
+        boundedOffset,
+        safeQuery
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:commitDiff',
+    async (_, projectId: unknown, hash: unknown, scopeBucketId?: unknown) => {
+      const safeHash = validateEntityId(hash, 'Commit hash')
+      return gitService.commitDiff(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        safeHash
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:commitFileDiff',
+    async (_, projectId: unknown, hash: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      gitService.commitFileDiff(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateEntityId(hash, 'Commit hash'),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
+    'git:amend',
+    async (_, projectId: unknown, message: unknown, scopeBucketId?: unknown) =>
+      gitService.amend(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateCommitMessage(message)
+      )
+  )
+  ipcMain.handle(
+    'git:reset',
+    async (_, projectId: unknown, mode: unknown, target?: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.reset(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitResetMode(mode),
+        target === undefined ? undefined : validateEntityId(target, 'Reset target')
+      )
+      // A reset moves the branch, so keep thread.branch coherent like checkout.
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
+    'git:deleteCommit',
+    async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.deleteCommit(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateEntityId(target, 'Delete commit target')
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle('git:getIdentity', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getIdentity(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
+  ipcMain.handle(
+    'git:setIdentity',
+    async (_, projectId: unknown, identity: unknown, scopeBucketId?: unknown) => {
+      const safe = validateGitIdentity(identity)
+      return gitService.setIdentity(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        safe.name,
+        safe.email
+      )
+    }
+  )
+}
