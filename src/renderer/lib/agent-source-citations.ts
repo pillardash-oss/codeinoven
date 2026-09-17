@@ -28,8 +28,16 @@ const FILE_EXT =
 
 const FILE_EXT_PATTERN = `(?:${FILE_EXT})`
 const BACKTICK_CANDIDATE = /(?<!\[)`([^`\n]+)`/gu
+// A prose citation (`src/a/b.ts:12`) only counts when it is its own token. It may
+// not be preceded by a word or path character (negative lookbehind), so a match
+// can never start in the middle of a longer path or a URL, and it must be
+// followed by sentence punctuation, a closing delimiter or end of line.
+// Delimiters MAY precede it   that is how prose spells a citation, e.g.
+// `(flag set at src/main/chat/chat-engine.ts:6774)`. The lookahead deliberately
+// omits `]`: a trailing `]` means the candidate sits inside a markdown link
+// label, which must never be rewritten from the inside.
 const PLAIN_WITH_LINE = new RegExp(
-  `(?<=^|\\s)((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN}):(\\d+)(?:-(\\d+))?(?=[.,;:!?]?(?:$|\\s))`,
+  `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN}):(\\d+)(?:-(\\d+))?(?=$|[\\s.,;:!?)"'*_])`,
   'giu'
 )
 const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
@@ -388,7 +396,18 @@ export function linkifyFileCitations(
 
   result = result.replace(
     PLAIN_WITH_LINE,
-    (match, path: string, line: string, lineEnd?: string) => {
+    (
+      match,
+      path: string,
+      line: string,
+      lineEnd: string | undefined,
+      offset: number,
+      whole: string
+    ) => {
+      // A markdown link label always ends with `](`, so a citation followed by
+      // at most emphasis markers and `](` is the text of a link, not a citation:
+      // rewriting it would nest a link inside a link and break the label.
+      if (/^[*_]{0,2}\]\(/u.test(whole.slice(offset + match.length))) return match
       const parsed = parseFileCitation(`${path}:${line}${lineEnd ? `-${lineEnd}` : ''}`)
       if (!parsed || !isClickable(parsed.path)) return match
       return `[\`${match}\`](${citationHref(parsed)})`
