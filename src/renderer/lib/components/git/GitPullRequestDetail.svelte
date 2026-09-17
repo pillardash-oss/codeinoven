@@ -30,6 +30,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
+  import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
@@ -212,6 +213,8 @@
   let editBody = $state('')
   /** The row a Delete confirmation is open for, or null. */
   let deletingEntry = $state<ConversationEntry | null>(null)
+  /** The Delete confirmation's panel, for owning its initial focus. */
+  let deletePanel = $state<HTMLDivElement | null>(null)
   let expandedCommit = $state<string | null>(null)
   let commitFiles = $state<Record<string, PullRequestFile[]>>({})
   let loadingCommit = $state<string | null>(null)
@@ -542,6 +545,17 @@
     cancelEdit()
     notice = entry.commentId === null ? 'Description saved' : 'Comment saved'
     await refresh()
+  }
+
+  /**
+   * Own the confirmation's initial focus instead of bits-ui's default of focusing
+   * the panel itself. There is no field to fill, so focus lands on the primary
+   * action, which is what a modal without an input is supposed to do.
+   */
+  function focusDeleteDialog(event: Event): void {
+    event.preventDefault()
+    if (!deletePanel) return
+    findPanelPrimaryAction(deletePanel)?.focus({ preventScroll: true })
   }
 
   async function deleteEntry(entry: ConversationEntry): Promise<void> {
@@ -2007,6 +2021,8 @@
   <AlertDialog.Portal>
     <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
     <AlertDialog.Content
+      bind:ref={deletePanel}
+      onOpenAutoFocus={focusDeleteDialog}
       class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
     >
       <AlertDialog.Title class="text-sm font-semibold text-foreground">
@@ -2018,13 +2034,15 @@
         will be removed from pull request #{number}. This runs on GitHub and cannot be undone from
         here.
       </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
+      <div class="mt-5 flex justify-end gap-2" data-modal-footer>
         <AlertDialog.Cancel
+          data-modal-dismiss
           class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
         >
           Cancel
         </AlertDialog.Cancel>
         <AlertDialog.Action
+          data-modal-primary
           class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
           onclick={() => deletingEntry && void deleteEntry(deletingEntry)}
         >
