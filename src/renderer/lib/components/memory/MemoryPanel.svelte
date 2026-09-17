@@ -10,15 +10,23 @@
   } from '$shared/types'
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
-  import { managedScopesFor, planMemorySaveGroups, type MemoryLocation } from './memory-routing'
+  import {
+    managedScopesFor,
+    planMemorySaveGroups,
+    scopeIdsForChange,
+    defaultScopeForSurface,
+    MEMORY_SCOPE_OPTIONS,
+    type MemoryLocation,
+    type MemoryPanelSurface
+  } from './memory-routing'
+  import { memoryScopeOptions } from './memory-scope-options.svelte'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
+  import type { Thread } from '$shared/types'
 
   interface Props {
     variant?: 'settings' | 'sidebar'
-    /** The active settings tab   'projects' or 'chats'. */
-    scope?: 'projects' | 'chats'
     projectId?: string
     threadId?: string
     memoryEnabled?: boolean
@@ -37,11 +45,8 @@
 
   type MemorySection = 'active' | 'proposed'
 
-  type MemoryTab = 'projects' | 'chats'
-
   let {
     variant = 'settings',
-    scope = $bindable('projects'),
     projectId,
     threadId,
     memoryEnabled,
@@ -65,7 +70,7 @@
   let loadedChatEnabled = $state(true)
   let proposalBusyIds = $state<string[]>([])
   let loadRequest = 0
-  /** Which context (`variant:scope:project`) and thread the panel state was read
+  /** Which surface (`surface:project`) and thread the panel state was read
    *  for, so a thread switch can be served by re-reading only that thread's own
    *  memory instead of the whole panel. */
   let loadedContextKey = ''
@@ -91,53 +96,33 @@
     low: 'Low'
   }
 
-  /** Whether this panel is managing project memory or chat memory. */
-  let contextKind = $derived<MemoryTab>(
-    variant === 'settings' ? scope : projectId === INBOX_PROJECT_ID ? 'chats' : 'projects'
+  /** Which memory surface this panel is, which decides its scopes and files. */
+  let surface = $derived<MemoryPanelSurface>(
+    variant === 'settings'
+      ? 'settings'
+      : projectId === INBOX_PROJECT_ID
+        ? 'sidebar-chats'
+        : 'sidebar-projects'
   )
 
-  let effectiveMemoryEnabled = $derived(
-    contextKind === 'chats'
-      ? (chatMemoryEnabled ?? loadedChatEnabled)
-      : (memoryEnabled ?? loadedProjectEnabled)
+  let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
+
+  let projectMemoryEnabled = $derived(memoryEnabled ?? loadedProjectEnabled)
+  let chatMemoryEnabledValue = $derived(chatMemoryEnabled ?? loadedChatEnabled)
+  let sidebarMemoryEnabled = $derived(
+    surface === 'sidebar-chats' ? chatMemoryEnabledValue : projectMemoryEnabled
   )
+
+  /** Projects offered by the scope pickers (sidebar surfaces only). */
+  let pickerProjects = $derived(surface === 'settings' ? [] : memoryScopeOptions.projects)
 
   let headerDescription = $derived(
     variant === 'settings'
-      ? scope === 'chats'
-        ? 'Global memory used in every chat. Manage one chat’s own memory from that chat’s sidebar.'
-        : 'Global memory used in every project. Manage one project’s own memory from that project’s sidebar.'
+      ? 'Choose whether each memory applies to projects, chats, or both.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
         : 'Global, project, and thread preferences active in this conversation.'
   )
-
-  let availableScopes = $derived.by((): Array<{ value: MemoryScope; label: string }> => {
-    if (variant === 'settings') {
-      return scope === 'chats'
-        ? [
-            { value: 'global', label: 'Global' },
-            { value: 'chat', label: 'Chats' }
-          ]
-        : [
-            { value: 'global', label: 'Global' },
-            { value: 'projects', label: 'Projects' }
-          ]
-    }
-    if (projectId === INBOX_PROJECT_ID) {
-      return [
-        { value: 'global', label: 'Global' },
-        { value: 'chat', label: 'Chats' },
-        { value: 'thread', label: 'Thread' }
-      ]
-    }
-    return [
-      { value: 'global', label: 'Global' },
-      { value: 'projects', label: 'Projects' },
-      { value: 'project', label: 'Specific project' },
-      { value: 'thread', label: 'Thread' }
-    ]
-  })
 
   let currentSection = $derived(variant === 'settings' ? settingsSection : activeSection)
   let inactiveCount = $derived(entries.filter((entry) => !entry.enabled).length)
@@ -187,15 +172,10 @@
       }
     }
     if (variant === 'settings') {
-      return scope === 'chats'
-        ? {
-            title: 'No global chat memories yet.',
-            body: 'Add a preference you want every chat to remember, or approve suggested ones.'
-          }
-        : {
-            title: 'No global memories yet.',
-            body: 'Add a preference you want every project to remember. Project-specific memory lives in that project’s sidebar.'
-          }
+      return {
+        title: 'No global memories yet.',
+        body: 'Add a preference and choose whether it applies to projects, chats, or both.'
+      }
     }
     return {
       title: 'No memory entries yet.',
@@ -205,7 +185,7 @@
 
   async function load(): Promise<void> {
     const request = ++loadRequest
-    const contextKey = `${variant}:${scope}:${projectId ?? ''}`
+    const contextKey = `${surface}:${projectId ?? ''}`
     const thread = threadId ?? ''
     loading = true
     error = ''
@@ -216,52 +196,39 @@
       let nextEntries: MemoryEntry[]
       let nextProposals: PendingProposal[]
       if (variant === 'settings') {
-        if (scope === 'chats') {
-          const [rootEntries, chatEntries, globalProposals, chatProposals] = await Promise.all([
-            invoke('memory:getEntries'),
-            invoke('memory:getEntries', INBOX_PROJECT_ID),
-            invoke('memory:getPendingProposals'),
-            invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
-          ])
-          nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
-          nextProposals = [
-            ...globalProposals
-              .filter((proposal) => proposal.scope === 'global')
-              .map((proposal) => ({ proposal })),
-            ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
-          ]
-        } else {
-          const [rootEntries, globalProposals] = await Promise.all([
-            invoke('memory:getEntries'),
-            invoke('memory:getPendingProposals')
-          ])
-          nextEntries = rootEntries
-          nextProposals = globalProposals
-            .filter((proposal) => proposal.scope === 'global' || proposal.scope === 'projects')
-            .map((proposal) => ({ proposal }))
-        }
-      } else if (projectId === INBOX_PROJECT_ID) {
-        const [rootEntries, chatEntries, threadEntries, globalProposals, chatProposals] =
-          await Promise.all([
-            invoke('memory:getEntries'),
-            invoke('memory:getEntries', INBOX_PROJECT_ID),
-            invoke('memory:getEntries', INBOX_PROJECT_ID, threadId),
-            invoke('memory:getPendingProposals'),
-            invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
-          ])
+        const [rootEntries, chatEntries, rootProposals, chatProposals] = await Promise.all([
+          invoke('memory:getEntries'),
+          invoke('memory:getEntries', INBOX_PROJECT_ID),
+          invoke('memory:getPendingProposals'),
+          invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+        ])
         nextEntries = [
-          ...rootEntries.filter((entry) => entry.scope === 'global'),
-          ...chatEntries,
-          ...(threadId ? threadEntries : [])
+          ...rootEntries.filter((entry) => entry.scope === 'global' || entry.scope === 'projects'),
+          ...chatEntries.filter((entry) => entry.scope === 'chat')
         ]
         nextProposals = [
-          ...globalProposals
-            .filter((proposal) => proposal.scope === 'global')
+          ...rootProposals
+            .filter((proposal) => proposal.scope === 'global' || proposal.scope === 'projects')
             .map((proposal) => ({ proposal })),
-          ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
+          ...chatProposals
+            .filter((proposal) => proposal.scope === 'chat')
+            .map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
         ]
+      } else if (projectId === INBOX_PROJECT_ID) {
+        const [chatEntries, threadEntries, chatProposals] = await Promise.all([
+          invoke('memory:getEntries', INBOX_PROJECT_ID),
+          invoke('memory:getEntries', INBOX_PROJECT_ID, threadId),
+          invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+        ])
+        nextEntries = [
+          ...chatEntries.filter((entry) => entry.scope === 'chat'),
+          ...(threadId ? threadEntries.filter((entry) => entry.scope === 'thread') : [])
+        ]
+        nextProposals = chatProposals
+          .filter((proposal) => proposal.scope === 'chat')
+          .map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
       } else if (projectId && threadId) {
-        const [globalEntries, projectEntries, threadEntries, globalProposals, projectProposals] =
+        const [rootEntries, projectEntries, threadEntries, rootProposals, projectProposals] =
           await Promise.all([
             invoke('memory:getEntries'),
             invoke('memory:getEntries', projectId),
@@ -269,9 +236,15 @@
             invoke('memory:getPendingProposals'),
             invoke('memory:getPendingProposals', projectId)
           ])
-        nextEntries = [...globalEntries, ...projectEntries, ...threadEntries]
+        nextEntries = [
+          ...rootEntries.filter((entry) => entry.scope === 'projects'),
+          ...projectEntries.filter((entry) => entry.scope === 'project'),
+          ...threadEntries.filter((entry) => entry.scope === 'thread')
+        ]
         nextProposals = [
-          ...globalProposals.map((proposal) => ({ proposal })),
+          ...rootProposals
+            .filter((proposal) => proposal.scope === 'projects')
+            .map((proposal) => ({ proposal })),
           ...projectProposals.map((proposal) => ({ proposal, queueProjectId: projectId }))
         ]
       } else {
@@ -300,7 +273,7 @@
     try {
       if (variant === 'settings' || (projectId && threadId)) {
         const fallback: MemoryLocation = variant === 'sidebar' ? { projectId, threadId } : {}
-        await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(contextKind))
+        await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(surface))
         saved = true
         if (savedTimeout) clearTimeout(savedTimeout)
         savedTimeout = setTimeout(() => {
@@ -364,7 +337,7 @@
     // then inserts the persisted entry at the top and expands it.
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
-    const entryScope = availableScopes[0]?.value ?? 'global'
+    const entryScope = defaultScopeForSurface(surface)
     const placeholderSuffix = Math.random().toString(36).slice(2, 6)
     const label = 'Untitled memory'
     const content = `New memory   ${Date.now()}-${placeholderSuffix}`
@@ -391,28 +364,33 @@
     }
   }
 
-  async function setMemoryEnabled(enabled: boolean): Promise<void> {
+  async function setProjectMemoryEnabled(enabled: boolean): Promise<void> {
     error = ''
     try {
-      if (contextKind === 'chats') {
-        if (onChatMemoryEnabledChange) {
-          await onChatMemoryEnabledChange(enabled)
-        } else {
-          await invoke('config:update', {
-            memory: { enabled: loadedProjectEnabled, chatEnabled: enabled, entries: [] }
-          })
-        }
-        loadedChatEnabled = enabled
+      if (onMemoryEnabledChange) {
+        await onMemoryEnabledChange(enabled)
       } else {
-        if (onMemoryEnabledChange) {
-          await onMemoryEnabledChange(enabled)
-        } else {
-          await invoke('config:update', {
-            memory: { enabled, chatEnabled: loadedChatEnabled, entries: [] }
-          })
-        }
-        loadedProjectEnabled = enabled
+        await invoke('config:update', {
+          memory: { enabled, chatEnabled: loadedChatEnabled, entries: [] }
+        })
       }
+      loadedProjectEnabled = enabled
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update memory.'
+    }
+  }
+
+  async function setChatMemoryEnabled(enabled: boolean): Promise<void> {
+    error = ''
+    try {
+      if (onChatMemoryEnabledChange) {
+        await onChatMemoryEnabledChange(enabled)
+      } else {
+        await invoke('config:update', {
+          memory: { enabled: loadedProjectEnabled, chatEnabled: enabled, entries: [] }
+        })
+      }
+      loadedChatEnabled = enabled
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update memory.'
     }
@@ -445,16 +423,43 @@
     field: keyof MemoryEntry,
     value: string | boolean | number | string[] | undefined
   ): void {
-    entries = entries.map((entry, i) =>
-      i === index
-        ? {
-            ...entry,
-            ...(field === 'category' && value !== 'models' ? { modelKeys: undefined } : {}),
-            [field]: value,
-            updatedAt: Date.now()
-          }
-        : entry
-    )
+    entries = entries.map((entry, i) => {
+      if (i !== index) return entry
+      if (field === 'scope') {
+        const scope = value as MemoryScope
+        return {
+          ...entry,
+          scope,
+          ...scopeIdsForChange(
+            scope,
+            { projectId: entry.projectId, threadId: entry.threadId },
+            variant === 'sidebar' ? { projectId, threadId } : {}
+          ),
+          updatedAt: Date.now()
+        }
+      }
+      return {
+        ...entry,
+        ...(field === 'category' && value !== 'models' ? { modelKeys: undefined } : {}),
+        [field]: value,
+        updatedAt: Date.now()
+      }
+    })
+  }
+
+  /** The project whose threads the Thread picker should offer for an entry. */
+  function entryThreadProjectId(entry: MemoryEntry): string | undefined {
+    return entry.projectId ?? (surface === 'sidebar-chats' ? INBOX_PROJECT_ID : projectId)
+  }
+
+  function threadsForEntry(entry: MemoryEntry): Thread[] {
+    if (entry.scope !== 'thread') return []
+    return memoryScopeOptions.threadsFor(entryThreadProjectId(entry))
+  }
+
+  function threadsLoadingForEntry(entry: MemoryEntry): boolean {
+    if (entry.scope !== 'thread') return false
+    return memoryScopeOptions.isLoading(entryThreadProjectId(entry))
   }
 
   function showActive(): void {
@@ -505,7 +510,7 @@
   }
 
   $effect(() => {
-    const contextKey = `${variant}:${scope}:${projectId ?? ''}`
+    const contextKey = `${surface}:${projectId ?? ''}`
     if (!contextKey) return
     const thread = threadId ?? ''
     // A thread switch inside one project changes that thread's memory and
@@ -516,77 +521,65 @@
     }
     void load()
   })
+
+  /** Keep the Thread picker's list warm for the projects an entry can choose. */
+  $effect(() => {
+    if (surface === 'settings') return
+    // `ensureThreads` dedupes in-flight loads and caches per project, so asking
+    // once per entry is cheap and needs no local bookkeeping.
+    if (projectId) void memoryScopeOptions.ensureThreads(projectId)
+    for (const entry of entries) {
+      if (entry.scope !== 'thread') continue
+      void memoryScopeOptions.ensureThreads(entryThreadProjectId(entry))
+    }
+  })
 </script>
 
 <div
   class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings' ? 'w-full p-6' : 'p-5'}"
 >
-  <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->
+  <!-- Fixed header: title, enable switches, section tabs -->
   <div class="shrink-0">
     <div class="mb-4 flex items-start justify-between gap-4">
       <div>
         <h1 class="text-xl font-bold tracking-tight">Memory</h1>
         <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">{headerDescription}</p>
       </div>
-
-      {#if variant === 'settings'}
-        <div
-          class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
-          role="tablist"
-          aria-label="Memory scope"
-        >
-          <button
-            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {scope ===
-            'projects'
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'}"
-            role="tab"
-            aria-selected={scope === 'projects'}
-            title="Manage project memory"
-            onclick={() => (scope = 'projects')}
-          >
-            Projects
-          </button>
-          <button
-            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {scope ===
-            'chats'
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'}"
-            role="tab"
-            aria-selected={scope === 'chats'}
-            title="Manage chat memory"
-            onclick={() => (scope = 'chats')}
-          >
-            Chats
-          </button>
-        </div>
-      {/if}
     </div>
 
     {#if variant === 'settings'}
-      <div class="mb-4 flex items-center justify-between gap-3">
-        <label class="flex items-center gap-2 text-sm font-medium text-foreground">
-          <Switch
-            checked={effectiveMemoryEnabled}
-            onchange={() => void setMemoryEnabled(!effectiveMemoryEnabled)}
-            aria-label={contextKind === 'chats'
-              ? effectiveMemoryEnabled
-                ? 'Disable persistent memory for chats'
-                : 'Enable persistent memory for chats'
-              : effectiveMemoryEnabled
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-4">
+          <label class="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Switch
+              checked={projectMemoryEnabled}
+              onchange={() => void setProjectMemoryEnabled(!projectMemoryEnabled)}
+              aria-label={projectMemoryEnabled
                 ? 'Disable persistent memory for projects'
                 : 'Enable persistent memory for projects'}
-            title="When off, saved entries stay here but are not sent to agents"
-          />
-          Persistent memory
-        </label>
+              title="When off, saved project entries stay here but are not sent to agents"
+            />
+            Project memory
+          </label>
+          <label class="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Switch
+              checked={chatMemoryEnabledValue}
+              onchange={() => void setChatMemoryEnabled(!chatMemoryEnabledValue)}
+              aria-label={chatMemoryEnabledValue
+                ? 'Disable persistent memory for chats'
+                : 'Enable persistent memory for chats'}
+              title="When off, saved chat entries stay here but are not sent to agents"
+            />
+            Chat memory
+          </label>
+        </div>
         {#if allowTransfer}
-          <MemoryTransfer {variant} {scope} onImported={load} />
+          <MemoryTransfer {variant} onImported={load} />
         {/if}
       </div>
-    {:else if !effectiveMemoryEnabled}
+    {:else if !sidebarMemoryEnabled}
       <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
-        Persistent memory is disabled{contextKind === 'chats' ? ' for chats' : ' for projects'}.
+        Persistent memory is disabled{surface === 'sidebar-chats' ? ' for chats' : ' for projects'}.
         Entries can be managed here but are not sent to agents.
       </p>
     {/if}
@@ -821,12 +814,15 @@
     <!-- Entries list (scrollable) -->
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div class="space-y-3 pb-2">
-        {#each filteredEntries as entry (`${entry.scope}:${entry.projectId ?? ''}:${entry.threadId ?? ''}:${entry.id}`)}
+        {#each filteredEntries as entry (entry.id)}
           <MemoryEntryComponent
             {entry}
             index={entries.indexOf(entry)}
             {projectId}
-            scopeOptions={availableScopes}
+            {scopeOptions}
+            projects={pickerProjects}
+            threads={threadsForEntry(entry)}
+            threadsLoading={threadsLoadingForEntry(entry)}
             initiallyExpanded={entry.id === lastAddedId}
             onUpdate={updateEntry}
             onRemove={removeEntry}
