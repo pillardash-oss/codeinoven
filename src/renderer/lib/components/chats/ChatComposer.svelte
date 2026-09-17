@@ -1,7 +1,9 @@
 <script lang="ts">
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { fade } from 'svelte/transition'
   import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
+  import { motionDuration } from '$lib/motion'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -843,6 +845,11 @@
   /** The mic stays mounted; only the send/stop control follows composer state. */
   let showSendControl = $derived(!disabled && (working || hasSendableContent))
 
+  /** The maximize control is only useful once there is something to expand for,
+   *  and it stays while maximized so clearing the text cannot strand the composer
+   *  in its expanded size with no way back. */
+  let showExpandControl = $derived(hasText || expansion.maximized)
+
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
     if (working) return
@@ -1570,28 +1577,34 @@
       />
     {/if}
     <!-- Maximize   floats at the top right of the typing surface so the control
-         is out of the writing line; the editor reserves its corner with `pr-10`. -->
-    <button
-      type="button"
-      class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
-      aria-pressed={expansion.maximized}
-      title={expansion.maximized
-        ? 'Collapse the composer to its normal size'
-        : 'Expand the composer for a taller, wider typing area'}
-      onclick={toggleComposerExpansion}
-    >
-      {#if expansion.maximized}
-        <Minimize2 size={13} />
-      {:else}
-        <Maximize2 size={13} />
-      {/if}
-    </button>
+         is out of the writing line; the editor reserves its corner with `pr-10`.
+         It fades in with the first character typed (see `showExpandControl`). -->
+    {#if showExpandControl}
+      <button
+        type="button"
+        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        transition:fade={{ duration: motionDuration(140) }}
+        aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
+        aria-pressed={expansion.maximized}
+        title={expansion.maximized
+          ? 'Collapse the composer to its normal size'
+          : 'Expand the composer for a taller, wider typing area'}
+        onclick={toggleComposerExpansion}
+      >
+        {#if expansion.maximized}
+          <Minimize2 size={13} />
+        {:else}
+          <Maximize2 size={13} />
+        {/if}
+      </button>
+    {/if}
 
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
-      class="composer-editor w-full overflow-y-auto px-3.5 pr-10 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-3.5 text-sm leading-5 text-foreground outline-none {showExpandControl
+        ? 'pr-10'
+        : 'pr-3.5'}"
       bind:value
       {placeholder}
       {autofocus}
@@ -1836,6 +1849,13 @@
 <style>
   .chat-composer {
     container-type: inline-size;
+    /* `width: 100%` is what lets the maximize transition run: an `auto` width
+       cannot interpolate to the measured pixel width, so the box would snap
+       wider while its margins were still animating. */
+    width: 100%;
+    transition:
+      width 240ms ease,
+      margin-inline 240ms ease;
   }
 
   /* Maximize   the editor is the composer's typing surface, so the control is
@@ -1845,6 +1865,12 @@
   :global(.composer-editor) {
     min-height: 2.5rem;
     max-height: 10rem;
+    /* The right padding only grows once the maximize control is on screen, and
+       it grows with the same beat as that control's fade. */
+    transition:
+      min-height 240ms ease,
+      max-height 240ms ease,
+      padding-right 140ms ease;
   }
 
   :global(.chat-composer.composer-maximized .composer-editor) {
@@ -1860,6 +1886,13 @@
   :global(.chat-composer.composer-maximized) {
     width: var(--composer-expanded-width, 100%);
     margin-inline: calc((100% - var(--composer-expanded-width, 100%)) / 2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.chat-composer),
+    :global(.composer-editor) {
+      transition: none;
+    }
   }
 
   .pending-stop-icon {
