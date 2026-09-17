@@ -143,9 +143,10 @@ class BrowserVisibilityState {
   }
 
   /**
-   * The surface that currently owns the native view. Only one view can exist at
-   * a time, so a fullscreen surface outranks the sidebar, and the sidebar owns
-   * it only while it is actually displaying the tab that claimed it.
+   * The surface that currently owns the native view. Only one view can be on
+   * screen at a time, so a fullscreen surface outranks the sidebar, and the
+   * sidebar owns it only while it is actually displaying the tab that claimed
+   * it. Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
     if (this.claims.has('fullscreen')) return 'fullscreen'

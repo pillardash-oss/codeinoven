@@ -21,11 +21,36 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The page keeps running when the user views another project.',
+      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. Pass attention "background" to keep it offscreen without pulling the user to it.',
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string' } },
+      properties: {
+        url: { type: 'string' },
+        attention: {
+          type: 'string',
+          enum: ['focus', 'background'],
+          description:
+            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+        }
+      },
       required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'viewport',
+    description:
+      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        preset: {
+          type: 'string',
+          enum: ['phone', 'phone-large', 'tablet', 'laptop', 'desktop']
+        },
+        width: { type: 'number' },
+        height: { type: 'number' }
+      },
       additionalProperties: false
     }
   },
@@ -67,7 +92,8 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'screenshot',
-    description: 'Capture the visible browser page as a PNG data URL.',
+    description:
+      'Capture the browser page as a PNG data URL at its current viewport, whether the tab is on screen or parked offscreen.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {

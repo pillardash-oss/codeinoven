@@ -39,12 +39,19 @@ import {
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
 import type { BrowserTab, PendingBrowserPermission } from './browser-service/browser-types'
+import { BrowserTabStage } from './browser-service/browser-stage'
 import {
+  AGENT_REVEAL_GRACE_MS,
   BROWSER_PARTITION_PREFIX,
+  DEFAULT_PARKED_VIEWPORT,
+  MAX_ABANDONED_REVEALS,
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
+  MAX_PARKED_TABS,
   PERMISSION_TIMEOUT_MS,
+  RELAX_COOLDOWN_MS,
   browserContextKey,
+  validateAttention,
   validateBounds,
   validateBoundedHost,
   validateBrowserUrl,
@@ -55,8 +62,10 @@ import {
   validateSiteDataScopes,
   validateSiteMenuPoint,
   validateTabId,
-  validateThreadId
+  validateThreadId,
+  validateViewportRequest
 } from './browser-service/browser-validation'
+import type { BrowserViewport } from './browser-service/browser-types'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -72,11 +81,27 @@ export class BrowserService {
   private readonly promptWindow: PermissionPromptWindow
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
+  /** Invisible windows that keep non-displayed tabs alive offscreen. */
+  private readonly stage: BrowserTabStage
   private activeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
   private activeTabBounds: BrowserViewBounds | null = null
+  /** Parked tab ids in least-recently-used order, newest last. Drives the cap on
+   *  how many tabs may render offscreen at once. */
+  private readonly parkedOrder: string[] = []
+  /** Tabs the agent just revealed to the user, so a tab the user immediately
+   *  leaves can be counted as an ignored reveal. `shown` records that the reveal
+   *  actually reached the screen, which is what makes leaving it meaningful. */
+  private readonly agentReveals = new Map<
+    string,
+    { threadKey: string; at: number; shown: boolean }
+  >()
+  /** Consecutive ignored reveals per thread, with when the last one happened. */
+  private readonly abandonedReveals = new Map<string, { count: number; at: number }>()
+  /** Threads whose agent reveals were ignored, until this timestamp. */
+  private readonly relaxedUntil = new Map<string, number>()
   /** True while a Sonner toast is visible in the renderer. A native
    *  WebContentsView floats above every DOM surface, so while this is set the
    *  active browser view stays detached and the DOM toast composites normally. */
@@ -89,6 +114,7 @@ export class BrowserService {
     permissionPersistence: PermissionMemoryPersistence
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
+    this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
@@ -136,13 +162,20 @@ export class BrowserService {
         const bounds = validateBounds(rawBounds)
         const tab = this.ensureTab(tabId, projectId, threadId)
 
-        if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
-        if (this.activeTabId !== tabId) {
-          this.activeTabId = tabId
-          if (!this.toastVisible) this.window.contentView.addChildView(tab.view)
-        }
-        tab.view.setBounds(bounds)
+        // Leaving a tab costs nothing now: the outgoing tab keeps running in an
+        // invisible stage window instead of going dead behind the app window.
+        if (this.activeTabId && this.activeTabId !== tabId) this.parkTab(this.activeTabId)
+        this.activeTabId = tabId
         this.activeTabBounds = bounds
+        this.markRevealShown(tabId)
+        if (this.toastVisible) {
+          // A native view floats above every DOM surface, so while a toast is on
+          // screen the tab stays parked at its on-screen size: the page keeps
+          // the exact viewport the user was looking at, and keeps running.
+          this.parkTab(tabId, { width: bounds.width, height: bounds.height }, true)
+        } else {
+          this.showActiveView()
+        }
         // Refresh the alert/confirm context label on every activation so a
         // renamed project or thread is reflected without waiting for a reload.
         this.injectDialogContext(tabId)
@@ -156,7 +189,10 @@ export class BrowserService {
 
     ipcMain.handle('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
-      if (this.activeTabId === tabId) this.detachActiveView()
+      // Leaving a tab right after an agent revealed it is the signal that the
+      // agent's reveal was not welcome; it stops being counted after a while.
+      this.noteDepartedReveal(tabId)
+      this.parkTab(tabId)
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -264,9 +300,14 @@ export class BrowserService {
   }
 
   dispose(): void {
-    this.detachActiveView()
+    this.activeTabId = null
     this.toastVisible = false
     this.activeTabBounds = null
+    this.parkedOrder.length = 0
+    this.agentReveals.clear()
+    this.abandonedReveals.clear()
+    this.relaxedUntil.clear()
+    this.stage.dispose()
     this.promptWindow.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
@@ -292,18 +333,33 @@ export class BrowserService {
     const contextKey = browserContextKey(projectId, threadId)
     if (operation === 'open') {
       const url = validateBrowserUrl(this.requiredInputString(input, 'url'))
+      const attention = validateAttention(input['attention'])
       const tabId = `browser:agent:${crypto.randomUUID()}`
       const tab = this.ensureTab(tabId, projectId, threadId)
       tab.initialNavigationStarted = true
-      this.agentTabIds.set(contextKey, tabId)
+      // Mount the tab offscreen before anything else: the page must run whether
+      // or not the user ends up looking at it.
+      this.parkTab(tabId)
       this.load(tabId, url)
+      this.agentTabIds.set(contextKey, tabId)
+      // An opportunistic reveal is skipped once the user has shown twice that
+      // they leave agent-opened tabs straight away.
+      const relaxed = attention === 'focus' && this.isRelaxed(threadId)
+      const reveal = attention === 'focus' && !relaxed
+      if (reveal) this.rememberReveal(tabId, threadId)
       sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
         projectId,
         threadId,
         requestedTabId: tabId,
-        reveal: true
+        reveal
       })
-      return { ...this.utilityTabContext(tabId, tab), page: this.stateFor(tabId, tab) }
+      return {
+        ...this.utilityTabContext(tabId, tab),
+        viewport: tab.viewport,
+        attention: reveal ? 'focus' : 'background',
+        relaxed,
+        page: this.stateFor(tabId, tab)
+      }
     }
 
     const tabId = this.agentTabIds.get(contextKey)
@@ -312,7 +368,28 @@ export class BrowserService {
     if (tab.projectId !== projectId || tab.threadId !== threadId) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
+    // An operation is a use: it revives a tab that was evicted from the parked
+    // set, and protects it from eviction while the agent keeps working on it.
+    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) this.parkTab(tabId)
+    else this.touchParkedTab(tabId)
     const utilityContext = this.utilityTabContext(tabId, tab)
+    if (operation === 'viewport') {
+      const viewport = validateViewportRequest(input, tab.viewport)
+      tab.viewport = viewport
+      if (this.stage.isParked(tab.view)) {
+        // Re-park rather than setBounds directly: the stage owns where each
+        // parked view sits inside its window.
+        this.stage.park(tab.view, viewport)
+        return { ...utilityContext, viewport, applied: 'parked' }
+      }
+      return {
+        ...utilityContext,
+        viewport,
+        applied: 'displayed',
+        detail:
+          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies whenever the tab is parked offscreen.'
+      }
+    }
     if (operation === 'navigate') {
       const url = validateBrowserUrl(this.requiredInputString(input, 'url'))
       this.load(tabId, url)
@@ -412,7 +489,8 @@ export class BrowserService {
       threadId,
       initialNavigationStarted: false,
       consoleEntries: [],
-      favicon: null
+      favicon: null,
+      viewport: { ...DEFAULT_PARKED_VIEWPORT }
     }
     this.tabs.set(tabId, tab)
 
@@ -489,6 +567,9 @@ export class BrowserService {
         const popupTabId = `browser:${crypto.randomUUID()}`
         const popupTab = this.ensureTab(popupTabId, tab.projectId, tab.threadId)
         popupTab.initialNavigationStarted = true
+        // Park it like every other tab: a popup the user never goes on to view
+        // must still load and run.
+        this.parkTab(popupTabId)
         this.load(popupTabId, safeUrl)
         sendToRenderer(this.window.webContents, 'browser:openRequested', safeUrl, {
           projectId: tab.projectId,
@@ -829,24 +910,149 @@ export class BrowserService {
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
   }
 
-  private detachActiveView(): void {
-    if (!this.activeTabId) return
-    const tab = this.tabs.get(this.activeTabId)
-    if (tab) this.window.contentView.removeChildView(tab.view)
-    this.activeTabId = null
+  /**
+   * Park a tab in an invisible stage window, where it keeps a real viewport and
+   * keeps producing frames no matter what the user is looking at. `size`
+   * overrides the tab's parked viewport for callers that must preserve the exact
+   * viewport the user was seeing (the toast case).
+   */
+  private parkTab(tabId: string, size?: BrowserViewport, keepActive = false): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    const viewport = size ?? tab.viewport
+    this.window.contentView.removeChildView(tab.view)
+    this.stage.park(tab.view, viewport)
+    this.markParked(tabId)
+    if (this.activeTabId === tabId && !keepActive) {
+      this.activeTabId = null
+      this.activeTabBounds = null
+    }
+    this.enforceParkedCap(tabId)
+    // A stage window the window server stopped showing would silently freeze the
+    // page (that is how a parked view dies), so confirm it once per park and hand
+    // the tab a fresh window if it did not take. Fire and forget: parking must
+    // not block the caller.
+    void this.stage.verifyVisible(tab.view).then((visible) => {
+      if (visible || !this.stage.isParked(tab.view)) return
+      Logger.dev('Reparking a browser tab whose stage window stopped rendering', { tabId })
+      this.stage.restart(tab.view, this.tabs.get(tabId)?.viewport ?? viewport)
+    })
   }
 
-  /** Suspend the active native browser view while a toast is on screen. A
-   *  WebContentsView floats above every DOM surface, so toasts would be hidden
-   *  behind it; detaching lets the DOM toast composite normally. When the
-   *  toast clears, the view is re-attached. */
+  /** Mount the current active tab in the app window at its display bounds. */
+  private showActiveView(): void {
+    if (!this.activeTabId || this.toastVisible) return
+    const tab = this.tabs.get(this.activeTabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    this.stage.release(tab.view)
+    this.forgetParked(this.activeTabId)
+    this.window.contentView.addChildView(tab.view)
+    if (this.activeTabBounds) tab.view.setBounds(this.activeTabBounds)
+  }
+
+  private markParked(tabId: string): void {
+    this.forgetParked(tabId)
+    this.parkedOrder.push(tabId)
+  }
+
+  private forgetParked(tabId: string): void {
+    const index = this.parkedOrder.indexOf(tabId)
+    if (index >= 0) this.parkedOrder.splice(index, 1)
+  }
+
+  /** Keep an agent's working tab from being evicted ahead of idle parked tabs. */
+  private touchParkedTab(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (tab && this.stage.isParked(tab.view)) this.markParked(tabId)
+  }
+
+  /**
+   * Cap how many tabs render offscreen at once. Every parked tab renders like a
+   * displayed one, so an unbounded parked set would burn CPU and battery for
+   * pages nobody is using. The oldest parked tab loses its stage window and goes
+   * inert; the next operation on it parks it again.
+   */
+  private enforceParkedCap(keep: string): void {
+    while (this.parkedOrder.length > MAX_PARKED_TABS) {
+      const candidate = this.parkedOrder.find((id) => id !== keep && id !== this.activeTabId)
+      if (candidate === undefined) return
+      this.forgetParked(candidate)
+      const tab = this.tabs.get(candidate)
+      if (tab) this.stage.release(tab.view)
+    }
+  }
+
+  /** Remember that the agent asked for this tab to be brought to the user. */
+  private rememberReveal(tabId: string, threadId: string): void {
+    const now = Date.now()
+    for (const [id, reveal] of this.agentReveals) {
+      if (now - reveal.at > AGENT_REVEAL_GRACE_MS) this.agentReveals.delete(id)
+    }
+    this.agentReveals.set(tabId, { threadKey: threadId, at: now, shown: false })
+  }
+
+  /** The revealed tab reached the user's screen, so leaving it now says
+   *  something about the reveal. */
+  private markRevealShown(tabId: string): void {
+    const reveal = this.agentReveals.get(tabId)
+    if (reveal) reveal.shown = true
+  }
+
+  /**
+   * A reveal the user saw and then left within the grace window was not welcome.
+   * Two of those in a row make the agent's next opens mount offscreen silently
+   * for a cooldown, so an agent cannot keep pulling the user away from what they
+   * were doing. Nothing is shown in the UI about it.
+   */
+  private noteDepartedReveal(tabId: string): void {
+    const reveal = this.agentReveals.get(tabId)
+    if (!reveal) return
+    this.agentReveals.delete(tabId)
+    const now = Date.now()
+    if (now - reveal.at > AGENT_REVEAL_GRACE_MS) return
+    // A reveal the user never saw was not refused: the renderer hides a tab for
+    // reasons that have nothing to do with the user leaving it (a full-window
+    // surface taking over, a stale-attach guard, the sidebar changing region).
+    if (!reveal.shown) return
+    const previous = this.abandonedReveals.get(reveal.threadKey)
+    // Only consecutive ignores count, so an old one cannot combine with a new
+    // one days later to mute a thread.
+    const count = previous && now - previous.at <= RELAX_COOLDOWN_MS ? previous.count + 1 : 1
+    if (count < MAX_ABANDONED_REVEALS) {
+      this.abandonedReveals.set(reveal.threadKey, { count, at: now })
+      return
+    }
+    this.abandonedReveals.delete(reveal.threadKey)
+    this.relaxedUntil.set(reveal.threadKey, now + RELAX_COOLDOWN_MS)
+  }
+
+  private isRelaxed(threadId: string): boolean {
+    const until = this.relaxedUntil.get(threadId)
+    if (until === undefined) return false
+    if (Date.now() >= until) {
+      this.relaxedUntil.delete(threadId)
+      return false
+    }
+    return true
+  }
+
+  /** Pull a tab out of the app window while a toast is on screen and put it back
+   *  afterwards, so the DOM toast composites normally without the page losing
+   *  its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
     if (!this.activeTabId) return
     const tab = this.tabs.get(this.activeTabId)
     if (!tab) return
-    if (visible) this.window.contentView.removeChildView(tab.view)
-    else this.window.contentView.addChildView(tab.view)
+    if (visible) {
+      this.parkTab(
+        this.activeTabId,
+        this.activeTabBounds ?? { width: tab.viewport.width, height: tab.viewport.height },
+        true
+      )
+      return
+    }
+    this.showActiveView()
   }
 
   private destroy(tabId: string): void {
@@ -856,7 +1062,13 @@ export class BrowserService {
       if (pending.request.tabId === tabId)
         this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
-    if (this.activeTabId === tabId) this.detachActiveView()
+    if (this.activeTabId === tabId) {
+      this.activeTabId = null
+      this.activeTabBounds = null
+    }
+    this.forgetParked(tabId)
+    this.agentReveals.delete(tabId)
+    this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
     for (const [contextKey, agentTabId] of this.agentTabIds) {

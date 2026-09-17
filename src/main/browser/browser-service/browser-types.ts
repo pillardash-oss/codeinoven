@@ -12,6 +12,12 @@ import type {
   BrowserSiteDataScope
 } from '../../../lib/ipc-contract'
 
+/** Viewport a tab is laid out at while it is parked offscreen, in CSS pixels. */
+export interface BrowserViewport {
+  width: number
+  height: number
+}
+
 export interface BrowserTab {
   view: WebContentsView
   projectId: string
@@ -20,6 +26,10 @@ export interface BrowserTab {
   consoleEntries: BrowserConsoleEntry[]
   /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
   favicon: string | null
+  /** Size this tab is laid out at while parked offscreen. A displayed tab is
+   *  laid out at the on-screen surface's size instead, and keeps this value for
+   *  whenever it is parked again. */
+  viewport: BrowserViewport
 }
 
 export interface PendingBrowserPermission {
