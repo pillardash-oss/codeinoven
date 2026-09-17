@@ -23,6 +23,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   // The `@query` detection is shared with the chat composer rather than
   // re-implemented here: it already knows to stay silent inside code spans and
@@ -612,6 +613,7 @@
           class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Open pull request on GitHub"
           aria-label="Open pull request on GitHub"
+          data-external-url={summary.url}
           onclick={() => void openInBrowser(summary.url)}
         >
           <ExternalLink size={13} />
@@ -641,7 +643,7 @@
     >
       <span class="font-mono">{summary.headRef}</span>
       <span class="font-mono">→ {summary.baseRef}</span>
-      <span class="shrink-0">· {summary.authorLogin}</span>
+      <span class="shrink-0">· {githubDisplayLogin(summary.authorLogin)}</span>
       <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
       {#if detail}
         <span class="flex shrink-0 items-center gap-1.5 tabular-nums">

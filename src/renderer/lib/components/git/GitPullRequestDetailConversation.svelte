@@ -2,6 +2,7 @@
   import { Check, Loader2, MessagesSquare, MoreHorizontal } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { relativeTime } from '$lib/format/relative-time'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import {
     githubAbuseReportUrl,
     githubBlockUserUrl,
@@ -86,7 +87,7 @@
    * result, with the writing still happening where issues are written.
    */
   async function referenceInNewIssue(entry: ConversationEntry): Promise<void> {
-    const reference = `${entry.body.trim()}\n\n_Originally posted by @${entry.author} in ${entry.url}_`
+    const reference = `${entry.body.trim()}\n\n_Originally posted by @${githubDisplayLogin(entry.author)} in ${entry.url}_`
     await copyText(reference)
     await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
     onNotice('Reference copied, new issue opened on GitHub')
@@ -169,7 +170,7 @@
 
   async function blockAuthor(entry: ConversationEntry): Promise<void> {
     await openInBrowser(githubBlockUserUrl(entry.author))
-    onNotice(`Opened GitHub's blocked-accounts settings for @${entry.author}`)
+    onNotice(`Opened GitHub's blocked-accounts settings for @${githubDisplayLogin(entry.author)}`)
   }
 </script>
 
@@ -193,8 +194,13 @@
           <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
           <div class="min-w-0 flex-1">
             <div class="flex min-w-0 items-center gap-1.5">
+              <!--
+                The `Bot` badge below is what tells the reader this account is an
+                app, so the `[bot]` suffix GitHub keeps on the login is left off
+                the name: it says the same thing twice in one word.
+              -->
               <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                >{entry.author}</span
+                >{githubDisplayLogin(entry.author)}</span
               >
               {#if entry.isBot}
                 <!-- GitHub's own badge for an app account. It is what tells a
@@ -222,7 +228,8 @@
                 type="button"
                 class="cursor-pointer hover:text-foreground hover:underline"
                 title="Open this comment on GitHub"
-                aria-label="Open {entry.author}'s comment on GitHub"
+                aria-label="Open {githubDisplayLogin(entry.author)}'s comment on GitHub"
+                data-external-url={entry.url}
                 onclick={() => openEntryOnGitHub(entry)}
               >
                 {relativeTime(entry.at)}
@@ -239,7 +246,7 @@
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
                 class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
-                aria-label="Actions for {entry.author}'s comment"
+                aria-label="Actions for {githubDisplayLogin(entry.author)}'s comment"
                 title="Comment actions"
               >
                 <MoreHorizontal size={13} />

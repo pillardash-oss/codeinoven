@@ -24,6 +24,7 @@
     Trash2
   } from '@lucide/svelte'
   import { DropdownMenu as Menu } from 'bits-ui'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import type { PrMinimizeReason } from '$shared/types'
 
   interface Props {
@@ -159,6 +160,6 @@
 {#if canBlock}
   <Menu.Item class={itemClass} onSelect={onBlock} disabled={busy}>
     <Ban size={12} class="shrink-0 text-dimmed" />
-    Block @{author}
+    Block @{githubDisplayLogin(author)}
   </Menu.Item>
 {/if}

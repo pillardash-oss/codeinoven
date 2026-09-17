@@ -291,6 +291,7 @@
                   class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                   title="Open workflow run on GitHub"
                   aria-label="Open workflow run on GitHub"
+                  data-external-url={run.url}
                   onclick={() => void openInBrowser(run.url)}
                 >
                   <ExternalLink size={11} />
@@ -428,6 +429,7 @@
                             type="button"
                             class="mt-1.5 flex h-6 cursor-pointer items-center gap-1 text-[0.5625rem] font-medium text-foreground hover:text-primary"
                             title="Follow this running job on GitHub"
+                            data-external-url={job.url}
                             onclick={() => void openInBrowser(job.url)}
                           >
                             <ExternalLink size={10} />

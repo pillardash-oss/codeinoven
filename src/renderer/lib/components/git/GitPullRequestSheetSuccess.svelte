@@ -35,6 +35,7 @@
       type="button"
       class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated"
       title="Open this pull request on GitHub"
+      data-external-url={result.url}
       onclick={() => onOpenBrowser(result.url)}
     >
       <ExternalLink size={12} />

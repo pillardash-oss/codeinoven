@@ -28,6 +28,16 @@ export const IMAGE_ATTR_SRC = /\bsrc="([^"]*)"/iu
 /** The whole `src="…"` attribute, for a wholesale replacement. */
 export const IMAGE_ATTR_SRC_ANY = /\bsrc="[^"]*"/iu
 
+/**
+ * The whole `srcset="…"` attribute.
+ *
+ * Dropped when an image is inlined: a browser prefers `srcset` over `src`
+ * wherever it can use it, and every URL in a provider-authored `srcset` is a
+ * remote one the renderer CSP cannot load, so leaving it would keep the broken
+ * picture the `data:` URL was meant to replace.
+ */
+export const IMAGE_ATTR_SRCSET_ANY = /\ssrcset="[^"]*"/iu
+
 /** `alt="…"` anywhere inside a tag. */
 export const IMAGE_ATTR_ALT = /\balt="([^"]*)"/iu
 

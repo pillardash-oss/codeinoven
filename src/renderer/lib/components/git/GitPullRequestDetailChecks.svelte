@@ -134,6 +134,7 @@
             class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Open {check.name} externally"
             aria-label="Open {check.name} externally"
+            data-external-url={check.url}
             onclick={() => void openInBrowser(check.url ?? '')}
           >
             <ExternalLink size={12} />

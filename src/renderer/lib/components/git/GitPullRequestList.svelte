@@ -16,6 +16,8 @@
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { githubAppInstallUrl } from '$lib/github-references'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import PrStateFilter from './PrStateFilter.svelte'
   import type { PrState, PullRequestSummary } from '$shared/types'
 
@@ -174,8 +176,8 @@
           <button
             type="button"
             class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() =>
-              void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
+            data-external-url={githubAppInstallUrl()}
+            onclick={() => void openInBrowser(githubAppInstallUrl())}
           >
             Install GitHub App
           </button>
@@ -202,7 +204,7 @@
             <div class="min-w-0 flex-1">
               <p class="truncate text-[0.6875rem] font-medium text-foreground">{pr.title}</p>
               <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">
-                #{pr.number} by {pr.authorLogin} · {relativeTime(pr.updatedAt)}
+                #{pr.number} by {githubDisplayLogin(pr.authorLogin)} · {relativeTime(pr.updatedAt)}
               </p>
               <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
                 {pr.headRef} → {pr.baseRef}

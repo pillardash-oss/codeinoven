@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Marked } from 'marked'
 import {
   githubAbuseReportUrl,
+  githubAppInstallUrl,
   githubBlockUserUrl,
   githubIssueUrl,
   githubNewIssueUrl,
@@ -45,6 +46,10 @@ describe('GitHub URL builders', () => {
     expect(githubBlockUserUrl('octo cat')).toBe(
       'https://github.com/settings/blocked_users?blocked_user=octo%20cat'
     )
+  })
+
+  it('points the install prompt at this app\u0027s GitHub App', () => {
+    expect(githubAppInstallUrl()).toBe('https://github.com/apps/codeinoven/installations/new')
   })
 })
 

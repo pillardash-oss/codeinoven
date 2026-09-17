@@ -268,6 +268,7 @@
               class="flex shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
               title={`Open commit ${info.shortHash} on GitHub`}
               aria-label={`Open commit ${info.shortHash} on GitHub`}
+              data-external-url={commitInfoUrl}
               onclick={() => onOpenCommitInBrowser(commitInfoUrl)}
             >
               <ExternalLink size={10} />

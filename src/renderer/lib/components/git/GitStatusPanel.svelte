@@ -2285,6 +2285,7 @@
         class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this pull request on GitHub"
         aria-label="Open this pull request on GitHub"
+        data-external-url={selectedPullRequest?.url ?? ''}
         onclick={() => void openInBrowser(selectedPullRequest?.url ?? '')}
       >
         <ExternalLink size={12} aria-hidden="true" />
@@ -2316,6 +2317,7 @@
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title={deploymentsExternal.title}
       aria-label={deploymentsExternal.title}
+      data-external-url={deploymentsExternal.url}
       onclick={() => void openInBrowser(deploymentsExternal.url)}
     >
       <ExternalLink size={12} aria-hidden="true" />

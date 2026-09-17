@@ -40,6 +40,7 @@
     <button
       type="button"
       class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+      data-external-url={gitState.githubPermission?.settingsUrl ?? ''}
       onclick={() => void openInBrowser(gitState.githubPermission?.settingsUrl ?? '')}
     >
       Update GitHub access

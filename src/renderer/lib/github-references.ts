@@ -58,6 +58,16 @@ export function githubBlockUserUrl(login?: string): string {
   return login ? `${base}?blocked_user=${encodeURIComponent(login)}` : base
 }
 
+/**
+ * GitHub's install flow for this app.
+ *
+ * Where a missing installation is explained (the pull request list, the
+ * deployments monitor), the control that fixes it sends the reader here.
+ */
+export function githubAppInstallUrl(): string {
+  return 'https://github.com/apps/codeinoven/installations/new'
+}
+
 // ─── Reference extension ────────────────────────────────────────────────────
 
 /** Token type emitted for every resolved reference. */

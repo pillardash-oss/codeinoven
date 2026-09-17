@@ -27,6 +27,7 @@ import {
   IMAGE_ATTR_CLASS,
   IMAGE_ATTR_SRC,
   IMAGE_ATTR_SRC_ANY,
+  IMAGE_ATTR_SRCSET_ANY,
   IMAGE_TAG,
   decodeMarkdownAttribute,
   hasRemoteImage
@@ -482,10 +483,30 @@ export function blockHtml(
   const parser = parserFor(allowHtml, repository)
   const sanitized = DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
   const withFavicons = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
-  const html = hasImage ? injectContentImages(withFavicons) : withFavicons
+  const html = hasImage
+    ? injectContentImages(unwrapPictureElements(withFavicons))
+    : withFavicons
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
+}
+
+/**
+ * Render a raw HTML fragment that a container split out of its block.
+ *
+ * An HTML block's own markup   the `<summary>` inside a `<details>`, or the
+ * text between two elements   has to be sanitized exactly like a whole block,
+ * images and favicons included, so it takes the same path `blockHtml` does. The
+ * synthetic token carries the fragment as both source and text, which is what
+ * marked's own HTML renderer passes through.
+ *
+ * `allowHtml` is not a parameter because only HTML mode ever produces a
+ * fragment: with the HTML tokenizers off there is no raw markup to split.
+ */
+export function htmlFragment(raw: string, repository: GithubRepoContext | null = null): string {
+  if (!raw.trim()) return ''
+  const token: Tokens.HTML = { type: 'html', block: true, raw, pre: false, text: raw }
+  return blockHtml(token, true, repository)
 }
 
 /**
@@ -514,21 +535,62 @@ function collectFootnoteRefs(token: Token, visit: (ref: FootnoteRefToken) => voi
 }
 
 const EXTERNAL_LINK_SOURCE_PATTERN = /https?:\/\//iu
-const EXTERNAL_LINK_OPEN = /<a\b[^>]*\bhref="https?:\/\/[^"]+"[^>]*>/giu
+/**
+ * A whole external anchor: its attributes, its href and its content.
+ *
+ * Matching the element rather than its opening tag is what makes the favicon
+ * decision below possible — whether an image already *is* the link cannot be
+ * answered from the opening tag alone.
+ */
+const EXTERNAL_LINK_ANCHOR = /<a\b([^>]*\bhref="(https?:\/\/[^"]*)"[^>]*)>([\s\S]*?)<\/a>/giu
 
 /**
  * Insert a favicon into external link anchors. The renderer CSP blocks remote
  * images, so only already-resolved `data:` URLs are injected; unresolved links
  * stay plain until `faviconState.version` bumps and the block re-renders.
+ *
+ * An anchor whose content is already a picture gets nothing: a bot comment that
+ * links its own logo writes `<a href="…"><img …></a>`, and a favicon there would
+ * be a second image inside the same link.
  */
 function injectLinkFavicons(html: string): string {
-  return html.replace(EXTERNAL_LINK_OPEN, (anchor) => {
-    const href = /\bhref="(https?:\/\/[^"]+)"/iu.exec(anchor)?.[1]
-    if (!href) return anchor
-    const dataUrl = faviconState.faviconFor(href)
-    if (!dataUrl) return anchor
-    return `${anchor}<img class="markdown-link-favicon" src="${dataUrl}" alt="" loading="lazy">`
-  })
+  return html.replace(
+    EXTERNAL_LINK_ANCHOR,
+    (anchor: string, attributes: string, href: string, inner: string) => {
+      if (isMediaOnlyAnchor(inner)) return anchor
+      const dataUrl = faviconState.faviconFor(href)
+      if (!dataUrl) return anchor
+      return `<a${attributes}><img class="markdown-link-favicon" src="${dataUrl}" alt="" loading="lazy">${inner}</a>`
+    }
+  )
+}
+
+/**
+ * Whether an anchor draws a picture and nothing else.
+ *
+ * Text is what a favicon sits beside; an anchor that is only an image has no
+ * text to decorate. `&nbsp;` is not text: it is the spacing a bot footer pads
+ * its logo with.
+ */
+function isMediaOnlyAnchor(inner: string): boolean {
+  if (!/<(?:img|picture|svg|video)\b/iu.test(inner)) return false
+  return inner.replace(/<[^>]*>/gu, '').replace(/&nbsp;/giu, '').trim() === ''
+}
+
+const PICTURE_ELEMENT = /<picture\b[^>]*>([\s\S]*?)<\/picture>/giu
+const IMG_TAG = /<img\b[^>]*>/iu
+
+/**
+ * Replace a `<picture>` with the `<img>` a browser without its sources draws.
+ *
+ * A dark-mode variant arrives as `<source srcset="https://…">`, and the renderer
+ * CSP blocks remote image hosts, so that source can never load. Worse, a matching
+ * media query makes the browser pick it *instead* of the `<img>` — a broken
+ * picture even after the `<img>` beside it has been inlined. Dropping to the
+ * `<img>` is exactly what a browser with no matching source does.
+ */
+function unwrapPictureElements(html: string): string {
+  return html.replace(PICTURE_ELEMENT, (whole: string, inner: string) => IMG_TAG.exec(inner)?.[0] ?? whole)
 }
 
 /**
@@ -560,7 +622,12 @@ function injectContentImages(html: string): string {
     }
 
     const dataUrl = githubImageState.imageFor(src)
-    if (dataUrl) return tag.replace(IMAGE_ATTR_SRC_ANY, `src="${dataUrl}"`)
+    if (dataUrl) {
+      // `srcset` wins over `src` wherever a browser can use it, and every URL in
+      // it is a remote one this renderer cannot draw, so the attribute has to go
+      // with the `src` it replaces.
+      return tag.replace(IMAGE_ATTR_SRC_ANY, `src="${dataUrl}"`).replace(IMAGE_ATTR_SRCSET_ANY, '')
+    }
 
     const label = escapeHtmlAttribute(alt)
     return `<span class="markdown-image-pending" role="img" aria-label="${label}" title="${label}">${escapeHtml(alt)}</span>`
