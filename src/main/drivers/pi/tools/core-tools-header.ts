@@ -12,12 +12,15 @@ import {
 } from '../../../../lib/core-tools'
 
 export function piCoreToolsHeaderSource(): string {
-  return `import { existsSync, readFileSync, statSync } from 'node:fs'
+  return `import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { open, readdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
   createBashToolDefinition,
   createEditToolDefinition,
   createReadToolDefinition,

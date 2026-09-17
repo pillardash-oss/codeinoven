@@ -113,8 +113,10 @@ export function piCoreToolsSubagentSource(): string {
   /** Poll for stop requests, only while workers are live. */
   function ensureStopWatcher() {
     if (stopPollTimer) return
+    readWatchedChildren()
     stopPollTimer = setInterval(function () {
       applyStopRequest()
+      readWatchedChildren()
       let running = false
       for (const record of subAgents.values()) {
         if (record.status === 'running') {
@@ -134,6 +136,41 @@ export function piCoreToolsSubagentSource(): string {
     return text.length > CIO_SUBAGENT_OUTPUT_CAP
       ? text.slice(0, CIO_SUBAGENT_OUTPUT_CAP) + '\\n…(output truncated)'
       : text
+  }
+
+  // ── App-owned sub-agent watch state ──────────────────────────────────
+  // The app names the child transcripts it is displaying right now in this
+  // session's watch file. Token deltas and partial tool output exist only for
+  // the live typewriter, so they are forwarded for watched children alone:
+  // an unwatched worker still streams every structural record (messages, tool
+  // calls, lifecycle, settle), which is all the card, the transcript capture
+  // and the settle path need.
+  const CIO_WATCH_FLAG_PATH = '__CIO_SUBAGENT_WATCH_PATH__'
+  const CIO_WATCHED_CHILD_IDS = new Set()
+  let watchFlagMtimeMs = -1
+
+  /** Read the app's watched-children list (mtime-cached). */
+  function readWatchedChildren() {
+    try {
+      const info = statSync(CIO_WATCH_FLAG_PATH)
+      if (info.mtimeMs === watchFlagMtimeMs) return
+      watchFlagMtimeMs = info.mtimeMs
+      const parsed = JSON.parse(readFileSync(CIO_WATCH_FLAG_PATH, 'utf8'))
+      const source = typeof parsed === 'object' && parsed !== null ? parsed : {}
+      const ids = Array.isArray(source.childSessionIds) ? source.childSessionIds : []
+      CIO_WATCHED_CHILD_IDS.clear()
+      for (const id of ids) {
+        if (typeof id === 'string' && id) CIO_WATCHED_CHILD_IDS.add(id)
+      }
+    } catch {
+      watchFlagMtimeMs = -1
+      CIO_WATCHED_CHILD_IDS.clear()
+    }
+  }
+
+  /** True while the app is displaying this child's transcript. */
+  function isChildWatched(childSessionId) {
+    return CIO_WATCHED_CHILD_IDS.has(childSessionId)
   }
 
   function subAgentText(message) {
@@ -407,6 +444,17 @@ export function piCoreToolsSubagentSource(): string {
 
     return {
       push(event) {
+        // The high-frequency records (per-token deltas, partial tool output)
+        // are forwarded only for a child the app is watching. Everything else
+        //   messages, tool calls, lifecycle and the settle record below   is
+        // forwarded for every worker, so an unwatched worker's card, status
+        // and transcript capture behave exactly as before.
+        if (
+          (event.type === 'message_update' || event.type === 'tool_execution_update') &&
+          !isChildWatched(childSessionId)
+        ) {
+          return
+        }
         const record = trimStreamRecord(event)
         if (!record) return
         queue.push(record)
@@ -581,6 +629,84 @@ export function piCoreToolsSubagentSource(): string {
     })
   }
 
+  /**
+   * Cwd-bound session services shared by every worker in this harness process.
+   * Building a session from scratch reads settings, models, the project
+   * context file, and the whole skill catalog from disk again for each worker;
+   * one set per cwd serves all of them, because the readers are read-only and
+   * \`createAgentSessionFromServices\` neither reloads nor mutates them.
+   *
+   * The loader is only shared while it carries no extensions: an extension's
+   * runtime is per-active-session state that each newly built session
+   * overwrites, so sharing one loader across sessions that register extensions
+   * would retarget their callbacks. Without extensions there is nothing to
+   * retarget, and the fallback below keeps the previous per-worker build.
+   */
+  const sharedWorkerServicesByCwd = new Map()
+
+  function sharedWorkerServices(parentCtx) {
+    const cwd = parentCtx && parentCtx.cwd
+    if (!cwd) return Promise.resolve(null)
+    const existing = sharedWorkerServicesByCwd.get(cwd)
+    if (existing) return existing
+    const pending = createAgentSessionServices({ cwd })
+      .then(function (services) {
+        if (services.resourceLoader.getExtensions().extensions.length > 0) return null
+        mirrorParentProviders(parentCtx, services.modelRuntime)
+        return services
+      })
+      .catch(function () {
+        return null
+      })
+    sharedWorkerServicesByCwd.set(cwd, pending)
+    return pending
+  }
+
+  /** Copy the parent's app-managed provider registrations onto a target runtime. */
+  function mirrorParentProviders(parentCtx, target) {
+    const registry = parentCtx && parentCtx.modelRegistry
+    if (!registry || !target || typeof target.registerProvider !== 'function') return
+    const providerIds = registry.getRegisteredProviderIds()
+    for (const providerId of providerIds) {
+      const config = registry.getRegisteredProviderConfig(providerId)
+      if (!config) continue
+      try {
+        target.registerProvider(providerId, config)
+      } catch {}
+    }
+  }
+
+  /**
+   * Build one worker session. Shared services when they are available (the
+   * common case, and the reason a worker no longer pays a full cold start of
+   * its own), the plain from-scratch build otherwise.
+   */
+  async function createWorkerSession(parentCtx, sessionManager, resolvedModel, spec, customTools) {
+    const shared = await sharedWorkerServices(parentCtx)
+    const modelOptions = {
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {})
+    }
+    if (shared) {
+      const created = await createAgentSessionFromServices({
+        services: shared,
+        sessionManager,
+        ...modelOptions,
+        tools: ['read', 'bash', 'edit', 'write'],
+        customTools
+      })
+      return { session: created.session, shared: true }
+    }
+    const created = await createAgentSession({
+      cwd: parentCtx.cwd,
+      sessionManager,
+      ...modelOptions,
+      tools: ['read', 'bash', 'edit', 'write'],
+      customTools
+    })
+    return { session: created.session, shared: false }
+  }
+
   async function runSubAgent(parentCtx, onUpdate, spec, signal) {
     let runningCount = 0
     for (const record of subAgents.values()) {
@@ -603,20 +729,27 @@ export function piCoreToolsSubagentSource(): string {
     // array at creation time, so it must not sit in the temporal dead zone.
     const touchedFiles = []
     let session
+    let sharedServices = false
     try {
+      const parentSessionFile = readParentSessionFile(parentCtx)
       const sessionDir = process.env.CIO_SUBAGENT_SESSION_DIR
+      // The child links itself to the parent in its own session header, so an
+      // orphaned worker transcript can be told apart from a thread transcript
+      // when stale session files are pruned.
+      const newSessionOptions = parentSessionFile ? { parentSession: parentSessionFile } : undefined
       const sessionManager = sessionDir
-        ? SessionManager.create(parentCtx.cwd, sessionDir)
-        : SessionManager.create(parentCtx.cwd)
-      const created = await createAgentSession({
-        cwd: parentCtx.cwd,
+        ? SessionManager.create(parentCtx.cwd, sessionDir, newSessionOptions)
+        : SessionManager.create(parentCtx.cwd, undefined, newSessionOptions)
+      const created = await createWorkerSession(
+        parentCtx,
         sessionManager,
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-        ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}),
-        tools: ['read', 'bash', 'edit', 'write'],
-        customTools: gatedWorkerTools(parentCtx, touchedFiles)
-      })
+        resolvedModel,
+        spec,
+        gatedWorkerTools(parentCtx, touchedFiles)
+      )
       session = created.session
+      sharedServices = created.shared
+      pruneStaleWorkerSessions(session.sessionFile)
     } catch (error) {
       return {
         error:
@@ -624,14 +757,11 @@ export function piCoreToolsSubagentSource(): string {
           (error && error.message ? error.message : String(error))
       }
     }
-    // App-managed custom providers live only in the primary session's model
-    // registry; mirror them so the sub-agent resolves the same models.
-    for (const providerId of parentCtx.modelRegistry.getRegisteredProviderIds()) {
-      const config = parentCtx.modelRegistry.getRegisteredProviderConfig(providerId)
-      if (!config) continue
-      try {
-        session.modelRuntime.registerProvider(providerId, config)
-      } catch {}
+    if (!sharedServices) {
+      // App-managed custom providers live only in the primary session's model
+      // registry; mirror them so the sub-agent resolves the same models. With
+      // shared services the mirror already ran once for the whole process.
+      mirrorParentProviders(parentCtx, session.modelRuntime)
     }
     const record = {
       agentId,
@@ -680,7 +810,11 @@ export function piCoreToolsSubagentSource(): string {
     })
     record.promise = (async function () {
       try {
-        await session.prompt(spec.instructions, { expandPromptTemplates: false })
+        // The worker gets the CodeInOven framing around the primary agent's raw
+        // instructions, so the file-report contract (the primary agent is the one
+        // that commits) actually reaches the worker instead of only being
+        // described in the spawn tool's schema.
+        await session.prompt(workerPrompt(spec), { expandPromptTemplates: false })
         // A worker the user stopped never resolves as a completion: an aborted
         // child run resolves its prompt, so the status must not be reset here.
         if (record.status !== 'aborted') record.status = 'completed'
@@ -710,6 +844,11 @@ export function piCoreToolsSubagentSource(): string {
           record.status === 'aborted' ? 'aborted' : record.status === 'error' ? 'error' : 'idle',
           record.error
         )
+        // The worker's transcript is app-owned from here on: the engine mirrors
+        // it into its own store when the child settles, so the harness session
+        // file is pure duplication from the harness session dir, which holds
+        // whole transcripts and never had a pruning path.
+        discardWorkerSessionFile(record.sessionFile)
         // Background workers announce themselves; foreground spawns are
         // awaited inline by the primary and need no notification.
         if (spec.background && !record.stopRequested) notifySubAgentDone(record)
@@ -724,6 +863,80 @@ export function piCoreToolsSubagentSource(): string {
       if (message && message.role === 'assistant') return message
     }
     return null
+  }
+
+  /** The parent's own session file, for the child's \`parentSession\` header. */
+  function readParentSessionFile(parentCtx) {
+    try {
+      const manager = parentCtx && parentCtx.sessionManager
+      const file =
+        manager && typeof manager.getSessionFile === 'function' ? manager.getSessionFile() : undefined
+      return typeof file === 'string' && file ? file : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Best-effort removal of a settled worker's session file. */
+  function discardWorkerSessionFile(sessionFile) {
+    if (typeof sessionFile !== 'string' || !sessionFile) return
+    try {
+      rmSync(sessionFile, { force: true })
+    } catch {}
+  }
+
+  /**
+   * Worker transcripts are deleted when they settle, but a crash or a
+   * force-quit can leave one behind, and nothing else ever cleans the harness
+   * session directory. This sweeps those leftovers: only files whose header
+   * links them to a parent session (see \`parentSession\` on the worker session)
+   * and that have not been touched for a week are removed, so a live worker and
+   * a thread transcript are never candidates. At most one sweep per process,
+   * off the event loop, so a spawn never waits on it.
+   */
+  const WORKER_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+  let workerSessionPruneStarted = false
+
+  function pruneStaleWorkerSessions(sessionFile) {
+    if (workerSessionPruneStarted) return
+    if (typeof sessionFile !== 'string' || !sessionFile) return
+    workerSessionPruneStarted = true
+    void (async function () {
+      try {
+        const directory = dirname(sessionFile)
+        const names = await readdir(directory)
+        const now = Date.now()
+        for (const name of names) {
+          if (name.slice(-6) !== '.jsonl') continue
+          const candidate = join(directory, name)
+          if (candidate === sessionFile) continue
+          try {
+            const info = await stat(candidate)
+            if (now - info.mtimeMs <= WORKER_SESSION_MAX_AGE_MS) continue
+            if (!(await hasWorkerSessionHeader(candidate))) continue
+            await rm(candidate, { force: true })
+          } catch {}
+        }
+      } catch {}
+    })()
+  }
+
+  /** True when a session file's header links it to a parent session. */
+  async function hasWorkerSessionHeader(filePath) {
+    const handle = await open(filePath, 'r')
+    try {
+      const buffer = Buffer.alloc(4096)
+      const read = await handle.read(buffer, 0, buffer.length, 0)
+      const text = buffer.subarray(0, read.bytesRead).toString('utf8')
+      const newline = text.indexOf('\\n')
+      if (newline === -1 || text.indexOf('"parentSession"') === -1) return false
+      const header = JSON.parse(text.slice(0, newline))
+      return typeof header.parentSession === 'string' && header.parentSession.length > 0
+    } catch {
+      return false
+    } finally {
+      await handle.close()
+    }
   }
 
   function workerPrompt(spec) {

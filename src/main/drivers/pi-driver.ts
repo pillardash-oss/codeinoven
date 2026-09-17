@@ -111,6 +111,28 @@ const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 const PI_CHILD_STREAM_MAX = 16
 
 /**
+ * How long an idle thread may keep its pi process resident. Every live harness
+ * process owns its own heap (tens to hundreds of megabytes) for as long as it
+ * exists, and a thread that is not running a turn does not need one: the next
+ * turn spawns a fresh process and resumes the persisted native transcript
+ * (see `resumeNativePiSession`), the same path an app restart and a crash use.
+ * Nothing is evicted while a turn, a worker, or a pending card still owns the
+ * session.
+ */
+const PI_SESSION_IDLE_DISPOSE_MS = 5 * 60_000
+
+/** Cadence of the idle sweep. One timer serves every session of the driver. */
+const PI_SESSION_IDLE_SWEEP_MS = 60_000
+
+/**
+ * How long a child transcript stays watched after the app last asked for it.
+ * An open sub-agent view polls its child every few seconds, so a visible
+ * transcript keeps its own entry fresh; a view the user closed lapses on its
+ * own and the worker's token stream stops being forwarded.
+ */
+const PI_SUBAGENT_WATCH_WINDOW_MS = 45_000
+
+/**
  * How long a stopped session may keep streaming before the driver kills its pi
  * process. A stop must be authoritative: pi's abort RPC is the graceful path,
  * but a run that ignores it (or a wedged process) would otherwise keep working
@@ -254,6 +276,22 @@ export class PiDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
+  /**
+   * Last activity per live RPC session (any RPC record, prompt, steer, or
+   * abort). Feeds the idle sweep that disposes resident harness processes, so
+   * a thread that finished its work stops holding a process and its heap.
+   */
+  private readonly sessionActivityAt = new Map<string, number>()
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null
+  /** Per-session watch file the extension reads to learn which child
+   *  transcripts the app is displaying (see `watchSubagentSession`). */
+  private readonly cioWatchFlagPaths = new Map<string, string>()
+  /** Child session ids the app asked for, with the moment the request goes
+   *  stale. A transcript view polls its child while it is open, so a live view
+   *  keeps its entry fresh and a closed one lapses within the watch window. */
+  private readonly cioWatchedChildren = new Map<string, Map<string, number>>()
+  /** Last watch list published per session, so unchanged state is not rewritten. */
+  private readonly cioPublishedWatch = new Map<string, string>()
   /**
    * Live transcripts of delegated child pi sessions, keyed by child session id
    * and bounded (insertion order = recency) so a long app session cannot grow
@@ -1407,6 +1445,8 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
+    this.touchSessionActivity(sessionId)
+    this.ensureIdleSweep()
     // Register the long-lived RPC harness root with the app's process tracker
     // so it appears in the task manager and is covered by orphan reaping.
     this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
@@ -1506,6 +1546,9 @@ export class PiDriver extends PersistentCliDriver {
     // file and the engine's mirror take over as before.
     const live = this.childStreams.get(sessionId)
     if (live && live.context.session.messages.length > 0) {
+      // Whoever asked for this child's transcript is looking at it, so the
+      // extension may forward its token deltas again.
+      this.watchSubagentSession(sessionId)
       return Promise.resolve(structuredClone(live.context.session.messages))
     }
     return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
@@ -1719,6 +1762,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string,
     projectPath: string
   ): Promise<void> {
+    this.touchSessionActivity(sessionId)
     return this.requireSession(projectPath, sessionId)
       .then(async (session) => {
         // Resolve the retained context at compaction time, never while forking.
@@ -2737,6 +2781,7 @@ export class PiDriver extends PersistentCliDriver {
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
+      const watchFlagRelative = join(directory, 'watched-subagents.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
@@ -2745,6 +2790,7 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(allowedToolsRelative, '[]')
       await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
       await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
+      await this.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
@@ -2758,6 +2804,7 @@ export class PiDriver extends PersistentCliDriver {
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
+          subagentWatchPath: this.storage.resolve(watchFlagRelative),
           sessionId,
           // Same durable resolver the orchestration service publishes for the
           // prose recovery path; the gateway tools use it for host-level
@@ -2772,6 +2819,8 @@ export class PiDriver extends PersistentCliDriver {
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
+      this.cioWatchFlagPaths.set(sessionId, watchFlagRelative)
+      this.cioWatchedChildren.set(sessionId, new Map())
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn
@@ -2823,15 +2872,140 @@ export class PiDriver extends PersistentCliDriver {
   private disposeRpcClient(sessionId: string): void {
     this.compactionReadySessions.delete(sessionId)
     this.pageCompactions.delete(sessionId)
+    this.sessionActivityAt.delete(sessionId)
+    // No process is left to read a watch list for this session, and the file
+    // outlives the process: publish an empty list so a fresh spawn starts with
+    // nothing wrongly marked as displayed.
+    if (this.cioWatchedChildren.has(sessionId)) {
+      this.cioWatchedChildren.set(sessionId, new Map())
+      this.cioPublishedWatch.delete(sessionId)
+      void this.publishWatchedChildren(sessionId)
+    }
     const client = this.rpcClients.get(sessionId)
     if (client) {
       client.dispose()
       this.rpcClients.delete(sessionId)
     }
+    if (this.rpcClients.size === 0) this.stopIdleSweep()
     this.resumedNativeSessions.delete(sessionId)
     this.appliedPiSettings.delete(sessionId)
     this.latestRateLimits.delete(sessionId)
     this.cioProvidersExtensionEnvs.delete(sessionId)
+  }
+
+  /** Stamp the last activity of a live session for the idle sweep. */
+  private touchSessionActivity(sessionId: string): void {
+    this.sessionActivityAt.set(sessionId, Date.now())
+  }
+
+  /** Arm the idle sweep with the first live client; it stops with the last one. */
+  private ensureIdleSweep(): void {
+    if (this.idleSweepTimer) return
+    this.idleSweepTimer = setInterval(() => this.sweepIdleSessions(), PI_SESSION_IDLE_SWEEP_MS)
+    // Never hold the app's event loop open for an eviction that can wait.
+    if (typeof this.idleSweepTimer.unref === 'function') this.idleSweepTimer.unref()
+  }
+
+  private stopIdleSweep(): void {
+    if (!this.idleSweepTimer) return
+    clearInterval(this.idleSweepTimer)
+    this.idleSweepTimer = null
+  }
+
+  /**
+   * Dispose the harness process of every session that has been idle past the
+   * eviction window. A session is skippable for as long as anything can still
+   * produce output on it: a registered turn (which covers a run in progress,
+   * an RPC compaction, and a pi-managed retry window, since only
+   * `agent_settled` clears it), a nested worker that has not settled, or a
+   * permission/question card the user has not answered yet.
+   */
+  private sweepIdleSessions(): void {
+    const now = Date.now()
+    // The same cadence lapses watch marks nobody refreshed: a closed sub-agent
+    // view must stop its worker's token stream within a bounded window.
+    for (const parentSessionId of this.cioWatchedChildren.keys()) {
+      void this.publishWatchedChildren(parentSessionId)
+    }
+    for (const [sessionId] of this.rpcClients) {
+      if (this.activeTurns.has(sessionId)) continue
+      if (this.hasLiveChildSession(sessionId)) continue
+      if (this.hasPendingUiRequest(sessionId)) continue
+      const idleSince = this.sessionActivityAt.get(sessionId) ?? now
+      if (now - idleSince < PI_SESSION_IDLE_DISPOSE_MS) continue
+      Logger.info('Evicting the harness process of an idle session', {
+        sessionId,
+        idleMs: now - idleSince
+      })
+      this.disposeRpcClient(sessionId)
+    }
+  }
+
+  /** True while a nested worker of this session is still running. */
+  private hasLiveChildSession(parentSessionId: string): boolean {
+    for (const state of this.childStreams.values()) {
+      if (state.parentSessionId === parentSessionId && !state.settled) return true
+    }
+    return false
+  }
+
+  /**
+   * True while the user still owes this session an answer. Pending requests are
+   * keyed by their RPC request id, so they are matched on the session they
+   * belong to: a card on screen must never lose the process that asked for it.
+   */
+  private hasPendingUiRequest(sessionId: string): boolean {
+    for (const request of this.pendingUiRequests.values()) {
+      if (request.sessionId === sessionId) return true
+    }
+    return false
+  }
+
+  /**
+   * Remember that the app is displaying a child session's transcript. The
+   * extension reads the resulting watch file and forwards token deltas for
+   * watched children only: a worker nobody is looking at still reports every
+   * message, tool call and settle, but stops shipping a per-token stream that
+   * only a view would consume.
+   */
+  private watchSubagentSession(childSessionId: string): void {
+    const parentSessionId = this.childStreams.get(childSessionId)?.parentSessionId
+    if (!parentSessionId || !this.cioWatchFlagPaths.has(parentSessionId)) return
+    const watched = this.cioWatchedChildren.get(parentSessionId) ?? new Map<string, number>()
+    watched.set(childSessionId, Date.now() + PI_SUBAGENT_WATCH_WINDOW_MS)
+    this.cioWatchedChildren.set(parentSessionId, watched)
+    void this.publishWatchedChildren(parentSessionId)
+  }
+
+  /** Write the live watch list for one parent session, when it changed. */
+  private async publishWatchedChildren(parentSessionId: string): Promise<void> {
+    const path = this.cioWatchFlagPaths.get(parentSessionId)
+    if (!path) return
+    const childSessionIds = this.liveWatchedChildren(parentSessionId)
+    const signature = childSessionIds.join(',')
+    if (this.cioPublishedWatch.get(parentSessionId) === signature) return
+    this.cioPublishedWatch.set(parentSessionId, signature)
+    try {
+      await this.storage.writeRaw(path, JSON.stringify({ childSessionIds, updatedAt: Date.now() }))
+    } catch (error) {
+      Logger.dev('Sub-agent watch publication failed:', error)
+    }
+  }
+
+  /** Watched child ids of one session, dropping every lapsed mark. */
+  private liveWatchedChildren(parentSessionId: string): string[] {
+    const watched = this.cioWatchedChildren.get(parentSessionId)
+    if (!watched) return []
+    const now = Date.now()
+    const live: string[] = []
+    for (const [childSessionId, expiresAt] of watched) {
+      if (expiresAt <= now) {
+        watched.delete(childSessionId)
+        continue
+      }
+      live.push(childSessionId)
+    }
+    return live.sort()
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {

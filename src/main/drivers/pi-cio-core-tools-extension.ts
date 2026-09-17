@@ -75,6 +75,11 @@ export interface CioCoreToolsExtensionOptions {
    *  nested worker sessions and for disarming the wake-up paths that would
    *  otherwise start a fresh turn right after the stop. */
   stopFlagPath: string
+  /** Absolute path of the per-session sub-agent watch file. The driver writes
+   *  the child session ids the app is displaying right now; the extension
+   *  forwards token deltas for those children only, so a worker nobody is
+   *  looking at does not re-serialize a stream only a view would consume. */
+  subagentWatchPath: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -205,6 +210,10 @@ __CIO_STRIP_BUILTINS__  })
         JSON.stringify(options.oversizedFlagPath).slice(1, -1)
       )
       .replace('__CIO_STOP_FLAG_PATH__', JSON.stringify(options.stopFlagPath).slice(1, -1))
+      .replace(
+        '__CIO_SUBAGENT_WATCH_PATH__',
+        JSON.stringify(options.subagentWatchPath).slice(1, -1)
+      )
       // One-shot sessions strip the interactive tool factories at generation
       // time (not runtime), so the materialized module never even imports them.
       .replaceAll('__CIO_INTERACTIVE_TOOLS__', options.oneShot === true ? '// ' : '')
