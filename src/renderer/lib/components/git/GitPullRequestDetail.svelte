@@ -3,46 +3,42 @@
     Bot,
     Check,
     ChevronDown,
-    ChevronRight,
     CircleDot,
     CircleSlash,
     ExternalLink,
-    FileDiff,
-    GitCommitHorizontal,
     Loader2,
     Maximize2,
     MessageSquare,
     Merge,
-    MessagesSquare,
     RefreshCw,
-    Rocket,
     RotateCcw,
-    Send,
-    ShieldCheck,
     ThumbsUp,
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import { onDestroy } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   // The `@query` detection is shared with the chat composer rather than
   // re-implemented here: it already knows to stay silent inside code spans and
   // quoted passages, which a second copy would have to relearn.
   import { composerMentionQuery } from '../chats/composer-mentions'
   import PrMentionMenu from './PrMentionMenu.svelte'
-  import GitJobLogView from './GitJobLogView.svelte'
   // The identity row is one component now, shared with the Git panel's own
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
-  import PrAvatar from './PrAvatar.svelte'
+  import GitPullRequestDetailConversation from './GitPullRequestDetailConversation.svelte'
+  import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
+  import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
+  import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
+  import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
+  import { buildConversation } from './git-pull-request-detail-format'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -52,12 +48,9 @@
     participantMentionUsers
   } from './pr-mentions'
   import type {
-    GitHubDeploymentJobLog,
     PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
-    PullRequestCheck,
-    PullRequestFile,
     PullRequestSummary,
     RepositoryMentionUser
   } from '$shared/types'
@@ -196,16 +189,7 @@
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
-  let expandedCommit = $state<string | null>(null)
-  let commitFiles = $state<Record<string, PullRequestFile[]>>({})
-  let loadingCommit = $state<string | null>(null)
-  let expandedFile = $state<string | null>(null)
   let agentReport = $state<PrAgentReport | null>(null)
-  /** Which check's log is open, keyed the way the checks list is keyed. */
-  let expandedCheck = $state<string | null>(null)
-  let checkLogs = $state<Record<string, GitHubDeploymentJobLog>>({})
-  let checkLogErrors = $state<Record<string, string>>({})
-  let loadingCheckLogs = $state<Record<string, boolean>>({})
 
   const number = $derived(summary.number)
   /**
@@ -266,61 +250,10 @@
 
   /**
    * Conversation as one chronological stream: the PR description, issue
-   * comments, submitted reviews, and inline code comments   the same context
+   * comments, submitted reviews, and inline code comments, the same context
    * GitHub shows, so a merge decision never needs the browser.
    */
-  const conversation = $derived.by(() => {
-    if (!bundle) return []
-    const entries: Array<{
-      key: string
-      author: string
-      at: string
-      body: string
-      kind: 'description' | 'comment' | 'review' | 'inline'
-      meta?: string
-    }> = []
-    if (bundle.detail.body.trim()) {
-      entries.push({
-        key: 'body',
-        author: bundle.detail.authorLogin,
-        at: bundle.detail.createdAt,
-        body: bundle.detail.body,
-        kind: 'description'
-      })
-    }
-    for (const comment of bundle.comments) {
-      entries.push({
-        key: `c${comment.id}`,
-        author: comment.authorLogin,
-        at: comment.createdAt,
-        body: comment.body,
-        kind: 'comment'
-      })
-    }
-    for (const review of bundle.reviews) {
-      entries.push({
-        key: `r${review.id}`,
-        author: review.authorLogin,
-        at: review.submittedAt,
-        body: review.body,
-        kind: 'review',
-        meta: review.state.replace(/_/gu, ' ').toLowerCase()
-      })
-    }
-    for (const comment of bundle.reviewComments) {
-      entries.push({
-        key: `rc${comment.id}`,
-        author: comment.authorLogin,
-        at: comment.createdAt,
-        body: comment.body,
-        kind: 'inline',
-        meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`
-      })
-    }
-    return entries
-      .filter((entry) => entry.body.trim() || entry.kind === 'review')
-      .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
-  })
+  const conversation = $derived(buildConversation(bundle))
 
   /**
    * The active view is one of these. In the full screen reader they become a
@@ -333,51 +266,10 @@
       count: prViewCount(view.id, bundle, (agentReport?.content ?? '').trim().length > 0)
     }))
   )
-  type EntryKind = 'description' | 'comment' | 'review' | 'inline'
-
-  /** Human label for a conversation entry's badge. */
-  function kindLabel(kind: EntryKind, meta?: string): string {
-    if (kind === 'description') return 'description'
-    if (kind === 'inline') return 'inline review'
-    if (kind === 'review') return meta ?? 'review'
-    return 'comment'
-  }
-
-  /** Badge colour   approvals and change requests read at a glance. */
-  function kindClass(kind: EntryKind, meta?: string): string {
-    if (kind === 'review' && meta === 'approved') return 'bg-success/10 text-success'
-    if (kind === 'review' && meta === 'changes requested') return 'bg-warning/10 text-warning'
-    if (kind === 'description') return 'bg-primary/10 text-primary'
-    return 'bg-elevated text-dimmed'
-  }
-
-  /** Matching left edge on the card so the stream scans vertically. */
-  function accentClass(kind: EntryKind, meta?: string): string {
-    if (kind === 'review' && meta === 'approved') return 'border-l-2 border-l-success'
-    if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
-    if (kind === 'description') return 'border-l-2 border-l-primary'
-    return ''
-  }
 
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
     agentReport = await gitState.loadAgentReport(projectId, number)
-  }
-
-  async function toggleCommit(sha: string): Promise<void> {
-    if (expandedCommit === sha) {
-      expandedCommit = null
-      return
-    }
-    expandedCommit = sha
-    if (commitFiles[sha]) return
-    loadingCommit = sha
-    try {
-      const files = await gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)
-      commitFiles = { ...commitFiles, [sha]: files }
-    } finally {
-      loadingCommit = null
-    }
   }
 
   async function postComment(): Promise<void> {
@@ -631,94 +523,6 @@
     }
   }
 
-  function checkIcon(check: PullRequestCheck): typeof Check {
-    if (check.status !== 'completed') return CircleDot
-    if (check.conclusion === 'success') return Check
-    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CircleSlash
-    return X
-  }
-
-  function checkClass(check: PullRequestCheck): string {
-    if (check.status !== 'completed') return 'text-warning'
-    if (check.conclusion === 'success') return 'text-success'
-    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return 'text-dimmed'
-    return 'text-danger'
-  }
-
-  /** Stable key for one check row, shared by the list key and the log cache. */
-  function checkKey(check: PullRequestCheck): string {
-    return check.name + (check.url ?? '')
-  }
-
-  /** Human wording for a check's progress, so `in_progress` is not shown raw. */
-  function checkStateLabel(check: PullRequestCheck): string {
-    if (check.status !== 'completed') return check.status.replace('_', ' ')
-    return check.conclusion ?? 'done'
-  }
-
-  /**
-   * The job behind a check. Actions names the job in the check's `details_url`,
-   * which is exact even for one leg of a matrix run; when the provider only gives
-   * the run, the job is matched by name so the wrong leg's log is never shown.
-   */
-  async function resolveCheckJobId(check: PullRequestCheck): Promise<number | null> {
-    if (check.jobId !== null) return check.jobId
-    if (check.workflowRunId === null) return null
-    const run = await gitState
-      .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
-      .catch(() => null)
-    return run?.jobs.find((job) => job.name === check.name)?.id ?? null
-  }
-
-  /** Name the two failures a reader can actually act on, then quote the rest. */
-  function checkLogMessage(reason: unknown): string {
-    const text = reason instanceof Error ? reason.message : ''
-    if (/HTTP 404/u.test(text)) return 'This job has not published a log yet.'
-    if (/HTTP (401|403)/u.test(text)) return 'Your GitHub access cannot read this job log.'
-    return text || 'The log could not be loaded.'
-  }
-
-  async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
-    const key = checkKey(check)
-    if (expandedCheck === key) {
-      expandedCheck = null
-      return
-    }
-    expandedCheck = key
-    if (checkLogs[key] || loadingCheckLogs[key]) return
-    loadingCheckLogs = { ...loadingCheckLogs, [key]: true }
-    checkLogErrors = { ...checkLogErrors, [key]: '' }
-    try {
-      const jobId = await resolveCheckJobId(check)
-      if (jobId === null) {
-        checkLogErrors = {
-          ...checkLogErrors,
-          [key]: 'This check does not name a job, so its log has to be read on GitHub.'
-        }
-        return
-      }
-      const log = await gitState.ensureDeploymentJobLog(
-        projectId,
-        identity.owner,
-        identity.repo,
-        jobId
-      )
-      if (log) checkLogs = { ...checkLogs, [key]: log }
-    } catch (reason) {
-      checkLogErrors = { ...checkLogErrors, [key]: checkLogMessage(reason) }
-    } finally {
-      loadingCheckLogs = { ...loadingCheckLogs, [key]: false }
-    }
-  }
-
-  /** Colorize a unified patch the way the rest of the app renders diffs. */
-  function patchLineClass(line: string): string {
-    if (line.startsWith('@@')) return 'text-primary'
-    if (line.startsWith('+')) return 'bg-success/10 text-success'
-    if (line.startsWith('-')) return 'bg-danger/10 text-danger'
-    return 'text-muted'
-  }
-
   $effect(() => {
     const owner = identity.owner
     const repo = identity.repo
@@ -741,48 +545,6 @@
     })
   })
 </script>
-
-{#snippet emptyState(Icon: typeof Bot, text: string)}
-  <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <Icon size={18} class="text-dimmed" />
-    <p class="text-[0.6875rem] leading-relaxed text-dimmed">{text}</p>
-  </div>
-{/snippet}
-
-{#snippet fileList(files: PullRequestFile[], keyPrefix: string)}
-  {#each files as file (file.path)}
-    {@const fileKey = `${keyPrefix}:${file.path}`}
-    <div class="border-b border-border/50">
-      <button
-        type="button"
-        class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
-        onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
-      >
-        <FileDiff size={12} class="shrink-0 text-dimmed" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
-          {file.path}
-        </span>
-        <span class="shrink-0 text-[0.5625rem] tabular-nums">
-          <span class="text-success">+{file.additions}</span>
-          <span class="text-danger">−{file.deletions}</span>
-        </span>
-      </button>
-      {#if expandedFile === fileKey}
-        {#if file.patch}
-          <pre
-            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[0.5625rem] leading-relaxed"><!--
-         -->{#each file.patch.split('\n') as line, index (index)}<span
-                class="block {patchLineClass(line)}">{line || ' '}</span
-              >{/each}</pre>
-        {:else}
-          <p class="px-3 py-2 text-[0.625rem] text-dimmed">
-            No inline diff for this file (binary or too large).
-          </p>
-        {/if}
-      {/if}
-    </div>
-  {/each}
-{/snippet}
 
 {#snippet panelHead()}
   <!-- Header -->
@@ -1084,239 +846,35 @@
         Loading pull request…
       </div>
     {:else if tab === 'conversation'}
-      {#if conversation.length === 0}
-        {@render emptyState(MessagesSquare, 'Nothing has been said yet.')}
-      {:else}
-        <div class="flex flex-col gap-2 p-2">
-          {#each conversation as entry (entry.key)}
-            <article
-              class="overflow-hidden rounded-lg border border-border bg-surface {accentClass(
-                entry.kind,
-                entry.meta
-              )}"
-            >
-              <header
-                class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
-              >
-                <PrAvatar login={entry.author} />
-                <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                  >{entry.author}</span
-                >
-                <span
-                  class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
-                    entry.kind,
-                    entry.meta
-                  )}"
-                >
-                  {kindLabel(entry.kind, entry.meta)}
-                </span>
-                <span class="flex-1"></span>
-                <span class="shrink-0 text-[0.5625rem] text-dimmed">{relativeTime(entry.at)}</span>
-              </header>
-              {#if entry.kind === 'inline' && entry.meta}
-                <p
-                  class="truncate border-b border-border/40 bg-elevated/20 px-2.5 py-1 font-mono text-[0.5625rem] text-dimmed"
-                >
-                  {entry.meta}
-                </p>
-              {/if}
-              {#if entry.body.trim()}
-                <div class="px-2.5 py-2">
-                  <!-- GitHub's dialect includes HTML, so PR prose needs it to
-                       read correctly; the sanitizer still strips anything
-                       executable. Agent-authored text elsewhere keeps it off. -->
-                  <MarkdownView
-                    text={entry.body}
-                    class="text-[0.6875rem] leading-relaxed"
-                    allowHtml
-                  />
-                </div>
-              {/if}
-            </article>
-          {/each}
-        </div>
-      {/if}
+      <GitPullRequestDetailConversation entries={conversation} />
     {:else if tab === 'commits'}
-      {#if !bundle || bundle.commits.length === 0}
-        {@render emptyState(GitCommitHorizontal, 'No commits on this branch.')}
-      {:else}
-        {#each bundle.commits as commit (commit.sha)}
-          <div class="border-b border-border/50">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
-              title="Show the files changed in {commit.shortSha}"
-              onclick={() => void toggleCommit(commit.sha)}
-            >
-              <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[0.6875rem] text-foreground">{commit.message}</p>
-                <p class="truncate text-[0.5625rem] text-dimmed">
-                  <span class="font-mono">{commit.shortSha}</span>
-                  · {commit.authorName} · {relativeTime(commit.date)}
-                </p>
-              </div>
-              {#if loadingCommit === commit.sha}
-                <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
-              {/if}
-            </button>
-            {#if expandedCommit === commit.sha}
-              {@const files = commitFiles[commit.sha] ?? []}
-              {#if files.length === 0 && loadingCommit !== commit.sha}
-                <p class="px-3 py-2 text-[0.625rem] text-dimmed">No files in this commit.</p>
-              {:else}
-                <div class="border-t border-border/50 bg-elevated/20">
-                  {@render fileList(files, commit.sha)}
-                </div>
-              {/if}
-            {/if}
-          </div>
-        {/each}
-      {/if}
+      <GitPullRequestDetailChanges
+        mode="commits"
+        commits={bundle?.commits ?? []}
+        files={bundle?.files ?? []}
+        loadCommitFiles={(sha) =>
+          gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)}
+      />
     {:else if tab === 'files'}
-      {#if !bundle || bundle.files.length === 0}
-        {@render emptyState(FileDiff, 'No changed files.')}
-      {:else}
-        {@render fileList(bundle.files, 'pr')}
-      {/if}
+      <GitPullRequestDetailChanges
+        mode="files"
+        commits={bundle?.commits ?? []}
+        files={bundle?.files ?? []}
+        loadCommitFiles={(sha) =>
+          gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)}
+      />
     {:else if tab === 'checks'}
-      {#if !checks || checks.checks.length === 0}
-        {@render emptyState(ShieldCheck, 'No checks have reported on this branch.')}
-      {:else}
-        {#each checks.checks as check (checkKey(check))}
-          {@const Icon = checkIcon(check)}
-          {@const key = checkKey(check)}
-          {@const runId = check.workflowRunId}
-          {@const isOpen = expandedCheck === key}
-          <div class="border-b border-border/50">
-            <!--
-              The whole row is the log toggle: a check's result is only half the
-              story, and the reason to open the tab is to read why it failed.
-            -->
-            <div class="flex items-center gap-2 px-3 py-1.5">
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                title={isOpen ? `Hide the ${check.name} log` : `Show the ${check.name} log`}
-                aria-expanded={isOpen}
-                onclick={() => void toggleCheckLog(check)}
-              >
-                <ChevronRight
-                  size={11}
-                  class="shrink-0 text-dimmed transition-transform {isOpen ? 'rotate-90' : ''}"
-                />
-                <Icon size={12} class="shrink-0 {checkClass(check)}" />
-                <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">
-                  {check.name}
-                </span>
-                <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                  {checkStateLabel(check)}
-                </span>
-              </button>
-              {#if check.url}
-                <button
-                  type="button"
-                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Open {check.name} externally"
-                  aria-label="Open {check.name} externally"
-                  onclick={() => void openInBrowser(check.url ?? '')}
-                >
-                  <ExternalLink size={12} />
-                </button>
-              {/if}
-            </div>
-            {#if isOpen}
-              <div class="border-t border-border/50 bg-elevated/20">
-                <!--
-                  No `failedSteps` here on purpose: a check is named after its job, and
-                  the log's sections are named after steps, so there is nothing to match.
-                  The view marks the step GitHub flagged with an error in the log itself.
-                -->
-                <GitJobLogView
-                  log={checkLogs[key] ?? null}
-                  loading={loadingCheckLogs[key] === true}
-                  error={checkLogErrors[key] ?? ''}
-                  class="px-3 py-2"
-                />
-                {#if runId !== null}
-                  <div class="border-t border-border/40 px-3 py-1.5">
-                    <button
-                      type="button"
-                      class="flex h-6 min-w-0 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
-                      title="Open this workflow run in the Deployments tab to inspect every job and step"
-                      onclick={() => onOpenWorkflowRun(runId)}
-                    >
-                      <Rocket size={11} class="shrink-0" />
-                      <span class="min-w-0 truncate">Open the full run in Deployments</span>
-                    </button>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {/each}
-      {/if}
-    {:else if agentReport?.content.trim()}
-      <div class="px-3 py-2">
-        <div class="mb-2 flex items-center gap-2">
-          <p class="flex-1 truncate text-[0.5625rem] text-dimmed">
-            {agentReport.path} · {relativeTime(agentReport.updatedAt)}
-          </p>
-          {#if agentReport.threadId}
-            <button
-              type="button"
-              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Open the thread that produced this review"
-              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-            >
-              <Bot size={12} />
-              Open thread
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-            title="Post this report as a comment on the pull request"
-            disabled={posting}
-            onclick={() => void postAgentReport()}
-          >
-            <Send size={12} />
-            Post to PR
-          </button>
-        </div>
-        <MarkdownView text={agentReport.content} class="text-[0.6875rem] leading-relaxed" />
-      </div>
+      <GitPullRequestDetailChecks {projectId} {identity} {checks} {onOpenWorkflowRun} />
     {:else}
-      <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
-        <Bot size={18} class="text-dimmed" />
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
-          worktree and writes its findings to <span class="font-mono"
-            >.cio/git/pr/{number}/review.md</span
-          >. The report shows up here when it lands.
-        </p>
-        <div class="flex items-center gap-2">
-          {#if agentReport?.threadId}
-            <button
-              type="button"
-              class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-              title="Open the review thread already running for this pull request"
-              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-            >
-              <Bot size={12} class="shrink-0" />
-              <span class="min-w-0 truncate">Open review thread</span>
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() => onAgentReview(summary)}
-          >
-            <Bot size={12} class="shrink-0" />
-            <span class="min-w-0 truncate">Start agent review</span>
-          </button>
-        </div>
-      </div>
+      <GitPullRequestDetailAgentReport
+        {number}
+        {summary}
+        {agentReport}
+        {posting}
+        {onOpenThread}
+        {onAgentReview}
+        onPostReport={() => void postAgentReport()}
+      />
     {/if}
   </div>
 {/snippet}
@@ -1583,145 +1141,18 @@
   </div>
 {/if}
 
-<AlertDialog.Root open={mergeConfirm} onOpenChange={(value) => (mergeConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Merge pull request #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        <strong class="text-foreground">{summary.title}</strong> will be merged into
-        <strong class="text-foreground">{summary.baseRef}</strong> using the
-        <strong class="text-foreground">{method}</strong> method.
-        {#if checks?.state === 'failure'}
-          Checks are currently <strong class="text-danger">failing</strong> on this branch.
-        {/if}
-        This runs on GitHub and cannot be undone from here.
-      </AlertDialog.Description>
-
-      {#if method === 'rebase'}
-        <p
-          class="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed"
-        >
-          Rebase preserves the original commits, so there's no custom commit message to add.
-        </p>
-      {:else}
-        <div class="mt-3 space-y-2">
-          <div>
-            <label
-              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-title-{mergeFieldSuffix}"
-            >
-              Commit title
-            </label>
-            <input
-              id="merge-commit-title-{mergeFieldSuffix}"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-              placeholder={method === 'merge'
-                ? `Merge pull request #${number} from ${summary.headRef}`
-                : 'Title of the squashed commit'}
-              bind:value={commitTitle}
-            />
-          </div>
-          <div>
-            <label
-              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-message-{mergeFieldSuffix}"
-            >
-              Commit message
-            </label>
-            <textarea
-              id="merge-commit-message-{mergeFieldSuffix}"
-              class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-              placeholder={method === 'merge'
-                ? 'Describe the merge (optional)'
-                : 'Commit message for the squashed changes'}
-              bind:value={commitMessage}></textarea>
-          </div>
-        </div>
-      {/if}
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          onclick={() => void merge()}
-        >
-          Merge
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<AlertDialog.Root open={resolveConfirm} onOpenChange={(value) => (resolveConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Resolve conflicts for PR #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        This checks out the <strong class="text-foreground">{summary.headRef}</strong> branch
-        locally as <code class="font-mono">pr-{number}</code>, merges
-        <strong class="text-foreground">{summary.baseRef}</strong> into it, and switches the Git panel
-        to the changes tab. You'll resolve each conflicted file in your editor, then commit and push to
-        update the pull request.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-warning px-3 text-xs font-medium text-on-primary hover:bg-warning/90"
-          onclick={() => {
-            resolveConfirm = false
-            onResolveLocally?.(summary)
-          }}
-        >
-          Resolve locally
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<AlertDialog.Root open={closeConfirm} onOpenChange={(value) => (closeConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Close pull request #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        <strong class="text-foreground">{summary.title}</strong> will be closed without merging. You can
-        reopen it later from this view.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:bg-danger/90"
-          onclick={() => void closePullRequest()}
-        >
-          Close
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<GitPullRequestDetailMergeDialogs
+  {number}
+  {summary}
+  {method}
+  checksFailure={checks?.state === 'failure'}
+  {mergeFieldSuffix}
+  bind:mergeOpen={mergeConfirm}
+  bind:closeOpen={closeConfirm}
+  bind:resolveOpen={resolveConfirm}
+  bind:commitTitle
+  bind:commitMessage
+  onMerge={() => void merge()}
+  onResolveLocally={() => onResolveLocally?.(summary)}
+  onClosePullRequest={() => void closePullRequest()}
+/>
