@@ -338,6 +338,7 @@ import type {
   PersistedProviderCatalog,
   QueuedCoordinatorHandoff,
   RankingGradeCandidate,
+  RankingJudgeOutcome,
   RejectedSpecArtifact,
   SessionCompletionWaiter,
   SessionInfo,
@@ -21047,7 +21048,8 @@ export class ChatEngine {
       )
       for (const row of rows) {
         const candidate = toRankingCandidate(row)
-        const score = await this.gradeCandidateCore(candidate)
+        const outcome = await this.gradeCandidateCore(candidate)
+        const score = outcome.score
         if (score !== null) {
           this.rankingJudgeFailures.delete(row.harness_id)
           const durationMs = Math.max(0, row.ended_at - row.started_at)
@@ -21073,7 +21075,7 @@ export class ChatEngine {
           if (applied) processed += 1
           continue
         }
-        await this.deferJudgeFailure(row)
+        await this.deferJudgeFailure(row, outcome)
         processed += 1
       }
     } finally {
@@ -21099,7 +21101,10 @@ export class ChatEngine {
    * deferred, never dropped: a judge that recovers scores its backlog, and an
    * exhausted row still parks for the recovery pass.
    */
-  private async deferJudgeFailure(row: ModelRankingSnapshotRow): Promise<void> {
+  private async deferJudgeFailure(
+    row: ModelRankingSnapshotRow,
+    outcome: RankingJudgeOutcome
+  ): Promise<void> {
     const now = Date.now()
     await this.rankingSnapshotRepo.deferOrParkViaWorker(
       row.id,
@@ -21118,7 +21123,13 @@ export class ChatEngine {
     )
     const cooldownUntilMs = now + cooldownMs
     Logger.info('Ranking judge held back after repeated failures', {
+      // The graded harness owns the queue and the cooldown; the judge identity
+      // says which model actually failed, which an auxiliary assignment makes
+      // a different harness from the graded one.
       harnessId: row.harness_id,
+      viaAuxiliary: outcome.viaAuxiliary,
+      judgeHarnessId: outcome.judgeHarnessId,
+      judgeModelId: outcome.judgeModelId,
       consecutiveFailures: consecutive,
       cooldownMs
     })
@@ -21139,8 +21150,21 @@ export class ChatEngine {
     return delayMs + Math.floor(Math.random() * delayMs * ChatEngine.RANKING_DEADLINE_JITTER_RATIO)
   }
 
-  /** Judge one candidate and persist nothing; returns the 0–10 score, or null on judge failure. */
-  private async gradeCandidateCore(candidate: RankingGradeCandidate): Promise<number | null> {
+  /**
+   * Judge one candidate and persist nothing. Returns the 0–10 score, or null on
+   * judge failure, together with the judge that ran so a failure is reported
+   * against the model that produced it rather than against the graded model.
+   */
+  private async gradeCandidateCore(candidate: RankingGradeCandidate): Promise<RankingJudgeOutcome> {
+    // Names the judge that actually ran; the outer catch reports a failure
+    // against it, so an unusable auxiliary assignment is not misattributed to
+    // the graded harness's own model.
+    let judge: RankingJudgeOutcome = {
+      score: null,
+      judgeHarnessId: candidate.harnessId,
+      judgeModelId: candidate.modelId,
+      viaAuxiliary: false
+    }
     try {
       const workingDirectory = await this.auxiliaryWorkingDirectory()
       // A user-assigned auxiliary model judges the conversation when one is
@@ -21153,6 +21177,12 @@ export class ChatEngine {
         projectPath: workingDirectory
       })
       if (auxiliary) {
+        judge = {
+          score: null,
+          judgeHarnessId: auxiliary.harnessId,
+          judgeModelId: auxiliary.modelId,
+          viaAuxiliary: true
+        }
         let auxiliaryScore: number | null = null
         try {
           auxiliaryScore = await auxiliary.driver.gradeTurn(auxiliary.projectPath, {
@@ -21176,12 +21206,26 @@ export class ChatEngine {
             gradedHarnessId: candidate.harnessId,
             score: auxiliaryScore
           })
-          return auxiliaryScore
+          return { ...judge, score: auxiliaryScore }
         }
+        // A judge that answers without a score is otherwise invisible: the run
+        // silently falls through to the graded harness below, so name it here.
+        Logger.dev('Auxiliary agent returned no score; using the harness candidate judge', {
+          auxiliaryHarnessId: auxiliary.harnessId,
+          auxiliaryModelId: auxiliary.modelId,
+          gradedHarnessId: candidate.harnessId,
+          gradedModelId: candidate.modelId
+        })
       }
       // The snapshot is self-contained: grading judges the conversation payload,
       // never the project, so a deleted or renamed project cannot block it.
       const driver = await this.driverForAccount(candidate.harnessId)
+      judge = {
+        score: null,
+        judgeHarnessId: candidate.harnessId,
+        judgeModelId: candidate.modelId,
+        viaAuxiliary: false
+      }
       const score = await driver.gradeTurn(workingDirectory, {
         settings: {
           harnessId: candidate.harnessId,
@@ -21200,10 +21244,10 @@ export class ChatEngine {
         score
       })
       // A driver that violates its number-or-null contract is a judge failure.
-      return typeof score === 'number' ? score : null
+      return { ...judge, score: typeof score === 'number' ? score : null }
     } catch (error) {
       Logger.dev('Ranking grading failed:', rawErrorMessage(error))
-      return null
+      return judge
     }
   }
 

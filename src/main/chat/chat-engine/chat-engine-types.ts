@@ -469,3 +469,20 @@ export interface RankingGradeCandidate {
   assistantOutput: string
   followUp: string | null
 }
+
+/**
+ * Which judge produced one grading result, or failed to produce one. Grading
+ * can run on the user-assigned auxiliary model or on the graded harness's own
+ * cheap candidate, so a failure is only diagnosable when the log names the
+ * judge that actually ran.
+ */
+export interface RankingJudgeOutcome {
+  /** 0–10 score, or null when no judge returned a number. */
+  score: number | null
+  /** Harness that ran the judge: the assigned auxiliary harness, or the graded harness. */
+  judgeHarnessId: string
+  /** Model that ran the judge. */
+  judgeModelId: string
+  /** True when the attempt ran on the user-assigned auxiliary model. */
+  viaAuxiliary: boolean
+}
