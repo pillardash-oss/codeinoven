@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { ArrowUp, Clock, Flame, Square } from '@lucide/svelte'
+  import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -29,6 +29,7 @@
   import { handleComposerPaste, type ComposerPasteContext } from './chat-composer-paste'
   import { createComposerSlashActions, isSlashRoutedAction } from './chat-composer-slash.svelte'
   import { createComposerMentionSearch } from './chat-composer-mentions.svelte'
+  import { createComposerExpansion } from './chat-composer-expand.svelte'
   import { trackMenuCloseFocus } from './chat-composer-menu-focus.svelte'
   import {
     withFileSystemMode,
@@ -423,6 +424,16 @@
    *  the overlay resolves its fixed-position origin against it. */
   function handleDropAnchorChange(element: HTMLElement | null): void {
     dropAnchorProbe = element
+  }
+  /** Maximize control   triples the editor's height and widens the composer to
+   *  150% of its column for long-form writing. */
+  const expansion = createComposerExpansion({ getComposer: () => composerRoot })
+
+  /** Resize the composer, then hand focus straight back to the caret so the user
+   *  keeps typing in the surface they just enlarged. */
+  function toggleComposerExpansion(): void {
+    expansion.toggle()
+    focusComposerAtSavedCaret()
   }
   /** Viewport geometry of the conversation region while files are in flight, so
    *  the overlay covers exactly that region (never the sidebars). */
@@ -1469,7 +1480,9 @@
 />
 
 <div
-  class="chat-composer relative z-10 border bg-surface shadow-sm"
+  class="chat-composer relative z-10 border bg-surface shadow-sm {expansion.maximized
+    ? 'composer-maximized'
+    : ''}"
   data-onboarding="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
@@ -1556,9 +1569,29 @@
         }}
       />
     {/if}
+    <!-- Maximize   floats at the top right of the typing surface so the control
+         is out of the writing line; the editor reserves its corner with `pr-10`. -->
+    <button
+      type="button"
+      class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
+      aria-pressed={expansion.maximized}
+      title={expansion.maximized
+        ? 'Collapse the composer to its normal size'
+        : 'Expand the composer for a taller, wider typing area'}
+      onclick={toggleComposerExpansion}
+    >
+      {#if expansion.maximized}
+        <Minimize2 size={13} />
+      {:else}
+        <Maximize2 size={13} />
+      {/if}
+    </button>
+
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
+      class="composer-editor w-full overflow-y-auto px-3.5 pr-10 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
       bind:value
       {placeholder}
       {autofocus}
@@ -1803,6 +1836,30 @@
 <style>
   .chat-composer {
     container-type: inline-size;
+  }
+
+  /* Maximize   the editor is the composer's typing surface, so the control is
+     what grows: the collapsed height cap becomes the expanded floor (the box is
+     immediately large) and the cap triples. The 60vh clamp keeps a visible
+     conversation on short windows. */
+  :global(.composer-editor) {
+    min-height: 2.5rem;
+    max-height: 10rem;
+  }
+
+  :global(.chat-composer.composer-maximized .composer-editor) {
+    min-height: 10rem;
+    max-height: min(30rem, 60vh);
+  }
+
+  /* Maximize also widens the composer to 150% of its column.
+     `--composer-expanded-width` is measured against the hosting conversation
+     pane (see chat-composer-expand.svelte.ts) and falls back to the column width
+     until that measurement lands; the negative inline margins centre a box that
+     is now wider than its own parent. */
+  :global(.chat-composer.composer-maximized) {
+    width: var(--composer-expanded-width, 100%);
+    margin-inline: calc((100% - var(--composer-expanded-width, 100%)) / 2);
   }
 
   .pending-stop-icon {
