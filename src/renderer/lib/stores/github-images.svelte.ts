@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { imageUrlsFromMarkdown } from '$lib/markdown-remote-images'
 
 /**
  * Shared, reactive cache of remote images embedded in provider-authored markdown,
@@ -57,6 +58,17 @@ class GithubImageState {
     void drain.finally(() => {
       if (this.inflight === drain) this.inflight = null
     })
+  }
+
+  /**
+   * Image URLs in a markdown source, for the effect that queues resolution.
+   *
+   * The extraction itself is shared with the renderer's own `<img>` rewrite, so
+   * the store can never queue one set of URLs while the renderer waits on
+   * another.
+   */
+  imageUrlsFromText(text: string): string[] {
+    return imageUrlsFromMarkdown(text)
   }
 
   /**
