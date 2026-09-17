@@ -1,4 +1,6 @@
 import { Logger } from '../../system/logger'
+import type { AgentProviderIssue } from '../../../lib/types'
+import { isUsageResetWaitIssue, parseUsageResetAt } from '../../../lib/provider-issue'
 import type { GenerateTitleOptions, SendPromptOptions } from '../driver.interface'
 import type {
   OneShotOutcome,
@@ -18,11 +20,71 @@ import {
 export interface OneShotHost {
   driverName: string
   titleTurns: TitleTurnRegistry
+  /**
+   * Account-scoped usage-reset blocks, shared by every auxiliary run on this
+   * driver instance. Keyed by `providerId/modelId` because a provider window
+   * closes per account and model, not per job.
+   */
+  quotaBlocks: Map<string, AuxiliaryQuotaBlock>
   createSession: (projectPath: string, title: string) => Promise<string>
   sendPrompt: (projectPath: string, options: SendPromptOptions) => Promise<void>
   requireSession: (projectPath: string, sessionId: string) => Promise<PersistentCliSession>
   abort: (projectPath: string, sessionId: string) => Promise<void>
   deleteSession: (projectPath: string, sessionId: string) => Promise<void>
+}
+
+/** One candidate whose provider reported a usage reset, and when its window reopens. */
+export interface AuxiliaryQuotaBlock {
+  /** Epoch ms this candidate may be probed again. */
+  resetAt: number
+  /** Provider-reported reason, kept for the attempt ledger and diagnostics. */
+  reason: string
+}
+
+/**
+ * Longest a blocked candidate is skipped. Providers report multi-day quota
+ * windows and this memory is in-process only, so the block is capped rather
+ * than honoured verbatim: the candidate is probed again once the cap passes,
+ * which keeps a misparsed or already-lifted reset from retiring an auxiliary
+ * path for days.
+ */
+const AUXILIARY_QUOTA_BLOCK_MAX_MS = 6 * 60 * 60 * 1000
+
+/** Identity a usage reset blocks: one account serving one provider/model pair. */
+export function auxiliaryCandidateKey(candidate: TitleModelCandidate): string {
+  return `${candidate.providerId}/${candidate.modelId}`
+}
+
+/**
+ * Remember a provider-reported usage reset for one candidate.
+ *
+ * An account-level limit fails identically for every queued background job, so
+ * without this memory a blocked account pays a fresh harness process for title,
+ * grading, lesson, heartbeat, and cheap-model runs alike, once per job, until
+ * its window reopens: Codex's usage-limit failures repeated on every grading row
+ * for hours because the reset time the provider reported was parsed and then
+ * discarded.
+ */
+function rememberQuotaBlock(
+  host: OneShotHost,
+  candidateKey: string,
+  issue: AgentProviderIssue | null
+): void {
+  if (!issue || !isUsageResetWaitIssue(issue)) return
+  const resetAt = issue.retryAt ?? parseUsageResetAt(issue.message)
+  const now = Date.now()
+  if (resetAt === undefined || resetAt <= now) return
+  const blockedUntil = Math.min(resetAt, now + AUXILIARY_QUOTA_BLOCK_MAX_MS)
+  host.quotaBlocks.set(candidateKey, {
+    resetAt: blockedUntil,
+    reason: `usage limit reported until ${new Date(resetAt).toISOString()}`
+  })
+  Logger.info('Auxiliary candidate held back until its usage window reopens', {
+    driverId: host.driverName,
+    candidate: candidateKey,
+    reportedResetAt: new Date(resetAt).toISOString(),
+    blockedUntil: new Date(blockedUntil).toISOString()
+  })
 }
 
 /** Run one auxiliary one-shot completion per disposable session, cheapest candidate first. */
@@ -50,6 +112,18 @@ export async function runOneShotWithCandidates(
 
   for (let index = 0; index < attempts.length; index++) {
     const candidate = attempts[index]
+    const candidateKey = auxiliaryCandidateKey(candidate)
+    const block = host.quotaBlocks.get(candidateKey)
+    if (block) {
+      if (block.resetAt > Date.now()) {
+        // The account already reported this window as closed: skip it without
+        // spawning a harness process, and record the skip so the ledger shows a
+        // candidate that was deliberately passed over rather than one that ran.
+        accounted.push(buildTitleAttempt(index + 1, candidate, false, `Skipped: ${block.reason}`))
+        continue
+      }
+      host.quotaBlocks.delete(candidateKey)
+    }
     const sessionId = await host.createSession(projectPath, 'Auxiliary one-shot')
     host.titleTurns.register(sessionId)
     const completion = host.titleTurns.wait(sessionId, host.driverName, timeoutMs)
@@ -103,13 +177,15 @@ export async function runOneShotWithCandidates(
       )
     } catch (error) {
       const fallbackReason = describeTitleFailure(error)
-      if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
+      const issue = error instanceof TitleTurnProviderIssueError ? error.issue : null
+      if (issue?.kind === 'authentication') {
         accounted.push(buildTitleAttempt(index + 1, candidate, false, fallbackReason))
         if (index === attempts.length - 1) {
           return { value: null, authFailed: true, attempts: accounted }
         }
         continue
       }
+      rememberQuotaBlock(host, candidateKey, issue)
       Logger.dev(
         `${host.driverName} one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
         error

@@ -69,7 +69,10 @@ import {
   TITLE_GENERATION_TIMEOUT_MS,
   TitleTurnRegistry
 } from './persistent-cli/persistent-cli-title'
-import { runOneShotWithCandidates } from './persistent-cli/persistent-cli-one-shot'
+import {
+  runOneShotWithCandidates,
+  type AuxiliaryQuotaBlock
+} from './persistent-cli/persistent-cli-one-shot'
 import { hasProcessExited, waitForProcessExit } from './persistent-cli/persistent-cli-process'
 import { buildUserMessage } from './persistent-cli/persistent-cli-user-message'
 
@@ -124,6 +127,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }
   >()
   private readonly titleTurns = new TitleTurnRegistry()
+  /**
+   * Provider-reported usage reset per auxiliary candidate (`providerId/modelId`),
+   * so an exhausted account is probed once per window instead of once per
+   * queued background job. In-process state by design: an app restart forgets
+   * it and probes afresh, so a stale block can never outlive the session.
+   */
+  private readonly auxiliaryQuotaBlocks = new Map<string, AuxiliaryQuotaBlock>()
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private lastGradeTurnAttempts: TitleAttemptAccounting[] = []
@@ -209,6 +219,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       {
         driverName: this.name,
         titleTurns: this.titleTurns,
+        quotaBlocks: this.auxiliaryQuotaBlocks,
         createSession: (path, title) => this.createSession(path, title),
         sendPrompt: (path, promptOptions) => this.sendPrompt(path, promptOptions),
         requireSession: (path, id) => this.requireSession(path, id),
