@@ -1066,6 +1066,31 @@ export class GitState {
     return this.prs.ensurePullRequestBundle(projectId, owner, repo, pullNumber, force)
   }
 
+  /**
+   * Warm the pull request under the pointer, so the click that follows renders
+   * from cache rather than spinning through a cold `pr:bundle`.
+   */
+  preloadPullRequestBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<void> {
+    return this.prs.preloadPullRequestBundle(projectId, owner, repo, pullNumber)
+  }
+
+  /** Warm the page behind Next, from the current page's cursor alone. */
+  preloadPullRequestNextPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: Parameters<GitPullRequestCache['preloadPullRequestNextPage']>[3],
+    page: number,
+    query: Parameters<GitPullRequestCache['preloadPullRequestNextPage']>[5]
+  ): Promise<void> {
+    return this.prs.preloadPullRequestNextPage(projectId, owner, repo, state, page, query)
+  }
+
   mentionUsersFor(projectId: string, owner: string, repo: string) {
     return this.prs.mentionUsersFor(projectId, owner, repo)
   }

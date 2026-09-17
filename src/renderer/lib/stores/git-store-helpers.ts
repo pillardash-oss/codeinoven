@@ -86,6 +86,17 @@ export const PR_ERROR_COOLDOWN_MS = 120_000
 export const GITHUB_PROBE_TTL_MS = 30_000
 
 /**
+ * How long a failed hover warm-up is remembered before the same key may be
+ * warmed again.
+ *
+ * Deliberately its own clock rather than `PR_ERROR_COOLDOWN_MS`: that one gates
+ * the load the user asked for, and a warm-up must never arm it, or a hover that
+ * happened to fail would leave the click behind it doing nothing. This only
+ * stops a pointer parked on a broken row from re-requesting on every pass.
+ */
+export const PR_PRELOAD_RETRY_MS = 30_000
+
+/**
  * Whether a `git push` failure was a non-fast-forward rejection (the remote
  * contains commits we don't have) rather than an actual error. Matches git's
  * standard stderr phrasing across versions.
