@@ -58,6 +58,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
@@ -9683,9 +9684,11 @@
   // receives this instance's in-process window broadcasts and would otherwise
   // show a trace frozen at whatever was on disk at mount). The poll is change-only,
   // and it stops while this thread is off screen: nobody is watching, so the
-  // live turn does not need a reader's worth of IPC every second.
+  // live turn does not need a reader's worth of IPC every second. It stops on the
+  // quit signal too, because this read reaches the database through the message
+  // mirror and the main process closes that database while the window is still up.
   $effect(() => {
-    if (!busy || !active) return
+    if (!busy || !active || appQuitState.quitting) return
     const poll = setInterval(() => void pollStreamParts(), 1000)
     return () => {
       clearInterval(poll)

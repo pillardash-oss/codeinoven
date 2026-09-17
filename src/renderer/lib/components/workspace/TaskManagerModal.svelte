@@ -25,6 +25,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -169,9 +170,12 @@
     })
   })
 
-  // Auto-refresh every 5 seconds while the modal stays open.
+  // Auto-refresh every 5 seconds while the modal stays open. The snapshot
+  // resolves project and thread names through the database, so it stops on the
+  // quit signal: the main process closes that database while the window is
+  // still open.
   $effect(() => {
-    if (!open) return
+    if (!open || appQuitState.quitting) return
     const timer = setInterval(() => void poll(), 5000)
     return () => clearInterval(timer)
   })

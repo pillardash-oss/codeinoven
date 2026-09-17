@@ -4,6 +4,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 
   type ChangesMode = 'diffs' | 'files'
@@ -132,6 +133,10 @@
     }
 
     async refreshLive(): Promise<void> {
+      // The live summary is a database read. Stop on the quit signal: the main
+      // process closes the database while the window is still open, and this
+      // poll would otherwise land on it.
+      if (appQuitState.quitting) return
       const request = this.liveRefreshGuard.begin()
       const generation = this.generation
       try {

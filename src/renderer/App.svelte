@@ -33,6 +33,7 @@
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -759,10 +760,13 @@
     return subscribe('window:beforeQuit', () => {
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
-      // The component tree unmounts naturally as the window closes.
-      // Push any debounced DB draft commits now: the main process closes the
-      // database later in its shutdown pipeline, and these invokes must land
-      // while the grace period is still open.
+      // The window itself only closes at the end of that pipeline, so latch the
+      // quit signal here: repeating background reads check it and stop instead
+      // of polling into the already-closed database. One-shot user-intent work
+      // is not gated. Push any debounced DB draft commits now: the main process
+      // closes the database later in its shutdown pipeline, and these invokes
+      // must land while the grace period is still open.
+      appQuitState.markQuitting()
       flushAllDraftCommits()
     })
   }

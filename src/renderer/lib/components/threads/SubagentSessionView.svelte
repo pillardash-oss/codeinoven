@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
@@ -157,9 +158,11 @@
   // once more when the run settles so the final transcript is picked up even
   // if the last poll raced the terminal flush. A child that streams its own
   // events needs neither: the stream is the transcript, so polling stops the
-  // moment the first child event arrives.
+  // moment the first child event arrives. The quit signal stops it outright:
+  // the transcript read goes through the database, which the main process
+  // closes while the window is still open.
   $effect(() => {
-    if (!sessionId) return
+    if (!sessionId || appQuitState.quitting) return
     if (busy && !liveStreamed) {
       workerWasBusy = true
       const poll = setInterval(() => {
