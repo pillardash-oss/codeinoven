@@ -734,6 +734,7 @@ const PR_REVIEW_EVENTS = new Set<import('../../lib/types').PrReviewEvent>([
   'REQUEST_CHANGES',
   'COMMENT'
 ])
+const WORKFLOW_RERUN_MODES = new Set<import('../../lib/types').WorkflowRerunMode>(['all', 'failed'])
 
 /** Validate a PR merge method (merge|squash|rebase). */
 export function validateMergeMethod(value: unknown): import('../../lib/types').PrMergeMethod {
@@ -888,6 +889,13 @@ export function validatePrState(value: unknown): import('../../lib/types').PrSta
 /** Validate a PR review verdict. */
 export function validatePrReviewEvent(value: unknown): import('../../lib/types').PrReviewEvent {
   return assertEnum(value, PR_REVIEW_EVENTS, 'PR review event')
+}
+
+/** Validate which jobs a workflow re-run replays (all|failed). */
+export function validateWorkflowRerunMode(
+  value: unknown
+): import('../../lib/types').WorkflowRerunMode {
+  return assertEnum(value, WORKFLOW_RERUN_MODES, 'workflow re-run mode')
 }
 
 /** Validate a 1-based PR listing page number. */

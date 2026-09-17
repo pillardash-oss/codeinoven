@@ -22,7 +22,8 @@ import type {
   PullRequestPage,
   PullRequestReference,
   PullRequestSummary,
-  RepositoryMentionUser
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '../../lib/types'
 import { capJobLogText } from '../../lib/github-job-log'
 import type {
@@ -657,6 +658,22 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  /**
+   * Replay a workflow run. GitHub spells the two modes as separate endpoints and
+   * answers both with 201 and no body.
+   */
+  async rerunWorkflowRun(input: {
+    owner: string
+    repo: string
+    runId: number
+    mode: WorkflowRerunMode
+  }): Promise<void> {
+    const suffix = input.mode === 'failed' ? '/rerun-failed-jobs' : '/rerun'
+    await this.request(`${this.repoPath(input)}/actions/runs/${input.runId}${suffix}`, {
+      method: 'POST'
+    })
+  }
+
   /** Resolve the Actions run behind a deployment: from a status URL first, then by head sha. */
   private async resolveDeploymentRun(
     input: { owner: string; repo: string },
@@ -835,7 +852,11 @@ export class GitHubProvider implements GitProvider {
         throw new ProviderHttpError(response.status, message)
       }
       if (response.status === 204) return {}
-      return (await response.json()) as Record<string, unknown> | unknown[]
+      // A re-run answers 201 with an empty body, which `json()` cannot parse; a
+      // body-less success is a value-less success, not a malformed response.
+      const text = await response.text()
+      if (!text.trim()) return {}
+      return JSON.parse(text) as Record<string, unknown> | unknown[]
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
         throw new Error('Provider request timed out', { cause: failure })

@@ -5104,6 +5104,15 @@ export interface GitHubWorkflowRunDetail {
   fetchedAt: number
 }
 
+/**
+ * Which jobs a workflow re-run replays. GitHub offers exactly these two: every
+ * job in the run, or only the ones that failed.
+ */
+export type WorkflowRerunMode = 'all' | 'failed'
+
+/** A workflow re-run answers with an empty body, so the result carries no value. */
+export type WorkflowRerunResult = GitHubMutationResult<null>
+
 // ─── Cloud deployments ───────────────────────────────────────────────────────
 
 /** Provider-agnostic deployment hosts the Cloud Deployments panel can reach. */

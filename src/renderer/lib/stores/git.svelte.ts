@@ -49,7 +49,8 @@ import type {
   PullRequestPage,
   PullRequestReference,
   PullRequestSummary,
-  RepositoryMentionUser
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -94,6 +95,7 @@ export type GitOperation =
   | 'deployment-detail'
   | 'deployment-run-detail'
   | 'deployment-log'
+  | 'deployment-rerun'
 
 /** How long a cached PR page or bundle is served without refetching. */
 const PR_CACHE_TTL_MS = 60_000
@@ -2060,6 +2062,59 @@ export class GitState {
     } finally {
       this.markBusy('deployment-log', false)
     }
+  }
+
+  /**
+   * Replay a workflow run's jobs, then drop the cached views so the run, its
+   * deployment and its logs are read again instead of showing the stale pre-run
+   * state. Returns false when GitHub refused (the reason lands in `error`).
+   */
+  async rerunWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number,
+    mode: WorkflowRerunMode
+  ): Promise<boolean> {
+    this.markBusy('deployment-rerun', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      const result = await invoke('deployment:rerunRun', projectId, owner, repo, runId, mode)
+      if (result.status === 'permission_required') {
+        this.githubPermission = result
+        return false
+      }
+      this.invalidateWorkflowRun(owner, repo, runId)
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The workflow run could not be re-run')
+      return false
+    } finally {
+      this.markBusy('deployment-rerun', false)
+    }
+  }
+
+  /**
+   * Forget everything a re-run invalidates for one run: the run detail, its job
+   * logs (a re-run replaces them), the deployment that owns it, and the overview
+   * list that shows its state. The deployment is matched by dropping the whole
+   * repository's deployment details, because a run id does not name one.
+   */
+  private invalidateWorkflowRun(owner: string, repo: string, runId: number): void {
+    const runKey = GitState.workflowRunKey(owner, repo, runId)
+    const jobIds = (this.deploymentRunDetails[runKey]?.detail.jobs ?? []).map((job) => job.id)
+
+    delete this.deploymentRunDetails[runKey]
+    delete this.deploymentOverviews[GitState.deploymentKey(owner, repo)]
+
+    const detailKeys = Object.keys(this.deploymentDetails).filter((key) =>
+      key.startsWith(`${GitState.deploymentKey(owner, repo)}#`)
+    )
+    for (const key of detailKeys) delete this.deploymentDetails[key]
+
+    for (const jobId of jobIds)
+      delete this.deploymentLogs[GitState.deploymentLogKey(owner, repo, jobId)]
   }
 
   /** Read the agent's review report for a PR, if it has written one. */

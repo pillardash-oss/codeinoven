@@ -38,6 +38,7 @@
   import { composerMentionQuery } from '../chats/composer-mentions'
   import PrMentionMenu from './PrMentionMenu.svelte'
   import GitJobLogView from './GitJobLogView.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
   // The identity row is one component now, shared with the Git panel's own
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
@@ -645,6 +646,20 @@
     return 'text-danger'
   }
 
+  /**
+   * A check that finished without succeeding, which is the only kind a re-run
+   * can help. Shares its branch shape with `checkClass`, which paints the same
+   * set red, but answers a different question: "can a re-run fix this?"
+   */
+  function checkFailed(check: PullRequestCheck): boolean {
+    if (check.status !== 'completed') return false
+    return (
+      check.conclusion !== 'success' &&
+      check.conclusion !== 'skipped' &&
+      check.conclusion !== 'neutral'
+    )
+  }
+
   /** Stable key for one check row, shared by the list key and the log cache. */
   function checkKey(check: PullRequestCheck): string {
     return check.name + (check.url ?? '')
@@ -1213,6 +1228,22 @@
                   {checkStateLabel(check)}
                 </span>
               </button>
+              {#if checkFailed(check) && runId !== null}
+                <!--
+                  A failing check is a job with a problem, so the re-run lives on
+                  its row. GitHub only re-runs a whole run, which is why the menu
+                  offers "all jobs" beside "failed jobs only".
+                -->
+                <RerunRunMenu
+                  {projectId}
+                  {identity}
+                  {runId}
+                  runStatus="completed"
+                  hasFailedJobs
+                  compact
+                  onRerun={() => void refresh()}
+                />
+              {/if}
               {#if check.url}
                 <button
                   type="button"

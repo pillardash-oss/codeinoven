@@ -113,6 +113,7 @@ import {
   validatePrState,
   validatePrPage,
   validatePrReviewEvent,
+  validateWorkflowRerunMode,
   validatePrCommentBody,
   validatePushOptions,
   validatePullIntegrateOptions,
@@ -462,7 +463,8 @@ function canonicalGitHubBranch(branch: string): string {
 function githubPermissionRequired(
   error: unknown,
   owner: string,
-  repo: string
+  repo: string,
+  accessLabel = 'Pull requests read and write access'
 ): GitHubPermissionRequired | null {
   if (
     !(error instanceof ProviderHttpError) ||
@@ -474,7 +476,7 @@ function githubPermissionRequired(
   return {
     status: 'permission_required',
     message:
-      `CodeInOven needs Pull requests read and write access for ${owner}/${repo}. ` +
+      `CodeInOven needs ${accessLabel} for ${owner}/${repo}. ` +
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
@@ -820,12 +822,13 @@ async function resolveDragIcon(firstPath?: string): Promise<Electron.NativeImage
 async function runGitHubMutation<T>(
   owner: string,
   repo: string,
-  mutation: () => Promise<T>
+  mutation: () => Promise<T>,
+  accessLabel?: string
 ): Promise<GitHubMutationResult<T>> {
   try {
     return { status: 'completed', value: await mutation() }
   } catch (error) {
-    const permission = githubPermissionRequired(error, owner, repo)
+    const permission = githubPermissionRequired(error, owner, repo, accessLabel)
     if (permission) return permission
     throw error
   }
@@ -7062,6 +7065,38 @@ export function registerIpcHandlers(
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
         jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:rerunRun',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      runId: unknown,
+      mode: unknown
+    ) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to re-run workflow runs')
+      const target = {
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+      }
+      return runGitHubMutation(
+        target.owner,
+        target.repo,
+        async () => {
+          await provider.rerunWorkflowRun({
+            ...target,
+            runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID),
+            mode: validateWorkflowRerunMode(mode)
+          })
+          return null
+        },
+        'Actions read and write access'
+      )
     }
   )
 

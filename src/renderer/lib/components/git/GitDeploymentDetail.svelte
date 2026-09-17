@@ -15,6 +15,7 @@
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
   import GitJobLogView from './GitJobLogView.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import type {
     GitHubDeployment,
@@ -346,6 +347,16 @@
               {/if}
               Review failed job
             </button>
+          {/if}
+          {#if detail.workflowRun}
+            <RerunRunMenu
+              {projectId}
+              {identity}
+              runId={detail.workflowRun.id}
+              runStatus={detail.workflowRun.status}
+              hasFailedJobs={failedJob !== null}
+              onRerun={() => void loadDetail(true)}
+            />
           {/if}
         </div>
         {#if detail.jobs.length === 0}

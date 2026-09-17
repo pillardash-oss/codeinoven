@@ -18,7 +18,8 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
-  RepositoryMentionUser
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '../../lib/types'
 
 /** Merge a pull request with the given method. */
@@ -129,6 +130,16 @@ export interface GitProvider {
     repo: string
     jobId: number
   }): Promise<GitHubDeploymentJobLog>
+  /**
+   * Replay a workflow run's jobs, either every job or only the failed ones.
+   * Needs `actions: write`, so a read-only grant answers 403 rather than a result.
+   */
+  rerunWorkflowRun(input: {
+    owner: string
+    repo: string
+    runId: number
+    mode: WorkflowRerunMode
+  }): Promise<void>
   /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.

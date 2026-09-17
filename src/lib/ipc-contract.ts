@@ -192,7 +192,9 @@ import type {
   CuaBridgeStatus,
   ComputerUsePipFrame,
   ComputerUsePipState,
-  ComputerUseActivity
+  ComputerUseActivity,
+  WorkflowRerunMode,
+  WorkflowRerunResult
 } from './types'
 import type { WorkerNameSettings } from './assignment/worker-names'
 import type { CioPromptId, CioPromptSetting } from './cio-prompts'
@@ -1761,6 +1763,15 @@ export const IPC_INVOKE_CONTRACT = {
   'deployment:jobLog': {} as Contract<
     [projectId: string, owner: string, repo: string, jobId: number],
     GitHubDeploymentJobLog
+  >,
+  /**
+   * Replay a workflow run's jobs (all, or only the failed ones). Returns the
+   * mutation envelope so a read-only grant surfaces its permission prompt
+   * instead of a bare failure.
+   */
+  'deployment:rerunRun': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number, mode: WorkflowRerunMode],
+    WorkflowRerunResult
   >,
   /**
    * Read a project's cloud deployment config, or null when none exists. The

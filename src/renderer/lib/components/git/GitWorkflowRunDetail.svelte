@@ -5,6 +5,7 @@
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
   import GitJobLogView from './GitJobLogView.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import type {
     GitHubDeploymentJob,
@@ -39,6 +40,9 @@
   const loading = $derived(gitState.isBusy('deployment-run-detail'))
 
   const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
+
+  /** The run the re-run control targets: the loaded detail's, or the passed one. */
+  const rerunRun = $derived(detail?.run ?? run)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -193,6 +197,14 @@
               Review failed job
             </button>
           {/if}
+          <RerunRunMenu
+            {projectId}
+            {identity}
+            runId={rerunRun.id}
+            runStatus={rerunRun.status}
+            hasFailedJobs={failedJob !== null}
+            onRerun={() => void loadDetail(true)}
+          />
         </div>
         {#if detail.jobs.length === 0}
           <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
