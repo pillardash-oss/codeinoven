@@ -11,8 +11,6 @@ import type {
   GitDiff,
   GitFileChange,
   GitIdentity,
-  GitMainSyncDirection,
-  GitMainSyncResult,
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
@@ -20,6 +18,9 @@ import type {
   GitResetMode,
   GitStashEntry,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeerTarget,
+  GitSyncResult,
   GitSyncSummary,
   MergeSummary,
   PullRequestCompare,
@@ -1099,49 +1100,54 @@ export class GitService {
   }
 
   /**
-   * Sync this checkout with the project's main worktree, in either direction.
-   * The project root is the single source of truth for "main": the branch it
-   * has checked out is the other end of both directions.
+   * Sync this checkout with another end, in either direction. The other end is a
+   * peer: another checkout (the project root, or a managed worktree) or a named
+   * local branch. "Sync with main" is the peer that is the project root, so both
+   * of those flows share this one implementation instead of drifting apart.
    *
-   * `from-main` reads main and writes this checkout: the main branch's
-   * remote-tracking ref is refreshed first, then integrated. The
-   * remote-tracking ref is preferred only when it strictly contains the local
-   * branch   i.e. the project root has not pulled yet. Otherwise the local
-   * branch wins, so commits that exist only on the project root's main are
-   * never silently skipped. A failed remote refresh is reported through
-   * `fetched: false`, never treated as fatal: the local branch still is the
-   * repository's authoritative main state when the network is unavailable.
+   * `from` reads the peer and writes this checkout: the peer branch's
+   * remote-tracking ref is refreshed first, then integrated. The remote-tracking
+   * ref is preferred only when it strictly contains the local branch - i.e. the
+   * other checkout has not pulled yet. Otherwise the local branch wins, so
+   * commits that exist only in the other checkout are never silently skipped. A
+   * failed remote refresh is reported through `fetched: false`, never treated as
+   * fatal: the local branch is still the repository's authoritative state when
+   * the network is unavailable.
    *
-   * `to-main` reads this checkout and writes main: this branch's commits are
-   * folded into the branch the project root has checked out. Nothing is ever
-   * pushed   publishing main stays an explicit user action.
+   * `to` reads this checkout and writes the peer: this branch's commits are
+   * folded into the branch the peer has checked out. It needs a real checkout to
+   * receive them, and nothing is ever pushed - publishing stays an explicit user
+   * action.
    *
-   * Both directions fail closed instead of guessing: a checkout that is the
-   * project root itself, a detached HEAD, or an integration already in progress
-   * all throw before a single ref moves. A conflicted integration is not an
-   * error   the refreshed status is returned so the renderer hands over to the
-   * conflict UI.
+   * Both directions fail closed instead of guessing: a peer that is this very
+   * checkout, a detached HEAD, or an integration already in progress all throw
+   * before a single ref moves. A conflicted integration is not an error - the
+   * refreshed status is returned so the renderer hands over to the conflict UI.
+   *
+   * The whole operation holds this checkout's queue, and both ends are mutated
+   * under it; two cross-syncs in opposite directions would still serialise, which
+   * is why a nested acquisition of the peer's queue is deliberately not taken.
    */
-  async syncMain(
+  async syncWith(
     projectPath: string,
     options: {
-      direction: GitMainSyncDirection
-      /** Root of the project's main worktree   the other end of the sync. */
-      mainPath: string
+      direction: GitSyncDirection
+      /** The other end of the sync, already resolved by the caller. */
+      peer: GitSyncPeerTarget
       strategy: GitPullStrategy
       remote?: string
       token?: string
     }
-  ): Promise<GitMainSyncResult> {
+  ): Promise<GitSyncResult> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      const mainDirectory = await this.repo(options.mainPath)
-      const toward = options.direction === 'from-main' ? 'from' : 'to'
-      if (directory === mainDirectory) {
+      const peerDirectory = options.peer.path ? await this.repo(options.peer.path) : null
+      const toward = options.direction === 'from' ? 'from' : 'to'
+      if (peerDirectory === directory) {
         throw new Error(
-          options.direction === 'from-main'
-            ? 'This checkout is the project root, so there is no main worktree to sync from'
-            : 'This checkout is the project root, so it cannot be synced to main'
+          options.direction === 'from'
+            ? `This checkout is ${options.peer.label}, so there is nothing to sync from`
+            : `This checkout is ${options.peer.label}, so it cannot be synced to itself`
         )
       }
 
@@ -1154,25 +1160,38 @@ export class GitService {
       // agree either way.
       if (before.conflictState !== 'none') {
         throw new Error(
-          `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} main`
+          `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} ${options.peer.label}`
         )
       }
       if (before.detached || !before.branch) {
-        throw new Error(`Check out a branch in this worktree before syncing ${toward} main`)
+        throw new Error(
+          `Check out a branch in this worktree before syncing ${toward} ${options.peer.label}`
+        )
       }
       const branch = before.branch
 
-      if (options.direction === 'to-main') {
-        return await this.foldIntoMain(directory, mainDirectory, before, branch, options)
+      if (options.direction === 'to') {
+        if (!peerDirectory) {
+          throw new Error(
+            `${options.peer.label} is not a checkout, so it cannot receive commits. Pick a worktree or the project root to sync to`
+          )
+        }
+        return await this.foldIntoPeer(directory, peerDirectory, before, branch, options)
       }
 
-      const sourceBranch = (
-        await this.wrapError(projectPath, 'read', () =>
-          this.client(mainDirectory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])
+      const sourceBranch = peerDirectory
+        ? await this.branchOfCheckout(peerDirectory, options.peer.label)
+        : options.peer.branch
+      if (!sourceBranch) {
+        throw new Error(`${options.peer.label} has no branch to sync from`)
+      }
+      if (!peerDirectory) {
+        const exists = await this.wrapError(projectPath, 'read', () =>
+          this.refExists(this.client(directory), `refs/heads/${sourceBranch}`)
         )
-      ).trim()
-      if (!sourceBranch || sourceBranch === 'HEAD') {
-        throw new Error('The project root is not on a branch, so there is nothing to sync from')
+        if (!exists) {
+          throw new Error(`The branch ${sourceBranch} does not exist in this repository`)
+        }
       }
 
       const remoteName = options.remote ?? (await this.primaryRemoteName(directory))
@@ -1185,9 +1204,9 @@ export class GitService {
           await withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
           fetched = true
         } catch (failure) {
-          // Reported as `fetched: false`   the local main branch is still synced.
+          // Reported as `fetched: false` - the local branch is still synced.
           Logger.dev(
-            `Sync from main: refreshing ${remoteName}/${sourceBranch} failed: ${
+            `Sync ${toward} ${options.peer.label}: refreshing ${remoteName}/${sourceBranch} failed: ${
               failure instanceof Error ? failure.message : String(failure)
             }`
           )
@@ -1204,118 +1223,137 @@ export class GitService {
 
       return {
         status: await this.readStatus(directory),
-        direction: 'from-main',
+        direction: 'from',
         branch,
-        mainBranch: sourceBranch,
+        peerBranch: sourceBranch,
+        peerLabel: options.peer.label,
         ref: ref === remoteRef && remoteName ? `${remoteName}/${sourceBranch}` : sourceBranch,
         fetched,
         remote: remoteName ?? null,
         incoming,
-        mainAhead: 0
+        peerAhead: 0
       }
     })
   }
 
+  /** The branch a peer checkout has checked out, refusing a detached HEAD. */
+  private async branchOfCheckout(directory: string, label: string): Promise<string> {
+    const resolved = (
+      await this.client(directory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])
+    ).trim()
+    if (!resolved || resolved === 'HEAD') {
+      throw new Error(`${label} is not on a branch, so there is nothing to sync from`)
+    }
+    return resolved
+  }
+
   /**
-   * Fold this worktree's branch into the branch the project root has checked
-   * out ("Sync to main").
+   * Fold this worktree's branch into the branch the peer checkout has checked
+   * out ("Sync to" the peer).
    *
    * Both checkouts must be committed and idle first: only committed work can
    * move, so uncommitted work would silently stay behind, and a clean target is
    * what makes rolling a refused merge back exact.
    *
-   * `rebase` keeps main linear without rewriting it: this branch's commits are
-   * replayed on top of main (a conflict stays here, in the checkout the panel
-   * shows, just like `from-main`), then main fast-forwards onto the rebased
-   * branch. `merge`/`ff-only` integrate directly in main, and a merge that
-   * conflicts is rolled back before the error surfaces   a one-click action run
-   * from a worktree scope must never leave the project root mid-merge where the
-   * user cannot see it.
+   * `rebase` keeps the peer linear without rewriting it: this branch's commits
+   * are replayed on top of the peer's branch (a conflict stays here, in the
+   * checkout the panel shows, just like `from`), then the peer branch
+   * fast-forwards onto the rebased branch. `merge`/`ff-only` integrate directly
+   * in the peer, and a merge that conflicts is rolled back before the error
+   * surfaces - a one-click action run from a worktree scope must never leave
+   * another checkout mid-merge where the user is not looking.
    */
-  private async foldIntoMain(
+  private async foldIntoPeer(
     directory: string,
-    mainDirectory: string,
+    peerDirectory: string,
     before: GitStatus,
     branch: string,
-    options: { mainPath: string; strategy: GitPullStrategy }
-  ): Promise<GitMainSyncResult> {
+    options: { direction: GitSyncDirection; peer: GitSyncPeerTarget; strategy: GitPullStrategy }
+  ): Promise<GitSyncResult> {
+    const label = options.peer.label
     const uncommitted = (status: GitStatus): number =>
       status.changes.filter((change) => change.status !== 'untracked').length
 
     const dirty = uncommitted(before)
     if (dirty > 0) {
       throw new Error(
-        `This worktree has ${dirty} uncommitted file${dirty === 1 ? '' : 's'}. Commit or stash ${dirty === 1 ? 'it' : 'them'} before syncing to main`
+        `This checkout has ${dirty} uncommitted file${dirty === 1 ? '' : 's'}. Commit or stash ${dirty === 1 ? 'it' : 'them'} before syncing to ${label}`
       )
     }
 
-    const mainStatus = await this.readStatus(mainDirectory)
-    // Same order as the worktree's own check: a rebase in the project root also
-    // detaches its HEAD, and "the project root is not on a branch" is not what
-    // the user needs to hear while its rebase is sitting half-finished.
-    if (mainStatus.conflictState !== 'none') {
+    const peerStatus = await this.readStatus(peerDirectory)
+    // Same order as the worktree's own check: a rebase in the peer also detaches
+    // its HEAD, and "not on a branch" is not what the user needs to hear while
+    // its rebase is sitting half-finished.
+    if (peerStatus.conflictState !== 'none') {
       throw new Error(
-        `Finish or abort the in-progress ${mainStatus.conflictState} in the project main worktree before syncing to main`
+        `Finish or abort the in-progress ${peerStatus.conflictState} in ${label} before syncing to it`
       )
     }
-    if (mainStatus.detached || !mainStatus.branch) {
-      throw new Error('The project root is not on a branch, so there is nothing to sync to')
+    if (peerStatus.detached || !peerStatus.branch) {
+      throw new Error(`${label} is not on a branch, so there is nothing to sync to`)
     }
-    const mainBranch = mainStatus.branch
-    const mainDirty = uncommitted(mainStatus)
-    if (mainDirty > 0) {
+    const peerBranch = peerStatus.branch
+    const peerDirty = uncommitted(peerStatus)
+    if (peerDirty > 0) {
       throw new Error(
-        `The project main worktree has ${mainDirty} uncommitted file${mainDirty === 1 ? '' : 's'}. Commit or stash ${mainDirty === 1 ? 'it' : 'them'} there before syncing to main`
+        `${label} has ${peerDirty} uncommitted file${peerDirty === 1 ? '' : 's'}. Commit or stash ${peerDirty === 1 ? 'it' : 'them'} there before syncing to it`
       )
     }
 
-    const incoming = await this.countCommitsAhead(mainDirectory, options.mainPath, branch)
+    const incoming = await this.countCommitsAhead(
+      peerDirectory,
+      options.peer.path ?? peerDirectory,
+      branch
+    )
     let conflicted = false
     if (incoming > 0) {
       if (options.strategy === 'rebase') {
         const outcome = await this.integrateFromRef(
           directory,
-          options.mainPath,
-          `refs/heads/${mainBranch}`,
+          options.peer.path ?? directory,
+          `refs/heads/${peerBranch}`,
           'rebase'
         )
         conflicted = outcome === 'conflicted'
         if (!conflicted) {
-          await this.foldIntoMainBranch(mainDirectory, branch, mainBranch, 'ff-only')
+          await this.foldIntoPeerBranch(peerDirectory, branch, peerBranch, label, 'ff-only')
         }
       } else {
-        await this.foldIntoMainBranch(mainDirectory, branch, mainBranch, options.strategy)
+        await this.foldIntoPeerBranch(peerDirectory, branch, peerBranch, label, options.strategy)
       }
     }
 
     return {
       status: await this.readStatus(directory),
-      direction: 'to-main',
+      direction: 'to',
       branch,
-      mainBranch,
+      peerBranch,
+      peerLabel: label,
       ref: branch,
       fetched: false,
       remote: null,
       incoming,
-      mainAhead:
+      peerAhead:
         incoming > 0 && !conflicted
-          ? (await this.readStatus(mainDirectory)).ahead
-          : mainStatus.ahead
+          ? (await this.readStatus(peerDirectory)).ahead
+          : peerStatus.ahead
     }
   }
 
   /**
-   * Integrate `branch` into the branch checked out in the project root. The
+   * Integrate `branch` into the branch checked out in the peer checkout. The
    * caller guarantees a clean, idle target, so a conflicted merge can be rolled
-   * back exactly instead of stranding the project root mid-merge.
+   * back exactly instead of stranding the peer mid-merge.
    */
-  private async foldIntoMainBranch(
-    mainDirectory: string,
+  private async foldIntoPeerBranch(
+    peerDirectory: string,
     branch: string,
-    mainBranch: string,
+    peerBranch: string,
+    label: string,
     strategy: 'merge' | 'ff-only'
   ): Promise<void> {
-    const git = this.client(mainDirectory)
+    const git = this.client(peerDirectory)
     const args = strategy === 'ff-only' ? ['--no-edit', '--ff-only', branch] : ['--no-edit', branch]
     const failure = await git.merge(args).then(
       () => null,
@@ -1334,16 +1372,16 @@ export class GitService {
       )
       throw new Error(
         rolledBack
-          ? `Merging ${branch} into ${mainBranch} would conflict. Run "Sync from main" in this worktree, resolve the conflicts here, then sync to main again`
-          : `Merging ${branch} into ${mainBranch} conflicted and could not be rolled back. Resolve it in the project main worktree first`
+          ? `Merging ${branch} into ${peerBranch} would conflict. Sync from ${label} in this worktree, resolve the conflicts here, then sync to it again`
+          : `Merging ${branch} into ${peerBranch} conflicted and could not be rolled back. Resolve it in ${label} first`
       )
     }
     if (strategy === 'ff-only') {
       throw new Error(
-        `${mainBranch} has diverged from ${branch}, so it cannot fast-forward. Merge instead`
+        `${peerBranch} has diverged from ${branch}, so it cannot fast-forward. Merge instead`
       )
     }
-    await this.wrapError(mainDirectory, 'mutation', async () => {
+    await this.wrapError(peerDirectory, 'mutation', async () => {
       throw failure
     })
   }

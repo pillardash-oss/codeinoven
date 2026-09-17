@@ -18,16 +18,20 @@ import type {
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
-  GitMainSyncResult,
   GitRebaseAction,
   GitRemoteInfo,
   GitStashEntry,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeer,
+  GitSyncPeerOption,
+  GitSyncResult,
   MergeSummary,
   PrAgentReport,
   PrCommentKind,
   PrComposeReport,
   PrCreateInput,
+  PrListRequest,
   PrMergeMethod,
   PrMinimizeReason,
   PrResolveOptions,
@@ -212,24 +216,21 @@ export const invokeGitContract = {
     ],
     GitStatus
   >,
-  /** Integrate the project's main worktree branch into a worktree checkout. */
-  'git:syncFromMain': {} as Contract<
+  /** Integrate another checkout or branch into a checkout, or fold a checkout's commits into one. */
+  'git:syncWith': {} as Contract<
     [
       projectId: string,
-      options: { strategy: import('../types').GitPullStrategy },
+      options: {
+        direction: GitSyncDirection
+        strategy: import('../types').GitPullStrategy
+        peer: GitSyncPeer
+      },
       scopeBucketId?: string
     ],
-    GitMainSyncResult
+    GitSyncResult
   >,
-  /** Fold a worktree checkout's branch into the project's main worktree branch. */
-  'git:syncToMain': {} as Contract<
-    [
-      projectId: string,
-      options: { strategy: import('../types').GitPullStrategy },
-      scopeBucketId?: string
-    ],
-    GitMainSyncResult
-  >,
+  /** Every checkout and branch this project can sync with, as main names them. */
+  'git:syncPeers': {} as Contract<[projectId: string, scopeBucketId?: string], GitSyncPeerOption[]>,
   'git:push': {} as Contract<
     [
       projectId: string,
@@ -348,7 +349,15 @@ export const invokeGitContract = {
     GitHubMutationResult<PullRequestReference>
   >,
   'pr:page': {} as Contract<
-    [projectId: string, owner: string, repo: string, state: PrState, page: number],
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      state: PrState,
+      page: number,
+      /** Which relationship to keep, how to order, and where to continue from. */
+      request: PrListRequest
+    ],
     PullRequestPage
   >,
   /**

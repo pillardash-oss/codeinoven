@@ -2,6 +2,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
+  import GitSyncPeerDialog from '../git/GitSyncPeerDialog.svelte'
   import ScopeMergeModal from './ScopeMergeModal.svelte'
   import ScopeLifecycleModal from './ScopeLifecycleModal.svelte'
   import ScopeCreateModal from './ScopeCreateModal.svelte'
@@ -160,6 +161,22 @@
     onDone={() => (actions.mergeTarget = null)}
     onConflicts={(sourceProjectId: string, targetScopeBucketId: string) =>
       actions.openConflictsHandoff(sourceProjectId, targetScopeBucketId)}
+  />
+{/if}
+
+<!--
+  "Merge from project": the same peer chooser the Git panel uses, aimed at this
+  scope's worktree. The chooser resolves the running checkout from the scope
+  board, so it names this scope as the one the sync runs in.
+-->
+{#if projectId && actions.syncTarget}
+  <GitSyncPeerDialog
+    {projectId}
+    scopeBucketId={actions.syncTarget.bucket.id}
+    initialDirection={actions.syncTarget.direction}
+    initialPeer={{ kind: 'root' }}
+    onClose={() => (actions.syncTarget = null)}
+    onDone={() => (actions.syncTarget = null)}
   />
 {/if}
 

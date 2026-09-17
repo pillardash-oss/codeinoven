@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../lib/types'
 import type {
-  GitMainSyncDirection,
-  GitMainSyncResult,
   GitPullStrategy,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeerTarget,
+  GitSyncResult,
   PermissionLevel,
   ScopeAgentConfirmationRequest,
   ScopeBoard,
@@ -55,15 +56,16 @@ export interface ScopeToolContext {
 /** Git operations the tool needs, supplied by the shared Git service. */
 export interface ScopeToolGit {
   getStatus(projectPath: string): Promise<GitStatus>
-  syncMain(
+  syncWith(
     projectPath: string,
     options: {
-      direction: GitMainSyncDirection
-      mainPath: string
+      direction: GitSyncDirection
+      /** The other end of the sync; the agent's scope tool always names the project root. */
+      peer: GitSyncPeerTarget
       strategy: GitPullStrategy
       token?: string
     }
-  ): Promise<GitMainSyncResult>
+  ): Promise<GitSyncResult>
 }
 
 export interface ScopeToolServiceOptions {
@@ -79,7 +81,7 @@ export interface ScopeToolServiceOptions {
   onBoardChanged?: (event: ScopeBoardChangedEvent) => void
   /** Stream a worktree job's stages, tagged as agent-originated. */
   onProgress?: (event: ScopeWorktreeProgressEvent) => void
-  /** Vaulted project credential, used to refresh main before a `from-main` sync. */
+  /** Vaulted project credential, used to refresh the peer branch before a `from` sync. */
   resolveGitToken?: (projectId: string) => Promise<string | undefined>
   /** Configured pull strategy; `ask` is already resolved to a concrete one. */
   defaultPullStrategy?: () => Promise<GitPullStrategy>
@@ -384,11 +386,12 @@ export class ScopeToolService {
     }
     const strategy = call.strategy ?? (await this.options.defaultPullStrategy?.()) ?? 'merge'
     const token = await this.options.resolveGitToken?.(context.projectId)
-    const direction: GitMainSyncDirection =
-      call.action === 'sync_from_main' ? 'from-main' : 'to-main'
-    const result = await this.git.syncMain(scopeRoot, {
+    const direction = call.action === 'sync_from_main' ? 'from' : 'to'
+    // The agent's peer is always the project directory, which is exactly what
+    // `action` names ("main" is the branch the project root has checked out).
+    const result = await this.git.syncWith(scopeRoot, {
       direction,
-      mainPath: projectPath,
+      peer: { path: projectPath, label: 'the project root' },
       strategy,
       ...(token === undefined ? {} : { token })
     })
@@ -397,13 +400,13 @@ export class ScopeToolService {
       synced: conflicted.length === 0,
       direction,
       branch: result.branch,
-      mainBranch: result.mainBranch,
+      peerBranch: result.peerBranch,
       ref: result.ref,
       strategy,
       fetched: result.fetched,
       remote: result.remote,
       incoming: result.incoming,
-      mainAhead: result.mainAhead,
+      peerAhead: result.peerAhead,
       conflicted,
       conflictState: result.status.conflictState,
       published: false,

@@ -6,6 +6,7 @@ import { ipcErrorMessage } from '$lib/ipc-errors'
 import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  type GitSyncDirection,
   type ScopeBucket,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight
@@ -39,6 +40,12 @@ export class ScopeActionsController {
   deletePreflight = $state<ScopeLifecyclePreflight | null>(null)
   lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
   mergeTarget = $state<ScopeBucket | null>(null)
+  /**
+   * Scope whose worktree is the checkout a peer sync runs in. Opened from the
+   * menu as "Merge from project…", which is a sync from the project root into
+   * that worktree, but the chooser still lets the user pick any other end.
+   */
+  syncTarget = $state<{ bucket: ScopeBucket; direction: GitSyncDirection } | null>(null)
   createWorktreeTarget = $state<ScopeBucket | null>(null)
   adoptWorktreeTarget = $state<ScopeBucket | null>(null)
   /** Last failed action, surfaced by whichever surface renders the controller. */
@@ -183,6 +190,14 @@ export class ScopeActionsController {
 
   askMerge(bucket: ScopeBucket): void {
     this.mergeTarget = bucket
+  }
+
+  /**
+   * "Merge from project": bring the project root's commits into this worktree's
+   * branch, through the same peer chooser the Git panel uses.
+   */
+  askSyncFrom(bucket: ScopeBucket): void {
+    this.syncTarget = { bucket, direction: 'from' }
   }
 
   askCreateWorktree(bucket: ScopeBucket): void {

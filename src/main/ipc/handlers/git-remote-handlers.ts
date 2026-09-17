@@ -2,17 +2,16 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import {
   validateBranchName,
   validateEntityId,
-  validateMainSyncOptions,
   validatePullIntegrateOptions,
   validatePushOptions,
   validateRemoteName,
-  validateRemoteUrl
+  validateRemoteUrl,
+  validateSyncWithOptions
 } from '../ipc-validation'
-import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
-  const { gitService, vault, gitCredentialRef, resolveProjectPath } = ctx
+  const { gitService, syncPeers, vault, gitCredentialRef, resolveProjectPath } = ctx
 
   // ─── Git remotes, sync & credentials ────────────────────────────────────
   const gitCredentialStatus = async (projectId: string) => ({
@@ -121,46 +120,41 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
     }
   )
   /**
-   * Both directions of the worktree/main sync share one resolution path: the
-   * worktree root comes from the active scope, the main root from the Default
-   * scope, and the vaulted PAT is resolved in main only so it never crosses IPC.
+   * Both directions of a peer sync share one resolution path: the running
+   * checkout comes from the active scope, the other end is resolved by the peer
+   * service (which is also what the picker listed), and the vaulted PAT is
+   * resolved in main only so it never crosses IPC.
    */
-  const syncMain = async (
-    direction: 'from-main' | 'to-main',
-    projectId: unknown,
-    options: unknown,
-    scopeBucketId?: unknown
-  ) => {
+  const syncWith = async (projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeOptions = validateMainSyncOptions(options)
-    // Both directions need a worktree checkout: without a scope the active root
-    // is the project root, which is the other end of the sync.
-    if (scopeBucketId === undefined) {
-      throw new Error(
-        `Syncing ${direction === 'from-main' ? 'from' : 'to'} the main branch requires a worktree scope`
-      )
-    }
-    const safeScopeBucketId = validateEntityId(scopeBucketId, 'Scope bucket ID')
+    const safeOptions = validateSyncWithOptions(options)
+    const safeScopeBucketId =
+      scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
     // Resolve the vaulted PAT in main only; the token never crosses IPC.
     const tokenRef = gitCredentialRef(safeProjectId)
     const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-    return gitService.syncMain(await resolveProjectPath(safeProjectId, safeScopeBucketId), {
-      direction,
-      mainPath: await resolveProjectPath(safeProjectId, DEFAULT_SCOPE_BUCKET_ID),
+    const peer = await syncPeers.resolve({ projectId: safeProjectId, peer: safeOptions.peer })
+    return gitService.syncWith(await resolveProjectPath(safeProjectId, safeScopeBucketId), {
+      direction: safeOptions.direction,
+      peer: peer.target,
       strategy: safeOptions.strategy,
       token
     })
   }
   ipcMain.handle(
-    'git:syncFromMain',
+    'git:syncWith',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      syncMain('from-main', projectId, options, scopeBucketId)
+      syncWith(projectId, options, scopeBucketId)
   )
-  ipcMain.handle(
-    'git:syncToMain',
-    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      syncMain('to-main', projectId, options, scopeBucketId)
-  )
+  ipcMain.handle('git:syncPeers', async (_, projectId: unknown, scopeBucketId?: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeScopeBucketId =
+      scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+    return syncPeers.options({
+      projectId: safeProjectId,
+      runningPath: await resolveProjectPath(safeProjectId, safeScopeBucketId)
+    })
+  })
   ipcMain.handle(
     'git:push',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {

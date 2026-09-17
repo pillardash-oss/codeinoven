@@ -3,7 +3,6 @@
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { showToastWarning } from '$lib/stores/app-errors.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
@@ -24,8 +23,8 @@
     GitConflictSide,
     GitDiff,
     GitFileChange,
-    GitMainSyncDirection,
     GitPullStrategy,
+    GitSyncDirection,
     GitRebaseAction,
     GitHubDeployment,
     GitHubDeploymentJob,
@@ -90,6 +89,9 @@
   import GitStatusPanelRepoStates from './GitStatusPanelRepoStates.svelte'
   import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
   import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
+  import GitSyncButton from './GitSyncButton.svelte'
+  import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
+  import { reportSyncResult } from './git-sync-copy'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
@@ -97,9 +99,9 @@
   import PrViewSwitcher from './PrViewSwitcher.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import { PR_DETAIL_VIEWS, prViewCount } from './pr-view'
-  import SyncMainButton from './SyncMainButton.svelte'
   import GitViewMenu from './GitViewMenu.svelte'
   import PrIdentityRow from './PrIdentityRow.svelte'
+  import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
   import { type PrDetailTabId } from './pr-view'
 
@@ -109,7 +111,7 @@
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import type { PrState, PullRequestSummary } from '$shared/types'
+  import type { PrListFilter, PrListSort, PrState, PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -154,12 +156,20 @@
   let pullStrategyError = $state('')
   /**
    * Main-sync strategy chooser, opened by the `ask` preference, a failure, or
-   * always for the to-main direction (it mutates the project root).
+   * always when sending commits out of this checkout (that mutates a branch the
+   * user is not looking at).
    */
   let syncMainOpen = $state(false)
   let syncMainError = $state('')
   /** Which direction the chooser and its actions apply to. */
-  let syncMainDirection = $state<GitMainSyncDirection>('from-main')
+  let syncDirection = $state<GitSyncDirection>('from')
+  /**
+   * Peer chooser, opened from the Sync menu's branch entries. It owns the other
+   * end's selection and the sync itself, so the panel only says which direction
+   * the user started from.
+   */
+  let syncPeerOpen = $state(false)
+  let syncPeerDirection = $state<GitSyncDirection>('from')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -222,6 +232,8 @@
    * own action row, beside Push and Pull.
    */
   let prListState = $state<PrState>(savedView.prListState)
+  let prListFilter = $state<PrListFilter>(savedView.prListFilter)
+  let prListSort = $state<PrListSort>(savedView.prListSort)
   let prListPage = $state(1)
   /**
    * The view the detail reader is showing, mirrored so the header's check pill
@@ -337,7 +349,9 @@
       selectedCommit,
       selectedPullRequest,
       selectedStash,
-      prListState
+      prListState,
+      prListFilter,
+      prListSort
     })
   })
 
@@ -421,6 +435,7 @@
         identity.repo,
         prListState,
         prListPage,
+        { filter: prListFilter, sort: prListSort },
         true
       )
       return
@@ -791,6 +806,23 @@
   function selectPrListState(next: PrState): void {
     if (next === prListState) return
     prListState = next
+    prListPage = 1
+  }
+
+  /**
+   * Switch which relationship the PR view keeps, or how it orders the result.
+   * Both are the panel's, so the page goes with them: page 4 of "everything" has
+   * nothing to do with page 4 of "authored by me".
+   */
+  function selectPrListFilter(next: PrListFilter): void {
+    if (next === prListFilter) return
+    prListFilter = next
+    prListPage = 1
+  }
+
+  function selectPrListSort(next: PrListSort): void {
+    if (next === prListSort) return
+    prListSort = next
     prListPage = 1
   }
 
@@ -1363,7 +1395,7 @@
         branch.remote === primaryRemote?.name
     )
   )
-  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync-main']))
+  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push', 'sync']))
   /** Commits the remote does not have yet, according to the last fetch. */
   const commitsAhead = $derived(status?.ahead ?? 0)
   /**
@@ -1384,8 +1416,8 @@
   )
 
   /**
-   * The active scope's bucket. Managed worktree scopes are the only ones that
-   * have a main worktree to sync from, so they alone get the Sync-main action.
+   * The active scope's bucket. Only a managed worktree has a main worktree to
+   * trade commits with by name, while every checkout can sync with any other.
    */
   const activeScopeBucket = $derived(scopeState.bucketFor(projectId, scopeBucketId))
   const worktreeScope = $derived(activeScopeBucket?.root.kind === 'worktree')
@@ -1400,7 +1432,11 @@
    */
   const showsPull = $derived(repoState === 'git' && hasRemote && commitsBehind > 0)
   const showsPush = $derived(repoState === 'git' && hasRemote && hasWorkToPush)
-  const showsSync = $derived(repoState === 'git' && worktreeScope)
+  /**
+   * Any checkout can sync: a worktree trades commits with main (or anything
+   * else), and the project root can pull in a worktree's or a branch's commits.
+   */
+  const showsSync = $derived(repoState === 'git')
   /**
    * Pull and Push are the only remote actions that earn the second row: they act
    * on the branch you are standing on, one each, and they fill the row between
@@ -1536,14 +1572,19 @@
    * retrying.
    */
   async function performSyncMain(
-    direction: GitMainSyncDirection,
+    direction: GitSyncDirection,
     strategy: GitPullStrategy
   ): Promise<void> {
-    const result = await gitState.syncMain(projectId, direction, strategy)
+    // "Main" is the project root, so the peer is named rather than chosen.
+    const result = await gitState.syncWith(projectId, scopeBucketId, {
+      direction,
+      peer: { kind: 'root' },
+      strategy
+    })
     if (gitState.error) {
       syncMainError = gitState.error
       gitState.error = null
-      syncMainDirection = direction
+      syncDirection = direction
       syncMainOpen = true
       // A refusal usually names a state this panel has not read yet   a rebase
       // the platform, an agent or a terminal left stopped is not in the status
@@ -1556,53 +1597,17 @@
     syncMainOpen = false
     syncMainError = ''
     void refreshStatus()
-
-    if (direction === 'from-main') {
-      const summary =
-        result.incoming === 0
-          ? `Already up to date with ${result.ref}`
-          : `Synced ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} from ${result.ref}`
-      if (result.status.conflicted.length > 0) {
-        showToastWarning(`${summary}, with conflicts to resolve.`)
-        return
-      }
-      if (result.remote && !result.fetched) {
-        showToastWarning(
-          `${summary}. ${result.remote}/${result.mainBranch} could not be refreshed.`
-        )
-        return
-      }
-      toast.success(summary)
-      return
-    }
-
-    if (result.status.conflicted.length > 0) {
-      showToastWarning(
-        `Rebasing onto ${result.mainBranch} hit conflicts. Resolve them in this worktree, then sync to main again.`
-      )
-      return
-    }
-    const summary =
-      result.incoming === 0
-        ? `Nothing to send: ${result.mainBranch} already has ${result.branch}'s commits`
-        : `Sent ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} to ${result.mainBranch}`
-    if (result.mainAhead > 0) {
-      toast.success(
-        `${summary}. ${result.mainBranch} has ${String(result.mainAhead)} unpushed commit${result.mainAhead === 1 ? '' : 's'}.`
-      )
-      return
-    }
-    toast.success(summary)
+    reportSyncResult(result)
   }
 
-  function openSyncMain(direction: GitMainSyncDirection): void {
-    syncMainDirection = direction
+  function openSyncMain(direction: GitSyncDirection): void {
+    syncDirection = direction
     syncMainError = ''
     syncMainOpen = true
   }
 
-  async function syncMainAction(direction: GitMainSyncDirection): Promise<void> {
-    if (direction === 'to-main' || appConfigState.defaultPullStrategy === 'ask') {
+  async function syncMainAction(direction: GitSyncDirection): Promise<void> {
+    if (direction === 'to' || appConfigState.defaultPullStrategy === 'ask') {
       openSyncMain(direction)
       return
     }
@@ -1610,9 +1615,25 @@
   }
 
   function closeSyncMain(): void {
-    if (gitState.isBusy('sync-main')) return
+    if (gitState.isBusy('sync')) return
     syncMainOpen = false
     syncMainError = ''
+  }
+
+  /** The peer chooser has to be opened: the other end is the whole choice. */
+  function openSyncPeer(direction: GitSyncDirection): void {
+    syncPeerDirection = direction
+    syncPeerOpen = true
+  }
+
+  function closeSyncPeer(): void {
+    if (gitState.isBusy('sync')) return
+    syncPeerOpen = false
+  }
+
+  function syncPeerDone(): void {
+    syncPeerOpen = false
+    void refreshStatus()
   }
 
   async function performPush(remote: { name: string; url: string }): Promise<void> {
@@ -2733,6 +2754,12 @@
       />
     {:else}
       <PrStateFilter state={prListState} onSelect={selectPrListState} />
+      <PrListOptionsMenu
+        filter={prListFilter}
+        sort={prListSort}
+        onFilterChange={selectPrListFilter}
+        onSortChange={selectPrListSort}
+      />
     {/if}
   {:else if activeTab === 'deployments' && selectedDeployment !== null}
     {@const DeploymentGlyph = stateGlyph(openDeploymentState)}
@@ -2900,16 +2927,18 @@
         <!--
           The view's own action comes first, ahead of Search: it acts on what you
           are looking at, while Search, Refresh and the overflow act on the panel.
-          Sync main belongs to the same group   it is a worktree action, not an
-          action on the branch's drift.
+          Sync belongs to the same group   it trades commits with another
+          checkout, it is not an action on this branch's own drift.
         -->
         <div class="flex shrink-0 items-center gap-0.5">
           {@render viewActions()}
           {#if showsSync}
-            <SyncMainButton
-              busy={gitState.isBusy('sync-main')}
+            <GitSyncButton
+              busy={gitState.isBusy('sync')}
               blocked={syncBusy || conflicted.length > 0}
+              canSyncMain={worktreeScope}
               onSync={(direction) => void syncMainAction(direction)}
+              onPickPeer={openSyncPeer}
             />
           {/if}
           <button
@@ -3266,9 +3295,13 @@
               identity={githubIdentity}
               {githubConnected}
               state={prListState}
+              filter={prListFilter}
+              sort={prListSort}
               page={prListPage}
               showControls={false}
               onStateChange={selectPrListState}
+              onFilterChange={selectPrListFilter}
+              onSortChange={selectPrListSort}
               onPageChange={(next) => (prListPage = next)}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onFullscreen={() => openPullRequestFullscreen(null)}
@@ -3337,7 +3370,7 @@
     {pullStrategyOpen}
     {pullStrategyError}
     {syncMainOpen}
-    {syncMainDirection}
+    {syncDirection}
     {syncMainError}
     {integrationOpen}
     {conflictState}
@@ -3402,6 +3435,17 @@
   />
 </div>
 
+<!-- Peer chooser: the panel only says which direction the user started from. -->
+{#if syncPeerOpen}
+  <GitSyncPeerDialog
+    {projectId}
+    {scopeBucketId}
+    initialDirection={syncPeerDirection}
+    onClose={closeSyncPeer}
+    onDone={syncPeerDone}
+  />
+{/if}
+
 <GitStatusPanelConfirmDialogs
   bind:stashDropTarget
   bind:discardConfirm
@@ -3460,8 +3504,12 @@
           identity={githubIdentity}
           {githubConnected}
           state={prListState}
+          filter={prListFilter}
+          sort={prListSort}
           page={prListPage}
           onStateChange={selectPrListState}
+          onFilterChange={selectPrListFilter}
+          onSortChange={selectPrListSort}
           onPageChange={(next) => (prListPage = next)}
           onOpen={(pr) => openPullRequestFullscreen(pr)}
           onSignIn={() => (showGitHubSignIn = true)}

@@ -16,7 +16,7 @@ export type GitOperation =
   | 'checkout'
   | 'fetch'
   | 'pull'
-  | 'sync-main'
+  | 'sync'
   | 'push'
   | 'merge'
   | 'rebase'
@@ -121,9 +121,22 @@ export function parseGitHubRepo(url: string): { owner: string; repo: string } | 
   return owner && repo ? { owner, repo } : null
 }
 
-/** Cache key for one page of a repository's pull request list. */
-export function prPageKey(owner: string, repo: string, state: string, page: number): string {
-  return `${owner}/${repo}:${state}:${page}`
+/**
+ * Cache key for one page of a repository's pull request list.
+ *
+ * The filter and sort are part of the key, not just the state: "open, authored by
+ * me, newest first" and "open, everything, newest first" are different listings,
+ * and a page cached under one must never be served for the other.
+ */
+export function prPageKey(
+  owner: string,
+  repo: string,
+  state: string,
+  filter: string,
+  sort: string,
+  page: number
+): string {
+  return `${owner}/${repo}:${state}:${filter}:${sort}:${page}`
 }
 
 /** Cache key for one pull request's detail bundle. */

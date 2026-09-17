@@ -33,6 +33,7 @@ import { EditorService } from '../editor/editor-service'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
+import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
 import { SecretVault } from '../storage/secret-vault'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { DiagnosticsService } from '../system/diagnostics-service'
@@ -170,6 +171,17 @@ export function registerIpcHandlers(
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
   const gitService = new GitService()
+  /**
+   * The sync's other end is resolved once, for both the picker that lists the
+   * options and the operation that acts on the choice, so the two can never name
+   * the same end differently.
+   */
+  const syncPeers = new SyncPeerService({
+    scopes: scopeManager,
+    resolveRoot: (projectId, scopeBucketId) =>
+      scopeRootResolver.resolve({ projectId, scopeBucketId }),
+    git: syncPeerGit(gitService)
+  })
   const branchBackfillDeps: ThreadBranchDeps = {
     resolver: repositoryService,
     store: threadManager,
@@ -357,6 +369,7 @@ export function registerIpcHandlers(
     scopeWorktreeService,
     scopeRootResolver,
     scopeRoots,
+    syncPeers,
     projectFilesService,
     threadManager,
     scopeThreadLifecycle,

@@ -9,13 +9,8 @@
  * plus pull-request creation stay desktop-only.
  */
 
-import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
-import type {
-  GitConflictSide,
-  GitMainSyncResult,
-  GitRebaseAction,
-  GitResetMode
-} from '../../../lib/types'
+import type { GitConflictSide, GitRebaseAction, GitResetMode } from '../../../lib/types'
+import { validateSyncWithOptions } from '../../ipc/validation/pr'
 import type { RemoteRpcCallContext } from './remote-rpc-context'
 import { REMOTE_RPC_UNHANDLED } from './remote-rpc-context'
 import { optionalBoolean, requireString, requireStringArray } from './remote-rpc-args'
@@ -277,10 +272,34 @@ export async function callRemoteGitRpc(
         }
       )
     }
-    case 'git:syncFromMain':
-      return await syncMain(ctx, 'from-main', args)
-    case 'git:syncToMain':
-      return await syncMain(ctx, 'to-main', args)
+    case 'git:syncWith': {
+      const projectId = requireString(args[0])
+      const options = validateSyncWithOptions(args[1])
+      const tokenRef = `git_pat_${projectId}`
+      const token = (await ctx.vault.exists(tokenRef))
+        ? await ctx.vault.resolve(tokenRef)
+        : undefined
+      const peer = await ctx.syncPeers.resolve({ projectId, peer: options.peer })
+      return ctx.gitService.syncWith(
+        await resolveRemoteProjectPath(
+          ctx,
+          projectId,
+          args[2] === undefined ? undefined : requireString(args[2])
+        ),
+        { direction: options.direction, peer: peer.target, strategy: options.strategy, token }
+      )
+    }
+    case 'git:syncPeers': {
+      const projectId = requireString(args[0])
+      return ctx.syncPeers.options({
+        projectId,
+        runningPath: await resolveRemoteProjectPath(
+          ctx,
+          projectId,
+          args[1] === undefined ? undefined : requireString(args[1])
+        )
+      })
+    }
     case 'git:push': {
       const projectId = requireString(args[0])
       const options = (args[1] ?? {}) as {
@@ -392,39 +411,4 @@ export async function syncBranchAfterCheckout<T>(
     if (branchName) await ctx.threadManager.setBranch(projectId, thread.id, branchName)
   }
   return result
-}
-
-/**
- * Shared dispatcher for both directions of the worktree/main sync, mirroring
- * the desktop `git:syncFromMain` / `git:syncToMain` handlers: the worktree root
- * comes from the active scope, the main root from the Default scope, and the
- * vaulted PAT is resolved here so it never crosses the wire.
- */
-export async function syncMain(
-  ctx: RemoteRpcCallContext,
-  direction: 'from-main' | 'to-main',
-  args: unknown[]
-): Promise<GitMainSyncResult> {
-  const projectId = requireString(args[0])
-  const options = (args[1] ?? {}) as { strategy?: string }
-  const strategy = options.strategy
-  if (strategy !== 'merge' && strategy !== 'rebase' && strategy !== 'ff-only') {
-    throw new TypeError('Invalid sync strategy')
-  }
-  if (args[2] === undefined) {
-    throw new Error(
-      `Syncing ${direction === 'from-main' ? 'from' : 'to'} the main branch requires a worktree scope`
-    )
-  }
-  const tokenRef = `git_pat_${projectId}`
-  const token = (await ctx.vault.exists(tokenRef)) ? await ctx.vault.resolve(tokenRef) : undefined
-  return ctx.gitService.syncMain(
-    await resolveRemoteProjectPath(ctx, projectId, requireString(args[2])),
-    {
-      direction,
-      mainPath: await resolveRemoteProjectPath(ctx, projectId, DEFAULT_SCOPE_BUCKET_ID),
-      strategy,
-      token
-    }
-  )
 }

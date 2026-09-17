@@ -10,8 +10,6 @@ import type {
   GitDiff,
   GitFileChange,
   GitIdentity,
-  GitMainSyncDirection,
-  GitMainSyncResult,
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
@@ -19,6 +17,10 @@ import type {
   GitRestoreTarget,
   GitStashEntry,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeer,
+  GitSyncPeerOption,
+  GitSyncResult,
   GitHubPermissionRequired,
   MergeSummary,
   PrResolveOptions
@@ -444,46 +446,57 @@ export class GitLocalOperations {
   }
 
   /**
-   * Sync this worktree with the project's main worktree branch, in either
-   * direction. Main resolves both ends (the project root's branch, and this
-   * checkout's branch), so the renderer only picks the direction and the
-   * reconciliation strategy. A conflicted integration is a normal outcome, not
-   * an error: the returned status carries the conflicts and the panel hands
-   * over to the conflict UI.
+   * Every checkout and branch this project can sync with, as main names them.
+   * The picker renders exactly this list and hands the chosen peer back
+   * untouched, so main and the UI can never disagree about what an end is.
    */
-  async syncMain(
+  async syncPeers(projectId: string, scopeBucketId?: string): Promise<GitSyncPeerOption[]> {
+    return scopeBucketId
+      ? invoke('git:syncPeers', projectId, scopeBucketId)
+      : invoke('git:syncPeers', projectId)
+  }
+
+  /**
+   * Sync one checkout with another end, in either direction. Main resolves both
+   * ends, so the renderer only names them and picks the reconciliation
+   * strategy. A conflicted integration is a normal outcome, not an error: the
+   * returned status carries the conflicts and the caller hands over to the
+   * conflict UI.
+   *
+   * `scopeBucketId` is the checkout the sync runs in, which is not always the
+   * active one: a scope's own menu syncs that scope's worktree while the panel
+   * shows something else. Only a run in the active checkout may touch the
+   * status this store shows.
+   */
+  async syncWith(
     projectId: string,
-    direction: GitMainSyncDirection,
-    strategy: GitPullStrategy
-  ): Promise<GitMainSyncResult | null> {
-    const scopeBucketId = this.access.scopeFor(projectId)
-    if (!scopeBucketId) {
-      this.error = `Syncing ${direction === 'from-main' ? 'from' : 'to'} main requires a worktree scope`
-      return null
-    }
-    this.access.markBusy('sync-main', true)
+    scopeBucketId: string | undefined,
+    options: { direction: GitSyncDirection; peer: GitSyncPeer; strategy: GitPullStrategy }
+  ): Promise<GitSyncResult | null> {
+    this.access.markBusy('sync', true)
     this.error = null
     try {
-      const result =
-        direction === 'from-main'
-          ? await invoke('git:syncFromMain', projectId, { strategy }, scopeBucketId)
-          : await invoke('git:syncToMain', projectId, { strategy }, scopeBucketId)
-      this.status = result.status
-      if (result.status.conflicted.length === 0) this.conflictsMode = false
+      const result = scopeBucketId
+        ? await invoke('git:syncWith', projectId, options, scopeBucketId)
+        : await invoke('git:syncWith', projectId, options)
+      if (this.access.scopeFor(projectId) === scopeBucketId) {
+        this.status = result.status
+        if (result.status.conflicted.length === 0) this.conflictsMode = false
+      }
       return result
     } catch (reason) {
-      const toward = direction === 'from-main' ? 'from main' : 'to main'
+      const toward = options.direction === 'from' ? 'from' : 'to'
       this.error = errorMessage(
         reason,
-        strategy === 'rebase'
-          ? `Syncing ${toward} with rebase failed`
-          : strategy === 'ff-only'
-            ? `Syncing ${toward} with a fast-forward failed`
-            : `Syncing ${toward} with a merge failed`
+        options.strategy === 'rebase'
+          ? `Syncing ${toward} that branch with rebase failed`
+          : options.strategy === 'ff-only'
+            ? `Syncing ${toward} that branch with a fast-forward failed`
+            : `Syncing ${toward} that branch with a merge failed`
       )
       return null
     } finally {
-      this.access.markBusy('sync-main', false)
+      this.access.markBusy('sync', false)
     }
   }
 

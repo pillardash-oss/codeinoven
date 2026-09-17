@@ -5,6 +5,7 @@ import {
   validateBoundedInteger,
   validateBoundedString,
   validateBoolean,
+  validateEntityId,
   MAX_GITHUB_NUMERIC_ID
 } from './primitives'
 import { validateBranchName, validateRemoteName } from './git'
@@ -20,6 +21,18 @@ const PULL_STRATEGIES = new Set<import('../../../lib/types').GitPullStrategy>([
   'ff-only'
 ])
 const PR_STATES = new Set<import('../../../lib/types').PrState>(['open', 'closed', 'all'])
+/**
+ * Which of the viewer's relationships a listing can narrow to. These are exactly
+ * GitHub's search qualifiers, one per member, and `all` is the absence of one.
+ */
+const PR_LIST_FILTERS = new Set<import('../../../lib/types').PrListFilter>([
+  'all',
+  'authored',
+  'assigned',
+  'review-requested',
+  'involves'
+])
+const PR_LIST_SORTS = new Set<import('../../../lib/types').PrListSort>(['updated', 'created'])
 const PR_REVIEW_EVENTS = new Set<import('../../../lib/types').PrReviewEvent>([
   'APPROVE',
   'REQUEST_CHANGES',
@@ -151,15 +164,49 @@ export function validatePullIntegrateOptions(value: unknown): {
   return options
 }
 
-/** Options for syncing a worktree checkout with the project's main worktree. */
-export function validateMainSyncOptions(value: unknown): {
+const SYNC_DIRECTIONS = new Set<import('../../../lib/types').GitSyncDirection>(['from', 'to'])
+const SYNC_PEER_KINDS = new Set<import('../../../lib/types').GitSyncPeer['kind']>([
+  'root',
+  'worktree',
+  'branch'
+])
+
+/**
+ * Options for syncing a checkout with another end. The peer is a discriminated
+ * union, so a scope id and a branch name can never both (or neither) arrive, and
+ * each kind rejects the fields the other kinds use.
+ */
+export function validateSyncWithOptions(value: unknown): {
+  direction: import('../../../lib/types').GitSyncDirection
   strategy: import('../../../lib/types').GitPullStrategy
+  peer: import('../../../lib/types').GitSyncPeer
 } {
   const input = assertRecord(value, 'Sync options')
-  rejectUnknownFields(input, new Set(['strategy']), 'sync options')
+  rejectUnknownFields(input, new Set(['direction', 'strategy', 'peer']), 'sync options')
   return {
-    strategy: assertEnum(input.strategy, PULL_STRATEGIES, 'sync strategy')
+    direction: assertEnum(input.direction, SYNC_DIRECTIONS, 'sync direction'),
+    strategy: assertEnum(input.strategy, PULL_STRATEGIES, 'sync strategy'),
+    peer: validateSyncPeer(input.peer)
   }
+}
+
+/** One sync peer, validated field by field against the kind it claims to be. */
+export function validateSyncPeer(value: unknown): import('../../../lib/types').GitSyncPeer {
+  const peer = assertRecord(value, 'Sync peer')
+  const kind = assertEnum(peer.kind, SYNC_PEER_KINDS, 'sync peer kind')
+  if (kind === 'root') {
+    rejectUnknownFields(peer, new Set(['kind']), 'sync peer')
+    return { kind: 'root' }
+  }
+  if (kind === 'worktree') {
+    rejectUnknownFields(peer, new Set(['kind', 'scopeBucketId']), 'sync peer')
+    return {
+      kind: 'worktree',
+      scopeBucketId: validateEntityId(peer.scopeBucketId, 'Scope bucket ID')
+    }
+  }
+  rejectUnknownFields(peer, new Set(['kind', 'branch']), 'sync peer')
+  return { kind: 'branch', branch: validateBranchName(peer.branch, 'Sync branch') }
 }
 
 /** Validate options for preparing a local PR conflict resolution. */
@@ -238,6 +285,28 @@ export function validateWorkflowRerunMode(
 /** Validate a 1-based PR listing page number. */
 export function validatePrPage(value: unknown): number {
   return validateBoundedInteger(value, 'Pull request page', 1, 1000)
+}
+
+/**
+ * Validate a PR listing request: which relationship to keep, how to order, and
+ * where to continue from.
+ *
+ * The three travel together as one value because a cursor only means anything
+ * alongside the filter and sort that produced it. `cursor` may be absent or null
+ * (the first page); anything else is bounded, since a GitHub cursor is an opaque
+ * base64 blob and the provider only ever echoes back what it gave us.
+ */
+export function validatePrListRequest(value: unknown): import('../../../lib/types').PrListRequest {
+  const input = assertRecord(value, 'Pull request list request')
+  rejectUnknownFields(input, new Set(['filter', 'sort', 'cursor']), 'pull request list request')
+  return {
+    filter: assertEnum(input.filter, PR_LIST_FILTERS, 'pull request list filter'),
+    sort: assertEnum(input.sort, PR_LIST_SORTS, 'pull request list sort'),
+    cursor:
+      input.cursor === undefined || input.cursor === null
+        ? null
+        : validateBoundedString(input.cursor, 'Pull request list cursor', 1, 512)
+  }
 }
 
 /** Validate a PR comment or review body (GitHub caps bodies around 64k). */

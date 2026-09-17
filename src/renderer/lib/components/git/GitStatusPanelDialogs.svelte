@@ -7,8 +7,8 @@
     GitBranchInfo,
     GitCommitInfo,
     GitFileChange,
-    GitMainSyncDirection,
     GitPullStrategy,
+    GitSyncDirection,
     GitRemoteInfo,
     GitResetMode,
     GitStatus
@@ -27,7 +27,7 @@
     pullStrategyOpen: boolean
     pullStrategyError: string
     syncMainOpen: boolean
-    syncMainDirection: GitMainSyncDirection
+    syncDirection: GitSyncDirection
     syncMainError: string
     integrationOpen: boolean
     conflictState: 'merge' | 'rebase' | 'none'
@@ -73,7 +73,7 @@
     closePullStrategy: () => void
     performPull: (strategy: GitPullStrategy) => void
     closeSyncMain: () => void
-    performSyncMain: (direction: GitMainSyncDirection, strategy: GitPullStrategy) => void
+    performSyncMain: (direction: GitSyncDirection, strategy: GitPullStrategy) => void
     confirmCompleteMerge: () => void
     openCompleteMerge: () => void
     loadGitHubAuth: () => void
@@ -100,7 +100,7 @@
     pullStrategyOpen,
     pullStrategyError,
     syncMainOpen,
-    syncMainDirection,
+    syncDirection,
     syncMainError,
     integrationOpen,
     conflictState,
@@ -349,17 +349,17 @@
 
 <!--
     Main-sync strategy chooser: the same `ask` preference as the Pull button for
-    `from-main`, and always shown for `to-main`, which mutates the project root.
+    `from`, and always shown for `to`, which mutates the project root.
   -->
 {#if syncMainOpen}
   <Modal
     open
-    title={syncMainDirection === 'from-main' ? 'Sync from main' : 'Sync to main'}
+    title={syncDirection === 'from' ? 'Sync from main' : 'Sync to main'}
     onClose={closeSyncMain}
   >
     <div class="space-y-3">
       <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-        {#if syncMainDirection === 'from-main'}
+        {#if syncDirection === 'from'}
           <p class="text-[0.625rem] font-medium text-foreground">
             Into <span class="font-mono">{status?.branch ?? 'this worktree'}</span>
           </p>
@@ -405,7 +405,7 @@
       {:else if syncMainError}
         <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
           <p class="text-[0.625rem] font-semibold text-danger">
-            {syncMainDirection === 'from-main'
+            {syncDirection === 'from'
               ? 'Main could not be synced'
               : 'This worktree could not be sent to main'}
           </p>
@@ -415,7 +415,7 @@
             {syncMainError}
           </p>
           <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-            {syncMainDirection === 'from-main'
+            {syncDirection === 'from'
               ? 'Choose another strategy below, or cancel without changing this worktree further.'
               : 'Choose another strategy below, or cancel without changing anything further.'}
           </p>
@@ -423,7 +423,7 @@
       {/if}
       {#if !integrationOpen}
         <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
-          {#if syncMainDirection === 'from-main'}
+          {#if syncDirection === 'from'}
             <p>
               <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
               a merge commit.
@@ -458,7 +458,7 @@
         <button
           type="button"
           class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-          disabled={gitState.isBusy('sync-main')}
+          disabled={gitState.isBusy('sync')}
           onclick={closeSyncMain}
         >
           Cancel
@@ -467,16 +467,16 @@
           <button
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'ff-only')}
+            disabled={gitState.isBusy('sync')}
+            onclick={() => void performSyncMain(syncDirection, 'ff-only')}
           >
             Fast-forward only
           </button>
           <button
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'rebase')}
+            disabled={gitState.isBusy('sync')}
+            onclick={() => void performSyncMain(syncDirection, 'rebase')}
           >
             Rebase
           </button>
@@ -484,8 +484,8 @@
             type="button"
             class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             data-modal-primary
-            disabled={gitState.isBusy('sync-main')}
-            onclick={() => void performSyncMain(syncMainDirection, 'merge')}
+            disabled={gitState.isBusy('sync')}
+            onclick={() => void performSyncMain(syncDirection, 'merge')}
           >
             Merge
           </button>

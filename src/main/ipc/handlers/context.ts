@@ -13,6 +13,7 @@ import type {
   scopeRootProvider,
   ManagedWorktreeInspector
 } from '../../workspaces/scope-root-resolver'
+import type { SyncPeerService } from '../../git/sync-peer-service'
 import type { ProjectFilesService } from '../../editor/project-files-service'
 import type { DirectoryPreviewService } from '../../preview/directory-preview-service'
 import type { CheckpointManager } from '../../storage/checkpoint-manager'
@@ -108,6 +109,8 @@ export interface IpcHandlerContext {
   scopeWorktreeService: ScopeWorktreeService
   scopeThreadLifecycle: ScopeThreadLifecycle
   scopeRootResolver: ScopeRootResolver
+  /** Resolves a sync's other end: every checkout and branch, named once. */
+  syncPeers: SyncPeerService
   scopeRoots: ReturnType<typeof scopeRootProvider>
   projectFilesService: ProjectFilesService
   threadManager: ThreadManager

@@ -20,6 +20,7 @@ import { GitLocalOperations } from './git-store-local-operations.svelte'
 import type {
   GitIdentity,
   GitStatus,
+  GitSyncPeerOption,
   Project,
   GitBranchInfo,
   GitRemoteInfo,
@@ -804,12 +805,16 @@ export class GitState {
     return this.local.pullIntegrate(projectId, remote, branch, strategy)
   }
 
-  syncMain(
+  syncPeers(projectId: string, scopeBucketId?: string): Promise<GitSyncPeerOption[]> {
+    return this.local.syncPeers(projectId, scopeBucketId)
+  }
+
+  syncWith(
     projectId: string,
-    direction: Parameters<GitLocalOperations['syncMain']>[1],
-    strategy: Parameters<GitLocalOperations['syncMain']>[2]
+    scopeBucketId: string | undefined,
+    options: Parameters<GitLocalOperations['syncWith']>[2]
   ) {
-    return this.local.syncMain(projectId, direction, strategy)
+    return this.local.syncWith(projectId, scopeBucketId, options)
   }
 
   addRemote(projectId: string, name: string, url: string): Promise<void> {
@@ -1045,9 +1050,10 @@ export class GitState {
     repo: string,
     state: Parameters<GitPullRequestCache['ensurePullRequestPage']>[3],
     page: number,
+    query: Parameters<GitPullRequestCache['ensurePullRequestPage']>[5],
     force = false
   ): Promise<void> {
-    return this.prs.ensurePullRequestPage(projectId, owner, repo, state, page, force)
+    return this.prs.ensurePullRequestPage(projectId, owner, repo, state, page, query, force)
   }
 
   ensurePullRequestBundle(
@@ -1194,8 +1200,15 @@ export class GitState {
     return this.prOps.minimizePrComment(projectId, owner, repo, pullNumber, nodeId, reason)
   }
 
-  static pageKey(owner: string, repo: string, state: string, page: number): string {
-    return prPageKey(owner, repo, state, page)
+  static pageKey(
+    owner: string,
+    repo: string,
+    state: string,
+    filter: string,
+    sort: string,
+    page: number
+  ): string {
+    return prPageKey(owner, repo, state, filter, sort, page)
   }
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {

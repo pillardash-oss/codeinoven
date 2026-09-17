@@ -6,6 +6,7 @@
     FolderInput,
     GitBranch,
     GitMerge,
+    GitPullRequestArrow,
     PanelsLeftBottom,
     Pencil,
     Pin,
@@ -208,6 +209,14 @@
           run: () => {
             closeMenu()
             actions.askMerge(bucket)
+          }
+        })
+        list.push({
+          label: 'Merge from project…',
+          icon: GitPullRequestArrow,
+          run: () => {
+            closeMenu()
+            actions.askSyncFrom(bucket)
           }
         })
         if (setupFailed || setupStale) {

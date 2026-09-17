@@ -149,32 +149,83 @@ export interface GitSyncSummary {
   behind: number
 }
 
-/** Which way a worktree/main sync moves committed work. */
-export type GitMainSyncDirection = 'from-main' | 'to-main'
+/** Which way a sync moves committed work: into this checkout, or out of it. */
+export type GitSyncDirection = 'from' | 'to'
 
 /**
- * Result of syncing a worktree checkout with the project's main worktree, in
- * either direction. The integrated ref is reported so the panel can state
- * exactly what moved instead of guessing at "main".
+ * The other end of a sync, exactly as the renderer asks for it.
+ *
+ * `root` is the project's own directory, which is what "sync with main" is - the
+ * project root is the single source of truth for the main branch. `worktree` is
+ * a scope whose checkout is the other end. `branch` is a local branch no
+ * checkout holds, so it can contribute commits but has nowhere to receive them.
  */
-export interface GitMainSyncResult {
-  /** Status of the checkout the panel is attached to (the worktree side). */
+export type GitSyncPeer =
+  | { kind: 'root' }
+  | { kind: 'worktree'; scopeBucketId: string }
+  | { kind: 'branch'; branch: string }
+
+/**
+ * The other end of a sync after main resolved it into something Git can act on:
+ * a checkout path, a named branch, or both (a checkout and the branch it shows).
+ */
+export interface GitSyncPeerTarget {
+  /** Absolute checkout path when the other end is a working tree. */
+  path?: string
+  /** Local branch named by the peer when it is not a checkout. */
+  branch?: string
+  /** Noun phrase every panel message and error names this end with. */
+  label: string
+}
+
+/**
+ * One end the picker can offer, as main resolved the project's checkouts and
+ * branches. Options never lie about availability: an unhealthy worktree still
+ * appears, marked with the reason it cannot be used, and the checkout the
+ * operation runs in appears marked as itself rather than being hidden.
+ */
+export interface GitSyncPeerOption {
+  /** Exactly what the renderer hands back to `git:syncWith`. */
+  peer: GitSyncPeer
+  /** Name the picker shows for this end. */
+  label: string
+  /** Branch this end contributes or receives; null when it has none to name. */
+  branch: string | null
+  /** True when this end is a working tree that can also receive commits. */
+  checkout: boolean
+  /** True when this end is the checkout the operation would run in. */
+  self: boolean
+  /** Checkout directory, when this end is one. */
+  path: string | null
+  /** Why this end cannot be used right now, when it cannot. */
+  unavailable?: string
+}
+
+/**
+ * Result of syncing this checkout with another checkout or branch, in either
+ * direction. The integrated ref and the resolved peer are reported so the panel
+ * can state exactly what moved instead of guessing at "main".
+ */
+export interface GitSyncResult {
+  /** Status of the checkout the sync ran in. */
   status: GitStatus
-  direction: GitMainSyncDirection
-  /** Branch checked out in the worktree this sync ran in. */
+  direction: GitSyncDirection
+  /** Branch checked out in the checkout the sync ran in. */
   branch: string
-  /** Branch checked out in the project's main worktree. */
-  mainBranch: string
-  /** Ref whose commits were integrated (`origin/main`, `main`, or the worktree branch). */
+  /** Branch the peer contributed (`from`) or received (`to`). */
+  peerBranch: string
+  /** How the peer end was named, for panel copy. */
+  peerLabel: string
+  /** Ref whose commits were integrated (`origin/main`, `main`, the peer branch). */
   ref: string
-  /** True when the main branch's remote-tracking ref was refreshed first (`from-main`). */
+  /** True when the peer branch's remote-tracking ref was refreshed first. */
   fetched: boolean
-  /** Remote used for that refresh, when the repository has one (`from-main`). */
+  /** Remote used for that refresh, when the repository has one. */
   remote: string | null
   /** Commits the integrated ref had that the other end did not, before integrating. */
   incoming: number
-  /** Commits the main worktree's branch is ahead of its upstream by after the sync. */
-  mainAhead: number
+  /** Commits the peer checkout's branch is ahead of its upstream by after the sync. */
+  peerAhead: number
 }
 
 /** Conflict information reported by a merge/rebase failure. */

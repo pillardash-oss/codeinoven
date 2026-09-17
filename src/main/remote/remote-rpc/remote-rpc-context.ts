@@ -24,6 +24,7 @@ import type { ProjectFilesService } from '../../editor/project-files-service'
 import type { ScopeWorktreeService } from '../../git/scope-worktree-service'
 import type { RepositoryService } from '../../git/repository-service'
 import type { GitService } from '../../git/git-service'
+import type { SyncPeerService } from '../../git/sync-peer-service'
 import type { GitHubAuthService } from '../../git/github-auth-service'
 import type { CheckpointManager } from '../../storage/checkpoint-manager'
 import type { MemoryService } from '../../chat/memory-service'
@@ -51,6 +52,8 @@ export interface RemoteRpcCallContext {
   scopeManager: ScopeManager
   scopeWorktreeService: ScopeWorktreeService
   scopeRoots: ReturnType<typeof scopeRootProvider>
+  /** Resolves a sync's other end: every checkout and branch, named once. */
+  syncPeers: SyncPeerService
   specEngine: SpecEngine
   engineeringLifecycleEngine: EngineeringLifecycleEngine
   prdEngine: PrdEngine

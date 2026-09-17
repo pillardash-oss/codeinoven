@@ -46,6 +46,7 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import { MemoryService } from '../chat/memory-service'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
+import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
 import { SecretVault } from '../storage/secret-vault'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
@@ -113,6 +114,7 @@ export class RemoteRpcDispatcher {
   private readonly scopeManager: ScopeManager
   private readonly scopeWorktreeService: ScopeWorktreeService
   private readonly scopeRoots: ReturnType<typeof scopeRootProvider>
+  private readonly syncPeers: SyncPeerService
   private readonly specEngine: SpecEngine
   private readonly engineeringLifecycleEngine: EngineeringLifecycleEngine
   private readonly prdEngine: PrdEngine
@@ -158,9 +160,12 @@ export class RemoteRpcDispatcher {
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
     this.scopeWorktreeService = new ScopeWorktreeService(this.scopeManager, this.projectManager)
-    this.scopeRoots = scopeRootProvider(
-      new ScopeRootResolver(this.projectManager, this.scopeManager, this.scopeWorktreeService)
+    const scopeRootResolver = new ScopeRootResolver(
+      this.projectManager,
+      this.scopeManager,
+      this.scopeWorktreeService
     )
+    this.scopeRoots = scopeRootProvider(scopeRootResolver)
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
@@ -173,6 +178,14 @@ export class RemoteRpcDispatcher {
     this.memoryService = new MemoryService(this.storage)
     this.repositoryService = new RepositoryService()
     this.gitService = new GitService()
+    // Built from the git service above, so the peer picker lists branches with
+    // exactly the client every other git operation uses.
+    this.syncPeers = new SyncPeerService({
+      scopes: this.scopeManager,
+      resolveRoot: (projectId, scopeBucketId) =>
+        scopeRootResolver.resolve({ projectId, scopeBucketId }),
+      git: syncPeerGit(this.gitService)
+    })
     this.vault = new SecretVault(this.storage)
     this.githubAuthService = new GitHubAuthService(this.vault)
     this.attachments = new RemoteAttachmentStore(this.projectManager)
@@ -186,6 +199,7 @@ export class RemoteRpcDispatcher {
       scopeManager: this.scopeManager,
       scopeWorktreeService: this.scopeWorktreeService,
       scopeRoots: this.scopeRoots,
+      syncPeers: this.syncPeers,
       specEngine: this.specEngine,
       engineeringLifecycleEngine: this.engineeringLifecycleEngine,
       prdEngine: this.prdEngine,

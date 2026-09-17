@@ -150,7 +150,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     projectManager,
     {
       getStatus: (projectPath) => gitService.getStatus(projectPath),
-      syncMain: (projectPath, options) => gitService.syncMain(projectPath, options)
+      syncWith: (projectPath, options) => gitService.syncWith(projectPath, options)
     },
     {
       scopeThreads: scopeThreadLifecycle,
