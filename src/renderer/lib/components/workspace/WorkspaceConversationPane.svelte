@@ -4,7 +4,7 @@
   import AiAccountSetupCard from '$lib/components/threads/AiAccountSetupCard.svelte'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
-  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
+  import { threadNeedsAiAccount } from '$lib/ai-account'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -92,10 +92,7 @@
       ?.name ?? chatComposerSettings.harnessId
   )
   /** True while the new-chat composer has a provider and a model to run on. */
-  let chatCanRunTurns = $derived(
-    harnessHasProvider(chatProviders, chatComposerSettings.harnessId) &&
-      selectedModelExists(chatProviders, chatComposerSettings)
-  )
+  let chatCanRunTurns = $derived(!threadNeedsAiAccount(chatComposerSettings))
   /** Armed by the composer refusing a send the chat has no account for. */
   let chatAiAccountPromptOpen = $state(false)
   let chatAiAccountPromptVisible = $derived(chatAiAccountPromptOpen && !chatCanRunTurns)

@@ -56,7 +56,7 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
+  import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -722,16 +722,12 @@
   )
 
   /**
-   * True when this composer cannot run a turn yet: either the harness has no
-   * provider the user holds credentials for, or no model is selected. Sending
-   * such a turn only reaches the driver to fail with an unavailable model, so
-   * hosts that pass `onNeedsAiAccount` get to show their setup card instead.
-   * Hosts that omit the callback keep the old behaviour.
+   * True when this composer has nothing to run a turn with. Sending such a turn
+   * only reaches the driver to fail with an unavailable model, so hosts that
+   * pass `onNeedsAiAccount` get to show their setup card instead. Hosts that
+   * omit the callback keep the old behaviour.
    */
-  let needsAiAccount = $derived(
-    !harnessHasProvider(resolvedProviders, resolved.harnessId) ||
-      !selectedModelExists(resolvedProviders, resolved)
-  )
+  let needsAiAccount = $derived(threadNeedsAiAccount(resolved))
 
   /** True when the selected harness cannot accept any prompt attachments. */
   let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)

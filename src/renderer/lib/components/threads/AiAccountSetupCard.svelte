@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Loader2, Plug, Sparkles, X } from '@lucide/svelte'
-  import { harnessCatalogs, harnessHasProvider, withModelSelection } from '$lib/ai-account'
+  import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
+  import { withModelSelection } from '../chats/chat-composer-settings'
   import { APP_NAME } from '$shared/brand'
   import type { ProviderCatalog, ThinkingLevel, ThreadSettings } from '$shared/types'
   import ModelPicker from '../shared/ModelPicker.svelte'

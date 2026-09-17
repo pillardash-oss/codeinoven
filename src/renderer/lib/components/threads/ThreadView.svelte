@@ -137,7 +137,7 @@
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
   } from '$lib/stores/provider-connect-flow.svelte'
-  import { harnessHasProvider, selectedModelExists } from '$lib/ai-account'
+  import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
@@ -9477,9 +9477,7 @@
   let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
 
   /** True while this thread holds both a provider and a model it can run on. */
-  let threadCanRunTurns = $derived(
-    harnessHasProvider(providers, settings.harnessId) && selectedModelExists(providers, settings)
-  )
+  let threadCanRunTurns = $derived(!threadNeedsAiAccount(settings))
   /** Armed by the composer refusing a send the thread has no account for. */
   let aiAccountPromptOpen = $state(false)
   /** The prompt also keeps showing while the user picks the model to run with. */
