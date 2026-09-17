@@ -44,6 +44,14 @@ export interface AgentQuestion {
   custom?: boolean
   /** The question asks the user to share files; offer composer-style file attachment. */
   fileRequest?: boolean
+  /** The question asks for a secret value; render a password input instead of options. */
+  secretRequest?: boolean
+  /** Stable id of one secret in a `cio_ask_secret` request. */
+  secretId?: string
+  /** Environment variable the collected value is exposed under. */
+  secretEnvironmentVariable?: string
+  /** Utility this secret is bound to as a credential, when the agent named one. */
+  secretUtilityId?: string
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */
@@ -72,6 +80,36 @@ export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
 }
 
 export type AgentQuestionResolution = 'answered' | 'dismissed' | 'timed_out'
+
+/**
+ * One secret value the user pasted into a `cio_ask_secret` card. The value is
+ * transient: it is consumed by the main process (vault + harness env) and never
+ * persisted in the thread transcript or returned to the renderer.
+ */
+export interface AgentSecretSubmission {
+  /** Id of the secret question the value answers. */
+  secretId: string
+  value: string
+}
+
+/** One collected secret handed to the harness so it can expose it as an env var. */
+export interface AgentSecretReplySecret {
+  secretId: string
+  /** Environment variable name the harness sets for this session. */
+  environmentVariable: string
+  /** Plaintext value; consumed in-process by the harness, never by the model. */
+  value: string
+}
+
+/**
+ * Reply to a pending `cio_ask_secret` request. The harness round-trips the
+ * values back into the session's process environment and answers the model with
+ * the environment variable names only.
+ */
+export interface AgentSecretReply {
+  status: 'set' | 'dismissed'
+  secrets: AgentSecretReplySecret[]
+}
 
 /** A renderable piece of an agent message. */
 export type AgentPart =

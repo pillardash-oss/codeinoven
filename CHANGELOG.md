@@ -5,6 +5,19 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- The agent can now collect secrets without ever seeing them. A new
+  `cio_ask_secret` tool asks for one or more values by title and description; the
+  app renders a password card with an in-field reveal toggle and a
+  "Secrets are not sent to the agent" note, stores each value in the encrypted
+  vault, and exposes it to the session as an OS environment variable
+  (`CIO_<ID>_<TITLE_SLUG>`, or the exact name the target expects). Passing a
+  `utility_id` binds the value to an installed capability as its credential,
+  exactly as the Utilities page does, so an MCP that needs a key can be finished
+  in one turn. The model receives only `Secret set, you may proceed.` and the
+  variable names.
+
 ### Changed
 
 - Replaced the 1–5 per-turn feedback ledger with a 0–10 conversation-grading

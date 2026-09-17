@@ -81,6 +81,8 @@ import { piCoreToolsEventsSource } from './pi/tools/core-tools-events'
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
+/** Tagged envelope the `cio_ask_secret` card rides through pi's dialog channel. */
+export const CIO_SECRET_MARKER = 'cio-secret:'
 
 /**
  * Compose the generated Pi core-tools extension module from its grouped

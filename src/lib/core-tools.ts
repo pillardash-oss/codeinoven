@@ -6,6 +6,14 @@ export const CIO_ASK_USER_TOOL_NAME = 'cio_ask_user'
 export const CIO_TODO_WRITE_TOOL_NAME = 'cio_todo_write'
 /** Asks the user for file paths, validates them, and returns a structured file list. */
 export const CIO_REQUEST_FILES_TOOL_NAME = 'cio_request_files'
+/**
+ * Collects one or more secret values from the user without the value ever
+ * reaching the model. The value is stored in the encrypted vault (and bound to a
+ * utility when the agent names one) and exposed to the session as an OS
+ * environment variable; the tool answers only with `Secret set, you may
+ * proceed.` plus the environment variable names.
+ */
+export const CIO_ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 /** Spawns nested sub-agent worker threads controlled by the primary agent. */
 export const CIO_SPAWN_AGENT_TOOL_NAME = 'cio_spawn_agent'
 /** Checks or waits for spawned sub-agent threads; returns metadata only. */
@@ -30,6 +38,7 @@ export const PI_CORE_TOOLS_TOOL_NAMES = [
   CIO_ASK_USER_TOOL_NAME,
   CIO_TODO_WRITE_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
+  CIO_ASK_SECRET_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_AGENT_OUTPUT_TOOL_NAME

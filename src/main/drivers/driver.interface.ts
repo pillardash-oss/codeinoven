@@ -4,6 +4,7 @@ import type {
   AgentMessage,
   AgentQuestionRequest,
   AgentRateLimitWindow,
+  AgentSecretReply,
   AgentUsageCredits,
   PromptAttachment,
   ThreadSettings,
@@ -697,6 +698,18 @@ export interface HarnessDriver {
 
   /** Reject a pending question request without answering it. */
   rejectQuestion(projectPath: string, sessionId: string, requestId: string): Promise<void>
+
+  /**
+   * Reply to a pending `cio_ask_secret` request. The payload carries the values
+   * so the harness extension can expose them to the session as environment
+   * variables; the driver must never place them in the model's context.
+   */
+  replyToSecret?(
+    projectPath: string,
+    sessionId: string,
+    requestId: string,
+    payload: AgentSecretReply
+  ): Promise<void>
 
   /** List provider-held pending questions for restart/reconnect recovery. */
   listPendingQuestions(projectPath: string): Promise<AgentQuestionRequest[]>

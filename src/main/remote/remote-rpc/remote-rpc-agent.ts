@@ -10,6 +10,7 @@
 import type {
   AgentCapabilitySource,
   AgentModelSelection,
+  AgentSecretSubmission,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -115,6 +116,13 @@ export async function callRemoteAgentRpc(
         requireString(args[1]),
         requireString(args[2]),
         args[3] as string[][]
+      )
+    case 'agent:answerSecret':
+      return chatEngine.answerSecret(
+        requireString(args[0]),
+        requireString(args[1]),
+        requireString(args[2]),
+        args[3] as AgentSecretSubmission[]
       )
     case 'agent:dismissQuestion':
       return chatEngine.dismissQuestion(

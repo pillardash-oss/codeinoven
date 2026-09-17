@@ -493,7 +493,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values; the user adds those through Utilities.`,
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: collect them with the cio_ask_secret tool when it is in your session (passing the installed id as utility_id and the server's variable as environment_variable), and otherwise tell the user to add them through Utilities.`,
             `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
           ]
         : [])

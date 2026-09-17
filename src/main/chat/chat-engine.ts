@@ -107,6 +107,7 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
+import { AgentSecretService } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
@@ -208,6 +209,9 @@ import type {
   PromptProjectReference,
   PromptReference,
   ProviderCatalog,
+  AgentSecretReply,
+  AgentSecretReplySecret,
+  AgentSecretSubmission,
   SessionAgentEvent,
   SpecGenerationRequest,
   SpecActionIntent,
@@ -530,7 +534,9 @@ import {
   queuedCoordinatorHandoffMessage,
   readAssignmentApiBody,
   recommendedQuestionAnswer,
+  isSecretQuestion,
   scopeHarnessCommands,
+  SECRET_ANSWER_PLACEHOLDER,
   specGenerationLesson,
   specMemoryPath,
   specRepairInstruction,
@@ -539,6 +545,7 @@ import {
   validateAssignmentAuditExecutionEvidence,
   validatePromptReferences,
   validateQuestionAnswers,
+  validateSecretSubmissions,
   validateUserMessagePresentation,
   writeAssignmentApiResponse
 } from './chat-engine/chat-engine-pure'
@@ -1101,6 +1108,8 @@ export class ChatEngine {
 
   private utilityRegistry: UtilityRegistryService
 
+  private agentSecrets: AgentSecretService
+
   private capabilityDiscovery: CapabilityDiscoveryService
 
   private baseUrlProviders: BaseUrlProviderService
@@ -1205,6 +1214,7 @@ export class ChatEngine {
     this.secretVault = new SecretVault(storage)
     this.utilityRuntime = new UtilityRuntimeService(storage)
     this.utilityRegistry = new UtilityRegistryService(storage)
+    this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
@@ -1836,6 +1846,16 @@ export class ChatEngine {
         this.answerQuestion(projectId, threadId, requestId, answers)
     )
     ipcMain.handle(
+      'agent:answerSecret',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        requestId: string,
+        secrets: AgentSecretSubmission[]
+      ) => this.answerSecret(projectId, threadId, requestId, secrets)
+    )
+    ipcMain.handle(
       'agent:dismissQuestion',
       (_, projectId: string, threadId: string, requestId: string) =>
         this.dismissQuestion(projectId, threadId, requestId)
@@ -2064,6 +2084,71 @@ export class ChatEngine {
       }
       if (error instanceof QuestionRequestGoneError) {
         this.finalizePendingQuestion(requestId, 'answered', safeAnswers)
+        return
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Store the secrets a user pasted into a `cio_ask_secret` card, then hand them
+   * to the harness so its extension can expose them as environment variables for
+   * the session. The values never reach the transcript or the model: the card is
+   * resolved with a placeholder, and the tool answers with the variable names only.
+   */
+  async answerSecret(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    secrets: AgentSecretSubmission[]
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    requestId = validateEntityId(requestId, 'Question request ID', 256)
+    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const submissions = validateSecretSubmissions(secrets, pending.request.questions)
+    const driver = this.driverForRuntime(
+      pending.driverId,
+      this.sessionRegistry.get(pending.request.sessionId)?.accountId
+    )
+    if (!driver) {
+      throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
+    }
+    const replyToSecret = driver.replyToSecret?.bind(driver)
+    if (!replyToSecret) {
+      throw new Error(`This harness cannot collect secrets: ${pending.driverId}`)
+    }
+    const replySecrets: AgentSecretReplySecret[] = []
+    for (const submission of submissions) {
+      const question = pending.request.questions.find(
+        (candidate) => candidate.secretId === submission.secretId
+      )
+      const environmentVariable = question?.secretEnvironmentVariable
+      if (!question || !environmentVariable) continue
+      const stored = await this.agentSecrets.store({
+        environmentVariable,
+        value: submission.value,
+        label: question.header ?? question.prompt,
+        ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {})
+      })
+      replySecrets.push({
+        secretId: submission.secretId,
+        environmentVariable: stored.environmentVariable,
+        value: submission.value
+      })
+    }
+    const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
+    const reply: AgentSecretReply = { status: 'set', secrets: replySecrets }
+    try {
+      await this.resolvePendingQuestion(pending, 'answered', answers, () =>
+        replyToSecret(pending.projectPath, pending.request.sessionId, requestId, reply)
+      )
+    } catch (error) {
+      // The turn that asked is gone, so there is nothing left to hand the values
+      // to. The secrets are already stored; resolve the card instead of hanging.
+      if (error instanceof InactiveQuestionTurnError || error instanceof QuestionRequestGoneError) {
+        this.finalizePendingQuestion(requestId, 'answered', answers)
         return
       }
       throw error
@@ -17864,9 +17949,12 @@ export class ChatEngine {
 
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
-    // Creating a Brainstorm version is a human decision, never a timer default.
+    // Creating a Brainstorm version and supplying a secret are both human
+    // decisions, never a timer default.
     if (
-      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
+      pending.request.questions.some(
+        (question) => isBrainstormDocumentQuestion(question.prompt) || isSecretQuestion(question)
+      )
     ) {
       pending.timer = undefined
       pending.request.expiresAt = undefined
@@ -18050,7 +18138,9 @@ export class ChatEngine {
     )
     const thread = await this.threadManager.getThread(session.projectId, session.threadId)
     if (
-      !event.questions.some((question) => isBrainstormDocumentQuestion(question.prompt)) &&
+      !event.questions.some(
+        (question) => isBrainstormDocumentQuestion(question.prompt) || isSecretQuestion(question)
+      ) &&
       (await this.achievementOwnsDecisions(thread ?? null))
     ) {
       const driver = this.driverForRuntime(driverId, session.accountId)

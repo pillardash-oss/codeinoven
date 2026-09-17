@@ -62,6 +62,7 @@
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
+  import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
@@ -193,6 +194,7 @@
     AgentModelSelection,
     AgentRole,
     AgentQuestion,
+    AgentSecretSubmission,
     PromptAttachment,
     PromptAssignmentTaskReference,
     PromptProjectReference,
@@ -9325,6 +9327,22 @@
     )
   }
 
+  /**
+   * Send pasted secret values to the main process. It stores them (vault, and a
+   * utility credential when the agent named one) and hands them to the harness;
+   * the values never enter the transcript or the model's context.
+   */
+  async function handleSecretSubmit(
+    requestId: string,
+    secrets: AgentSecretSubmission[]
+  ): Promise<void> {
+    await invoke('agent:answerSecret', thread.projectId, thread.id, requestId, secrets)
+    resolvedQuestionRequestIds.add(requestId)
+    pendingQuestionRequests = pendingQuestionRequests.filter(
+      (request) => request.requestId !== requestId
+    )
+  }
+
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
@@ -11267,29 +11285,37 @@
                   onAlternative={providePermissionAlternative}
                 />
               {/key}
-            {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}
+            {:else if pendingQuestionRequests.length > 0 && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
               {@const pendingRequest = pendingQuestionRequests[0]}
               {#key pendingRequest.requestId}
-                <AgentQuestionCard
-                  request={pendingRequest}
-                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
-                  onAnswer={handleQuestionAnswer}
-                  onDismiss={handleQuestionDismiss}
-                  onUpdate={handleQuestionUpdate}
-                  onExplain={handleQuestionExplain}
-                  onQuickChat={handleQuestionQuickChat}
-                  {settings}
-                  {providers}
-                  projectId={thread.projectId}
-                  favoriteModels={rendererRecovery.favoriteModels}
-                  recentModels={rendererRecovery.recentModels}
-                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-                  onModelChange={changeThreadModel}
-                  onToggleFavorite={(providerId, modelId, harnessId) =>
-                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                />
+                {#if pendingRequest.questions.some((question) => question.secretRequest === true)}
+                  <AgentSecretCard
+                    request={pendingRequest}
+                    onSubmit={handleSecretSubmit}
+                    onDismiss={handleQuestionDismiss}
+                  />
+                {:else}
+                  <AgentQuestionCard
+                    request={pendingRequest}
+                    scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                    onAnswer={handleQuestionAnswer}
+                    onDismiss={handleQuestionDismiss}
+                    onUpdate={handleQuestionUpdate}
+                    onExplain={handleQuestionExplain}
+                    onQuickChat={handleQuestionQuickChat}
+                    {settings}
+                    {providers}
+                    projectId={thread.projectId}
+                    favoriteModels={rendererRecovery.favoriteModels}
+                    recentModels={rendererRecovery.recentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                    onModelChange={changeThreadModel}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  />
+                {/if}
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard

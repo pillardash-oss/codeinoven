@@ -6,6 +6,7 @@ import type {
   AgentMessage,
   AgentModelSelection,
   AgentRunningProcess,
+  AgentSecretSubmission,
   AgentSessionStatus,
   AgentToolCatalog,
   AssignmentPlan,
@@ -74,6 +75,10 @@ export const invokeAgentContract = {
   'agent:compact': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:answerQuestion': {} as Contract<
     [projectId: string, threadId: string, requestId: string, answers: string[][]],
+    void
+  >,
+  'agent:answerSecret': {} as Contract<
+    [projectId: string, threadId: string, requestId: string, secrets: AgentSecretSubmission[]],
     void
   >,
   'agent:dismissQuestion': {} as Contract<

@@ -924,6 +924,55 @@ export function validateQuestionAnswers(answers: unknown, questions: AgentQuesti
   })
 }
 
+/** One secret question never carries options and never auto-answers. */
+export function isSecretQuestion(question: AgentQuestion): boolean {
+  return question.secretRequest === true && typeof question.secretId === 'string'
+}
+
+/** Placeholder recorded for a secret request so nothing sensitive is persisted. */
+export const SECRET_ANSWER_PLACEHOLDER = '[secret set]'
+
+/**
+ * Validate a `cio_ask_secret` submission against its pending request. Every
+ * secret question must be answered exactly once with a non-empty value, and no
+ * submission may name an unknown secret. Returns the values in question order.
+ */
+export function validateSecretSubmissions(
+  submissions: unknown,
+  questions: AgentQuestion[]
+): Array<{ secretId: string; value: string }> {
+  const expected: string[] = []
+  for (const question of questions) {
+    if (question.secretRequest !== true) continue
+    const secretId = question.secretId
+    if (typeof secretId === 'string' && secretId) expected.push(secretId)
+  }
+  if (expected.length === 0) throw new TypeError('This request is not a secret request')
+  if (!Array.isArray(submissions)) throw new TypeError('Secret submissions must be an array')
+  const values = new Map<string, string>()
+  for (const entry of submissions) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new TypeError('Secret submission must be an object')
+    }
+    const record = entry as Record<string, unknown>
+    const secretId = record['secretId']
+    const value = record['value']
+    if (typeof secretId !== 'string' || !expected.includes(secretId)) {
+      throw new TypeError(`Secret submission names an unknown secret: ${String(secretId)}`)
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new TypeError('Secret value must not be empty')
+    }
+    if (values.has(secretId)) throw new TypeError(`Duplicate secret submission: ${secretId}`)
+    values.set(secretId, value)
+  }
+  return expected.map((secretId) => {
+    const value = values.get(secretId)
+    if (value === undefined) throw new TypeError(`Secret value missing for: ${secretId}`)
+    return { secretId, value }
+  })
+}
+
 export function assertQuestionIndex(index: number, questionCount: number): void {
   if (!Number.isSafeInteger(index) || index < 0 || index >= questionCount) {
     throw new TypeError('Question index is out of range')

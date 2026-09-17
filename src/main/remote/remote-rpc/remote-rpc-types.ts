@@ -36,6 +36,7 @@ export interface RemoteRpcServices {
     | 'replyImageDescriptor'
     | 'listQuestions'
     | 'answerQuestion'
+    | 'answerSecret'
     | 'listCommands'
     | 'runCommand'
     | 'compactSession'
