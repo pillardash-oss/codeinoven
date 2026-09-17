@@ -1,0 +1,593 @@
+/**
+ * Post-paint service graph.
+ *
+ * Construct and register the optional services only after the primary window
+ * has painted. Dynamic imports keep the heavy modules (PTY, harness services,
+ * provider connection, remote mode, notifications, ...) out of the
+ * module-evaluation path so first paint is never blocked by their construction.
+ * Hydration IPC (config/project/bounded-thread/scope reads plus `app:*`) is
+ * registered before navigation, in the bootstrap. Feature IPC, chat, provider
+ * catalog, file preview, and optional services are registered here after first
+ * paint, in the exact order the bootstrap established.
+ */
+
+import { app } from 'electron'
+import { join } from 'path'
+import { chatThreadArtifactDirectory } from '../../lib/project-artifacts'
+import { ensureDir, getConfigRoot } from '../../lib/utils'
+import type { ThreadClickedPayload } from '../../lib/ipc-contract'
+import type { Database } from '../database/database'
+import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
+import { loadDeviceIdentity } from '../account/device-identity'
+import { StorageEngine } from '../storage/storage-engine'
+import { CheckpointManager } from '../storage/checkpoint-manager'
+import { instanceRegistry } from '../system/instance-registry'
+import { Logger } from '../system/logger'
+import { readMemorySyncState } from '../remote/memory-sync-state'
+import {
+  broadcastThreadUpdate,
+  setNotificationService,
+  setPowerWakeService
+} from '../chat/thread-events'
+import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
+import { ModelPricingService } from '../providers/model-pricing-service'
+import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
+import { sendToRenderer } from '../ipc/renderer-delivery'
+import { startupTelemetry } from '../system/startup-telemetry'
+import { BrowserService } from '../browser/browser-service'
+import type { BootstrapState } from './bootstrap-state'
+
+declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
+
+export interface PostPaintBootContext {
+  state: BootstrapState
+  storage: StorageEngine
+  database: Database
+  /** Directory of the built main bundle; icons and renderer assets resolve from it. */
+  mainBundleDirectory: string
+  appIconPath: string
+  isProduction: boolean
+  restorePersistedRemoteModeInDev: boolean
+  threadCreation: ThreadCreationCoordinator
+  threadDeletion: ThreadDeletionCoordinator
+  onThreadClicked: (payload: ThreadClickedPayload) => void
+  /** Called once the feature graph is live so the bootstrap can re-check readiness. */
+  onFeaturesReady: () => void
+}
+
+export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
+  const { state, storage, database } = context
+  if (state.updaterService) return
+  const [
+    { registerIpcHandlers },
+    { ProjectManager },
+    { ProjectFilesService },
+    { ChatEngine },
+    { ScopeManager },
+    { ScopeRootResolver, scopeRootProvider },
+    { ScopeWorktreeService },
+    { HarnessManifestService },
+    { ComputerUsePipService },
+    { UpdaterService },
+    { PowerWakeService },
+    { RetrySchedulerService },
+    { HeartbeatSchedulerService },
+    { SpeechService },
+    { registerSpeechIpc },
+    { PrototypePreviewService },
+    { DirectoryPreviewService }
+  ] = await Promise.all([
+    import('../ipc/ipc-handlers'),
+    import('../../lib/engines/project-manager'),
+    import('../editor/project-files-service'),
+    import('../chat/chat-engine'),
+    import('../../lib/engines/scope-manager'),
+    import('../workspaces/scope-root-resolver'),
+    import('../git/scope-worktree-service'),
+    import('../agents/harness-manifest-service'),
+    import('../utilities/computer-use-pip-service'),
+    import('../notifications/updater-service'),
+    import('../system/power-wake-service'),
+    import('../system/retry-scheduler-service'),
+    import('../system/heartbeat-scheduler-service'),
+    import('../speech/speech-service'),
+    import('../ipc/speech-ipc'),
+    import('../prototypes/prototype-preview-service'),
+    import('../preview/directory-preview-service')
+  ])
+
+  const projectManager = new ProjectManager(database)
+  const scopeManager = new ScopeManager(database)
+  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
+  const scopeRootResolver = new ScopeRootResolver(
+    projectManager,
+    scopeManager,
+    scopeWorktreeService
+  )
+  const projectFilesService = new ProjectFilesService(
+    projectManager,
+    scopeRootProvider(scopeRootResolver),
+    {
+      // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+      // directory; resolution creates it on demand so an empty thread still has
+      // a browsable root.
+      resolve: async (threadId: string) => {
+        const root = storage.resolve(chatThreadArtifactDirectory(threadId))
+        await ensureDir(root)
+        return root
+      }
+    }
+  )
+  state.appfileProjectFiles = projectFilesService
+  state.computerUsePipService = new ComputerUsePipService(storage)
+  state.harnessManifestService = new HarnessManifestService(storage)
+  state.modelPricingService = new ModelPricingService(storage)
+  state.chatEngine = new ChatEngine(
+    storage,
+    database,
+    state.computerUsePipService,
+    state.harnessManifestService,
+    context.threadCreation,
+    join(app.getPath('userData'), 'owned-processes.json'),
+    scopeRootProvider(scopeRootResolver),
+    state.modelPricingService
+  )
+  // Grade any ranking snapshots whose persisted close deadline elapsed while
+  // the app was closed (non-fatal: a failed sweep leaves rows queued for the
+  // next launch).
+  void state.chatEngine
+    .recoverPendingRankingGrades()
+    .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
+  // Merge the app-managed lean opencode agents into the machine-wide global
+  // config. Idempotent, additive-only and non-fatal; runs after first paint
+  // so it never blocks the workspace, and logs a dev-only summary.
+  const { syncOpenCodeLeanAgents } = await import('../opencode/opencode-agent-service')
+  await syncOpenCodeLeanAgents().catch((error) =>
+    Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
+  )
+  state.updaterService = new UpdaterService(storage)
+  state.powerWakeService = new PowerWakeService(storage, database)
+  state.retryScheduler = new RetrySchedulerService(storage)
+  state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
+  state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
+  state.speechService = new SpeechService(
+    {
+      catalogPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/model-catalog.json')
+        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
+      mlxWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/mlx-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
+      coremlWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/coreml-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
+      nativeCaptureWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/speech-capture-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
+    },
+    undefined,
+    (input) => state.chatEngine!.cleanupSpeechTranscript(input),
+    (input) => state.chatEngine!.transcribeSpeechAudio(input),
+    (input) => state.chatEngine!.learnSpeechLessons(input),
+    (pid, command, cwd) =>
+      state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
+  )
+  await state.speechService.initialize()
+  // Initialize auto-evict timers from persisted sound settings
+  try {
+    const cfg = await storage.getConfig()
+    state.speechService.updateUnloadOptions({
+      asr: cfg.sound.asrUnload,
+      cleanup: cfg.sound.cleanupUnload,
+      tts: cfg.sound.ttsUnload
+    })
+  } catch {
+    // defaults already applied
+  }
+  state.unregisterSpeechIpc = registerSpeechIpc(
+    state.speechService,
+    () => state.mainWindow?.webContents ?? null
+  )
+  state.prototypePreviewService = new PrototypePreviewService()
+  state.directoryPreviewService = new DirectoryPreviewService()
+  state.chatEngine.setPrototypePreviewRegistrar(
+    (previewSlug, canonicalRoot) =>
+      state.prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
+  )
+  void (async () => {
+    const projects = await projectManager.listProjects()
+    let registered = 0
+    for (const project of projects) {
+      if (project.source !== 'local' || !project.path) continue
+      registered += (await state.prototypePreviewService?.registerProject(project.path)) ?? 0
+    }
+    Logger.dev('Prototype preview registrations restored', { registered })
+  })().catch((error) => Logger.error('Prototype preview registration recovery failed:', error))
+  const { resolvePrototypePreviewOrigin } = await import('../prototypes/prototype-preview-origin')
+  const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
+    development: !context.isProduction,
+    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
+  })
+  ipcMain.removeHandler('prototypePreview:getOrigin')
+  ipcMain.handle('prototypePreview:getOrigin', async () => {
+    if (previewOrigin.origin || previewOrigin.source !== 'missing' || context.isProduction) {
+      return previewOrigin.origin
+    }
+    const service = state.prototypePreviewService
+    if (!service) return null
+    const port = await service.start()
+    return resolvePrototypePreviewOrigin(process.env, {
+      development: true,
+      bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
+      allocatedPort: port
+    }).origin
+  })
+  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+    const service = new BrowserService(state.mainWindow, database)
+    state.browserService = service
+    service.register()
+    state.chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
+      service.executeUtility(operation, input, browserContext)
+    )
+  }
+  // Keep the device awake while a scheduled auto-retry is due within the wake
+  // window, so a usage-limit reset fires even when the user is away.
+  state.powerWakeService.attachRetryScheduler(state.retryScheduler)
+  state.retryScheduler.attachChangeListener(() => state.powerWakeService?.onRetryScheduleChanged())
+  state.updaterService.setChatEngine(state.chatEngine)
+  // Reap any harness processes orphaned by an unclean previous run before the
+  // first session can spawn fresh servers, so leftover dev servers/ports are
+  // reclaimed without ever touching a harness the user runs outside the app.
+  try {
+    const reaped = await state.chatEngine.reapOrphanProcesses()
+    if (reaped.killed.length > 0 || reaped.skipped.length > 0) {
+      Logger.info('Reaped orphaned harness processes from an unclean shutdown', {
+        killed: reaped.killed,
+        skipped: reaped.skipped
+      })
+    }
+  } catch (error) {
+    Logger.error('Orphaned harness process reaping failed at startup:', error)
+  }
+  registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
+    projectManager,
+    projectFilesService,
+    directoryPreviewService: state.directoryPreviewService,
+    powerWakeService: state.powerWakeService,
+    retryScheduler: state.retryScheduler,
+    heartbeatScheduler: state.heartbeatScheduler,
+    harnessManifestService: state.harnessManifestService,
+    worktreeService: scopeWorktreeService,
+    threadCreation: context.threadCreation,
+    threadDeletion: context.threadDeletion,
+    hydrationHandlersRegistered: true,
+    speechService: state.speechService,
+    onScopedPathResolver: (resolve) => {
+      state.appfileScopedPathResolver = resolve
+    }
+  })
+  state.chatEngine.register()
+  state.harnessManifestService.register()
+  state.chatEngine.attachRetryScheduler(state.retryScheduler)
+  state.featuresReady = true
+  startupTelemetry.mark('features:ready')
+  context.onFeaturesReady()
+  state.resolveFeaturesReady?.()
+  state.resolveFeaturesReady = null
+  if (
+    state.mainWindow &&
+    !state.mainWindow.isDestroyed() &&
+    !state.mainWindow.webContents.isDestroyed()
+  ) {
+    sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
+  }
+
+  void (async () => {
+    const [
+      { PtyService },
+      { ProviderConnectionService },
+      { HarnessUpdateService },
+      { HarnessInstallService },
+      { HarnessAutoUpdateService },
+      { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
+      { RemoteRpcDispatcher },
+      { DeviceCredentialService },
+      { HarnessUsageRepo },
+      { MemoryService },
+      { NotificationService },
+      { RestartRecoveryService }
+    ] = await Promise.all([
+      import('../system/pty-service'),
+      import('../providers/provider-connection'),
+      import('../agents/harness-update-service'),
+      import('../agents/harness-install-service'),
+      import('../agents/harness-auto-update-service'),
+      import('../remote/remote-mode'),
+      import('../remote/remote-rpc'),
+      import('../remote/device-credential-service'),
+      import('../database/repositories/harness-usage-repo'),
+      import('../chat/memory-service'),
+      import('../notifications/notification-service'),
+      import('../system/restart-recovery-service')
+    ])
+
+    state.ptyService = new PtyService(
+      storage,
+      database,
+      scopeRootResolver,
+      (process) => {
+        state.chatEngine?.trackPtyProcess(
+          process.scopeId,
+          process.projectId,
+          process.threadId,
+          process.pid,
+          process.command,
+          process.cwd
+        )
+      },
+      (projectId, projectPath) => {
+        // User typed in a project terminal   open a user-activity window so
+        // their shell-driven edits are excluded from concurrent agent turns.
+        state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
+      }
+    )
+    // A probe that changes a harness's install state (new install, version
+    // bump) invalidates cached provider catalogs so the model picker reflects it.
+    state.providerConnection = new ProviderConnectionService(() => {
+      void state.chatEngine?.invalidateProviderCatalogs()
+    })
+    state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
+    state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
+    state.harnessInstallService = new HarnessInstallService(state.providerConnection)
+    state.notificationService = new NotificationService(storage, database, context.onThreadClicked)
+
+    /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
+    state.remoteCredentials = new DeviceCredentialService(database)
+    const accountProfileRepo = new AccountProfileRepo(database)
+    const accountUsage = new HarnessUsageRepo(database)
+    const accountMemory = new MemoryService(storage)
+    state.remoteMode = new RemoteModeController({
+      lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
+      localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
+      peerSecret: remotePeerSecret(),
+      staticRoot: join(context.mainBundleDirectory, '../renderer'),
+      iconPath: context.appIconPath,
+      rpc: new RemoteRpcDispatcher({
+        database,
+        chatEngine: state.chatEngine!,
+        storage,
+        credentials: state.remoteCredentials,
+        threadCreation: context.threadCreation,
+        threadDeletion: context.threadDeletion
+      }),
+      storage,
+      credentials: state.remoteCredentials,
+      accountProfileRepo,
+      loadAccountProfileData: async () => {
+        const identity = await loadDeviceIdentity(storage)
+        const analytics = await accountUsage.profileSummary()
+        const globalMemories = (await accountMemory.getEntries()).filter(
+          (entry) => entry.scope === 'global'
+        )
+        const syncState = await readMemorySyncState(storage)
+        return {
+          deviceId: identity.deviceId,
+          deviceLabel: identity.deviceLabel,
+          platform: identity.platform,
+          usage: {
+            deviceId: identity.deviceId,
+            deviceLabel: identity.deviceLabel,
+            platform: identity.platform,
+            messageCount: analytics.messageCount,
+            costUsd: analytics.costUsd,
+            tokens: analytics.tokens,
+            durationMs: analytics.durationMs,
+            activeDays: analytics.activityDays.length,
+            projects: await accountUsage.projectUsageSummary(),
+            updatedAt: Date.now()
+          },
+          globalMemories,
+          globalMemoryTombstones: syncState?.tombstones ?? []
+        }
+      },
+      applyGlobalMemories: async (entries) => {
+        // The server returns the tombstone-filtered union of every device's
+        // memories, so replacing the local list is what propagates deletions.
+        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
+      },
+      canOwnTransport: () => instanceRegistry.isPreferredRemoteOwner(),
+      onSessionActiveChange: (active) => state.powerWakeService?.setRemoteSessionActive(active)
+    })
+
+    const reconcileRemoteTransportOwnership = (startup = false): void => {
+      if (!state.remoteMode) return
+      if (state.remoteOwnershipPromise) {
+        state.remoteOwnershipReconcilePending = true
+        return
+      }
+      state.remoteOwnershipReconcilePending = false
+      const mayRestorePersistedMode = !startup || context.restorePersistedRemoteModeInDev
+      const operation =
+        instanceRegistry.isPreferredRemoteOwner() && mayRestorePersistedMode
+          ? state.remoteMode.restoreRemoteMode()
+          : state.remoteMode.relinquishTransportOwnership()
+      state.remoteOwnershipPromise = operation
+        .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
+        .finally(() => {
+          state.remoteOwnershipPromise = null
+          if (state.remoteOwnershipReconcilePending) reconcileRemoteTransportOwnership()
+        })
+    }
+    state.stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(
+      reconcileRemoteTransportOwnership
+    )
+
+    // Optional IPC   registered only after the services exist.
+    if (state.updaterService) {
+      state.updaterService.addActivitySource({
+        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0
+      })
+      state.updaterService.addActivitySource({
+        activeSessionCount: () => (state.remoteMode?.status.blockedQuit ? 1 : 0)
+      })
+    }
+    state.remoteMode.registerIpc()
+    state.ptyService.register()
+    state.providerConnection.register()
+    state.harnessUpdateService.register()
+    state.harnessAutoUpdateService.register()
+    state.harnessInstallService.register()
+
+    const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
+    const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
+    const { registerUtilityIpc } = await import('../ipc/utility-ipc')
+    const { registerGatewayIpc } = await import('../ipc/gateway-ipc')
+    const { OwnedProcessJournal } = await import('../system/owned-process-journal')
+    registerProviderAccountIpc(storage, undefined, (accountId) =>
+      state.chatEngine!.removeHarnessAccount(accountId)
+    )
+    registerBaseUrlProviderIpc(storage)
+    registerUtilityIpc(
+      storage,
+      undefined,
+      undefined,
+      undefined,
+      state.computerUsePipService ?? undefined
+    )
+    state.gatewaySupervisor = registerGatewayIpc(
+      storage,
+      () => state.mainWindow?.webContents ?? null,
+      undefined,
+      new OwnedProcessJournal(join(getConfigRoot(), 'gateways', 'owned-processes.json'))
+    )
+    // Reap gateway processes orphaned by a previous crash before anything can
+    // bind their port again, then bring enabled gateways back up.
+    void state.gatewaySupervisor
+      .recoverOrphans()
+      .then(() => state.gatewaySupervisor?.autoStartEnabled())
+      .catch((error) => {
+        Logger.error('Gateway startup recovery failed (non-fatal):', error)
+      })
+
+    // Wire PTY to the window now that it exists.
+    if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+      state.ptyService.attach(state.mainWindow.webContents)
+    }
+
+    try {
+      await state.powerWakeService?.start()
+      if (state.powerWakeService) setPowerWakeService(state.powerWakeService)
+    } catch (error) {
+      Logger.error('Power wake startup failed (non-fatal):', error)
+    }
+
+    try {
+      await state.retryScheduler?.start()
+      await state.chatEngine?.repairPendingRetryThreadStatuses()
+    } catch (error) {
+      Logger.error('Retry scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await state.heartbeatScheduler?.start()
+    } catch (error) {
+      Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      state.modelPricingService?.start()
+    } catch (error) {
+      Logger.error('Model pricing startup failed (non-fatal):', error)
+    }
+
+    try {
+      const recovery = await new RestartRecoveryService(database).recover()
+      if (recovery.recovered.length > 0) {
+        Logger.info('Recovered interrupted threads', {
+          inspected: recovery.inspected,
+          recovered: recovery.recovered.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+        // The renderer's thread list was hydrated before recovery ran, so its
+        // in-memory rows still hold the stale planning/executing status. Push
+        // the corrected snapshots so sidebar indicators flip to "interrupted"
+        // immediately instead of lingering on "working" until the thread is
+        // reopened. `interrupted` is not a notifiable status, so this cannot
+        // fire spurious OS notifications.
+        for (const thread of recovery.recovered) {
+          broadcastThreadUpdate(thread)
+        }
+      }
+      // Threads whose turns demonstrably completed before the stop are finalized
+      // as `completed`, never resumed. Broadcast their corrected status too so the
+      // sidebar doesn't linger on the stale "working" indicator.
+      if (recovery.completed.length > 0) {
+        Logger.info('Finalized completed interrupted threads', {
+          inspected: recovery.inspected,
+          completed: recovery.completed.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+        for (const thread of recovery.completed) {
+          broadcastThreadUpdate(thread)
+        }
+      }
+      if (recovery.failures.length > 0) {
+        Logger.error('Restart recovery completed with failures', recovery.failures)
+      }
+      await state.chatEngine?.resumePendingWork()
+      // Resume the interrupted threads themselves (regular + Sr. Engineer),
+      // gated by the "Resume work on restart" setting. Each resumed thread
+      // broadcasts a working status so the sidebar flips immediately.
+      if (recovery.recovered.length > 0) {
+        await state.chatEngine?.resumeRecoveredThreads(recovery.recovered)
+      }
+    } catch (error) {
+      Logger.error('Restart recovery failed (non-fatal):', error)
+    }
+
+    // One-time repair of file-change cards whose line counts were recorded as
+    // truncated by the previous whole-file gating (large files with small
+    // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
+    // candidate has been repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
+      if (repaired > 0) {
+        Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Line-stats repair failed (non-fatal):', error)
+    }
+
+    // One-time repair of file-change cards misattributed to hidden internal
+    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
+    // by turns that ran before internal attribution existed. Bounded,
+    // idempotent, and batched; a no-op once every candidate is repaired.
+    try {
+      const repaired = await new CheckpointManager(
+        database
+      ).repairMisattributedInternalCheckpoints()
+      if (repaired > 0) {
+        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Internal-attribution repair failed (non-fatal):', error)
+    }
+
+    // Restore remote mode after paint so users can see app UI while the LAN
+    // stack spins up in the background.
+    reconcileRemoteTransportOwnership(true)
+
+    try {
+      state.notificationService.start()
+      setNotificationService(state.notificationService)
+      state.updaterService?.start()
+    } catch (error) {
+      Logger.error('Update/notification startup failed (non-fatal):', error)
+    }
+  })()
+}

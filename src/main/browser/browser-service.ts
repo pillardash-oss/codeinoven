@@ -1,17 +1,11 @@
 import {
-  app,
   BrowserWindow,
-  Menu,
-  MenuItem,
-  dialog,
   session,
-  shell,
   webFrameMain,
   WebContentsView,
   type Session,
   type WebFrameMain
 } from 'electron'
-import { join } from 'node:path'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
@@ -20,12 +14,8 @@ import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
   BrowserDevToolsState,
-  BrowserDownload,
-  BrowserDownloadState,
   BrowserPageState,
-  BrowserPermissionDecision,
   BrowserPermissionRequest,
-  BrowserSiteDataScope,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -33,300 +23,35 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
-
-const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
-const MAX_BROWSER_URL_LENGTH = 8192
-const MAX_CONSOLE_ENTRIES = 500
-const MAX_TRACKED_DOWNLOADS = 50
-const DOWNLOAD_EVENT_INTERVAL_MS = 150
-const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
-const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
-const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
-const PERMISSION_TIMEOUT_MS = 60_000
-const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
-/** Character cap for the "<project> - <thread>" context line shown above
- *  page alert/confirm dialogs, so a long thread title cannot dominate them. */
-const MAX_DIALOG_LABEL_LENGTH = 120
-
-interface BrowserTab {
-  view: WebContentsView
-  projectId: string
-  threadId: string
-  initialNavigationStarted: boolean
-  consoleEntries: BrowserConsoleEntry[]
-  /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
-  favicon: string | null
-}
-
-interface PendingBrowserPermission {
-  request: BrowserPermissionRequest
-  callback: (granted: boolean) => void
-  timer: ReturnType<typeof setTimeout>
-}
-
-/** A destructive site-data action offered by the native site-settings menu. */
-interface SiteMenuAction {
-  scope: BrowserSiteDataScope
-  label: string
-  detail: string
-}
-
-const SITE_MENU_ACTIONS: readonly SiteMenuAction[] = [
-  {
-    scope: 'cookies',
-    label: 'Clear cookies',
-    detail: 'Cookies for sites visited in this browser will be deleted. You may be signed out.'
-  },
-  {
-    scope: 'site-data',
-    label: 'Clear site data',
-    detail:
-      'Storage, service workers and sessions for sites visited in this browser will be deleted.'
-  },
-  {
-    scope: 'cache',
-    label: 'Clear cache',
-    detail: 'Cached files for sites visited in this browser will be deleted.'
-  },
-  {
-    scope: 'permissions',
-    label: 'Reset permissions',
-    detail:
-      'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
-  }
-]
-
-interface BrowserDownloadRecord {
-  item: Electron.DownloadItem
-  download: BrowserDownload
-  lastEmittedAt: number
-}
-
-function validateTabId(value: unknown): string {
-  if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {
-    throw new TypeError('Browser tab ID is invalid')
-  }
-  return value
-}
-
-function validateProjectId(value: unknown): string {
-  if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
-    throw new TypeError('Browser project ID is invalid')
-  }
-  return value
-}
-
-function validateThreadId(value: unknown): string {
-  if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
-    throw new TypeError('Browser thread ID is invalid')
-  }
-  return value
-}
-
-function browserContextKey(projectId: string, threadId: string): string {
-  return `${projectId}:${threadId}`
-}
-
-function validatePermissionRequestId(value: unknown): string {
-  if (typeof value !== 'string' || !PERMISSION_REQUEST_ID_PATTERN.test(value)) {
-    throw new TypeError('Browser permission request ID is invalid')
-  }
-  return value
-}
-
-function validatePermissionDecision(value: unknown): BrowserPermissionDecision {
-  if (
-    typeof value !== 'string' ||
-    (value !== 'allow' && value !== 'allow-once' && value !== 'deny' && value !== 'dismiss')
-  ) {
-    throw new TypeError('Browser permission decision is invalid')
-  }
-  return value
-}
-
-function validateDownloadId(value: unknown): string {
-  if (typeof value !== 'string' || !DOWNLOAD_ID_PATTERN.test(value)) {
-    throw new TypeError('Browser download ID is invalid')
-  }
-  return value
-}
-
-const SITE_DATA_SCOPES: readonly BrowserSiteDataScope[] = [
-  'cookies',
-  'site-data',
-  'cache',
-  'permissions'
-]
-
-/** Storage buckets cleared by `session.clearStorageData()` for each scope.
- *  Cookies get their own scope so "cookies" and "site data" stay separable. */
-const SCOPE_STORAGE_TYPES: Record<
-  'cookies' | 'site-data',
-  Array<
-    | 'cookies'
-    | 'filesystem'
-    | 'indexdb'
-    | 'localstorage'
-    | 'shadercache'
-    | 'serviceworkers'
-    | 'cachestorage'
-  >
-> = {
-  cookies: ['cookies'],
-  'site-data': ['cachestorage', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
-}
-
-function validateSiteDataScopes(value: unknown): BrowserSiteDataScope[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > SITE_DATA_SCOPES.length) {
-    throw new TypeError('Browser site data scopes must be a non-empty array')
-  }
-  const unique = new Set(value)
-  for (const scope of unique) {
-    if (!SITE_DATA_SCOPES.includes(scope as BrowserSiteDataScope)) {
-      throw new TypeError(`Browser site data scope is invalid: ${String(scope)}`)
-    }
-  }
-  return [...unique]
-}
-
-function validateSiteMenuPoint(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100_000) {
-    throw new TypeError(`Browser site menu ${label} is invalid`)
-  }
-  return Math.round(value)
-}
-
-/** Validate the display host shown at the top of the site-settings menu. */
-function validateBoundedHost(value: unknown): string {
-  if (typeof value !== 'string' || value.length > 260 || value.includes('\0')) {
-    throw new TypeError('Browser site menu host is invalid')
-  }
-  return value
-}
-
-/** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
-function safeBasename(value: string): string {
-  // Substitute every path separator, drive-part, or control character with an
-  // underscore, then collapse dots/whitespace so the result is a plain basename.
-  let cleaned = ''
-  for (const char of value) {
-    const code = char.charCodeAt(0)
-    const substitute =
-      code === 0x2f || // '/'
-      code === 0x5c || // '\'
-      code === 0x3a || // ':'
-      code === 0x2a || // '*'
-      code === 0x3f || // '?'
-      code === 0x22 || // '"'
-      code === 0x3c || // '<'
-      code === 0x3e || // '>'
-      code === 0x7c || // '|'
-      code < 0x20 ||
-      code === 0x7f
-    cleaned += substitute ? '_' : char
-  }
-  const normalized = cleaned.replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
-  const base = normalized.length > 0 ? normalized.slice(0, 240) : 'download'
-  return base
-}
-
-/** Build the injected wrapper that prefixes page alert/confirm messages with
- *  the owning thread's context line. Escaping goes through `JSON.stringify`,
- *  so any project or thread name is embedded safely as a JS string literal. */
-function dialogContextScript(label: string): string {
-  return `(() => {
-  const label = ${JSON.stringify(label)};
-  const win = window;
-  if (win.__cioDialogOriginals === undefined) win.__cioDialogOriginals = {};
-  const originals = win.__cioDialogOriginals;
-  for (const [name, kind] of [['alert', 'Alert'], ['confirm', 'Confirm']]) {
-    if (typeof originals[name] !== 'function') {
-      const current = win[name];
-      if (typeof current !== 'function') continue;
-      originals[name] = current.bind(win);
-    }
-    const original = originals[name];
-    win[name] = function (message) {
-      const text = message == null ? '' : String(message);
-      return original(label + ' ' + kind + '\\n\\n' + text);
-    };
-  }
-})()`
-}
-
-function permissionOrigin(value: string): string | null {
-  try {
-    const parsed = new URL(value)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null
-  } catch {
-    return null
-  }
-}
-
-function permissionKey(origin: string, permission: string, scope = ''): string {
-  return `${origin}\n${permission}\n${scope}`
-}
-
-function permissionGrantKeys(request: BrowserPermissionRequest): string[] {
-  if (request.permission === 'media' && request.mediaTypes.length > 0) {
-    return request.mediaTypes.map((mediaType) =>
-      permissionKey(request.origin, request.permission, mediaType)
-    )
-  }
-  return [permissionKey(request.origin, request.permission)]
-}
-
-/** How a permission reply affects what the browser remembers. */
-interface PermissionResolution {
-  granted: boolean
-  rememberGrant: boolean
-  rememberDeny: boolean
-}
-
-const permissionResolutions: Record<BrowserPermissionDecision, PermissionResolution> = {
-  allow: { granted: true, rememberGrant: true, rememberDeny: false },
-  'allow-once': { granted: true, rememberGrant: false, rememberDeny: false },
-  deny: { granted: false, rememberGrant: false, rememberDeny: true },
-  dismiss: { granted: false, rememberGrant: false, rememberDeny: false }
-}
-
-function validateBrowserUrl(value: unknown): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_BROWSER_URL_LENGTH) {
-    throw new TypeError('Browser URL must be a string of at most 8192 characters')
-  }
-  let parsed: URL
-  try {
-    parsed = new URL(value)
-  } catch {
-    throw new TypeError('Browser URL is malformed')
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new TypeError('Browser URL must use http or https')
-  }
-  if (parsed.username !== '' || parsed.password !== '') {
-    throw new TypeError('Browser URL must not contain credentials')
-  }
-  return parsed.href
-}
-
-function validateBounds(value: unknown): BrowserViewBounds {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('Browser bounds must be an object')
-  }
-  const bounds = value as Record<string, unknown>
-  const result: BrowserViewBounds = {
-    x: bounds['x'] as number,
-    y: bounds['y'] as number,
-    width: bounds['width'] as number,
-    height: bounds['height'] as number
-  }
-  for (const coordinate of Object.values(result)) {
-    if (!Number.isInteger(coordinate) || coordinate < 0 || coordinate > 100_000) {
-      throw new TypeError('Browser bounds must contain non-negative integer coordinates')
-    }
-  }
-  return result
-}
+import { BrowserDownloadTracker } from './browser-service/browser-downloads'
+import { BrowserSiteDataService } from './browser-service/browser-site-data'
+import { dialogContextScript } from './browser-service/browser-dialog-context'
+import {
+  permissionGrantKeys,
+  permissionKey,
+  permissionOrigin,
+  permissionResolutions,
+  type PermissionResolution
+} from './browser-service/browser-permissions'
+import type { BrowserTab, PendingBrowserPermission } from './browser-service/browser-types'
+import {
+  BROWSER_PARTITION_PREFIX,
+  MAX_CONSOLE_ENTRIES,
+  MAX_DIALOG_LABEL_LENGTH,
+  PERMISSION_TIMEOUT_MS,
+  browserContextKey,
+  validateBounds,
+  validateBoundedHost,
+  validateBrowserUrl,
+  validateDownloadId,
+  validatePermissionDecision,
+  validatePermissionRequestId,
+  validateProjectId,
+  validateSiteDataScopes,
+  validateSiteMenuPoint,
+  validateTabId,
+  validateThreadId
+} from './browser-service/browser-validation'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -336,7 +61,8 @@ export class BrowserService {
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
-  private readonly downloads = new Map<string, BrowserDownloadRecord>()
+  private readonly downloadTracker: BrowserDownloadTracker
+  private readonly siteData: BrowserSiteDataService
   private readonly promptWindow: PermissionPromptWindow
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
@@ -358,6 +84,23 @@ export class BrowserService {
     this.promptWindow = new PermissionPromptWindow(window)
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
+    this.downloadTracker = new BrowserDownloadTracker({
+      window,
+      findTabId: (projectId, contentsId) =>
+        [...this.tabs.entries()].find(
+          ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contentsId
+        )?.[0]
+    })
+    this.siteData = new BrowserSiteDataService({
+      window,
+      sessionForProject: (projectId) => this.sessionForProject(projectId),
+      forEachTab: (visit) => {
+        for (const tab of this.tabs.values()) visit(tab)
+      },
+      dismissPermissions: (projectId) => this.dismissProjectPermissions(projectId),
+      clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
+      cancelProjectDownloads: (projectId) => this.downloadTracker.cancelProject(projectId)
+    })
   }
 
   register(): void {
@@ -432,12 +175,12 @@ export class BrowserService {
       return true
     })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
-      await this.clearProjectData(validateProjectId(rawProjectId))
+      await this.siteData.clearProjectData(validateProjectId(rawProjectId))
     })
     ipcMain.handle('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
       const projectId = validateProjectId(rawProjectId)
       const scopes = validateSiteDataScopes(rawScopes)
-      void this.clearSiteData(projectId, scopes).catch((error: unknown) => {
+      void this.siteData.clearSiteData(projectId, scopes).catch((error: unknown) => {
         Logger.error('Browser site data could not be cleared:', error)
       })
     })
@@ -448,7 +191,7 @@ export class BrowserService {
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       // Native popup menus run a nested run loop; detach from the invoke reply
       // so the renderer's call resolves immediately.
-      setImmediate(() => this.showSiteMenu(projectId, host, x, y))
+      setImmediate(() => this.siteData.showSiteMenu(projectId, host, x, y))
     })
     ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -479,38 +222,22 @@ export class BrowserService {
     })
     ipcMain.handle('browser:getDownloads', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
-      return [...this.downloads.values()]
-        .filter((record) => record.download.projectId === projectId)
-        .map((record) => ({ ...record.download }))
+      return this.downloadTracker.list(projectId)
     })
     ipcMain.handle('browser:cancelDownload', (_event, rawDownloadId) => {
-      this.downloads.get(validateDownloadId(rawDownloadId))?.item.cancel()
+      this.downloadTracker.cancel(validateDownloadId(rawDownloadId))
     })
     ipcMain.handle('browser:pauseDownload', (_event, rawDownloadId) => {
-      const record = this.downloads.get(validateDownloadId(rawDownloadId))
-      if (record && !record.item.isPaused()) {
-        record.item.pause()
-        record.download = { ...record.download, paused: true }
-        this.emitDownload(record.download.id, true)
-      }
+      this.downloadTracker.pause(validateDownloadId(rawDownloadId))
     })
     ipcMain.handle('browser:resumeDownload', (_event, rawDownloadId) => {
-      const record = this.downloads.get(validateDownloadId(rawDownloadId))
-      if (record && record.item.canResume()) {
-        record.item.resume()
-        record.download = { ...record.download, paused: false }
-        this.emitDownload(record.download.id, true)
-      }
+      this.downloadTracker.resume(validateDownloadId(rawDownloadId))
     })
     ipcMain.handle('browser:openDownload', (_event, rawDownloadId) => {
-      const record = this.downloads.get(validateDownloadId(rawDownloadId))
-      if (record && record.download.savePath) void shell.openPath(record.download.savePath)
+      this.downloadTracker.open(validateDownloadId(rawDownloadId))
     })
     ipcMain.handle('browser:revealDownload', (_event, rawDownloadId) => {
-      const record = this.downloads.get(validateDownloadId(rawDownloadId))
-      if (!record?.download.savePath) return false
-      shell.showItemInFolder(record.download.savePath)
-      return true
+      return this.downloadTracker.reveal(validateDownloadId(rawDownloadId))
     })
   }
 
@@ -530,10 +257,7 @@ export class BrowserService {
     this.configuredSessions.clear()
     this.permissionGrants.clear()
     this.permissionDenies.clear()
-    for (const record of this.downloads.values()) {
-      if (record.download.state === 'progressing') record.item.cancel()
-    }
-    this.downloads.clear()
+    this.downloadTracker.dispose()
   }
 
   async executeUtility(
@@ -840,215 +564,25 @@ export class BrowserService {
       this.promptWindow.show(context, this.promptAnchor())
     })
     browserSession.on('will-download', (event, item, contents) => {
-      this.handleDownload(projectId, item, contents.id)
+      this.downloadTracker.handleDownload(projectId, item, contents.id)
     })
     this.configuredSessions.add(partition)
     return browserSession
   }
 
-  /** Route a session download through the app-scoped save dialog and tracker. */
-  private handleDownload(projectId: string, item: Electron.DownloadItem, contentsId: number): void {
-    const tabEntry = [...this.tabs.entries()].find(
-      ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contentsId
-    )
-    const fileName = safeBasename(item.getFilename())
-    const defaultPath = join(app.getPath('downloads'), fileName)
-    item.setSaveDialogOptions({
-      title: 'Save downloaded file',
-      defaultPath
-    })
-
-    const id = crypto.randomUUID()
-    const record: BrowserDownloadRecord = {
-      item,
-      download: {
-        id,
-        tabId: tabEntry?.[0] ?? '',
-        projectId,
-        fileName,
-        url: item.getURL().slice(0, 2048),
-        mimeType: item.getMimeType().slice(0, 256),
-        receivedBytes: item.getReceivedBytes(),
-        totalBytes: item.getTotalBytes(),
-        speedBytes: item.getCurrentBytesPerSecond(),
-        progress: item.getPercentComplete(),
-        state: 'progressing',
-        paused: false,
-        savePath: '',
-        error: ''
-      },
-      lastEmittedAt: 0
-    }
-    this.downloads.set(id, record)
-    this.emitDownload(id)
-
-    item.on('updated', () => {
-      const current = this.downloads.get(id)
-      if (!current) return
-      current.download = {
-        ...current.download,
-        receivedBytes: item.getReceivedBytes(),
-        totalBytes: item.getTotalBytes() || current.download.totalBytes,
-        speedBytes: item.getCurrentBytesPerSecond(),
-        progress: item.getPercentComplete(),
-        paused: item.isPaused()
-      }
-      this.emitDownload(id)
-    })
-    item.once('done', (_event, state) => {
-      const current = this.downloads.get(id)
-      if (!current) return
-      const finished = state as BrowserDownloadState
-      current.download = {
-        ...current.download,
-        state: finished,
-        receivedBytes: item.getReceivedBytes(),
-        totalBytes: item.getTotalBytes() || current.download.totalBytes,
-        progress: item.getPercentComplete(),
-        paused: false,
-        savePath: item.getSavePath(),
-        error:
-          finished === 'interrupted'
-            ? 'The download was interrupted and could not resume.'
-            : current.download.error
-      }
-      this.emitDownload(id, true)
-      this.trimDownloads()
-    })
-  }
-
-  private emitDownload(id: string, force = false): void {
-    const record = this.downloads.get(id)
-    if (!record || this.window.webContents.isDestroyed()) return
-    const now = Date.now()
-    if (!force && now - record.lastEmittedAt < DOWNLOAD_EVENT_INTERVAL_MS) return
-    record.lastEmittedAt = now
-    sendToRenderer(this.window.webContents, 'browser:download', { ...record.download })
-  }
-
-  private trimDownloads(): void {
-    if (this.downloads.size <= MAX_TRACKED_DOWNLOADS) return
-    const terminal = [...this.downloads.entries()].filter(
-      ([, record]) => record.download.state !== 'progressing'
-    )
-    while (this.downloads.size > MAX_TRACKED_DOWNLOADS && terminal.length > 0) {
-      const [id] = terminal.shift() ?? []
-      if (id) this.downloads.delete(id)
-    }
-  }
-
-  /** Open the OS-native site-settings context menu. Runs in a nested run loop
-   *  and composites above the WebContentsView, so the page never has to be
-   *  detached for the menu. */
-  private showSiteMenu(projectId: string, host: string, x: number, y: number): void {
-    if (this.window.isDestroyed()) return
-    const menu = new Menu()
-    if (host) menu.append(new MenuItem({ label: host, enabled: false }))
-    menu.append(new MenuItem({ type: 'separator' }))
-    for (const action of SITE_MENU_ACTIONS) {
-      menu.append(
-        new MenuItem({
-          label: `${action.label}…`,
-          click: () => this.confirmAndClearSiteData(projectId, action)
-        })
-      )
-    }
-    menu.popup({
-      window: this.window,
-      x,
-      y,
-      callback: () => {
-        if (!this.window.webContents.isDestroyed()) {
-          sendToRenderer(this.window.webContents, 'browser:siteMenuClosed')
-        }
-      }
-    })
-  }
-
-  /** Confirm the destructive site-data action with a parented native dialog
-   *  before executing it. */
-  private confirmAndClearSiteData(projectId: string, action: SiteMenuAction): void {
-    if (this.window.isDestroyed()) return
-    void dialog
-      .showMessageBox(this.window, {
-        type: 'warning',
-        message: `${action.label}?`,
-        detail: action.detail,
-        buttons: [action.label, 'Cancel'],
-        defaultId: 1,
-        cancelId: 1
-      })
-      .then((result) => {
-        if (result.response !== 0) return
-        return this.clearSiteData(projectId, [action.scope]).catch((error: unknown) => {
-          Logger.error('Browser site data could not be cleared:', error)
-          if (this.window.isDestroyed()) return
-          void dialog.showMessageBox(this.window, {
-            type: 'error',
-            message: 'Site data could not be cleared',
-            detail:
-              error instanceof Error && error.message
-                ? error.message
-                : 'An unexpected error occurred while clearing browser site data.',
-            buttons: ['OK']
-          })
-        })
-      })
-      .catch((error: unknown) => {
-        Logger.error('Browser site data confirmation failed:', error)
-      })
-  }
-
-  private async clearProjectData(projectId: string): Promise<void> {
+  /** Dismiss every pending permission prompt that belongs to a project. */
+  private dismissProjectPermissions(projectId: string): void {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.projectId === projectId)
         this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
-    for (const record of this.downloads.values()) {
-      if (record.download.projectId === projectId && record.download.state === 'progressing') {
-        record.item.cancel()
-      }
-    }
+  }
+
+  /** Forget every remembered permission grant or denial for a project. */
+  private clearProjectPermissionMemory(projectId: string): void {
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     this.permissionGrants.get(partition)?.clear()
     this.permissionDenies.get(partition)?.clear()
-    const browserSession = this.sessionForProject(projectId)
-    await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()])
-    await browserSession.closeAllConnections()
-    for (const tab of this.tabs.values()) {
-      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
-    }
-  }
-
-  /** Clear only the requested scopes for the project's browser session. Tabs of
-   *  the project reload afterwards so cleared state takes effect immediately. */
-  private async clearSiteData(projectId: string, scopes: BrowserSiteDataScope[]): Promise<void> {
-    if (scopes.includes('permissions')) {
-      for (const [requestId, pending] of this.pendingPermissions) {
-        if (pending.request.projectId === projectId) {
-          this.resolvePermission(requestId, permissionResolutions.dismiss)
-        }
-      }
-      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
-      this.permissionGrants.get(partition)?.clear()
-      this.permissionDenies.get(partition)?.clear()
-    }
-    const browserSession = this.sessionForProject(projectId)
-    const work: Promise<unknown>[] = []
-    for (const scope of scopes) {
-      if (scope === 'cache') {
-        work.push(browserSession.clearCache())
-      } else if (scope === 'cookies' || scope === 'site-data') {
-        work.push(browserSession.clearStorageData({ storages: SCOPE_STORAGE_TYPES[scope] }))
-      }
-    }
-    if (work.length > 0) {
-      await Promise.all(work)
-      await browserSession.closeAllConnections()
-    }
-    for (const tab of this.tabs.values()) {
-      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
-    }
   }
 
   private resolvePermission(requestId: string, resolution: PermissionResolution): void {
