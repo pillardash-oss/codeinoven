@@ -483,9 +483,7 @@ export function blockHtml(
   const parser = parserFor(allowHtml, repository)
   const sanitized = DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
   const withFavicons = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
-  const html = hasImage
-    ? injectContentImages(unwrapPictureElements(withFavicons))
-    : withFavicons
+  const html = hasImage ? injectContentImages(unwrapPictureElements(withFavicons)) : withFavicons
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
@@ -574,7 +572,12 @@ function injectLinkFavicons(html: string): string {
  */
 function isMediaOnlyAnchor(inner: string): boolean {
   if (!/<(?:img|picture|svg|video)\b/iu.test(inner)) return false
-  return inner.replace(/<[^>]*>/gu, '').replace(/&nbsp;/giu, '').trim() === ''
+  return (
+    inner
+      .replace(/<[^>]*>/gu, '')
+      .replace(/&nbsp;/giu, '')
+      .trim() === ''
+  )
 }
 
 const PICTURE_ELEMENT = /<picture\b[^>]*>([\s\S]*?)<\/picture>/giu
@@ -590,7 +593,10 @@ const IMG_TAG = /<img\b[^>]*>/iu
  * `<img>` is exactly what a browser with no matching source does.
  */
 function unwrapPictureElements(html: string): string {
-  return html.replace(PICTURE_ELEMENT, (whole: string, inner: string) => IMG_TAG.exec(inner)?.[0] ?? whole)
+  return html.replace(
+    PICTURE_ELEMENT,
+    (whole: string, inner: string) => IMG_TAG.exec(inner)?.[0] ?? whole
+  )
 }
 
 /**

@@ -109,7 +109,8 @@ const CONTAINER_ATTRIBUTES = new Set(['open', 'class', 'id', 'title', 'dir', 'la
 const HTML_TAG_PATTERN = /<!--[\s\S]*?-->|<\/?[a-zA-Z!](?:"[^"]*"|'[^']*'|[^'">])*>/gu
 const TAG_NAME_PATTERN = /^<\/?([a-zA-Z][a-zA-Z0-9-]*)/
 const TAG_ATTRIBUTES_PATTERN = /<[a-zA-Z][a-zA-Z0-9-]*((?:"[^"]*"|'[^']*'|[^'">])*)/
-const ATTRIBUTE_PATTERN = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gu
+const ATTRIBUTE_PATTERN =
+  /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gu
 
 interface HtmlTag {
   /** Offset of the `<`. */
