@@ -168,6 +168,20 @@ export interface PreparedUtilityRuntime {
   cleanup(): Promise<void>
 }
 
+/**
+ * The plan and progress the owning thread is executing, published per turn so a
+ * driver-owned compaction checkpoint can rebuild context from them when a
+ * transcript can no longer be summarized. `planPath` and `progressPath` are
+ * absolute when the artifacts were located, so a checkpoint can re-read the
+ * newest version instead of the one captured at turn start.
+ */
+export interface CompactionFallbackContext {
+  plan: string | null
+  progress: string | null
+  planPath: string | null
+  progressPath: string | null
+}
+
 /** Authentication operations a harness exposes without implied account switching. */
 export interface HarnessAuthCapabilities {
   status: boolean
@@ -600,6 +614,18 @@ export interface HarnessDriver {
     projectPath: string,
     sessionId: string,
     endpoint: { url: string; token: string } | null
+  ): Promise<void>
+
+  /**
+   * Publish the owning thread's plan and progress for checkpoint rebuilds.
+   * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
+   * session-keyed file; every other harness ignores the call. `null` clears it,
+   * so a thread with no plan can never inject a stale one into a rebuild.
+   */
+  publishCompactionContext?(
+    projectPath: string,
+    sessionId: string,
+    context: CompactionFallbackContext | null
   ): Promise<void>
 
   /**

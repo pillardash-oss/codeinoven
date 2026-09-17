@@ -80,6 +80,11 @@ export interface CioCoreToolsExtensionOptions {
    *  forwards token deltas for those children only, so a worker nobody is
    *  looking at does not re-serialize a stream only a view would consume. */
   subagentWatchPath: string
+  /** Absolute path of the per-session plan/progress snapshot the engine
+   *  republishes each turn. The compaction extension reads it, and re-reads the
+   *  files the snapshot points at, to rebuild a checkpoint when the transcript
+   *  cannot be summarized. */
+  compactionContextPath: string
   /** Distilled project-and-app behavior contract injected into every spawned
    *  worker's prompt. A worker is a nested session with its own resource
    *  loader, so the extension's `before_agent_start` hook never runs for it and
@@ -216,6 +221,10 @@ __CIO_STRIP_BUILTINS__  })
         JSON.stringify(options.oversizedFlagPath).slice(1, -1)
       )
       .replace('__CIO_STOP_FLAG_PATH__', JSON.stringify(options.stopFlagPath).slice(1, -1))
+      .replace(
+        '__CIO_COMPACTION_CONTEXT_PATH__',
+        JSON.stringify(options.compactionContextPath).slice(1, -1)
+      )
       .replace(
         '__CIO_SUBAGENT_WATCH_PATH__',
         JSON.stringify(options.subagentWatchPath).slice(1, -1)

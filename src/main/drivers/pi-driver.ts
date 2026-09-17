@@ -28,6 +28,7 @@ import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import type {
+  CompactionFallbackContext,
   GenerateTitleOptions,
   HarnessCapabilities,
   SendPromptOptions,
@@ -243,6 +244,17 @@ interface ProviderOverlay {
   args: string[]
   env: Record<string, string>
   cleanup(): Promise<void>
+}
+
+/**
+ * Storage-relative directory holding one session's app-owned extension runtime
+ * files: the composed module, its per-turn handoffs, and the per-session flag
+ * files (oversized recovery, stop request, watched sub-agents, and the plan and
+ * progress snapshot a rebuilt checkpoint reads). Derived from the session id so
+ * a file can be published before the module is materialized.
+ */
+function cioCoreToolsDirectory(sessionId: string): string {
+  return join('runtime', 'cio-core-tools', sessionId)
 }
 
 /**
@@ -1255,6 +1267,32 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Publish the plan and progress the owning thread is executing, so the
+   * compaction extension can rebuild a checkpoint from them when a transcript
+   * cannot be summarized. Session-keyed and best-effort: a thread with no plan
+   * (or a harness without rebuild support) simply publishes an empty snapshot.
+   */
+  async publishCompactionContext(
+    _projectPath: string,
+    sessionId: string,
+    context: CompactionFallbackContext | null
+  ): Promise<void> {
+    void _projectPath
+    const relative = join(cioCoreToolsDirectory(sessionId), 'compaction-context.json')
+    try {
+      await this.storage.writeRaw(
+        relative,
+        JSON.stringify(
+          context ?? { plan: null, progress: null, planPath: null, progressPath: null }
+        )
+      )
+    } catch (error) {
+      // Rebuild context is a fallback, never a reason to fail a turn.
+      Logger.dev('Pi compaction context publish failed:', error)
+    }
+  }
+
   async prepareUtilityRuntime(
     request: UtilityRuntimePreparationRequest
   ): Promise<UtilityRuntimeOverlay> {
@@ -1796,8 +1834,11 @@ export class PiDriver extends PersistentCliDriver {
         const keptId = compaction?.['firstKeptEntryId']
         const details = parseRecord(compaction?.['details'])
         const trace = parseRecord(details?.['lastWorkingTrace'])
+        const checkpointKind = details?.['kind']
         const retainedAt =
-          details?.['kind'] === 'cio-page-checkpoint' && trace?.['firstKeptEntryId'] === keptId
+          (checkpointKind === 'cio-page-checkpoint' ||
+            checkpointKind === 'cio-emergency-checkpoint') &&
+          trace?.['firstKeptEntryId'] === keptId
             ? numberValue(trace?.['firstKeptCreatedAt'])
             : undefined
         if (retainedAt !== undefined) record['firstKeptCreatedAt'] = retainedAt
@@ -2801,13 +2842,14 @@ export class PiDriver extends PersistentCliDriver {
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     if (existing) return existing
     try {
-      const directory = join('runtime', 'cio-core-tools', sessionId)
+      const directory = cioCoreToolsDirectory(sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const watchFlagRelative = join(directory, 'watched-subagents.json')
+      const compactionContextRelative = join(directory, 'compaction-context.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
@@ -2831,6 +2873,10 @@ export class PiDriver extends PersistentCliDriver {
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
           subagentWatchPath: this.storage.resolve(watchFlagRelative),
+          // Never seeded by this materialization: the engine publishes the
+          // thread's plan and progress before the module exists on the first
+          // turn, and a seed written here would overwrite it.
+          compactionContextPath: this.storage.resolve(compactionContextRelative),
           // The primary agent's composed instructions ride the per-turn system
           // prompt handoff, which only the root session's hook reads. A worker
           // gets this distilled contract instead, so it can never be left with

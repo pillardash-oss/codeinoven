@@ -42,6 +42,10 @@ async function loadExtension(armed: boolean): Promise<{
     // string literal and silently disarm the extension.
     .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(join(root, 'flag.json')).slice(1, -1))
     .replace(
+      '__CIO_COMPACTION_CONTEXT_PATH__',
+      JSON.stringify(join(root, 'compaction-context.json')).slice(1, -1)
+    )
+    .replace(
       /^import \{ ([^}]+) \} from '@earendil-works\/pi-coding-agent'$/mu,
       (_line: string, bindings: string) =>
         bindings

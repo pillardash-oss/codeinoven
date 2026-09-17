@@ -1,5 +1,5 @@
 import { BrowserWindow, powerMonitor } from 'electron'
-import { readdir, readFile, rm } from 'fs/promises'
+import { readdir, readFile, rm, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
@@ -74,6 +74,7 @@ import {
 } from '../drivers/driver.interface'
 import type {
   AuxiliaryModelCandidate,
+  CompactionFallbackContext,
   HarnessDriver,
   SendPromptOptions,
   SteerPromptOptions,
@@ -306,9 +307,11 @@ import {
 import { generateId } from '../../lib/utils'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  PROJECT_DATA_DIRECTORY,
   chatThreadArtifactDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
+  featureSlugFromTitle,
   requireLocalProject
 } from '../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../lib/id'
@@ -2658,6 +2661,100 @@ export class ChatEngine {
   }
 
   /**
+   * Publish the plan and progress this thread is executing so a driver-owned
+   * checkpoint can rebuild context from them when a transcript can no longer be
+   * summarized. Best-effort: a thread with no plan publishes an empty snapshot,
+   * and a driver that builds no checkpoints is skipped entirely.
+   */
+  private async publishCompactionFallback(
+    driver: HarnessDriver,
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    projectPath: string
+  ): Promise<void> {
+    const publish = driver.publishCompactionContext?.bind(driver)
+    if (!publish) return
+    try {
+      await publish(projectPath, sessionId, await this.resolveThreadPlan(projectPath, threadId))
+    } catch (error) {
+      Logger.dev('Compaction fallback context publish failed:', error)
+    }
+  }
+
+  /**
+   * Locate the plan and progress this thread is executing.
+   *
+   * A thread with a feature slug owns `.cio/specs/<slug>`, the authoritative
+   * pair for engineering work. Every other thread keeps its plan beside its own
+   * scratch work, so the newest `.cio/work/<feature>` pair is used instead: the
+   * app cannot know which directory a chat chose, and the most recently written
+   * plan is the one the thread is following.
+   */
+  private async resolveThreadPlan(
+    projectPath: string,
+    threadId: string
+  ): Promise<CompactionFallbackContext> {
+    const row = this.database.get<{ feature_slug: string | null }>(
+      'SELECT feature_slug FROM threads WHERE id=?',
+      threadId
+    )
+    // A slug that no longer round-trips is not a directory this app wrote, so
+    // it is never joined into a path.
+    const slug = row?.feature_slug
+    const specDirectory =
+      slug && featureSlugFromTitle(slug) === slug
+        ? join(projectPath, featureArtifactDirectory(slug))
+        : null
+    const directory = specDirectory ?? (await this.newestWorkDirectory(projectPath))
+    if (!directory) return { plan: null, progress: null, planPath: null, progressPath: null }
+    const plan = await this.readPlanArtifact(join(directory, 'plan.md'))
+    const progress = await this.readPlanArtifact(join(directory, 'progress.md'))
+    return {
+      plan: plan?.text ?? null,
+      progress: progress?.text ?? null,
+      planPath: plan?.path ?? null,
+      progressPath: progress?.path ?? null
+    }
+  }
+
+  /** Read one plan/progress artifact, or null when it is absent or empty. */
+  private async readPlanArtifact(path: string): Promise<{ text: string; path: string } | null> {
+    try {
+      const text = await readFile(path, 'utf8')
+      return text.trim() ? { text, path } : null
+    } catch {
+      return null
+    }
+  }
+
+  /** Newest `.cio/work/<feature>` directory holding a plan, or null. */
+  private async newestWorkDirectory(projectPath: string): Promise<string | null> {
+    try {
+      const root = join(projectPath, PROJECT_DATA_DIRECTORY, 'work')
+      let newest: string | null = null
+      let newestAt = 0
+      for (const entry of await readdir(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const directory = join(root, entry.name)
+        try {
+          const modified = (await stat(join(directory, 'plan.md'))).mtimeMs
+          if (modified > newestAt) {
+            newestAt = modified
+            newest = directory
+          }
+        } catch {
+          // A work directory without a plan is not a plan candidate.
+        }
+      }
+      return newest
+    } catch {
+      // No scratch directory, or a project with no local filesystem root.
+      return null
+    }
+  }
+
+  /**
    * Install one tiny gateway plus always-on utilities for this turn. On-demand
    * schemas remain outside model context until the gateway activates them.
    */
@@ -2677,6 +2774,10 @@ export class ChatEngine {
     brainstormInterview = false,
     explicitUtilityInvocation = false
   ): Promise<string> {
+    // The plan and progress the thread is executing are republished before any
+    // early return below: a session whose transcript can no longer be summarized
+    // has to be able to rebuild its context from them.
+    await this.publishCompactionFallback(driver, projectId, threadId, sessionId, projectPath)
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
     this.computerUsePip?.notifyTurnStarted(threadId)
