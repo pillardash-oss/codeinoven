@@ -18,7 +18,10 @@ function seedThread(db: Database, threadId: string): void {
   )
 }
 
-function input(threadId: string, overrides: Partial<OpenRankingSnapshotInput> = {}): OpenRankingSnapshotInput {
+function input(
+  threadId: string,
+  overrides: Partial<OpenRankingSnapshotInput> = {}
+): OpenRankingSnapshotInput {
   return {
     threadId,
     projectId: 'p',
@@ -32,6 +35,7 @@ function input(threadId: string, overrides: Partial<OpenRankingSnapshotInput> = 
     dueAtMs: 86_461_000,
     userMessageText: 'fix the login bug',
     assistantOutputText: 'Fixed.',
+    anchorMessageId: 'msg-1',
     costUsd: 0.01,
     costStatus: 'known',
     ...overrides
@@ -39,10 +43,8 @@ function input(threadId: string, overrides: Partial<OpenRankingSnapshotInput> = 
 }
 
 function snapshot(db: Database, threadId: string): ModelRankingSnapshotRow | undefined {
-  return db.get(
-    'SELECT * FROM model_ranking_snapshots WHERE thread_id = ?',
-    threadId
-  ) as ModelRankingSnapshotRow | undefined
+  return db.get('SELECT * FROM model_ranking_snapshots WHERE thread_id = ?', threadId) as
+    ModelRankingSnapshotRow | undefined
 }
 
 async function seededDb(threadId: string): Promise<Database> {
@@ -80,7 +82,14 @@ describe('ModelRankingSnapshotRepo', () => {
       const open = repo.openForThread('t1')
       expect(open?.shot_category).toBe('first_shot')
 
-      repo.registerCompletedExchange(open?.id ?? '', 'still broken', 90_000, 90_000 + 24 * 3_600_000)
+      repo.registerCompletedExchange(
+        open?.id ?? '',
+        'msg-2',
+        'still broken',
+        'Still broken, here is the real fix.',
+        90_000,
+        90_000 + 24 * 3_600_000
+      )
       const upgraded = snapshot(db, 't1')
       expect(upgraded?.shot_category).toBe('multi_shot')
       expect(upgraded?.follow_up_text).toBe('still broken')
@@ -101,8 +110,22 @@ describe('ModelRankingSnapshotRepo', () => {
       const repo = new ModelRankingSnapshotRepo(db)
       repo.insert(input('t1'))
       const open = repo.openForThread('t1')
-      repo.registerCompletedExchange(open?.id ?? '', 'first follow-up', 90_000, 100_000)
-      repo.registerCompletedExchange(open?.id ?? '', 'second follow-up', 130_000, 140_000)
+      repo.registerCompletedExchange(
+        open?.id ?? '',
+        'msg-2',
+        'first follow-up',
+        'First follow-up answered.',
+        90_000,
+        100_000
+      )
+      repo.registerCompletedExchange(
+        open?.id ?? '',
+        'msg-3',
+        'second follow-up',
+        'Second follow-up answered.',
+        130_000,
+        140_000
+      )
 
       const row = snapshot(db, 't1')
       expect(row?.shot_category).toBe('multi_shot')
@@ -122,14 +145,25 @@ describe('ModelRankingSnapshotRepo', () => {
       const claimed = repo.claimDueBatch(1_000, 3)
       expect(claimed[0]?.status).toBe('processing')
 
-      repo.registerCompletedExchange(claimed[0]?.id ?? '', 'late follow-up', 2_000, 2_000 + 86_400_000)
+      repo.registerCompletedExchange(
+        claimed[0]?.id ?? '',
+        'msg-2',
+        'late follow-up',
+        'Answered the late follow-up.',
+        2_000,
+        2_000 + 86_400_000
+      )
       const row = snapshot(db, 't1')
       expect(row?.status).toBe('pending')
       expect(row?.follow_up_text).toBe('late follow-up')
 
       // The in-flight drain can no longer score or delete the stale claim.
       expect(
-        repo.deleteScoredInTransaction(claimed[0]?.id ?? '', claimed[0]?.claim_token ?? '', () => undefined)
+        repo.deleteScoredInTransaction(
+          claimed[0]?.id ?? '',
+          claimed[0]?.claim_token ?? '',
+          () => undefined
+        )
       ).toBe(false)
     } finally {
       destroyTestDb(db)
@@ -182,13 +216,9 @@ describe('ModelRankingSnapshotRepo', () => {
       repo.insert(input('t1'))
       const second = repo.claimDueBatch(Date.now(), 3)
       expect(
-        repo.deleteScoredInTransaction(
-          second[0]?.id ?? '',
-          claimed[0]?.claim_token ?? '',
-          () => {
-            scoreApplied += 1
-          }
-        )
+        repo.deleteScoredInTransaction(second[0]?.id ?? '', claimed[0]?.claim_token ?? '', () => {
+          scoreApplied += 1
+        })
       ).toBe(false)
       expect(scoreApplied).toBe(1)
     } finally {

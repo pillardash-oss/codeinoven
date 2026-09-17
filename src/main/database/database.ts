@@ -725,6 +725,7 @@ export class Database {
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateModelRankingSnapshotClaimToken(connection)
+      this.migrateModelRankingSnapshotAnchorMessageId(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
@@ -822,6 +823,26 @@ export class Database {
     )
     if (columns.size === 0 || columns.has('claim_token')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN claim_token TEXT')
+  }
+
+  /**
+   * Databases created before the anchor tag carry an `anchor_message_id`-less
+   * snapshot queue. Add the column in place (nullable, no backfill needed  
+   * a null anchor means "unknown", which keeps the pre-anchor behaviour of
+   * registering the next completed exchange as a follow-up). Idempotent and
+   * safe to re-run.
+   */
+  migrateModelRankingSnapshotAnchorMessageId(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0 || columns.has('anchor_message_id')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN anchor_message_id TEXT')
   }
 
   /**

@@ -20,6 +20,10 @@ export interface OpenRankingSnapshotInput {
   dueAtMs: number
   userMessageText: string
   assistantOutputText: string
+  /** Visible user message this window answers. The window counts one shot per
+   *  prompt, so a later turn that re-answers this same message refreshes the
+   *  window instead of registering a follow-up. */
+  anchorMessageId: string
   costUsd: number | null
   costStatus: 'known' | 'estimated' | 'unavailable'
 }
@@ -64,9 +68,9 @@ export class ModelRankingSnapshotRepo {
          id, thread_id, project_id, shot_category, status,
          harness_id, provider_id, model_id, thinking_level,
          started_at, ended_at, closed_at_ms, due_at_ms,
-         user_message_text, assistant_output_text, follow_up_text,
+         user_message_text, assistant_output_text, follow_up_text, anchor_message_id,
          cost_usd, cost_status, attempt_count, last_attempt_at_ms, created_at
-       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, 0, NULL, ?)`,
+       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, ?)`,
       [
         snapshotId(input),
         input.threadId,
@@ -81,6 +85,7 @@ export class ModelRankingSnapshotRepo {
         input.dueAtMs,
         input.userMessageText,
         input.assistantOutputText,
+        input.anchorMessageId,
         input.costUsd,
         input.costStatus,
         Date.now()
@@ -98,9 +103,9 @@ export class ModelRankingSnapshotRepo {
          id, thread_id, project_id, shot_category, status,
          harness_id, provider_id, model_id, thinking_level,
          started_at, ended_at, closed_at_ms, due_at_ms,
-         user_message_text, assistant_output_text, follow_up_text,
+         user_message_text, assistant_output_text, follow_up_text, anchor_message_id,
          cost_usd, cost_status, attempt_count, last_attempt_at_ms, created_at
-       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, 0, NULL, ?)`,
+       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, ?)`,
       snapshotId(input),
       input.threadId,
       input.projectId,
@@ -114,6 +119,7 @@ export class ModelRankingSnapshotRepo {
       input.dueAtMs,
       input.userMessageText,
       input.assistantOutputText,
+      input.anchorMessageId,
       input.costUsd,
       input.costStatus,
       Date.now()
@@ -133,24 +139,61 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
-   * A completed later exchange on the still-open conversation window: upgrade
-   * the classification to multi_shot, append the follow-up prompt as judge
-   * context, and slide the inactivity deadline. The window stays open   a
-   * conversation is graded exactly once, at close. A plain update, never a
-   * failure marker.
+   * A completed later exchange on the still-open conversation window.
+   *
+   * `promptMessageId` is the visible user message this exchange answers. A
+   * prompt the window already answers is not a new shot: an invisible
+   * continuation (a search nudge, a Mermaid repair, incomplete-turn recovery,
+   * a specification continuation) and a resumed retry all re-answer the user's
+   * own message, so such a turn refreshes the graded answer in place instead of
+   * upgrading the window to `multi_shot` and handing the judge the same prompt
+   * again as a follow-up, which the rubric reads as the user pushing back.
+   *
+   * A genuinely later prompt upgrades the classification to `multi_shot` and
+   * appends its text as judge context. Either way the inactivity deadline
+   * slides, so the window stays open   a conversation is graded exactly once,
+   * at close. A plain update, never a failure marker.
    *
    * If the drain had already claimed the row ('processing', inactivity
    * deadline elapsed mid-conversation), the row is reset to 'pending' and its
    * claim token cleared, so the in-flight judge result is discarded (its
    * delete guard no longer matches) and the conversation is graded later with
-   * the full follow-up context.
+   * the final answer.
    */
   registerCompletedExchange(
     id: string,
+    promptMessageId: string,
     followUpText: string,
+    assistantOutputText: string,
     endedAt: number,
     nextDueAtMs: number
   ): void {
+    const open = this.db.get<{ anchor_message_id: string | null }>(
+      `SELECT anchor_message_id FROM model_ranking_snapshots
+       WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
+      id
+    )
+    if (!open) return
+    if (open.anchor_message_id === promptMessageId) {
+      // Same user prompt answered again: keep the shot category and the judge
+      // context, but make the graded answer the one the user actually received
+      // (an incomplete turn is captured before its continuation runs, and a
+      // nudge turn replaces an answer the app itself rejected).
+      this.db.run(
+        `UPDATE model_ranking_snapshots
+         SET assistant_output_text = ?,
+             ended_at = ?,
+             due_at_ms = ?,
+             status = 'pending',
+             claim_token = NULL
+         WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
+        assistantOutputText,
+        endedAt,
+        nextDueAtMs,
+        id
+      )
+      return
+    }
     this.db.run(
       `UPDATE model_ranking_snapshots
        SET shot_category = 'multi_shot',
@@ -158,6 +201,7 @@ export class ModelRankingSnapshotRepo {
              CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
                   THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
              -12000),
+           anchor_message_id = ?,
            ended_at = ?,
            due_at_ms = ?,
            status = 'pending',
@@ -165,6 +209,7 @@ export class ModelRankingSnapshotRepo {
        WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
       followUpText,
       followUpText,
+      promptMessageId,
       endedAt,
       nextDueAtMs,
       id

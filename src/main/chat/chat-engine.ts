@@ -22169,6 +22169,14 @@ export class ChatEngine {
    * the conversation closes   thread deletion or the inactivity deadline  
    * and is graded exactly once at that point. Greeting-only first prompts
    * never enter the queue, so they never consume judge tokens.
+   *
+   * A shot is counted per visible user prompt, never per provider turn. The
+   * parent turn is resolved as the last user-origin message   invisible
+   * continuations are persisted as hidden `orchestrator` messages, so a nudge,
+   * a Mermaid repair, an incomplete-turn recovery, or a resumed retry all
+   * resolve to the same prompt and refresh the window instead of registering
+   * as a follow-up shot (see `registerCompletedExchange`).
+   *
    * Document-generating workflows (brainstorm, PRD) and audit-report threads
    * are excluded, as are internal orchestration turns.
    */
@@ -22194,15 +22202,19 @@ export class ChatEngine {
     if (prdStage === 'drafting' || prdStage === 'brainstorming') return
     const endedAt = turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now()
     const parentText = textForMessage(parentMessage)
+    const assistantText = textForMessage(turnAssistant).slice(0, 6_000)
     const open = this.rankingSnapshotRepo.openForThread(threadId)
     if (open) {
-      // Later exchange on the still-open window: upgrade to multi_shot, append
-      // the follow-up prompt as judge context, and slide the inactivity
-      // deadline. If the drain had already claimed the row, it is reset to
-      // pending and the stale judge result is discarded by its delete guard.
+      // Later exchange on the still-open window. A prompt this window already
+      // answers is a repeat (invisible continuation or resumed retry) and
+      // refreshes the final answer instead of upgrading to multi_shot. If the
+      // drain had already claimed the row, it is reset to pending and the
+      // stale judge result is discarded by its delete guard.
       this.rankingSnapshotRepo.registerCompletedExchange(
         open.id,
+        parentMessage.id,
         parentText.slice(0, 6_000),
+        assistantText,
         endedAt,
         endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS)
       )
@@ -22226,7 +22238,8 @@ export class ChatEngine {
       endedAt,
       dueAtMs: endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS),
       userMessageText: parentText.slice(0, 6_000),
-      assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000),
+      assistantOutputText: assistantText,
+      anchorMessageId: parentMessage.id,
       costUsd,
       costStatus
     })

@@ -318,6 +318,13 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
  * transient grading queue. At most one open snapshot per conversation window
  * (first user message + response, upgraded by one substantive follow-up).
  *
+ * One snapshot records one shot, not one provider turn: `anchor_message_id`
+ * names the visible user message the window currently answers, so the later
+ * turns that re-answer that same message   an invisible continuation (search
+ * nudge, Mermaid repair, incomplete-turn recovery, specification
+ * continuation) or a resumed retry   refresh the window in place instead of
+ * registering as a follow-up.
+ *
  * thread_id deliberately does NOT cascade-delete: thread deletion is the close
  * signal, and the raw prompt/response payload must survive deletion long
  * enough for the judge to score it. Once scored, the row is hard-deleted and
@@ -342,6 +349,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   user_message_text     TEXT NOT NULL DEFAULT '',
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
+  anchor_message_id     TEXT,
   cost_usd       REAL,
   cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),

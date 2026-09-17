@@ -103,6 +103,8 @@ export interface ModelRankingSnapshotRow {
   user_message_text: string
   assistant_output_text: string
   follow_up_text: string | null
+  /** Visible user message this window currently answers; null on legacy rows. */
+  anchor_message_id: string | null
   cost_usd: number | null
   cost_status: 'known' | 'estimated' | 'unavailable' | null
   attempt_count: number
