@@ -65,7 +65,7 @@
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -11908,86 +11908,47 @@
   onClose={() => (queuedStartAfterPickerOpen = false)}
 />
 
-<Modal
+<ConfirmDialog
   open={queuedStartAfterPendingRemoval !== null}
   title="Remove wait dependency?"
-  onClose={() => (queuedStartAfterPendingRemoval = null)}
+  onCancel={() => (queuedStartAfterPendingRemoval = null)}
+  onConfirm={confirmRemoveQueuedStartAfterThread}
+  confirmLabel="Remove dependency"
 >
-  <p class="text-sm text-muted">
+  <p>
     The queued message will no longer wait for
     <span class="font-medium text-foreground">{queuedStartAfterPendingRemoval?.title}</span>.
   </p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={() => (queuedStartAfterPendingRemoval = null)}
-    >
-      Cancel
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
-      onclick={confirmRemoveQueuedStartAfterThread}
-    >
-      Remove dependency
-    </button>
-  {/snippet}
-</Modal>
+</ConfirmDialog>
 
-<Modal
+<ConfirmDialog
   open={studioExitConfirmationOpen}
   title="Leave Spec Studio?"
-  onClose={() => (studioExitConfirmationOpen = false)}
+  onCancel={() => (studioExitConfirmationOpen = false)}
+  onConfirm={() => {
+    studioExitConfirmationOpen = false
+    finishCloseSpecStudio()
+  }}
+  confirmLabel="Discard changes"
+  cancelLabel="Stay"
 >
-  <p class="text-sm text-muted">
+  <p>
     You have unsaved changes in Spec Studio. Leaving will discard those edits and clear this
     session's undo and redo history.
   </p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={() => (studioExitConfirmationOpen = false)}
-    >
-      Stay
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
-      onclick={() => {
-        studioExitConfirmationOpen = false
-        finishCloseSpecStudio()
-      }}
-    >
-      Discard changes
-    </button>
-  {/snippet}
-</Modal>
+</ConfirmDialog>
 
-<Modal
+<ConfirmDialog
   open={messagePendingDelete !== null}
   title={deleteConfirmTitle}
-  onClose={cancelDeleteMessage}
+  onCancel={cancelDeleteMessage}
+  onConfirm={confirmDeleteMessage}
+  confirmLabel="Delete"
+  note="This cannot be undone."
+  busy={deletingMessageId !== null}
 >
-  <p class="text-sm text-muted">{deleteConfirmBody}</p>
-  <p class="mt-2 text-sm font-medium text-foreground">This cannot be undone.</p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={cancelDeleteMessage}
-    >
-      Cancel
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={deletingMessageId !== null}
-      onclick={() => void confirmDeleteMessage()}
-    >
-      {#if deletingMessageId !== null}
-        <Loader2 size={14} class="animate-spin" />
-      {:else}
-        Delete
-      {/if}
-    </button>
-  {/snippet}
-</Modal>
+  <p>{deleteConfirmBody}</p>
+</ConfirmDialog>
 
 <EngineeringFlowCancelModal
   open={lifecycleCancelModalOpen}
