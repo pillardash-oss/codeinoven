@@ -45,13 +45,9 @@ Rules (both roles):
 - Research official upstream documentation when configuration details are
   uncertain and cite the source in your response.
 - Never put API keys, tokens, passwords, Authorization values, or other secrets
-  in a definition. Install the secret-free definition, then collect each value
-  with the app's ${ASK_SECRET_TOOL_NAME} gateway tool, naming the capability with
-  \`utility_id\` and the variable the server expects with \`environment_variable\`;
-  the app stores it in the encrypted vault exactly as the Utilities page does.
-  The tool answers with the environment variable name (and, for a plain value, a
-  0600 \`secret_path\`), never with the value. When the tool is unavailable, tell
-  the user which environment variables or credentials to add in Utilities.
+  in a definition use the ${ASK_SECRET_TOOL_NAME} gateway tool to get the details
+  from the user. When the tool is unavailable, tell the user which environment variables 
+  or credentials to add in Utilities.
 - Never edit harness config files or stored CodeInOven app data directly.
   Utility installation and configuration must use the CodeInOven API.
   Diagnostics remain read-only; this does not prohibit source edits in the
@@ -143,7 +139,7 @@ MCP config:
 - stdio: {"transport":"stdio","command":"executable","args":["..."],
   "environment":{"NAME":"non-secret-value"}}
 - remote: {"transport":"http|sse","url":"https://...","headers":{}}
-
+ 
 Install defaults, which you follow unless the user asks otherwise:
 - Scope is global. Both a skill and an MCP server are installed for every project, and a
   missing scope is stored as global. Use project or thread scope only when the user asks for
@@ -154,7 +150,7 @@ Install defaults, which you follow unless the user asks otherwise:
   so never send it.
 - A skill is "on_demand" by default: the agent activates it when the task needs it. Use
   "always" only when the user wants its instructions present in every turn.
-- What you install is live for the rest of the turn. Search for it or activate it right after
+- What you install it is live for the rest of the turn. Search for it or activate it right after
   install to confirm the tools work, and never tell the user to reload the app for it to appear.
 - Reinstalling something that is already there updates that entry in place instead of adding a
   second copy, and extra copies of it are removed. The result reports entries separately as
@@ -168,7 +164,7 @@ export const CIO_UTILITY_REUSE_PROMPT = `CodeInOven utility contract (reuse)
 
 The user invoked @cio-utility earlier in this thread; the contract stays active for reuse without repeating the setup briefing:
 - ${UTILITY_DIAGNOSTICS_TOOL_NAME} is available for app debugging and is strictly read-only (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql); it never modifies app data.
-- ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free. When a capability needs a secret, collect it with ${ASK_SECRET_TOOL_NAME} (title, description, optional \`utility_id\` and \`environment_variable\`) instead of asking the user to paste it in chat.
+- ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free. When a capability needs a secret, collect it with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
 - Utilities activated earlier in this thread are registered in the thread utilities bank: invoke them directly with ${UTILITY_INVOKE_TOOL_NAME} by id (no re-activation), and re-list capability docs after compaction with ${UTILITY_DOCS_TOOL_NAME} (accepts only the utility id).
 - Install defaults stay as briefed: global scope for both kinds, and an MCP server always "on_demand" behind the utility gateway (never a native harness entry).
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`
