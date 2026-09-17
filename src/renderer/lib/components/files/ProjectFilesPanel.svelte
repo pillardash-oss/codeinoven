@@ -2,15 +2,11 @@
   import { onMount, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
-  import { AlertDialog, Dialog } from 'bits-ui'
+  import { Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     ChevronRight,
-    Code2,
-    Eye,
-    FileDiff,
-    FileQuestion,
     FolderTree,
     FolderOpen,
     Loader2,
@@ -18,7 +14,7 @@
     Save,
     TriangleAlert
   } from '@lucide/svelte'
-  import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
+  import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
@@ -27,16 +23,7 @@
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import {
-    isAudioMime,
-    isDocumentPreviewPath,
-    isHtmlPreviewPath,
-    isImageMime,
-    isSvgMime,
-    isVideoMime,
-    mimeFromPath,
-    supportsFilePreview
-  } from '$lib/mime'
+  import { supportsFilePreview } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -44,24 +31,29 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
   import { diffDetails } from './file-diff'
-  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
-  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
   import GoToLine from './GoToLine.svelte'
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
+  import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
+  import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
+  import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
+  import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
+  import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
+  import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
+  import {
+    filePreviewFlags,
+    hasAnyPreview,
+    previewKindLabel as previewKindLabelFor
+  } from './project-files-panel-preview'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
-  import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
-  import type { ProjectTextFile } from '$shared/types'
-  import type { ProjectFileInfo } from '$shared/types'
   import { INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
@@ -158,13 +150,14 @@
       !deletedAtCheckpoint &&
       (activePathIsConflicted || (activeSession !== null && dirty))
   )
-  let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
-  let htmlPreview = $derived(activeTab ? isHtmlPreviewPath(activeTab.path) : false)
-  let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
-  let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
-  let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
-  let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
-  let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
+  const previewFlags = $derived(filePreviewFlags(activeTab?.path ?? null))
+  let markdown = $derived(previewFlags.markdown)
+  let htmlPreview = $derived(previewFlags.html)
+  let pdf = $derived(previewFlags.pdf)
+  let image = $derived(previewFlags.image)
+  let svg = $derived(previewFlags.svg)
+  let video = $derived(previewFlags.video)
+  let audio = $derived(previewFlags.audio)
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
@@ -181,172 +174,40 @@
   // SVG is rendered natively in the renderer via a blob URL (animated SVGs
   // play), instead of the privileged `appfile://` scheme, which intentionally
   // refuses to serve project-controlled SVG.
-  let svgPreviewUrl = $state<string | null>(null)
-  let svgPreviewFailed = $state(false)
-  $effect(() => {
-    if (!activeTab || !svg) {
-      if (svgPreviewUrl) {
-        URL.revokeObjectURL(svgPreviewUrl)
-        svgPreviewUrl = null
-      }
-      svgPreviewFailed = false
-      return
-    }
-    // Reading the reload token keeps the effect reactive to explicit reloads:
-    // bumping it revokes the stale blob and re-reads the file from disk.
-    const reloadToken = projectState.previewReloadTokens[activeTab.path] ?? 0
-    let cancelled = false
-    svgPreviewFailed = false
-    void invoke(
-      'projectFiles:read',
+  const svgPreview = new ProjectFilesPanelSvgPreview()
+  $effect(() =>
+    svgPreview.sync({
       projectId,
-      activeTab.path,
-      workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId ?? undefined
-    )
-      .then((source: ProjectTextFile | null) => {
-        if (cancelled || !source) return
-        // A newer reload request superseded this read; its own run will land
-        // the fresh blob, so drop the stale content.
-        if ((projectState.previewReloadTokens[activeTab.path] ?? 0) !== reloadToken) return
-        const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
-        svgPreviewUrl = url
-      })
-      .catch(() => {
-        if (cancelled) return
-        svgPreviewFailed = true
-      })
-    return () => {
-      cancelled = true
-      if (svgPreviewUrl) {
-        URL.revokeObjectURL(svgPreviewUrl)
-        svgPreviewUrl = null
-      }
-      svgPreviewFailed = false
-    }
-  })
-  let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
-  let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
-  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
-  let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
-  /** Name of the preview renderer for the active file; keeps the Eye toggle's
-   *  labels identical in the inline and fullscreen toolbars. */
-  let previewKindLabel = $derived(
-    pdf
-      ? 'PDF'
-      : video
-        ? 'Video'
-        : audio
-          ? 'Audio'
-          : documentPreview
-            ? 'Document'
-            : htmlPreview
-              ? 'HTML'
-              : image
-                ? 'Image'
-                : 'Markdown'
+      activePath: activeTab?.path ?? null,
+      isSvg: svg,
+      // Reading the reload token keeps the effect reactive to explicit reloads:
+      // bumping it revokes the stale blob and re-reads the file from disk.
+      currentReloadToken: () =>
+        activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
+      scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
+      chatThreadId
+    })
   )
-  let documentHtml = $state<string | null>(null)
-  let documentLoading = $state(false)
-  let documentFailed = $state(false)
-  /** Human-readable reason when a preview fails   surfaced in the pane. */
-  let documentError = $state<string | null>(null)
-  /** Path whose HTML is currently loaded   guards against tab swaps. */
-  let documentHtmlPath = $state<string | null>(null)
-  /** Reload token the loaded HTML belongs to; a bumped token forces a re-read
-   *  even though the path is unchanged. Plain companion of `documentHtmlPath`. */
-  let documentHtmlToken: number | null = null
-  /** Path whose HTML is currently being fetched   guards against effect
-   *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
-   *  chains that would otherwise cancel or pile on top of each other.
-   *  Deliberately NOT `$state`: the effect both reads and writes it, so a
-   *  reactive variable here would re-trigger the effect on its own write
-   *  (effect_update_depth_exceeded)   same reason the previous run token was
-   *  a plain `let`. Only the async callbacks consult it after each run. */
-  let documentInFlightPath: string | null = null
-  /** Monotonic ownership token, incremented only when a new chain actually
-   *  starts. Lets stale callbacks tell themselves apart from the current
-   *  chain without participating in reactivity. */
-  let documentEffectToken = 0
+  let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
+  let imagePreviewFailed = $derived(svg ? svgPreview.failed : false)
+  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
+  let documentPreview = $derived(previewFlags.document)
+  let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
+  const docPreview = new ProjectFilesPanelDocumentPreview()
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
-   *  the preview load on each thread churn, leaving `documentLoading` stuck
-   *  true   the infinite spinner. */
+   *  the preview load on each thread churn, leaving the loader stuck true. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   $effect(() => {
-    if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
-      documentHtml = null
-      documentHtmlPath = null
-      documentHtmlToken = null
-      documentInFlightPath = null
-      documentFailed = false
-      documentError = null
-      documentLoading = false
-      return
-    }
-    const path = activeTab.path
-    const reloadToken = projectState.previewReloadTokens[path] ?? 0
-    // Bail if this path is already loaded (at the same reload token) OR
-    // already being fetched   the in-flight chain settles its own state.
-    // Without the in-flight guard, every `activeTab` reference change restarts
-    // the chain and the previous one never gets to clear `documentLoading`
-    // the infinite spinner. A bumped reload token bypasses both guards so
-    // Reload re-reads the file from disk.
-    if (
-      (documentHtmlPath === path && documentHtmlToken === reloadToken) ||
-      documentInFlightPath === path
+    const tab = activeTab
+    docPreview.sync(
+      projectId,
+      tab?.path ?? null,
+      Boolean(tab && documentPreview && tab.view === 'preview'),
+      tab ? (projectState.previewReloadTokens[tab.path] ?? 0) : 0,
+      documentScopeBucketId
     )
-      return
-    documentInFlightPath = path
-    const token = ++documentEffectToken
-    documentLoading = true
-    documentFailed = false
-    documentError = null
-    // `file:readDocumentPreview` requires an absolute path, but the tab only
-    // carries a project-relative path (which may live inside a managed worktree
-    // scope). Resolve the authoritative absolute path through main first.
-    const scopeBucketId = documentScopeBucketId
-    // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
-    const timeout = setTimeout(() => {
-      if (token !== documentEffectToken) return
-      documentHtml = null
-      documentHtmlPath = path
-      documentHtmlToken = reloadToken
-      documentInFlightPath = null
-      documentFailed = true
-      documentError = 'Document preview timed out'
-      documentLoading = false
-    }, 15000)
-    void invoke('projectFiles:info', projectId, path, scopeBucketId)
-      .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
-      .then((html: string | null) => {
-        if (token !== documentEffectToken) return
-        // documentPreviewFrame sanitizes and wraps the raw converter HTML in
-        // a styled page (white "paper" surface) so the preview matches the
-        // chat-attachment document preview instead of rendering transparent.
-        documentHtml = html ? documentPreviewFrame(html) : null
-        documentHtmlPath = path
-        documentHtmlToken = reloadToken
-        documentInFlightPath = null
-        documentFailed = html === null
-        documentError = html === null ? 'The document could not be converted for preview' : null
-      })
-      .catch((error: unknown) => {
-        if (token !== documentEffectToken) return
-        documentHtml = null
-        documentHtmlPath = path
-        documentHtmlToken = reloadToken
-        documentInFlightPath = null
-        documentFailed = true
-        documentError = error instanceof Error ? error.message : String(error)
-      })
-      .finally(() => {
-        clearTimeout(timeout)
-        // Only the current chain may settle the spinner; a stale chain that
-        // lands after a newer load started must leave it alone.
-        if (token === documentEffectToken) documentLoading = false
-      })
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
@@ -573,10 +434,6 @@
     void projectFilesWorkspace.swapFileSilent(projectId, currentPath, path)
   }
 
-  function cancelFullscreenNavigate(): void {
-    fullscreenPendingPath = null
-  }
-
   function revealBreadcrumb(index: number): void {
     const directory = index < 0 ? '' : breadcrumbParts.slice(0, index + 1).join('/')
     void projectFilesWorkspace.revealDirectory(projectId, directory)
@@ -623,11 +480,6 @@
     }
   }
 
-  function handleRenameSubmit(event: SubmitEvent): void {
-    event.preventDefault()
-    void renameSelected()
-  }
-
   async function deleteSelected(): Promise<void> {
     if (!deleteTargetPath || mutationPending) return
     const target = deleteTargetPath
@@ -644,79 +496,7 @@
     }
   }
 
-  let editorFindValue = $state('')
-  let editorFindActive = $state(0)
-  let editorFindTotal = $state(0)
-  let editorFindNonce = $state(0)
-  let editorReplaceValue = $state('')
-  let editorReplaceAction = $state<'one' | 'all'>('one')
-  let editorReplaceNonce = $state(0)
-  let editorReplaceRequest = $derived<{ nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null>(
-    editorReplaceNonce === 0
-      ? null
-      : {
-          nonce: editorReplaceNonce,
-          action: editorReplaceAction,
-          query: editorFindValue,
-          replacement: editorReplaceValue
-        }
-  )
-
-  function closeEditorFind(): void {
-    findNavState.closeEditorFind()
-    editorFindValue = ''
-    editorFindActive = 0
-    editorFindTotal = 0
-  }
-
-  function handleEditorFindQuery(query: string): void {
-    editorFindValue = query
-    editorFindActive = 0
-    editorFindTotal = 0
-    findNavState.editorFindQuery = query
-    findNavState.editorFindActiveIndex = 0
-    findNavState.editorFindMatches = 0
-    findNavState.editorFindOpen = true
-  }
-
-  function handleEditorFindMatches(matches: number): void {
-    editorFindTotal = matches
-    findNavState.editorFindMatches = matches
-  }
-
-  function editorFindNext(): void {
-    if (editorFindTotal === 0) return
-    const next = (editorFindActive + 1) % editorFindTotal
-    editorFindActive = next
-    findNavState.editorFindActiveIndex = next
-  }
-
-  function editorFindPrev(): void {
-    if (editorFindTotal === 0) return
-    const prev = (editorFindActive - 1 + editorFindTotal) % editorFindTotal
-    editorFindActive = prev
-    findNavState.editorFindActiveIndex = prev
-  }
-
-  function replaceOneInEditor(): void {
-    if (!editorFindValue || editorFindTotal === 0) return
-    editorReplaceAction = 'one'
-    editorReplaceNonce += 1
-  }
-
-  function replaceAllInEditor(): void {
-    if (!editorFindValue || editorFindTotal === 0) return
-    editorReplaceAction = 'all'
-    editorReplaceNonce += 1
-  }
-
-  function handleEditorReplaceDone(replaced: number): void {
-    if (replaced === 0) return
-    editorFindActive = 0
-    findNavState.editorFindActiveIndex = 0
-    // Force the editor to re-scan matches after the document changed.
-    editorFindNonce += 1
-  }
+  const editorFind = new ProjectFilesPanelFind()
 
   function submitGoToLine(line: number): void {
     if (!activeTab) return
@@ -730,7 +510,10 @@
 {#snippet staleVersionAlert(positionClass: string)}
   {#if staleSession}
     <div
-      class={['absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg', positionClass]}
+      class={[
+        'absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg',
+        positionClass
+      ]}
       role="alert"
     >
       <TriangleAlert size={13} class="shrink-0 text-warning" />
@@ -811,114 +594,38 @@
       </div>
 
       {#if activeTab}
-        <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
-              activeTab.view === 'diff'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Show file diff"
-            aria-pressed={activeTab.view === 'diff'}
-            title="Diff"
-            disabled={!checkpointDiff}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'diff')}
-          >
-            <FileDiff size={12} />
-          </button>
-          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
-            <button
-              type="button"
-              class={[
-                'flex h-6 w-6 items-center justify-center rounded transition-colors',
-                activeTab.view === 'preview'
-                  ? 'bg-overlay text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'
-              ]}
-              aria-label={`Preview ${previewKindLabel}`}
-              aria-pressed={activeTab.view === 'preview'}
-              title={`${previewKindLabel} preview`}
-              onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
-            >
-              <Eye size={12} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors',
-              activeTab.view === 'source'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Edit source"
-            aria-pressed={activeTab.view === 'source'}
-            title={deletedAtCheckpoint ? 'View deleted source' : 'Edit source'}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'source')}
-          >
-            <Code2 size={12} />
-          </button>
-          {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
-          {/if}
-          {#if diffStats}
-            <span
-              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
-              aria-label="Added lines">+{diffStats.additions}</span
-            >
-            <span
-              class="font-mono text-[0.625rem] tabular-nums text-danger"
-              aria-label="Deleted lines">−{diffStats.deletions}</span
-            >
-            {#if checkpointDiff?.truncated}
-              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
-                >Truncated</span
-              >
-            {/if}
-            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
-          {/if}
-          <span class="flex-1"></span>
-          <ProjectFileViewerMenu
-            diffView={activeTab.view === 'diff'}
-            lineNumbers={showLineNumbers}
-            wrap={wrapLines}
-            reloadDisabled={reloadDisabled}
-            mutationDisabled={deletedAtCheckpoint || mutationPending}
-            showUndoRedo={canUndoRedo}
-            onUndo={() => requestEdit('undo')}
-            onRedo={() => requestEdit('redo')}
-            onReload={reloadSelected}
-            onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => wrapTextState.toggle()}
-            onFullscreen={() => (fullscreenOpen = true)}
-            onRename={startRename}
-            onDelete={() => (deleteTargetPath = activeTab.path)}
-          />
-          {#if showSaveButton}
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-              disabled={deletedAtCheckpoint ||
-                (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
-                (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-              aria-label={activePathIsConflicted
-                ? 'Replace the original file and mark it resolved'
-                : 'Save file (Cmd/Ctrl+S)'}
-              title={activePathIsConflicted
-                ? 'Replace the original file and mark it resolved'
-                : 'Save file (Cmd/Ctrl+S)'}
-              onclick={() => void saveActiveFile()}
-            >
-              {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
-                <Loader2 size={11} class="animate-spin" />
-              {:else}
-                <Save size={11} />
-              {/if}
-            </button>
-          {/if}
-        </div>
+        <ProjectFilesPanelToolbar
+          {activeTab}
+          {checkpointDiff}
+          {diffStats}
+          {previewKindLabel}
+          showPreviewToggle={hasAnyPreview(previewFlags)}
+          {deletedAtCheckpoint}
+          showUndoRedo={canUndoRedo}
+          {reloadDisabled}
+          mutationDisabled={deletedAtCheckpoint || mutationPending}
+          {showLineNumbers}
+          {wrapLines}
+          {showSaveButton}
+          saveDisabled={deletedAtCheckpoint ||
+            (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
+            (activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving))}
+          saving={activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving)}
+          saveLabel={activePathIsConflicted
+            ? 'Replace the original file and mark it resolved'
+            : 'Save file (Cmd/Ctrl+S)'}
+          fullscreen={false}
+          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          onUndo={() => requestEdit('undo')}
+          onRedo={() => requestEdit('redo')}
+          onReload={reloadSelected}
+          onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
+          onToggleWrap={() => wrapTextState.toggle()}
+          onFullscreen={() => (fullscreenOpen = true)}
+          onRename={startRename}
+          onDelete={() => (deleteTargetPath = activeTab.path)}
+          onSave={() => void saveActiveFile()}
+        />
       {/if}
 
       {@render staleVersionAlert('top-[4.5rem]')}
@@ -933,21 +640,21 @@
 
       {#if findNavState.editorFindOpen && !fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
         <FindInBar
-          query={editorFindValue}
-          matches={editorFindTotal}
-          activeIndex={editorFindActive}
+          query={editorFind.value}
+          matches={editorFind.total}
+          activeIndex={editorFind.active}
           label="Find in file"
           floating
           focusTrigger={findNavState.editorFindFocusTrigger}
-          onQueryChange={handleEditorFindQuery}
+          onQueryChange={(query) => editorFind.setQuery(query)}
           enableReplace={!deletedAtCheckpoint}
-          replaceValue={editorReplaceValue}
-          onReplaceChange={(value) => (editorReplaceValue = value)}
-          onReplaceOne={replaceOneInEditor}
-          onReplaceAll={replaceAllInEditor}
-          onNext={editorFindNext}
-          onPrev={editorFindPrev}
-          onClose={closeEditorFind}
+          replaceValue={editorFind.replaceValue}
+          onReplaceChange={(value) => (editorFind.replaceValue = value)}
+          onReplaceOne={() => editorFind.replaceOne()}
+          onReplaceAll={() => editorFind.replaceAll()}
+          onNext={() => editorFind.next()}
+          onPrev={() => editorFind.prev()}
+          onClose={() => editorFind.close()}
         />
       {:else if goToLineOpen && !fullscreenOpen && activeTab}
         <GoToLine
@@ -1006,64 +713,21 @@
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
         <FileDiffView diff={checkpointDiff} />
-      {:else if activeTab.view === 'preview' && markdown}
-        <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-          <MarkdownView text={visibleContent} class="text-sm text-foreground" />
-        </div>
-      {:else if activeTab.view === 'preview' && htmlPreview}
-        <div class="min-h-0 flex-1 bg-surface">
-          {#if htmlPreviewSrcdoc}
-            <iframe
-              srcdoc={htmlPreviewSrcdoc}
-              sandbox=""
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && pdf}
-        <div class="min-h-0 flex-1 overflow-auto">
-          {#if previewUrl}
-            <iframe
-              src={previewUrl}
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && documentPreview}
-        <div class="min-h-0 flex-1 overflow-auto bg-surface">
-          {#if documentLoading}
-            <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
-              <Loader2 size={16} class="animate-spin" />
-              <span class="sr-only">Loading document preview</span>
-            </div>
-          {:else if documentHtml}
-            <iframe
-              srcdoc={documentHtml}
-              sandbox=""
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {:else if documentFailed}
-            <div
-              class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
-              role="status"
-            >
-              <FileQuestion size={24} />
-              <span class="text-xs">This document could not be previewed</span>
-              {#if documentError}
-                <span class="max-w-md text-center text-[0.625rem] break-words text-danger">
-                  {documentError}
-                </span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && image}
-        <FileImagePreview src={imagePreviewSrc} alt={activeTab.path} failed={imagePreviewFailed} />
-      {:else if activeTab.view === 'preview' && (video || audio)}
-        <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
+      {:else if activeTab.view === 'preview' && hasAnyPreview(previewFlags)}
+        <ProjectFilesPanelPreviewPane
+          path={activeTab.path}
+          flags={previewFlags}
+          {visibleContent}
+          {htmlPreviewSrcdoc}
+          {previewUrl}
+          {imagePreviewSrc}
+          {imagePreviewFailed}
+          documentLoading={docPreview.loading}
+          documentHtml={docPreview.html}
+          documentFailed={docPreview.failed}
+          documentError={docPreview.error}
+          showDocumentError
+        />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
@@ -1118,15 +782,15 @@
             spellcheck={markdown}
             {showLineNumbers}
             wrap={wrapLines}
-            findQuery={findNavState.editorFindOpen && !fullscreenOpen ? editorFindValue : ''}
-            findActiveIndex={editorFindActive}
-            findNonce={editorFindNonce}
-            replaceRequest={editorReplaceRequest}
+            findQuery={findNavState.editorFindOpen && !fullscreenOpen ? editorFind.value : ''}
+            findActiveIndex={editorFind.active}
+            findNonce={editorFind.nonce}
+            replaceRequest={editorFind.replaceRequest}
             {editRequest}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
-            onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
-            onReplaceDone={handleEditorReplaceDone}
+            onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
+            onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
             onInput={handleEditorInput}
           />
         {/key}
@@ -1217,93 +881,34 @@
         </Dialog.Close>
       </div>
       {#if activeTab && !activePathIsConflicted}
-        <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
-              activeTab.view === 'diff'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Show file diff"
-            aria-pressed={activeTab.view === 'diff'}
-            title="Diff"
-            disabled={!checkpointDiff}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'diff')}
-          >
-            <FileDiff size={12} />
-          </button>
-          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
-            <button
-              type="button"
-              class={[
-                'flex h-6 w-6 items-center justify-center rounded transition-colors',
-                activeTab.view === 'preview'
-                  ? 'bg-overlay text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'
-              ]}
-              aria-label={`Preview ${previewKindLabel}`}
-              aria-pressed={activeTab.view === 'preview'}
-              title={`${previewKindLabel} preview`}
-              onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
-            >
-              <Eye size={12} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors',
-              activeTab.view === 'source'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Edit source"
-            aria-pressed={activeTab.view === 'source'}
-            title={deletedAtCheckpoint ? 'View deleted source' : 'Edit source'}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'source')}
-          >
-            <Code2 size={12} />
-          </button>
-          {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
-          {/if}
-          {#if diffStats}
-            <span
-              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
-              aria-label="Added lines">+{diffStats.additions}</span
-            >
-            <span
-              class="font-mono text-[0.625rem] tabular-nums text-danger"
-              aria-label="Deleted lines">−{diffStats.deletions}</span
-            >
-            {#if checkpointDiff?.truncated}
-              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
-                >Truncated</span
-              >
-            {/if}
-            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
-          {/if}
-          <span class="flex-1"></span>
-          <ProjectFileViewerMenu
-            diffView={activeTab.view === 'diff'}
-            lineNumbers={showLineNumbers}
-            wrap={wrapLines}
-            reloadDisabled={reloadDisabled}
-            mutationDisabled={deletedAtCheckpoint || mutationPending}
-            showUndoRedo={canUndoRedo}
-            onUndo={() => requestEdit('undo')}
-            onRedo={() => requestEdit('redo')}
-            hideFullscreen
-            onReload={reloadSelected}
-            onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => wrapTextState.toggle()}
-            onFullscreen={() => (fullscreenOpen = true)}
-            onRename={startRename}
-            onDelete={() => (deleteTargetPath = activeTab.path)}
-          />
-        </div>
+        <ProjectFilesPanelToolbar
+          {activeTab}
+          {checkpointDiff}
+          {diffStats}
+          {previewKindLabel}
+          showPreviewToggle={hasAnyPreview(previewFlags)}
+          {deletedAtCheckpoint}
+          showUndoRedo={canUndoRedo}
+          {reloadDisabled}
+          mutationDisabled={deletedAtCheckpoint || mutationPending}
+          {showLineNumbers}
+          {wrapLines}
+          showSaveButton={false}
+          saveDisabled
+          saving={false}
+          saveLabel=""
+          fullscreen
+          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          onUndo={() => requestEdit('undo')}
+          onRedo={() => requestEdit('redo')}
+          onReload={reloadSelected}
+          onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
+          onToggleWrap={() => wrapTextState.toggle()}
+          onFullscreen={() => (fullscreenOpen = true)}
+          onRename={startRename}
+          onDelete={() => (deleteTargetPath = activeTab.path)}
+          onSave={() => void saveActiveFile()}
+        />
       {/if}
       <div class="relative flex min-h-0 min-w-0 flex-1">
         {@render staleVersionAlert('top-2')}
@@ -1314,21 +919,21 @@
         >
           {#if findNavState.editorFindOpen && fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
             <FindInBar
-              query={editorFindValue}
-              matches={editorFindTotal}
-              activeIndex={editorFindActive}
+              query={editorFind.value}
+              matches={editorFind.total}
+              activeIndex={editorFind.active}
               label="Find in file"
               floating
               focusTrigger={findNavState.editorFindFocusTrigger}
-              onQueryChange={handleEditorFindQuery}
+              onQueryChange={(query) => editorFind.setQuery(query)}
               enableReplace={!deletedAtCheckpoint}
-              replaceValue={editorReplaceValue}
-              onReplaceChange={(value) => (editorReplaceValue = value)}
-              onReplaceOne={replaceOneInEditor}
-              onReplaceAll={replaceAllInEditor}
-              onNext={editorFindNext}
-              onPrev={editorFindPrev}
-              onClose={closeEditorFind}
+              replaceValue={editorFind.replaceValue}
+              onReplaceChange={(value) => (editorFind.replaceValue = value)}
+              onReplaceOne={() => editorFind.replaceOne()}
+              onReplaceAll={() => editorFind.replaceAll()}
+              onNext={() => editorFind.next()}
+              onPrev={() => editorFind.prev()}
+              onClose={() => editorFind.close()}
             />
           {:else if goToLineOpen && fullscreenOpen && activeTab}
             <GoToLine
@@ -1341,69 +946,20 @@
           {/if}
           {#if activeTab?.view === 'diff' && checkpointDiff}
             <FileDiffView diff={checkpointDiff} />
-          {:else if activeTab?.view === 'preview' && markdown}
-            <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-              <MarkdownView text={visibleContent} class="text-sm text-foreground" />
-            </div>
-          {:else if activeTab?.view === 'preview' && htmlPreview}
-            <div class="min-h-0 flex-1 bg-surface">
-              {#if htmlPreviewSrcdoc}
-                <iframe
-                  srcdoc={htmlPreviewSrcdoc}
-                  sandbox=""
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && pdf}
-            <div class="min-h-0 flex-1 overflow-auto">
-              {#if previewUrl}
-                <iframe
-                  src={previewUrl}
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && documentPreview}
-            <div class="min-h-0 flex-1 overflow-auto bg-surface">
-              {#if documentLoading}
-                <div
-                  class="flex h-full items-center justify-center gap-2 text-dimmed"
-                  role="status"
-                >
-                  <Loader2 size={16} class="animate-spin" />
-                  <span class="sr-only">Loading document preview</span>
-                </div>
-              {:else if documentHtml}
-                <iframe
-                  srcdoc={documentHtml}
-                  sandbox=""
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {:else if documentFailed}
-                <div
-                  class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
-                  role="status"
-                >
-                  <FileQuestion size={24} />
-                  <span class="text-xs">This document could not be previewed</span>
-                </div>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && image}
-            <FileImagePreview
-              src={imagePreviewSrc}
-              alt={activeTab.path}
-              failed={imagePreviewFailed}
-            />
-          {:else if activeTab?.view === 'preview' && (video || audio)}
-            <FileMediaPreview
-              src={previewUrl}
-              alt={activeTab.path}
-              kind={video ? 'video' : 'audio'}
+          {:else if activeTab?.view === 'preview' && hasAnyPreview(previewFlags)}
+            <ProjectFilesPanelPreviewPane
+              path={activeTab.path}
+              flags={previewFlags}
+              {visibleContent}
+              {htmlPreviewSrcdoc}
+              {previewUrl}
+              {imagePreviewSrc}
+              {imagePreviewFailed}
+              documentLoading={docPreview.loading}
+              documentHtml={docPreview.html}
+              documentFailed={docPreview.failed}
+              documentError={docPreview.error}
+              showDocumentError={false}
             />
           {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
             {#if image}
@@ -1436,15 +992,15 @@
                 spellcheck={markdown}
                 {showLineNumbers}
                 wrap={wrapLines}
-                findQuery={findNavState.editorFindOpen ? editorFindValue : ''}
-                findActiveIndex={editorFindActive}
-                findNonce={editorFindNonce}
-                replaceRequest={editorReplaceRequest}
+                findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
+                findActiveIndex={editorFind.active}
+                findNonce={editorFind.nonce}
+                replaceRequest={editorFind.replaceRequest}
                 {editRequest}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
-                onFindMatches={handleEditorFindMatches}
-                onReplaceDone={handleEditorReplaceDone}
+                onFindMatches={(matches) => editorFind.setMatches(matches)}
+                onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
                 onInput={handleEditorInput}
               />
             {/if}
@@ -1477,109 +1033,16 @@
   </Dialog.Portal>
 </Dialog.Root>
 
-<AlertDialog.Root
-  bind:open={
-    () => fullscreenPendingPath !== null, (open) => !open && (fullscreenPendingPath = null)
-  }
->
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Unsaved changes
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Save changes to {activeTab?.path} before viewing another file?
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          onclick={cancelFullscreenNavigate}
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          onclick={() => void confirmFullscreenSaveAndNavigate()}
-        >
-          Save
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<Dialog.Root bind:open={() => renameTarget !== null, (open) => !open && (renameTarget = null)}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <Dialog.Title class="text-sm font-semibold text-foreground">Rename file</Dialog.Title>
-      <Dialog.Description class="mt-1 text-xs text-muted">
-        Enter a new file name, including its extension.
-      </Dialog.Description>
-      {#if renameTarget}
-        <form class="mt-4" onsubmit={handleRenameSubmit}>
-          <label class="text-xs font-medium text-foreground" for="viewer-rename-file">
-            File name
-          </label>
-          <input
-            id="viewer-rename-file"
-            bind:value={renameTarget.name}
-            class="mt-1 h-9 w-full rounded-lg border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
-            autocomplete="off"
-          />
-          <div class="mt-5 flex justify-end gap-2">
-            <Dialog.Close
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </Dialog.Close>
-            <button
-              type="submit"
-              class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              disabled={mutationPending || !renameTarget.name.trim()}
-            >
-              Rename
-            </button>
-          </div>
-        </form>
-      {/if}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
-
-<AlertDialog.Root
-  bind:open={() => deleteTargetPath !== null, (open) => !open && (deleteTargetPath = null)}
->
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Delete file?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        {deleteTargetPath} will be moved to Trash. Its open tab will close.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-          disabled={mutationPending}
-          onclick={() => void deleteSelected()}
-        >
-          Move to Trash
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ProjectFilesPanelDialogs
+  {fullscreenPendingPath}
+  activeTabPath={activeTab?.path}
+  onClearFullscreenPending={() => (fullscreenPendingPath = null)}
+  onConfirmFullscreenSaveAndNavigate={() => void confirmFullscreenSaveAndNavigate()}
+  {renameTarget}
+  onClearRenameTarget={() => (renameTarget = null)}
+  {mutationPending}
+  onRenameSubmit={() => void renameSelected()}
+  {deleteTargetPath}
+  onClearDeleteTarget={() => (deleteTargetPath = null)}
+  onConfirmDelete={() => void deleteSelected()}
+/>
