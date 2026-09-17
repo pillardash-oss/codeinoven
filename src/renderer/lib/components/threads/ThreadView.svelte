@@ -6,16 +6,6 @@
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
-  interface ThreadScrollState {
-    top: number
-    /** Whether the user was scrolled away from the bottom when saved. */
-    awayFromBottom: boolean
-  }
-
-  /** Persists each thread's scroll position across component remounts. */
-  const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  const HISTORY_WINDOW_SIZE = 40
-
   import {
     AudioLines,
     ArrowUpRight,
@@ -300,6 +290,12 @@
     tracePreviewByUserMessage
   } from './thread-message-presentation'
   import { mergeContextUsage, mergeRateLimitWindows } from './thread-usage-merge'
+  import {
+    HISTORY_WINDOW_SIZE,
+    mergedUserMessageSummaries,
+    promptPagesBefore
+  } from './thread-history'
+  import { threadScrollPositions } from './thread-scroll-memory'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -432,7 +428,7 @@
       }
       return countStart
     }
-    const covered = promptPagesBefore(turnStart, 2)
+    const covered = promptPagesBefore(messages, turnStart, 2)
     return Math.min(countStart, covered === -1 ? 0 : covered)
   })
   /** The mounted window: everything from the reader's anchor (or the newest
@@ -528,29 +524,10 @@
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
-  /** Merge the lazily loaded persisted full history with any live/optimistic
-   *  user messages still pending in the mirror, deduped by id (the live window
-   *  wins, e.g. after an edit) and kept in chronological order. This is the
-   *  single source shared by the history side panel and the composer's
-   *  arrow-up recall, so navigation can reach every message without the whole
-   *  conversation being loaded into the view. */
-  function mergedUserMessageSummaries(): UserMessageSummary[] {
-    const byId: Record<string, UserMessageSummary> = {}
-    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
-    for (const message of messages) {
-      if (message.role !== 'user') continue
-      byId[message.id] = {
-        id: message.id,
-        content: messageText(message),
-        createdAt: message.createdAt
-      }
-    }
-    return Object.values(byId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-  }
   /** Composer recall texts: the merged full history, minus blank entries that
    *  would only produce an empty recall step. */
   let composerHistoryTexts = $derived(
-    mergedUserMessageSummaries()
+    mergedUserMessageSummaries(messages, fullUserMessageHistory)
       .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
@@ -3072,11 +3049,13 @@
   // a short work-trace preview from the turn that follows it.
   $effect(() => {
     const tracePreviews = tracePreviewByUserMessage(messages)
-    const userMessages = mergedUserMessageSummaries().map(({ id, content }) => ({
-      id,
-      content,
-      ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
-    }))
+    const userMessages = mergedUserMessageSummaries(messages, fullUserMessageHistory).map(
+      ({ id, content }) => ({
+        id,
+        content,
+        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+      })
+    )
     if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
@@ -3237,29 +3216,6 @@
   }
 
   let loadingOlderMessages = $state(false)
-
-  /** Walk back `pages` user-prompt page starts from `fromIndex`. Returns the
-   *  index of the prompt that begins the `pages`-th older page, or -1 when
-   *  the store does not hold that many complete pages. Every prompt found in
-   *  the store defines a complete page: the store is contiguous, and a
-   *  prompt is by definition the first message of its turn. */
-  function promptPagesBefore(fromIndex: number, pages: number): number {
-    let cursor = fromIndex
-    for (let page = 0; page < pages; page++) {
-      let found = -1
-      for (let i = cursor - 1; i >= 0; i--) {
-        const message = messages[i]
-        if (!message) return -1
-        if (message.role !== 'user') continue
-        if (isActivityOnlyUserMessage(message)) continue
-        found = i
-        break
-      }
-      if (found === -1) return -1
-      cursor = found
-    }
-    return cursor
-  }
 
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
