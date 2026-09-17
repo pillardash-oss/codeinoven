@@ -72,12 +72,17 @@ live in focused siblings:
 | `thread-response-ranges.ts` | quoted-selection DOM geometry, highlight registry, bubble placement |
 | `thread-message-presentation.ts` | display text, inline reference chips, trace previews, model/harness/token attribution |
 | `thread-usage-merge.ts` | context-usage and rate-limit merge precedence |
+| `thread-history.ts` | mounted-window size, history panel user list, multi-page jump reach |
+| `thread-scroll-memory.ts` | per-thread viewport memory that survives a remount |
 | `WorkingTrace*.svelte`, `SourcesPanel*.svelte`, `SubagentSessionView*.svelte` | the trace, sources, and sub-agent surfaces |
 
 The studio region of `ThreadView.svelte` deliberately stays in the parent: each
 branch is a single `SpecStudio`, `BrainstormStudio`, `PrdStudio`,
 `AssignmentStudio`, or `AuditStudio` invocation wiring many props, so wrapping it
-would add prop drilling rather than remove coupling.
+would add prop drilling rather than remove coupling. The checkpoint and
+file-citation helpers stay for the same reason: they are already thin adapters
+over `checkpoint-matching.ts`, `project-files.svelte.ts`, and
+`context-sidebar.svelte.ts`.
 
 **Git** (`src/renderer/lib/components/git/`, `src/renderer/lib/stores/`)
 `GitStatusPanel.svelte` composes `GitStatusPanelChangesView`, `BranchesView`,
