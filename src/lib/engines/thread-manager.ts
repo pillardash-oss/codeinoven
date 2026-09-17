@@ -1,11 +1,6 @@
-import { writeFile, mkdir } from 'fs/promises'
-import { join } from 'path'
-import { generateId, getConfigRoot } from '../utils'
-import { THREAD_SCOPED_TABLES } from './thread-cleanup-registry'
-import { threadOwnedDirectories } from '../thread-storage-paths'
 import { rm } from 'fs/promises'
-import { messageId as createMessageId } from '../id'
-import { featureSlugFromTitle } from '../project-artifacts'
+import { generateId } from '../utils'
+import { threadOwnedDirectories } from '../thread-storage-paths'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
 import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
@@ -14,21 +9,11 @@ import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
   AgentMessageRepo,
-  type ProviderDeltaSyncResult,
-  buildLoadAllPageSql,
-  buildLoadByThreadPageSql,
-  buildLoadPageSql,
-  buildLoadSessionPageSql,
-  buildLoadUserMessagesPageSql,
-  buildSaveMessagesStatements,
-  buildSaveSubagentStatements
+  type ProviderDeltaSyncResult
 } from '../../main/database/repositories/agent-message-repo'
 import {
-  buildThreadSearchSql,
-  mergeThreadSearchResults,
   RECENT_THREADS_PER_PROJECT,
-  ThreadRepo,
-  type ThreadCapacityCandidate
+  ThreadRepo
 } from '../../main/database/repositories/thread-repo'
 import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
@@ -42,14 +27,30 @@ import {
   type ThreadSettings,
   type ThreadContextUsage,
   type AgentMessage,
-  type AgentPart,
   type ThreadMessageCursor,
   type ThreadMessagePage,
   type UserMessageSummary,
-  isOrchestrationChildThread,
-  isManagedScopeRoot,
-  type ScopeBoard
+  isOrchestrationChildThread
 } from '../types'
+import {
+  REGULAR_BUCKET,
+  bucketForThread,
+  buildThreadCapacity,
+  countThreadsInBucket,
+  firstEvictableInBucket,
+  isProtectedFromAutomaticCleanup,
+  scopedBucketIdsFromBoard,
+  type ThreadCapacity,
+  type ThreadListOptions
+} from './thread-manager-capacity'
+import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
+import { orchestrationDescendants } from './thread-manager-lineage'
+import { ThreadForkService } from './thread-manager-fork'
+import { ThreadSearchService } from './thread-manager-search'
+import { ThreadTranscriptStore } from './thread-manager-transcripts'
+
+export { remapCopiedMessages } from './thread-manager-fork'
+export type { ThreadCapacity, ThreadListOptions } from './thread-manager-capacity'
 
 /** Sidebar quota for the inbox (Chats) project: show all of its recent threads. */
 const INBOX_PROJECT_ID = 'inbox'
@@ -77,161 +78,6 @@ export class AllThreadsProtectedError extends Error {
 /** @deprecated Use `AllThreadsProtectedError`. */
 export const AllThreadsPinnedError = AllThreadsProtectedError
 
-function isProtectedFromAutomaticCleanup(thread: Pick<Thread, 'pinned' | 'status'>): boolean {
-  return thread.pinned || thread.status === 'spec'
-}
-
-/**
- * Sentinel bucket id for threads that do not belong to a pinned-like scope.
- * All non-pinned-like scopes (including the default scope) share this single
- * regular bucket, capped at the project thread limit.
- */
-const REGULAR_BUCKET = '__regular_bucket__'
-
-/**
- * A scope gets its own thread bucket when it is pinned on the board OR its
- * root is an app-managed Git worktree. Reads the board lazily per use; the
- * scope board is a single JSON row, so this is cheap.
- */
-function scopedBucketIdsFromBoard(board: ScopeBoard): Set<string> {
-  const ids = new Set<string>()
-  for (const bucket of board.buckets) {
-    if (bucket.pinned === true || isManagedScopeRoot(bucket.root)) ids.add(bucket.id)
-  }
-  return ids
-}
-
-/**
- * The bucket a thread belongs to: its own scope id when the scope is
- * pinned-like, otherwise the shared regular bucket.
- */
-function bucketForThread(
-  candidate: Pick<ThreadCapacityCandidate, 'scopeBucketId'>,
-  scopedBuckets: Set<string>
-): string {
-  return scopedBuckets.has(candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
-    ? (candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
-    : REGULAR_BUCKET
-}
-
-/** Deterministic view of a project's thread capacity for the UI. */
-export interface ThreadCapacity {
-  limit: number
-  activeCount: number
-  pinnedCount: number
-  protectedCount: number
-  deletableCount: number
-  /** Threads in pinned-like scopes, each kept in its own per-scope bucket. */
-  pinnedScopeCount: number
-}
-
-/** Paging/visibility controls for thread listings. */
-export interface ThreadListOptions {
-  limit?: number
-  offset?: number
-  includeArchived?: boolean
-  /** Row ordering: `default` (manual reorder) or `activity` (recent-first). */
-  order?: 'default' | 'activity'
-}
-
-type SqlStatement = { sql: string; params: unknown[] }
-
-function placeholdersFor(count: number): string {
-  return Array.from({ length: count }, () => '?').join(', ')
-}
-
-/** Build one set-based cleanup transaction for a thread tree. */
-function buildThreadDeletionStatements(
-  threads: Thread[],
-  assignmentIds: Set<string>
-): SqlStatement[] {
-  if (threads.length === 0) return []
-
-  const threadIds = threads.map((thread) => thread.id)
-  const threadPlaceholders = placeholdersFor(threadIds.length)
-  const projectId = threads[0].projectId
-  const statements: SqlStatement[] = []
-  const assignmentValues = [...assignmentIds]
-
-  // Pending turn-feedback rows are NOT resolved here: they keep their captured
-  // grading payload (their thread reference is SET NULL) and are judged by the
-  // LLM grader immediately after deletion   a lost-cause thread never scores
-  // as a pass just because it was deleted.
-
-  if (assignmentValues.length > 0) {
-    const assignmentPlaceholders = placeholdersFor(assignmentValues.length)
-    statements.push(
-      {
-        sql: `DELETE FROM assignment_operations WHERE assignment_id IN (${assignmentPlaceholders})`,
-        params: assignmentValues
-      },
-      {
-        sql: `DELETE FROM assignment_coordinator_snapshots WHERE assignment_id IN (${assignmentPlaceholders})`,
-        params: assignmentValues
-      }
-    )
-  }
-
-  const capabilityPredicate =
-    assignmentValues.length > 0
-      ? `assignment_id IN (${placeholdersFor(assignmentValues.length)}) OR thread_id IN (${threadPlaceholders})`
-      : `thread_id IN (${threadPlaceholders})`
-  statements.push({
-    sql: `DELETE FROM assignment_api_capabilities WHERE ${capabilityPredicate}`,
-    params: assignmentValues.length > 0 ? [...assignmentValues, ...threadIds] : threadIds
-  })
-
-  // Every table that stores a bare `thread_id` column *without* a real
-  // `ON DELETE CASCADE` foreign key to `threads` must be registered in
-  // `THREAD_SCOPED_TABLES` (thread-cleanup-registry.ts). Tables with a real
-  // FK clean themselves up via SQLite cascade (PRAGMA foreign_keys = ON is
-  // set on every connection) and never need an entry here.
-  for (const table of THREAD_SCOPED_TABLES) {
-    if (table.projectColumn) {
-      statements.push({
-        sql: `DELETE FROM ${table.table} WHERE ${table.projectColumn} = ? AND ${table.threadColumn} IN (${threadPlaceholders})`,
-        params: [projectId, ...threadIds]
-      })
-    } else {
-      statements.push({
-        sql: `DELETE FROM ${table.table} WHERE ${table.threadColumn} IN (${threadPlaceholders})`,
-        params: threadIds
-      })
-    }
-  }
-
-  statements.push({
-    sql: `DELETE FROM threads WHERE id IN (${threadPlaceholders})`,
-    params: threadIds
-  })
-
-  return statements
-}
-
-/**
- * Re-key copied messages and their parts so they can live in a new thread
- * without colliding with the originals. Used when forking a thread or when
- * promoting a temporary (quick) chat into a regular thread.
- */
-export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map((msg) => {
-    const newId = createMessageId()
-    const remapPart = (part: AgentPart): AgentPart => {
-      if (!('messageID' in part)) return part
-      const previous = part.id.includes(msg.id)
-        ? part.id.replace(msg.id, newId)
-        : `${newId}-${part.id}`
-      return { ...part, id: previous, messageID: newId }
-    }
-    return {
-      ...msg,
-      id: newId,
-      parts: msg.parts.map(remapPart),
-      transportParts: msg.transportParts?.map(remapPart)
-    }
-  })
-}
-
 /**
  * Main-process injection point that resolves a scope target into its
  * authoritative filesystem root. The persisted `Thread.workingDirectory` is
@@ -252,14 +98,9 @@ export class ThreadManager {
   private agentMessageRepo: AgentMessageRepo
   private harnessUsageRepo: HarnessUsageRepo
   private engineeringLifecycleEngine: EngineeringLifecycleEngine
-
-  /**
-   * Per-thread cache of the full user-message jump list (keyed by
-   * `${projectId}:${threadId}`), populated on first async worker-backed load
-   * and busted only when a new user message is applied to that thread or the
-   * thread is deleted   repeated menu-opens never re-scan the database.
-   */
-  private readonly userMessageHistoryCache = new Map<string, UserMessageSummary[]>()
+  private readonly transcripts: ThreadTranscriptStore
+  private readonly forks: ThreadForkService
+  private readonly searchService: ThreadSearchService
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -280,6 +121,9 @@ export class ThreadManager {
     this.harnessUsageRepo = new HarnessUsageRepo(db)
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(db)
     this.scopeManager = new ScopeManager(db)
+    this.transcripts = new ThreadTranscriptStore(db, this.agentMessageRepo)
+    this.forks = new ThreadForkService(db, this.projectRepo, this.engineeringLifecycleEngine, this)
+    this.searchService = new ThreadSearchService(db, this.threadRepo)
   }
 
   /** Reads scope boards to keep pinned scopes outside the thread bucket. */
@@ -402,16 +246,10 @@ export class ThreadManager {
       // so eviction only ever displaces threads from the same bucket.
       const newThreadBucket = bucketForThread({ scopeBucketId: input.scopeBucketId }, scopedBuckets)
       const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
-      const bucketCount = active.filter(
-        (candidate) => bucketForThread(candidate, scopedBuckets) === newThreadBucket
-      ).length
+      const bucketCount = countThreadsInBucket(active, scopedBuckets, newThreadBucket)
       let toEvictId: string | undefined
       if (!creatingOrchestrationChild && bucketCount >= project.threadLimit) {
-        const toEvict = active.find(
-          (candidate) =>
-            bucketForThread(candidate, scopedBuckets) === newThreadBucket &&
-            !isProtectedFromAutomaticCleanup(candidate)
-        )
+        const toEvict = firstEvictableInBucket(active, scopedBuckets, newThreadBucket)
         toEvictId = toEvict?.id
         if (!toEvictId) {
           throw new AllThreadsProtectedError(input.projectId, project.threadLimit, bucketCount)
@@ -759,7 +597,7 @@ export class ThreadManager {
     if (!thread) {
       throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
     }
-    const deletionOrder = [...this.orchestrationDescendants(projectThreads, threadId), thread]
+    const deletionOrder = [...orchestrationDescendants(projectThreads, threadId), thread]
     const assignmentIds = await this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
@@ -775,7 +613,7 @@ export class ThreadManager {
       throw new Error(outcome.error ?? 'thread deletion failed')
     }
     for (const candidate of deletionOrder) {
-      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, candidate.id))
+      this.transcripts.forgetUserMessages(projectId, candidate.id)
     }
     await this.removeThreadDiskArtifacts(deletionOrder)
     await this.onDeleted?.(deletionOrder)
@@ -915,28 +753,6 @@ export class ThreadManager {
     }
   }
 
-  private orchestrationDescendants(threads: Thread[], coordinatorThreadId: string): Thread[] {
-    const byCoordinator = new Map<string, Thread[]>()
-    for (const thread of threads) {
-      if (!thread.coordinatorThreadId) continue
-      const children = byCoordinator.get(thread.coordinatorThreadId) ?? []
-      children.push(thread)
-      byCoordinator.set(thread.coordinatorThreadId, children)
-    }
-    const descendants: Thread[] = []
-    const visit = (parentId: string): void => {
-      const children = (byCoordinator.get(parentId) ?? []).sort(
-        (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
-      )
-      for (const child of children) {
-        visit(child.id)
-        descendants.push(child)
-      }
-    }
-    visit(coordinatorThreadId)
-    return descendants
-  }
-
   /**
    * Ids of every orchestration descendant of `threadId`   worker sub-agent
    * threads dispatched by this coordinator, transitively. Used to attribute
@@ -945,7 +761,7 @@ export class ThreadManager {
   async listDescendantThreadIds(projectId: string, threadId: string): Promise<string[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
     const threads = await this.threadRepo.listForDeletionViaWorker(projectId)
-    return this.orchestrationDescendants(threads, threadId).map((thread) => thread.id)
+    return orchestrationDescendants(threads, threadId).map((thread) => thread.id)
   }
 
   private async assignmentIdsFor(threads: Thread[]): Promise<Set<string>> {
@@ -1105,7 +921,7 @@ export class ThreadManager {
    * debounce-committed draft content. Broadcasts a lightweight draft event so
    * every renderer (and remote view) keeps its draft indicators in sync
    * without the expensive full-thread reconcile that `broadcastThreadUpdate`
-   * triggers — commits land while the user is actively typing.
+   * triggers - commits land while the user is actively typing.
    */
   async setDraftState(
     projectId: string,
@@ -1284,28 +1100,7 @@ export class ThreadManager {
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    // Batch the statements so one huge transcript never materializes a single
-    // multi-megabyte transaction payload in memory. Every batch is its own
-    // transaction; the delete+upsert sequence below preserves the same
-    // end state because the delete always precedes the first upsert batch.
-    const BATCH = 16
-    for (let offset = 0; offset < Math.max(1, messages.length); offset += BATCH) {
-      const statements = buildSaveMessagesStatements(
-        threadId,
-        messages.slice(offset, offset + BATCH)
-      )
-      const batch = offset === 0 ? statements : statements.slice(2)
-      if (offset > 0) await new Promise<void>((resolve) => setImmediate(resolve))
-      const outcome = await this.db.transactionViaWorker(batch)
-      if (!outcome.ok) {
-        // Fallback: identical batching semantics on the primary connection.
-        this.db.transaction(() => {
-          for (const statement of batch) {
-            this.db.run(statement.sql, ...statement.params)
-          }
-        })
-      }
-    }
+    return this.transcripts.saveMessages(threadId, messages)
   }
 
   /**
@@ -1339,24 +1134,18 @@ export class ThreadManager {
         noop: false
       }
     }
-    const resolvedSessionId = sessionId ?? thread.sessionId ?? ''
-    const result = await this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
-    if (result.applied > 0 && messages.some((message) => message.role === 'user')) {
-      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, threadId))
-    }
-    return result
-  }
-
-  private userMessageHistoryCacheKey(projectId: string, threadId: string): string {
-    return `${projectId}:${threadId}`
+    return this.transcripts.upsertMessages(
+      projectId,
+      threadId,
+      sessionId ?? thread.sessionId ?? '',
+      messages
+    )
   }
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const page = await this.pagedAgentMessages((after) => buildLoadByThreadPageSql(threadId, after))
-    if (!page.ok) return this.agentMessageRepo.loadByThread(threadId)
-    return page.messages
+    return this.transcripts.loadMessages(threadId)
   }
 
   /** Load one bounded page of mirrored conversation history, newest page first. */
@@ -1367,14 +1156,7 @@ export class ThreadManager {
     limit: number
   ): Promise<ThreadMessagePage> {
     if (!this.getOwnedThread(projectId, threadId)) return { messages: [], hasOlder: false }
-    const built = buildLoadPageSql(threadId, before)
-    const result = await this.db.queryMessagesViaWorker(built.sql, built.params, limit + 1)
-    if (result.ok) {
-      const hasOlder = result.messages.length > limit
-      const pageMessages = hasOlder ? result.messages.slice(0, limit) : result.messages
-      return { messages: pageMessages.reverse(), hasOlder }
-    }
-    return this.agentMessageRepo.loadPageByThread(threadId, before, limit)
+    return this.transcripts.loadMessagePage(threadId, before, limit)
   }
 
   /** Load a contiguous mirrored window centered on an arbitrary message id. */
@@ -1387,32 +1169,19 @@ export class ThreadManager {
     if (!this.getOwnedThread(projectId, threadId)) {
       return { messages: [], hasOlder: false, hasNewer: false }
     }
-    return this.loadPageAroundViaWorker(threadId, anchorId, limit)
+    return this.transcripts.loadMessagePageAround(threadId, anchorId, limit)
   }
 
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const cacheKey = this.userMessageHistoryCacheKey(projectId, threadId)
-    const cached = this.userMessageHistoryCache.get(cacheKey)
-    if (cached) return cached
-    const page = await this.pagedUserMessages((after) =>
-      buildLoadUserMessagesPageSql(threadId, after)
-    )
-    if (!page.ok) return this.agentMessageRepo.loadUserMessagesByThread(threadId)
-    this.userMessageHistoryCache.set(cacheKey, page.messages)
-    return page.messages
+    return this.transcripts.loadUserMessages(projectId, threadId)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const page = await this.pagedAgentMessages(
-      (after) => buildLoadAllPageSql(threadId, after),
-      true
-    )
-    if (!page.ok) return this.agentMessageRepo.loadAllByThread(threadId)
-    return page.messages
+    return this.transcripts.loadMessageRecords(threadId)
   }
 
   /**
@@ -1426,16 +1195,7 @@ export class ThreadManager {
     messages: AgentMessage[]
   ): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    const outcome = await this.db.transactionViaWorker(
-      buildSaveSubagentStatements(threadId, sessionId, messages)
-    )
-    if (!outcome.ok) {
-      this.db.transaction(() => {
-        for (const statement of buildSaveSubagentStatements(threadId, sessionId, messages)) {
-          this.db.run(statement.sql, ...statement.params)
-        }
-      })
-    }
+    return this.transcripts.saveSubagentMessages(threadId, sessionId, messages)
   }
 
   /** Load a mirrored child-agent transcript without contacting the provider. */
@@ -1445,11 +1205,7 @@ export class ThreadManager {
     sessionId: string
   ): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const page = await this.pagedAgentMessages((after) =>
-      buildLoadSessionPageSql(threadId, sessionId, after)
-    )
-    if (!page.ok) return this.agentMessageRepo.loadBySession(threadId, sessionId)
-    return page.messages
+    return this.transcripts.loadSubagentMessages(threadId, sessionId)
   }
 
   /** List threads across all projects, sorted pinned-first then by last activity. */
@@ -1507,18 +1263,7 @@ export class ThreadManager {
     const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(projectId))
     // Threads in pinned-like scopes live in their own per-scope buckets and are
     // reported separately; the regular bucket holds every other thread.
-    const regular = active.filter(
-      (thread) =>
-        bucketForThread({ scopeBucketId: thread.scopeBucketId }, scopedBuckets) === REGULAR_BUCKET
-    )
-    return {
-      limit: project.threadLimit,
-      activeCount: regular.length,
-      pinnedCount: regular.filter((t) => t.pinned).length,
-      protectedCount: regular.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
-      deletableCount: regular.filter((t) => !isProtectedFromAutomaticCleanup(t)).length,
-      pinnedScopeCount: active.length - regular.length
-    }
+    return buildThreadCapacity(project.threadLimit, active, scopedBuckets)
   }
 
   /**
@@ -1531,21 +1276,7 @@ export class ThreadManager {
     query: string,
     options: { projectId?: string; limit?: number } = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
-    const raw = query.trim()
-    if (!raw) return []
-    const built = buildThreadSearchSql(raw, options)
-    const title = await this.db.queryViaWorker(built.title.sql, built.title.params, built.limit)
-    if (!title.ok) return this.threadRepo.search(query, options)
-    if (!built.fts) {
-      return mergeThreadSearchResults(title.rows, [], raw, built.limit)
-    }
-    const message = await this.db.queryViaWorker(
-      built.fts.sql,
-      built.fts.params,
-      Math.min(built.limit * 4, 200)
-    )
-    if (!message.ok) return this.threadRepo.search(query, options)
-    return mergeThreadSearchResults(title.rows, message.rows, raw, built.limit)
+    return this.searchService.search(query, options)
   }
 
   /**
@@ -1562,309 +1293,13 @@ export class ThreadManager {
     targetProjectId?: string
   ): Promise<Thread> {
     const parent = this.requireOwnedThread(projectId, threadId)
-    const destinationProjectId = targetProjectId ?? projectId
-    if (destinationProjectId !== projectId) {
-      const destination = this.projectRepo.get(destinationProjectId)
-      if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
-    }
-    // Resolve the upper bound before creating a destination. Only metadata crosses
-    // the worker boundary; transcript JSON stays in SQLite throughout the copy.
-    const upper = await this.db.queryViaWorker(
-      `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
-       AND session_id IS NULL ${messageId ? 'AND id = ?' : ''}
-       ORDER BY created_at DESC, id DESC LIMIT 1`,
-      messageId ? [threadId, messageId] : [threadId],
-      1
-    )
-    if (!upper.ok) throw new Error(upper.error ?? 'Cannot read fork boundary')
-    let cutoff = upper.rows[0]
-    if (messageId && !cutoff) {
-      // `agent_messages` is written when a turn settles, so a running turn's
-      // messages are addressable from the renderer (they stream into its live
-      // cache) before the durable transcript holds them. A fork copies stored
-      // history, so the boundary of such a message is the newest stored
-      // message: the whole of that history. An id that is stored anywhere but
-      // is not a canonical row of this thread (another thread, or a
-      // session-scoped trace row) is a stale boundary and must still fail, so
-      // a bad id can never silently fork the wrong history.
-      const storedElsewhere = await this.db.queryViaWorker(
-        'SELECT thread_id FROM agent_messages WHERE id = ? LIMIT 1',
-        [messageId],
-        1
-      )
-      if (!storedElsewhere.ok) throw new Error(storedElsewhere.error ?? 'Cannot read fork boundary')
-      if (storedElsewhere.rows.length > 0) {
-        throw new Error(`Cannot fork from message ${messageId}: message not found in thread`)
-      }
-      const newest = await this.db.queryViaWorker(
-        `SELECT id, created_at FROM agent_messages WHERE thread_id = ? AND session_id IS NULL
-         ORDER BY created_at DESC, id DESC LIMIT 1`,
-        [threadId],
-        1
-      )
-      if (!newest.ok) throw new Error(newest.error ?? 'Cannot read fork boundary')
-      cutoff = newest.rows[0]
-      if (!cutoff) {
-        throw new Error(`Cannot fork from message ${messageId}: this turn has not been saved yet`)
-      }
-    }
-    const boundary = cutoff
-      ? await this.db.queryViaWorker(
-          `SELECT CASE WHEN json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL THEN '' ELSE m.id END AS id,
-         min(m.created_at, coalesce((SELECT max(k.created_at) FROM agent_messages k
-           WHERE k.thread_id = m.thread_id AND k.session_id IS NULL
-             AND k.created_at <= json_extract(p.value, '$.firstKeptCreatedAt')),
-           json_extract(p.value, '$.firstKeptCreatedAt'), m.created_at)) AS created_at
-       FROM agent_messages m, json_each(m.parts) p
-       WHERE m.thread_id = ? AND m.session_id IS NULL
-       AND (m.created_at, m.id) <= (?, ?)
-       AND (
-         (json_extract(p.value, '$.type') = 'compaction-summary'
-           AND length(trim(json_extract(p.value, '$.text'))) > 0)
-         OR (json_extract(p.value, '$.type') = 'compaction'
-           AND length(trim(json_extract(p.value, '$.summary'))) > 0
-           AND (json_extract(p.value, '$.firstKeptEntryId') IS NULL
-             OR json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL)))
-       ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
-          [threadId, cutoff.created_at, cutoff.id],
-          1
-        )
-      : undefined
-    if (boundary && !boundary.ok)
-      throw new Error(boundary.error ?? 'Cannot read compaction boundary')
-    const lower = boundary?.rows[0]
-
-    const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
-    const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
-    const forked = await this.createThread({
-      projectId: destinationProjectId,
-      providerId: parent.providerId,
+    return this.forks.fork({
+      projectId,
+      parent,
       title,
-      titleSource: 'manual',
-      settings: parent.settings,
-      // Forks into another project (e.g. a chat continued in a project) never
-      // inherit the parent's feature work-directory or scope bucket.
-      featureSlug:
-        destinationProjectId === projectId
-          ? (parent.featureSlug ?? featureSlugFromTitle(parent.title))
-          : undefined,
-      scopeBucketId: forkScopeBucketId,
-      workingDirectory:
-        destinationProjectId === projectId ? parent.workingDirectory : destinationPath
+      checkpointId,
+      messageId,
+      targetProjectId
     })
-    // Same-scope forks re-resolve their compatibility directory from the
-    // destination scope inside `createThread`, so a stale parent directory
-    // can never override the authoritative root.
-    // A fork of an Engineering thread must open with the same switches lit:
-    // carry the parent's stage selection (and Auto Pilot) into the fork so
-    // the toolbox reflects exactly what the user had turned on.
-    {
-      const sourceLifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
-      if (sourceLifecycle && sourceLifecycle.selection !== 'none') {
-        try {
-          this.engineeringLifecycleEngine.select(destinationProjectId, forked.id, {
-            stages: sourceLifecycle.selectedStages ?? [],
-            autopilot: sourceLifecycle.autopilot === true
-          })
-        } catch {
-          // Lifecycle inheritance is cosmetic   never fail the fork on it.
-        }
-      }
-    }
-    if (cutoff) {
-      let after: Record<string, unknown> | undefined
-      for (;;) {
-        const page = await this.db.queryViaWorker(
-          `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
-           AND session_id IS NULL AND visibility IN ('conversation', 'working_trace')
-           AND (created_at, id) <= (?, ?)
-           ${lower ? 'AND (created_at, id) >= (?, ?)' : ''}
-           ${after ? 'AND (created_at, id) > (?, ?)' : ''}
-           ORDER BY created_at, id LIMIT 16`,
-          [
-            threadId,
-            cutoff.created_at,
-            cutoff.id,
-            ...(lower ? [lower.created_at, lower.id] : []),
-            ...(after ? [after.created_at, after.id] : [])
-          ],
-          16
-        )
-        if (!page.ok) throw new Error(page.error ?? 'Cannot read fork page')
-        if (page.rows.length === 0) break
-        const statements = page.rows.map((row) => {
-          const id = createMessageId()
-          return {
-            sql: `INSERT INTO agent_messages (
-              id, thread_id, role, origin, visibility, parts, search_text,
-              model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at,
-              generation_ms
-            ) SELECT ?, ?, role, origin, visibility,
-              (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
-                THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
-                FROM json_each(parts)), search_text,
-              model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at,
-              generation_ms
-              FROM agent_messages WHERE thread_id = ? AND id = ?`,
-            params: [id, forked.id, id, id, threadId, row.id]
-          }
-        })
-        const outcome = await this.db.transactionViaWorker(statements)
-        if (!outcome.ok) throw new Error(outcome.error ?? 'Cannot copy fork page')
-        after = page.rows[page.rows.length - 1]
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-    }
-
-    // A fork carries the parent's history, so it is a completed thread, not an
-    // empty "New Thread" draft. Keep it out of the todo slice and out of the
-    // renderer's empty-new-thread reuse logic; it becomes active again only
-    // when the user actually writes on it.
-    const completed = await this.setStatus(destinationProjectId, forked.id, 'completed', {
-      read: true
-    })
-
-    // Link fork to parent via branch metadata
-    const branchMeta = {
-      parentThreadId: threadId,
-      checkpointId: checkpointId ?? null,
-      messageId: messageId ?? null,
-      forkedAt: Date.now()
-    }
-
-    const branchDir = join(
-      getConfigRoot(),
-      'projects',
-      destinationProjectId,
-      'threads',
-      forked.id,
-      'branches'
-    )
-    await mkdir(branchDir, { recursive: true })
-    await writeFile(join(branchDir, 'origin.json'), JSON.stringify(branchMeta, null, 2))
-
-    return completed
-  }
-
-  // ── Worker-routed paged reads ───────────────────────────────────────────
-
-  /** Bounded page size for worker transcript reads. */
-  private static readonly TRANSCRIPT_PAGE_SIZE = 1000
-  /** Safety cap on the number of cursor pages read through the worker. */
-  private static readonly MAX_TRANSCRIPT_PAGES = 100_000
-
-  /**
-   * Read the full mirrored conversation by cursor-paging through the worker
-   * in bounded chunks, so no single worker query is unbounded (no
-   * `maxRows = 0`). Decoding (`parts` JSON parse + oversized-output cap) runs
-   * on the worker thread via `queryMessagesViaWorker`, so a legacy row's
-   * multi-megabyte tool output is never parsed on the main process. Returns
-   * `ok: false` when the worker path is unavailable so the caller can fall back.
-   */
-  private async pagedAgentMessages(
-    buildPage: (after: ThreadMessageCursor | undefined) => { sql: string; params: unknown[] },
-    includeTransport = false
-  ): Promise<{ ok: true; messages: AgentMessage[] } | { ok: false }> {
-    const messages: AgentMessage[] = []
-    let after: ThreadMessageCursor | undefined
-    for (let page = 0; page < ThreadManager.MAX_TRANSCRIPT_PAGES; page++) {
-      const built = buildPage(after)
-      const result = await this.db.queryMessagesViaWorker(
-        built.sql,
-        built.params,
-        ThreadManager.TRANSCRIPT_PAGE_SIZE,
-        includeTransport
-      )
-      if (!result.ok) return { ok: false }
-      messages.push(...result.messages)
-      if (!result.truncated || result.messages.length === 0) break
-      if (result.messages.length < ThreadManager.TRANSCRIPT_PAGE_SIZE) break
-      const last = result.messages[result.messages.length - 1]
-      after = { createdAt: last.createdAt, id: last.id }
-    }
-    return { ok: true, messages }
-  }
-
-  /** Same paging strategy as `pagedAgentMessages`, decoded to lightweight user-message summaries. */
-  private async pagedUserMessages(
-    buildPage: (after: ThreadMessageCursor | undefined) => { sql: string; params: unknown[] }
-  ): Promise<{ ok: true; messages: UserMessageSummary[] } | { ok: false }> {
-    const messages: UserMessageSummary[] = []
-    let after: ThreadMessageCursor | undefined
-    for (let page = 0; page < ThreadManager.MAX_TRANSCRIPT_PAGES; page++) {
-      const built = buildPage(after)
-      const result = await this.db.queryUserMessagesViaWorker(
-        built.sql,
-        built.params,
-        ThreadManager.TRANSCRIPT_PAGE_SIZE
-      )
-      if (!result.ok) return { ok: false }
-      messages.push(...result.messages)
-      if (!result.truncated || result.messages.length === 0) break
-      if (result.messages.length < ThreadManager.TRANSCRIPT_PAGE_SIZE) break
-      const last = result.messages[result.messages.length - 1]
-      after = { createdAt: last.createdAt, id: last.id }
-    }
-    return { ok: true, messages }
-  }
-
-  /** Centered window around a message id, read through bounded worker queries. */
-  private async loadPageAroundViaWorker(
-    threadId: string,
-    anchorId: string,
-    limit: number
-  ): Promise<ThreadMessagePage> {
-    const anchor = await this.db.queryViaWorker(
-      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
-      [threadId, anchorId],
-      1
-    )
-    if (!anchor.ok || anchor.rows.length === 0) {
-      return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
-    }
-    const anchorCreatedAt = Number(anchor.rows[0].created_at)
-    const half = Math.max(1, Math.floor(limit / 2))
-    const cursor = (older: boolean): string =>
-      older
-        ? ` AND (created_at < ? OR (created_at = ? AND id < ?))`
-        : ` AND (created_at > ? OR (created_at = ? AND id > ?))`
-    const order = (older: boolean): string => (older ? 'DESC, id DESC' : 'ASC, id ASC')
-    const older = await this.db.queryMessagesViaWorker(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation','working_trace')${cursor(true)}
-       ORDER BY created_at ${order(true)}`,
-      [threadId, anchorCreatedAt, anchorCreatedAt, anchorId],
-      half + 1
-    )
-    if (!older.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
-    const newer = await this.db.queryMessagesViaWorker(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation','working_trace')${cursor(false)}
-       ORDER BY created_at ${order(false)}`,
-      [threadId, anchorCreatedAt, anchorCreatedAt, anchorId],
-      half + 1
-    )
-    if (!newer.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
-    const anchorRow = await this.db.queryMessagesViaWorker(
-      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
-      [threadId, anchorId],
-      1
-    )
-    if (!anchorRow.ok)
-      return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
-    const olderMessages = older.messages
-    const newerMessages = newer.messages
-    const hasOlder = olderMessages.length > half
-    const hasNewer = newerMessages.length > half
-    const messages = [
-      ...olderMessages.slice(0, half).reverse(),
-      ...anchorRow.messages.slice(0, 1),
-      ...newerMessages.slice(0, half)
-    ]
-    return { messages, hasOlder, hasNewer }
   }
 }
