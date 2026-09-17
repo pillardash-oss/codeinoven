@@ -2,7 +2,7 @@
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Check, Clock, Pin, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
@@ -19,6 +19,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -353,6 +354,9 @@
       : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
   )
   let isRetryPaused = $derived(thread.status === 'working-paused')
+  /** Another CodeInOven instance owns this thread's in-flight turn, so its live
+   *  output and its stop control are there rather than here. */
+  let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
@@ -504,6 +508,17 @@
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered)
 
+  /** Tooltip for the state badge: the only place a collapsed row can explain
+   *  itself, since the badge is a bare dot or spinner. */
+  let badgeTitle = $derived.by((): string => {
+    if (isForeignRun) return 'Running in another instance'
+    if (isRetryPaused || isWorking) return stageLabel
+    if (thread.status === 'spec') return 'Spec ready'
+    if (threadState === 'scheduled') return 'Scheduled'
+    if (threadState === 'temporary-unread') return 'Temporary chat unread'
+    return threadState
+  })
+
   /** Maps ThreadState to StatusBadge props   all colours flow through the
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
@@ -522,7 +537,12 @@
         case 'todo':
           return { stage: 'todo' }
         case 'working':
-          return { variant: 'spinner', stage: 'working' }
+          // Work owned by another instance keeps the working colour but gets a
+          // distinct, still icon: a spinner here would promise live output this
+          // window never receives.
+          return isForeignRun
+            ? { variant: 'icon', icon: AppWindow, tone: 'working' }
+            : { variant: 'spinner', stage: 'working' }
         case 'scheduled':
           return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
@@ -671,17 +691,7 @@
             icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
-            title={isRetryPaused
-              ? stageLabel
-              : isWorking
-                ? stageLabel
-                : thread.status === 'spec'
-                  ? 'Spec ready'
-                  : threadState === 'scheduled'
-                    ? 'Scheduled'
-                    : threadState === 'temporary-unread'
-                      ? 'Temporary chat unread'
-                      : threadState}
+            title={badgeTitle}
           />
         {:else}
           <span
@@ -821,7 +831,9 @@
       : isBusyIndicator
         ? isRetryPaused
           ? 'border-warning bg-warning/5 hover:bg-elevated'
-          : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
+          : isForeignRun
+            ? 'border-thread-working bg-thread-working/5 hover:bg-elevated'
+            : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
     onpointerdown={() => preloadMessages()}
@@ -862,17 +874,7 @@
               icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
-              title={isRetryPaused
-                ? stageLabel
-                : isWorking
-                  ? stageLabel
-                  : thread.status === 'spec'
-                    ? 'Spec ready'
-                    : threadState === 'scheduled'
-                      ? 'Scheduled'
-                      : threadState === 'temporary-unread'
-                        ? 'Temporary chat unread'
-                        : threadState}
+              title={badgeTitle}
             />
           {:else}
             <span
@@ -1064,7 +1066,14 @@
         class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
         style="left: {popoverPos.x}px; top: {popoverPos.y}px"
       >
-        <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
+        <ThreadHoverPopover
+          {thread}
+          {isWorking}
+          {isRetryPaused}
+          {stageLabel}
+          {threadState}
+          {isForeignRun}
+        />
       </div>
     </Portal>
   {/if}

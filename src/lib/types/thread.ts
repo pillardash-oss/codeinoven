@@ -236,6 +236,20 @@ export interface ThreadSearchResult {
   timestamp?: number
 }
 
+/**
+ * A thread whose in-flight turn belongs to a different CodeInOven instance.
+ *
+ * Two instances share one config root, and therefore one thread table and one
+ * `active_turns` ledger, while each process owns only its own harness processes
+ * and event stream. A thread can therefore be genuinely working while a window
+ * receives none of its output: this notice is that fact, projected for the
+ * window that does not own the run.
+ */
+export interface ForeignRunNotice {
+  projectId: string
+  threadId: string
+}
+
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'tool'
 
 export interface ToolCall {

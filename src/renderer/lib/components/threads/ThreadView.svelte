@@ -155,6 +155,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
@@ -10394,6 +10395,7 @@
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
+                    {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
                     {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
@@ -10425,6 +10427,7 @@
                         latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
+                        foreignRun={traceRunIsForeign}
                         {active}
                         olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
                         onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, Loader2, RefreshCw, Zap } from '@lucide/svelte'
+  import { AppWindow, Brain, Loader2, RefreshCw, Zap } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -8,6 +8,10 @@
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
     rehydrated: boolean
+    /** True when this run belongs to another CodeInOven instance. Its live output
+     *  and its stop control are in that window, not this one, so the trace
+     *  explains the missing stream instead of showing a bare spinner. */
+    foreignRun?: boolean
     /** When the agent started working, when known, so the duration can show. */
     startTime: number | undefined
     elapsed: number
@@ -24,6 +28,7 @@
 
   let {
     rehydrated,
+    foreignRun = false,
     startTime,
     elapsed,
     modelLabel,
@@ -38,7 +43,19 @@
 </script>
 
 <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-  {#if rehydrated}
+  {#if foreignRun}
+    <span class="flex min-w-0 shrink items-center gap-2">
+      <AppWindow size={11} class="shrink-0 text-info" />
+      <span class="shrink-0 text-[0.625rem] text-info/80">
+        Running in another instance · showing last saved activity
+      </span>
+      {#if startTime}
+        <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
+          · {formatDurationSeconds(elapsed)}
+        </span>
+      {/if}
+    </span>
+  {:else if rehydrated}
     <span class="flex min-w-0 shrink items-center gap-2">
       <RefreshCw size={11} class="shrink-0 text-info" />
       <span class="shrink-0 text-[0.625rem] text-info/80">

@@ -48,6 +48,13 @@ export const IPC_EVENT_CONTRACT = {
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],
+  /**
+   * Threads another live CodeInOven instance is running right now, pushed
+   * whenever that set changes. A second window has no harness for those turns
+   * and receives none of their stream, so without this it can only show a
+   * working spinner with no live output.
+   */
+  'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
   /** Transient in-app toast (error/info, optional navigation action). */

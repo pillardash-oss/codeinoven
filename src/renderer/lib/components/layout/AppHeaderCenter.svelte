@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toast } from 'svelte-sonner'
-  import { Loader2 } from '@lucide/svelte'
+  import { AppWindow, Loader2 } from '@lucide/svelte'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
@@ -8,6 +8,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -75,6 +76,7 @@
       threadBusyForIndicator(thread) ||
       coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
     {@const isRetryPaused = isThreadRetryPaused(thread)}
+    {@const isForeignRun = foreignRuns.isForeign(thread.projectId, thread.id)}
     {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
     <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
@@ -124,17 +126,23 @@
               ? 'bg-warning/10 text-warning'
               : 'bg-info/10 text-info'}"
           >
-            <Loader2 size={10} class="animate-spin" />
+            {#if isForeignRun}
+              <AppWindow size={10} />
+            {:else}
+              <Loader2 size={10} class="animate-spin" />
+            {/if}
             <span class="header-status-label">
               {workspaceState.specStudioFormulating
                 ? 'Formulating…'
-                : isRetryPaused
-                  ? 'Waiting to retry'
-                  : activeRunActivity === 'brainstorm_report'
-                    ? activeRunActivityDetail?.phase === 'create'
-                      ? 'Generating report'
-                      : 'Refreshing report'
-                    : 'Working'}
+                : isForeignRun
+                  ? 'Running in another instance'
+                  : isRetryPaused
+                    ? 'Waiting to retry'
+                    : activeRunActivity === 'brainstorm_report'
+                      ? activeRunActivityDetail?.phase === 'create'
+                        ? 'Generating report'
+                        : 'Refreshing report'
+                      : 'Working'}
             </span>
           </span>
         {/if}

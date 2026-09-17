@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Clock, StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -17,6 +17,9 @@
     stageLabel?: string
     /** Whether the provider is waiting for an automatic retry. */
     isRetryPaused?: boolean
+    /** Whether this thread's in-flight turn belongs to another CodeInOven
+     *  instance, which is where its live output and stop control are. */
+    isForeignRun?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
@@ -36,6 +39,7 @@
     thread,
     isWorking = false,
     isRetryPaused = false,
+    isForeignRun = false,
     stageLabel = '',
     threadState = 'read'
   }: Props = $props()
@@ -120,7 +124,21 @@
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
     <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
   </div>
-  {#if isWorking}
+  {#if isForeignRun}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-muted">
+        <StatusBadge
+          stage="working"
+          variant="icon"
+          icon={AppWindow}
+          size="sm"
+          title="Running in another instance"
+        />
+        Running in another instance
+      </dd>
+    </div>
+  {:else if isWorking}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-muted">

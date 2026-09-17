@@ -73,7 +73,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { SpeechService },
     { registerSpeechIpc },
     { PrototypePreviewService },
-    { DirectoryPreviewService }
+    { DirectoryPreviewService },
+    { ForeignRunService }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -91,7 +92,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../speech/speech-service'),
     import('../ipc/speech-ipc'),
     import('../prototypes/prototype-preview-service'),
-    import('../preview/directory-preview-service')
+    import('../preview/directory-preview-service'),
+    import('../chat/foreign-run-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -271,6 +273,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.register()
   state.harnessManifestService.register()
   state.chatEngine.attachRetryScheduler(state.retryScheduler)
+  // Registered before `featuresReady`: a window hydrates the cross-instance turn
+  // notice as soon as it mounts, and its invoke must not race the handler.
+  state.foreignRuns = new ForeignRunService(database)
+  state.foreignRuns.registerIpc()
+  state.foreignRuns.start()
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
   context.onFeaturesReady()

@@ -10,6 +10,7 @@
 import type { BrowserWindow } from 'electron'
 import type { BrowserService } from '../browser/browser-service'
 import type { ChatEngine } from '../chat/chat-engine'
+import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
@@ -76,6 +77,8 @@ export interface BootstrapState {
   stopRemoteOwnershipListener: (() => void) | null
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
+  /** Cross-instance turn-ownership notices pushed to every window. */
+  foreignRuns: ForeignRunService | null
   remoteOwnershipPromise: Promise<void> | null
   remoteOwnershipReconcilePending: boolean
   modelPricingService: ModelPricingService | null
@@ -130,6 +133,7 @@ export function createBootstrapState(): BootstrapState {
     remoteMode: null,
     stopRemoteOwnershipListener: null,
     stopInstanceTakeOverListener: null,
+    foreignRuns: null,
     remoteOwnershipPromise: null,
     remoteOwnershipReconcilePending: false,
     modelPricingService: null,

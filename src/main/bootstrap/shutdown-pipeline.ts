@@ -134,6 +134,9 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   state.stopInstanceTakeOverListener?.()
   state.stopInstanceTakeOverListener = null
 
+  state.foreignRuns?.dispose()
+  state.foreignRuns = null
+
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.
   try {

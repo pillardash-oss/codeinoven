@@ -57,6 +57,8 @@ export class InstanceRegistry {
   private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
   private readonly liveInstanceListeners = new Set<() => void>()
   private readonly liveSetListeners = new Set<() => void>()
+  /** Local consumers of this process's turn-activity announcements. */
+  private readonly turnActivityListeners = new Set<() => void>()
   private readonly seenCheckpointEvents = new Set<string>()
   /** Live process ids as of the last membership check, to filter heartbeat noise. */
   private liveSetSignature = ''
@@ -203,6 +205,38 @@ export class InstanceRegistry {
       // Registry failures must never disable shared scheduled work.
       return true
     }
+  }
+
+  /**
+   * Announce that the set of turns this process is running may have changed.
+   *
+   * The shared `active_turns` ledger is the single source of truth for turn
+   * ownership, so no turn data rides in the entry itself: this is the
+   * invalidation, and a consumer that reacts to it re-reads that ledger. Local
+   * consumers are told at once; siblings notice through the registry file they
+   * already watch, which is the only cross-process signal this app delivers
+   * without polling. Publishing on every heartbeat regardless also bounds how
+   * long a missed announcement can stay stale.
+   */
+  publishTurnActivity(): void {
+    for (const listener of this.turnActivityListeners) {
+      try {
+        listener()
+      } catch {
+        // One consumer failing must not prevent the others.
+      }
+    }
+    try {
+      this.writeEntry()
+    } catch {
+      // Best effort: the next heartbeat re-announces it.
+    }
+  }
+
+  /** Subscribe to this process's own turn-activity announcements. */
+  onTurnActivityChanged(listener: () => void): () => void {
+    this.turnActivityListeners.add(listener)
+    return () => this.turnActivityListeners.delete(listener)
   }
 
   /**

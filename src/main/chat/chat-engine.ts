@@ -971,6 +971,15 @@ export class ChatEngine {
   /** Latest provider lifecycle state, retained across renderer remounts. */
   private sessionStatuses = new Map<string, AgentSessionStatus>()
 
+  /**
+   * Signature of the threads this process last announced as running.
+   *
+   * A turn emits several lifecycle transitions, and only the ones that move the
+   * set of running threads are worth telling a sibling about   every
+   * announcement costs it a re-read of the shared turn ledger.
+   */
+  private localRunSignature = ''
+
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
 
@@ -16381,6 +16390,29 @@ export class ChatEngine {
   }
 
   /**
+   * Tell the app that this process's set of running threads may have changed.
+   *
+   * A sibling instance has no harness for these turns and receives none of their
+   * stream, so the only way a window there can label one of them precisely is if
+   * this process says so. The shared `active_turns` ledger stays the truth: this
+   * is the invalidation that makes a sibling re-read it. Change-guarded, because
+   * one turn emits several lifecycle transitions and a sibling pays for every
+   * announcement with a read of that ledger.
+   */
+  private announceTurnActivityChange(): void {
+    const running = new Set<string>()
+    for (const [sessionId, status] of this.sessionStatuses) {
+      if (status.state !== 'working') continue
+      const session = this.sessionRegistry.get(sessionId)
+      if (session) running.add(`${session.projectId}:${session.threadId}`)
+    }
+    const signature = [...running].sort().join(',')
+    if (signature === this.localRunSignature) return
+    this.localRunSignature = signature
+    instanceRegistry.publishTurnActivity()
+  }
+
+  /**
    * Whether this launch must leave work that carries no turn owner alone.
    *
    * Every instance shares one config root, so the thread table, the persisted
@@ -19260,6 +19292,9 @@ export class ChatEngine {
   private handleSessionIdleSignal(sessionId: string): void {
     if (this.handledIdleSessions.has(sessionId)) return
     this.handledIdleSessions.add(sessionId)
+    // Some idle paths record the status without broadcasting it, so the turn's
+    // end is announced here as well as on the status stream.
+    this.announceTurnActivityChange()
     // The turn ended while a steer was still held (no tool window opened, or
     // the idle arrived between the tool end and the async flush). Deliver it
     // as the next turn's regular send   but only AFTER the idle finalization
@@ -19550,6 +19585,10 @@ export class ChatEngine {
    * to preserve stream-before-completion ordering.
    */
   private broadcast(event: AgentEvent): void {
+    // A session lifecycle transition is when this process's set of running
+    // threads can change, which is the one thing a sibling window cannot see by
+    // itself   it has no harness for these turns. Change-guarded inside.
+    if (event.type === 'session.status') this.announceTurnActivityChange()
     if (
       event.type === 'message.part.updated' ||
       event.type === 'message.part.delta' ||

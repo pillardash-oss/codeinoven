@@ -2,6 +2,7 @@ import type {
   Checklist,
   ChecklistItem,
   CreateThreadInput,
+  ForeignRunNotice,
   HarnessUsage,
   HistoryEntry,
   HistoryRole,
@@ -238,5 +239,11 @@ export const invokeThreadContract = {
   'thread:setIndependentAudit': {} as Contract<
     [projectId: string, threadId: string, enabled: boolean],
     Thread
-  >
+  >,
+  /**
+   * Threads another live CodeInOven instance is running right now. Hydration for
+   * the push stream: a window that mounts after the last change still learns the
+   * current set without polling.
+   */
+  'thread:listForeignRuns': {} as Contract<[], ForeignRunNotice[]>
 }

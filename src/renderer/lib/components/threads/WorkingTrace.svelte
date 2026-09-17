@@ -38,6 +38,9 @@
      *  session activity is confirming the run. Renders a saved-activity note
      *  instead of a live "Agent working…" spinner. */
     rehydrated?: boolean
+    /** True when this run belongs to another CodeInOven instance, which is where
+     *  its live output and stop control are. */
+    foreignRun?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -78,6 +81,7 @@
     latest = false,
     done = false,
     rehydrated = false,
+    foreignRun = false,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -425,6 +429,7 @@
       {#if busy}
         <WorkingTraceStatus
           {rehydrated}
+          {foreignRun}
           startTime={effectiveStartTime}
           {elapsed}
           {modelLabel}
