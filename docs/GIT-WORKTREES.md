@@ -177,12 +177,14 @@ its `cio/` branch, not the project root:
   branch is from its upstream afterwards, so the caller can say exactly what
   happened and that nothing was published.
 
-  The UI reaches it two ways. The Git panel's Sync menu keeps **Sync from main**
-  and **Sync to main** for the common case (named, no chooser, offered only while
-  the panel is attached to a managed worktree scope) and adds **Sync from
-  branch…** and **Sync to branch…**, which open one shared peer chooser that the
-  scope menu reuses as **Merge from project…** right below **Merge into
-  project…**.
+  The UI reaches it two ways, and both start from a **managed worktree scope**:
+  a worktree is the only scope with a second checkout to trade with. The Git
+  panel, attached to one, keeps **Sync from main** and **Sync to main** for the
+  common case (named, no chooser) and adds **Sync from branch…** and **Sync to
+  branch…**, which open one shared peer chooser that the scope menu reuses as
+  **Merge from project…** right below **Merge into project…**. The control is not
+  rendered at all for the project root, so `main` never offers to sync with
+  itself; the project root is reached as a peer from the worktree instead.
 
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's

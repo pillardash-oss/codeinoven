@@ -1426,8 +1426,8 @@
   )
 
   /**
-   * The active scope's bucket. Only a managed worktree has a main worktree to
-   * trade commits with by name, while every checkout can sync with any other.
+   * The active scope's bucket. Sync lives behind `showsSync`, so this is what
+   * tells the header whether the panel is looking at a managed worktree.
    */
   const activeScopeBucket = $derived(scopeState.bucketFor(projectId, scopeBucketId))
   const worktreeScope = $derived(activeScopeBucket?.root.kind === 'worktree')
@@ -1443,10 +1443,14 @@
   const showsPull = $derived(repoState === 'git' && hasRemote && commitsBehind > 0)
   const showsPush = $derived(repoState === 'git' && hasRemote && hasWorkToPush)
   /**
-   * Any checkout can sync: a worktree trades commits with main (or anything
-   * else), and the project root can pull in a worktree's or a branch's commits.
+   * Only a managed worktree scope gets the Sync control. Sync exists to trade
+   * commits between two checkouts of the same repository, and a worktree is the
+   * only scope that has a second checkout to trade with; from the project root
+   * the worktree's own Git panel already offers the same move in the direction
+   * that lands here, so an entry point on `main` would be a second door onto one
+   * operation, with the receiver off screen.
    */
-  const showsSync = $derived(repoState === 'git')
+  const showsSync = $derived(repoState === 'git' && worktreeScope)
   /**
    * Pull and Push are the only remote actions that earn the second row: they act
    * on the branch you are standing on, one each, and they fill the row between
@@ -2938,7 +2942,8 @@
           The view's own action comes first, ahead of Search: it acts on what you
           are looking at, while Search, Refresh and the overflow act on the panel.
           Sync belongs to the same group   it trades commits with another
-          checkout, it is not an action on this branch's own drift.
+          checkout, it is not an action on this branch's own drift   and it is
+          worktree-only, which `showsSync` decides.
         -->
         <div class="flex shrink-0 items-center gap-0.5">
           {@render viewActions()}
@@ -2946,7 +2951,6 @@
             <GitSyncButton
               busy={gitState.isBusy('sync')}
               blocked={syncBusy || conflicted.length > 0}
-              canSyncMain={worktreeScope}
               onSync={(direction) => void syncMainAction(direction)}
               onPickPeer={openSyncPeer}
             />

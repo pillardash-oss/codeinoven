@@ -8,19 +8,13 @@
     busy: boolean
     /** Another remote operation is running, or the worktree has conflicts to resolve first. */
     blocked: boolean
-    /**
-     * True when this checkout is a managed worktree, so "main" is a different
-     * checkout. From the project root "sync with main" would be a sync with
-     * itself, so only the peer entries apply there.
-     */
-    canSyncMain: boolean
     /** Start the main-branch flow, which knows both ends already. */
     onSync: (direction: GitSyncDirection) => void
     /** Open the peer chooser, for any other checkout or branch in the project. */
     onPickPeer: (direction: GitSyncDirection) => void
   }
 
-  let { busy, blocked, canSyncMain, onSync, onPickPeer }: Props = $props()
+  let { busy, blocked, onSync, onPickPeer }: Props = $props()
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40'
@@ -31,6 +25,10 @@
   direction lives in one menu. The two "main" entries stay separate because they
   are the common case and need no chooser; the other two open the peer chooser
   for any worktree or branch the project has.
+
+  The Git panel renders this only for a managed worktree scope, so "main" here is
+  always the project root, a different checkout: from the project root itself
+  "sync with main" would be a sync with this very checkout.
 -->
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
@@ -55,17 +53,15 @@
       collisionPadding={8}
       class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
     >
-      {#if canSyncMain}
-        <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from')}>
-          <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
-          Sync from main
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to')}>
-          <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
-          Sync to main
-        </DropdownMenu.Item>
-        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-      {/if}
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from')}>
+        <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync from main
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to')}>
+        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync to main
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onPickPeer('from')}>
         <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync from branch…
