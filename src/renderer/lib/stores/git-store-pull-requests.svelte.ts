@@ -1,6 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import type {
   PrAgentReport,
+  PrListQuery,
   PrState,
   PullRequestBundle,
   PullRequestFile,
@@ -107,6 +108,11 @@ export class GitPullRequestCache {
    *
    * Returns immediately when fresh cache exists; otherwise fetches. Pass
    * `force` for the explicit refresh button.
+   *
+   * The provider pages by cursor, so page N is only reachable through page N-1's
+   * cursor. Walking from the first page fills in whichever earlier pages are
+   * missing; on the usual Previous/Next path the walk stops at the first
+   * iteration because the page before is already cached.
    */
   async ensurePullRequestPage(
     projectId: string,
@@ -114,22 +120,56 @@ export class GitPullRequestCache {
     repo: string,
     state: PrState,
     page: number,
+    query: PrListQuery,
     force = false
   ): Promise<void> {
-    const key = prPageKey(owner, repo, state, page)
-    const cached = this.pages[key]
-    if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
-    if (!force && this.coolingDown(key)) return
-    const existingRequest = this.pageRequests[key]
-    if (existingRequest) return existingRequest
+    for (let index = 1; index <= page; index += 1) {
+      const key = prPageKey(owner, repo, state, query.filter, query.sort, index)
+      const cached = this.pages[key]
+      if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) continue
+      if (!force && this.coolingDown(key)) return
+      // A pagination cursor is the only way into a later page, and the provider
+      // hands one out only while the listing has more. Absent one, this page
+      // does not exist and asking for it would return the first page's rows.
+      const cursor = index > 1 ? this.cursorBefore(owner, repo, state, query, index) : null
+      if (index > 1 && !cursor) return
+      const existingRequest = this.pageRequests[key]
+      if (existingRequest) {
+        await existingRequest
+        continue
+      }
 
-    const request = this.loadPullRequestPage(projectId, owner, repo, state, page, key)
-    this.pageRequests[key] = request
-    try {
-      await request
-    } finally {
-      if (this.pageRequests[key] === request) delete this.pageRequests[key]
+      const request = this.loadPullRequestPage(
+        projectId,
+        owner,
+        repo,
+        state,
+        index,
+        query,
+        cursor,
+        key
+      )
+      this.pageRequests[key] = request
+      try {
+        await request
+      } finally {
+        if (this.pageRequests[key] === request) delete this.pageRequests[key]
+      }
+      // A failed page leaves nothing for the next iteration to continue from.
+      if (!this.pages[key]) return
     }
+  }
+
+  /** The cursor that opens a page: the one the page before it reported. */
+  private cursorBefore(
+    owner: string,
+    repo: string,
+    state: PrState,
+    query: PrListQuery,
+    page: number
+  ): string | null {
+    const previous = this.pages[prPageKey(owner, repo, state, query.filter, query.sort, page - 1)]
+    return previous?.page.nextCursor ?? null
   }
 
   private async loadPullRequestPage(
@@ -138,11 +178,17 @@ export class GitPullRequestCache {
     repo: string,
     state: PrState,
     page: number,
+    query: PrListQuery,
+    cursor: string | null,
     key: string
   ): Promise<void> {
     this.markBusy('pr-list', true)
     try {
-      const result = await invoke('pr:page', projectId, owner, repo, state, page)
+      const result = await invoke('pr:page', projectId, owner, repo, state, page, {
+        filter: query.filter,
+        sort: query.sort,
+        cursor
+      })
       this.pages = { ...this.pages, [key]: { page: result, fetchedAt: Date.now() } }
       delete this.failures[key]
     } catch (reason) {

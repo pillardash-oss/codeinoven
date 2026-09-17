@@ -1,4 +1,11 @@
-import type { GitCommitInfo, GitStashEntry, PrState, PullRequestSummary } from '$shared/types'
+import type {
+  GitCommitInfo,
+  GitStashEntry,
+  PrListFilter,
+  PrListSort,
+  PrState,
+  PullRequestSummary
+} from '$shared/types'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
 export type GitPanelTabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
@@ -12,6 +19,10 @@ export interface GitPanelViewState {
   /** Which pull requests the PR view lists. The panel renders the filter in its
    *  own header row, so the choice is panel state, not list state. */
   prListState: PrState
+  /** Which relationship that listing keeps, and how it is ordered. Panel state
+   *  for the same reason as the state filter: the panel draws the control. */
+  prListFilter: PrListFilter
+  prListSort: PrListSort
 }
 
 function defaultState(): GitPanelViewState {
@@ -21,7 +32,9 @@ function defaultState(): GitPanelViewState {
     selectedCommit: null,
     selectedPullRequest: null,
     selectedStash: null,
-    prListState: 'open'
+    prListState: 'open',
+    prListFilter: 'all',
+    prListSort: 'updated'
   }
 }
 
@@ -43,7 +56,8 @@ export const gitPanelView = {
     // Filled from the defaults so a state written by an older build (this map
     // lives for the whole run) can never hand a caller an undefined field. A
     // missing `prListState` used to reach the PR list as `state: undefined`,
-    // which the main process rejects as an invalid state filter.
+    // which the main process rejects as an invalid state filter, and the listing
+    // choices are validated the same way.
     const existing = states.get(projectId)
     return existing ? { ...defaultState(), ...existing } : defaultState()
   },

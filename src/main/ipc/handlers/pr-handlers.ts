@@ -11,6 +11,7 @@ import {
   validateMergeMethod,
   validatePrCommentBody,
   validatePrCreateInput,
+  validatePrListRequest,
   validatePrNumber,
   validatePrPage,
   validatePrState,
@@ -254,9 +255,18 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle(
     'pr:page',
-    async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      state: unknown,
+      page: unknown,
+      request: unknown
+    ) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       const safePage = validatePrPage(page)
+      const listing = validatePrListRequest(request)
       // An unauthenticated page is NOT an empty page   the renderer must be
       // able to tell "no open PRs" from "GitHub isn't connected yet", or the
       // header conflict indicator would treat a cold start as zero conflicts.
@@ -267,7 +277,10 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
           repo: validateBoundedString(repo, 'PR repository', 1, 128),
           state: validatePrState(state),
           page: safePage,
-          perPage: PR_PAGE_SIZE
+          perPage: PR_PAGE_SIZE,
+          filter: listing.filter,
+          sort: listing.sort,
+          cursor: listing.cursor
         })
       } catch (error) {
         if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {

@@ -144,7 +144,13 @@ export class GitPrConflictIndicators {
   ): Promise<void> {
     if (!(await this.ensureConnection())) return
     try {
-      const page = await invoke('pr:page', projectId, owner, repo, 'open', 1)
+      // The conflict probe wants the plainest listing there is: every open pull
+      // request, newest first, no relationship filter.
+      const page = await invoke('pr:page', projectId, owner, repo, 'open', 1, {
+        filter: 'all',
+        sort: 'updated',
+        cursor: null
+      })
       if (page.accessError) return
       // `mergeable` is frequently null in list payloads (GitHub computes it
       // lazily); `mergeable_state` (e.g. `dirty`) is the reliable list signal,

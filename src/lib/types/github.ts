@@ -1,6 +1,41 @@
 /** Filter for pull request listings. */
 export type PrState = 'open' | 'closed' | 'all'
 
+/**
+ * Which pull requests a listing shows, beyond the state filter.
+ *
+ * GitHub's own pull request list narrows by the viewer's relationship to the
+ * pull request, which is a question only the search index can answer
+ * (`author:@me`, `involves:@me`, …). These are those relationships; `all` adds
+ * no qualifier at all.
+ */
+export type PrListFilter = 'all' | 'authored' | 'assigned' | 'review-requested' | 'involves'
+
+/** How a pull request listing is ordered, newest first either way. */
+export type PrListSort = 'updated' | 'created'
+
+/**
+ * The listing choices that are not the state filter or the page: what the page
+ * was asked as one value, so the store can key a cached page by all of it.
+ */
+export interface PrListQuery {
+  filter: PrListFilter
+  sort: PrListSort
+}
+
+/**
+ * A listing request, as the renderer sends it: the choices plus the page of the
+ * page it continues from.
+ *
+ * The cursor is grouped with the choices rather than sent as its own argument
+ * because a cursor only ever means anything alongside the filter and sort that
+ * produced it.
+ */
+export interface PrListRequest extends PrListQuery {
+  /** Cursor the previous page reported, or null to ask for the first page. */
+  cursor: string | null
+}
+
 /** Draft-shaped request to create a pull request on the provider. */
 export interface PrDraft {
   owner: string
@@ -64,6 +99,13 @@ export interface PullRequestSummary {
   updatedAt: string
   /** Issue-comment count as reported by the provider (review comments excluded). */
   comments: number
+  /** Labels in GitHub's own order. Absent when the payload did not carry them. */
+  labels?: PullRequestLabel[]
+  /**
+   * Rolled-up check state for the head commit, with the counts behind it. Absent
+   * for a summary built outside a listing: the detail fetches its own checks.
+   */
+  checks?: PullRequestChecksRollup
   /**
    * Whether the provider has computed the PR as mergeable (`false` = conflicts).
    * Populated from list payloads where available; absent for locally-constructed
@@ -82,9 +124,15 @@ export interface PullRequestSummary {
 /** One page of pull requests, with a cursor the UI can advance. */
 export interface PullRequestPage {
   items: PullRequestSummary[]
+  /** The 1-based page this listing answers. */
   page: number
   /** Whether another page exists after this one. */
   hasMore: boolean
+  /**
+   * Where the next page starts, for providers that page by cursor. Null when
+   * this is the last page, and absent when the provider pages by number.
+   */
+  nextCursor?: string | null
   /** Actionable repository-access failure returned without rejecting IPC. */
   accessError?: string
 }
@@ -274,6 +322,29 @@ export interface PullRequestCheck {
 export interface PullRequestChecks {
   state: 'success' | 'failure' | 'pending' | 'none'
   checks: PullRequestCheck[]
+}
+
+/**
+ * A pull request's checks as a listing reports them: the rollup state and the
+ * counts behind its `passed/total` label, without every individual check.
+ *
+ * `state` is `PullRequestChecks['state']` on purpose. The list draws the same pill
+ * the detail header draws, so a new state has to be added in one place or neither
+ * surface compiles.
+ */
+export interface PullRequestChecksRollup {
+  state: PullRequestChecks['state']
+  /** Checks that already concluded successfully. */
+  passed: number
+  /** Every check the provider reports for the head commit. */
+  total: number
+}
+
+/** One label on a pull request, as GitHub declares it. */
+export interface PullRequestLabel {
+  name: string
+  /** Six hex digits without `#`, which is exactly what a chip's colour needs. */
+  color: string
 }
 
 /**

@@ -6,6 +6,8 @@ import type {
   GitRepositoryIdentity,
   PrCommentKind,
   PrDraft,
+  PrListFilter,
+  PrListSort,
   PrMergeMethod,
   PrMinimizeReason,
   PrReviewEvent,
@@ -49,6 +51,15 @@ export interface ListPullRequestPageInput extends ListPullRequestsInput {
   page: number
   /** Items per page; providers cap this. */
   perPage: number
+  /** Which of the viewer's relationships to the pull request to keep. */
+  filter: PrListFilter
+  /** Newest-first ordering. */
+  sort: PrListSort
+  /**
+   * Where to continue from, as the previous page reported it. Null asks for the
+   * first page; a provider that pages by number instead ignores it.
+   */
+  cursor: string | null
 }
 
 /** Address one pull request in a repository. */

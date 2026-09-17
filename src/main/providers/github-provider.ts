@@ -15,9 +15,11 @@ import type {
   PullRequestCommit,
   PullRequestCheck,
   PullRequestChecks,
+  PullRequestChecksRollup,
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
   PullRequestReview,
   PullRequestReviewComment,
   PullRequestPage,
@@ -70,6 +72,92 @@ export class ProviderHttpError extends Error {
     this.name = 'ProviderHttpError'
   }
 }
+
+/**
+ * Sanitized GraphQL failure that keeps GitHub's own error `type`.
+ *
+ * GraphQL answers HTTP 200 even when it rejects a request, so the transport has
+ * to raise its own error. The `type` (FORBIDDEN, NOT_FOUND, …) is what lets a
+ * caller tell a permanent access failure from a transient one without parsing
+ * the message.
+ */
+export class ProviderGraphqlError extends Error {
+  constructor(
+    message: string,
+    readonly type: string | null
+  ) {
+    super(message)
+    this.name = 'ProviderGraphqlError'
+  }
+}
+
+/**
+ * One GraphQL search for a page of pull requests.
+ *
+ * Search rather than the repository's `pullRequests` connection because
+ * `author:@me` and `review-requested:@me` are questions only the search index can
+ * answer, and because one response then carries the labels, comment count and
+ * check rollup the sidebar list draws without a follow-up request per row.
+ */
+const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!, $after: String) {
+  search(query: $q, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      __typename
+      ... on PullRequest {
+        number
+        title
+        url
+        state
+        isDraft
+        createdAt
+        updatedAt
+        mergeable
+        mergeStateStatus
+        headRefName
+        baseRefName
+        author {
+          login
+          avatarUrl
+        }
+        labels(first: 20) {
+          nodes {
+            name
+            color
+          }
+        }
+        comments {
+          totalCount
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  totalCount
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      conclusion
+                      status
+                    }
+                    ... on StatusContext {
+                      state
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
 
 /**
  * GitHub-first REST adapter.
@@ -136,7 +224,7 @@ export class GitHubProvider implements GitProvider {
       throw new Error(`Pull request #${input.pullNumber} has no provider node ID`)
     }
 
-    const response = await this.runGraphqlMutation(
+    const response = await this.runGraphql(
       'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
       { pullRequestId }
     )
@@ -252,19 +340,47 @@ export class GitHubProvider implements GitProvider {
 
   async listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage> {
     const state = input.state ?? 'open'
-    // Ask for one extra item so `hasMore` needs no extra round trip.
+    const qualifiers = ['is:pr', `repo:${input.owner}/${input.repo}`]
+    if (state === 'open') qualifiers.push('is:open')
+    else if (state === 'closed') qualifiers.push('is:closed')
+    if (input.filter === 'authored') qualifiers.push('author:@me')
+    else if (input.filter === 'assigned') qualifiers.push('assignee:@me')
+    else if (input.filter === 'review-requested') qualifiers.push('review-requested:@me')
+    else if (input.filter === 'involves') qualifiers.push('involves:@me')
+    qualifiers.push(input.sort === 'created' ? 'sort:created-desc' : 'sort:updated-desc')
+
+    // Ask for exactly the page size. An over-fetch of one extra would move
+    // `endCursor` past the first row of the next page, because the cursor is the
+    // last node the search returned.
     const perPage = Math.min(Math.max(input.perPage, 1), 50)
-    const query = `?state=${encodeURIComponent(state)}&per_page=${perPage + 1}&page=${input.page}&sort=updated&direction=desc`
-    const response = await this.request(`${this.repoPath(input)}/pulls${query}`, { method: 'GET' })
-    const items = Array.isArray(response) ? response : []
-    const summaries = items.flatMap((item) => {
-      const summary = this.toSummary(item, input.owner, input.repo)
-      return summary ? [summary] : []
-    })
-    return {
-      items: summaries.slice(0, perPage),
-      page: input.page,
-      hasMore: summaries.length > perPage
+    try {
+      const data = await this.runGraphql(PULL_REQUEST_LIST_QUERY, {
+        q: qualifiers.join(' '),
+        first: perPage,
+        after: input.cursor
+      })
+      const search = this.readRecord(data, 'search')
+      const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+      const items = nodes.flatMap((node) => {
+        const summary = this.toGraphqlSummary(node, input.owner, input.repo)
+        return summary ? [summary] : []
+      })
+      const pageInfo = search ? this.readRecord(search, 'pageInfo') : null
+      return {
+        items,
+        page: input.page,
+        hasMore: pageInfo?.['hasNextPage'] === true,
+        nextCursor: pageInfo ? this.readString(pageInfo, 'endCursor') : null
+      }
+    } catch (failure) {
+      // The IPC handler tells a repository the App cannot see apart from a
+      // transient outage by HTTP status, so a GraphQL access failure has to
+      // arrive as the same `ProviderHttpError` the REST calls raise.
+      if (failure instanceof ProviderGraphqlError) {
+        if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
+        if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)
+      }
+      throw failure
     }
   }
 
@@ -391,7 +507,7 @@ export class GitHubProvider implements GitProvider {
    * mutation addresses the comment by its global node id rather than its number.
    */
   async minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void> {
-    const data = await this.runGraphqlMutation(
+    const data = await this.runGraphql(
       'mutation MinimizeComment($subjectId: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $subjectId, classifier: $classifier }) { minimizedComment { isMinimized } } }',
       { subjectId: input.nodeId, classifier: input.reason }
     )
@@ -1154,15 +1270,14 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
-   * Run one GraphQL mutation and return its `data` record.
+   * Run one GraphQL query or mutation and return its `data` record.
    *
-   * A few GitHub operations   promoting a draft, hiding a comment   exist only on
-   * GraphQL, so the transport and its error unwrapping live here once rather than
-   * in each caller. The unwrapping matters: GraphQL answers HTTP 200 with an
-   * `errors` array when a mutation is rejected, so without this a failure would
-   * read as success.
+   * Some GitHub operations exist only on GraphQL, so the transport and its error
+   * unwrapping live here once rather than in each caller. The unwrapping matters:
+   * GraphQL answers HTTP 200 with an `errors` array when a request is rejected,
+   * so without this a failure would read as success.
    */
-  private async runGraphqlMutation(
+  private async runGraphql(
     query: string,
     variables: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
@@ -1178,9 +1293,126 @@ export class GitHubProvider implements GitProvider {
           typeof entry === 'object' && entry !== null && !Array.isArray(entry)
       )
       const message = first ? this.readString(first, 'message') : null
-      throw new Error(message?.slice(0, 500) ?? 'The provider rejected the request')
+      const type = first ? this.readString(first, 'type') : null
+      throw new ProviderGraphqlError(
+        message?.slice(0, 500) ?? 'The provider rejected the request',
+        type
+      )
     }
     return this.readRecord(responseRecord, 'data') ?? {}
+  }
+
+  /**
+   * Map one GraphQL search node to the renderer-safe summary, or null when it is
+   * not a pull request (an issue search returns both kinds of node) or has no
+   * usable number.
+   */
+  private toGraphqlSummary(
+    payload: unknown,
+    owner: string,
+    repo: string
+  ): PullRequestSummary | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    if (this.readString(record, '__typename') !== 'PullRequest') return null
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    const author = this.readRecord(record, 'author')
+    const login = author ? (this.readString(author, 'login') ?? 'unknown') : 'unknown'
+    const rawState = this.readString(record, 'state')
+    const state: PullRequestSummary['state'] =
+      rawState === 'MERGED' ? 'merged' : rawState === 'CLOSED' ? 'closed' : 'open'
+    const comments = this.readRecord(record, 'comments')
+    const checks = this.readChecksRollup(record)
+    const mergeStateStatus = this.readString(record, 'mergeStateStatus')
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Pull request #${number}`,
+      url: this.readString(record, 'url') ?? `https://github.com/${owner}/${repo}/pull/${number}`,
+      state,
+      draft: record['isDraft'] === true,
+      authorLogin: login,
+      authorAvatarUrl: author ? this.readString(author, 'avatarUrl') : null,
+      authorIsBot: login.endsWith('[bot]'),
+      headRef: this.readString(record, 'headRefName') ?? '',
+      baseRef: this.readString(record, 'baseRefName') ?? '',
+      createdAt: this.readString(record, 'createdAt') ?? '',
+      updatedAt: this.readString(record, 'updatedAt') ?? '',
+      comments: comments ? this.readNumber(comments, 'totalCount') : 0,
+      labels: this.readLabels(record),
+      ...(checks ? { checks } : {}),
+      mergeable: this.readMergeable(record),
+      mergeableState: mergeStateStatus ? mergeStateStatus.toLowerCase() : null
+    }
+  }
+
+  /** GitHub's tri-state mergeability as a listing reports it; UNKNOWN stays null. */
+  private readMergeable(record: Record<string, unknown>): boolean | null {
+    const value = this.readString(record, 'mergeable')
+    if (value === 'MERGEABLE') return true
+    if (value === 'CONFLICTING') return false
+    return null
+  }
+
+  /** Labels in GitHub's own order, dropping entries a chip cannot draw. */
+  private readLabels(record: Record<string, unknown>): PullRequestLabel[] {
+    const labels = this.readRecord(record, 'labels')
+    const nodes: unknown[] = labels && Array.isArray(labels['nodes']) ? labels['nodes'] : []
+    return nodes.flatMap((node): PullRequestLabel[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const entry = node as Record<string, unknown>
+      const name = this.readString(entry, 'name')
+      if (!name) return []
+      return [{ name, color: this.readString(entry, 'color') ?? '' }]
+    })
+  }
+
+  /**
+   * Roll up the head commit's checks, or undefined when the commit carries no
+   * status rollup at all.
+   *
+   * Undefined rather than a `none` state on purpose: the list draws no check
+   * signal for a repository that never ran anything, while `none` means the
+   * rollup exists and is empty.
+   */
+  private readChecksRollup(record: Record<string, unknown>): PullRequestChecksRollup | undefined {
+    const commits = this.readRecord(record, 'commits')
+    const commitNodes: unknown[] =
+      commits && Array.isArray(commits['nodes']) ? commits['nodes'] : []
+    const headNode = commitNodes[0]
+    if (typeof headNode !== 'object' || headNode === null) return undefined
+    const commit = this.readRecord(headNode as Record<string, unknown>, 'commit')
+    const rollup = commit ? this.readRecord(commit, 'statusCheckRollup') : null
+    if (!rollup) return undefined
+    const rawState = this.readString(rollup, 'state')
+    const state: PullRequestChecksRollup['state'] =
+      rawState === 'SUCCESS'
+        ? 'success'
+        : rawState === 'FAILURE' || rawState === 'ERROR'
+          ? 'failure'
+          : rawState === 'PENDING' || rawState === 'EXPECTED'
+            ? 'pending'
+            : 'none'
+    const contexts = this.readRecord(rollup, 'contexts')
+    const contextNodes: unknown[] =
+      contexts && Array.isArray(contexts['nodes']) ? contexts['nodes'] : []
+    let passed = 0
+    for (const context of contextNodes) {
+      if (typeof context !== 'object' || context === null) continue
+      const entry = context as Record<string, unknown>
+      const typename = this.readString(entry, '__typename')
+      const succeeded =
+        (typename === 'CheckRun' &&
+          this.readString(entry, 'status') === 'COMPLETED' &&
+          this.readString(entry, 'conclusion') === 'SUCCESS') ||
+        (typename === 'StatusContext' && this.readString(entry, 'state') === 'SUCCESS')
+      if (succeeded) passed += 1
+    }
+    return {
+      state,
+      passed,
+      total: contexts ? this.readNumber(contexts, 'totalCount') : 0
+    }
   }
 
   private pullPath(input: PullRequestTarget): string {

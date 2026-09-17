@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { GitHubProvider } from '../../../src/main/providers/github-provider'
+import { GitHubProvider, ProviderHttpError } from '../../../src/main/providers/github-provider'
 import type { PrMergeMethod } from '../../../src/lib/types'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -258,6 +258,192 @@ describe('GitHubProvider', () => {
     expect(detail.jobs).toHaveLength(1)
     expect(detail.jobs[0]).toMatchObject({ id: 77, name: 'build', conclusion: 'success' })
     expect(detail.jobs[0]?.steps[0]).toMatchObject({ name: 'Checkout', conclusion: 'success' })
+  })
+
+  it('lists a page of pull requests through one GraphQL search with labels, comments, and checks', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: true, endCursor: 'CURSOR_1' },
+            nodes: [
+              {
+                __typename: 'PullRequest',
+                number: 42,
+                title: 'Harden the parser',
+                url: 'https://github.com/acme/app/pull/42',
+                state: 'MERGED',
+                isDraft: true,
+                createdAt: '2026-08-01T10:00:00Z',
+                updatedAt: '2026-08-02T11:00:00Z',
+                mergeable: 'CONFLICTING',
+                mergeStateStatus: 'DIRTY',
+                headRefName: 'feature/parser',
+                baseRefName: 'main',
+                author: { login: 'octocat', avatarUrl: 'https://avatars.example/octocat.png' },
+                labels: {
+                  nodes: [
+                    { name: 'bug', color: 'ff0000' },
+                    { color: '00ff00' },
+                    { name: 'urgent', color: '0000ff' }
+                  ]
+                },
+                comments: { totalCount: 7 },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        statusCheckRollup: {
+                          state: 'FAILURE',
+                          contexts: {
+                            totalCount: 3,
+                            nodes: [
+                              {
+                                __typename: 'CheckRun',
+                                status: 'COMPLETED',
+                                conclusion: 'FAILURE'
+                              },
+                              { __typename: 'StatusContext', state: 'SUCCESS' },
+                              {
+                                __typename: 'CheckRun',
+                                status: 'IN_PROGRESS',
+                                conclusion: 'SUCCESS'
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              { __typename: 'Issue', number: 9, title: 'An issue' },
+              { __typename: 'PullRequest', number: 43, title: 'No checks yet' }
+            ]
+          }
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const page = await provider.listPullRequestPage({
+      owner: 'acme',
+      repo: 'app',
+      state: 'open',
+      filter: 'authored',
+      sort: 'updated',
+      perPage: 20,
+      page: 1,
+      cursor: null
+    })
+
+    const { url, init } = captureRequest()
+    expect(url).toBe('https://api.github.com/graphql')
+    expect(init.method).toBe('POST')
+    const body = JSON.parse(String(init.body)) as {
+      query: string
+      variables: Record<string, unknown>
+    }
+    expect(body.query).toContain('query PullRequestList')
+    expect(body.query).toContain('search(query: $q, type: ISSUE, first: $first, after: $after)')
+    expect(body.query).toContain('statusCheckRollup')
+    expect(body.variables['q']).toBe('is:pr repo:acme/app is:open author:@me sort:updated-desc')
+    expect(body.variables['first']).toBe(20)
+    expect(body.variables['after']).toBeNull()
+
+    // The Issue node is dropped, and the last node carries no check signal at all.
+    expect(page.items.map((item) => item.number)).toEqual([42, 43])
+    expect(page.items[1]?.checks).toBeUndefined()
+
+    expect(page.page).toBe(1)
+    expect(page.hasMore).toBe(true)
+    expect(page.nextCursor).toBe('CURSOR_1')
+    expect(page.items[0]).toMatchObject({
+      number: 42,
+      title: 'Harden the parser',
+      url: 'https://github.com/acme/app/pull/42',
+      state: 'merged',
+      draft: true,
+      authorLogin: 'octocat',
+      authorAvatarUrl: 'https://avatars.example/octocat.png',
+      authorIsBot: false,
+      headRef: 'feature/parser',
+      baseRef: 'main',
+      createdAt: '2026-08-01T10:00:00Z',
+      updatedAt: '2026-08-02T11:00:00Z',
+      comments: 7,
+      labels: [
+        { name: 'bug', color: 'ff0000' },
+        { name: 'urgent', color: '0000ff' }
+      ],
+      checks: { state: 'failure', passed: 1, total: 3 },
+      mergeable: false,
+      mergeableState: 'dirty'
+    })
+  })
+
+  it('clamps the GraphQL page size and continues from the passed cursor', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: 'CURSOR_2' },
+            nodes: []
+          }
+        }
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const page = await provider.listPullRequestPage({
+      owner: 'acme',
+      repo: 'app',
+      state: 'all',
+      filter: 'all',
+      sort: 'created',
+      perPage: 200,
+      page: 3,
+      cursor: 'CURSOR_1'
+    })
+
+    const body = JSON.parse(String(captureRequest().init.body)) as {
+      variables: Record<string, unknown>
+    }
+    // `all` adds no state or relationship qualifier, and the page size is capped.
+    expect(body.variables['q']).toBe('is:pr repo:acme/app sort:created-desc')
+    expect(body.variables['first']).toBe(50)
+    expect(body.variables['after']).toBe('CURSOR_1')
+    expect(page.page).toBe(3)
+    expect(page.hasMore).toBe(false)
+    expect(page.nextCursor).toBe('CURSOR_2')
+  })
+
+  it('maps a FORBIDDEN GraphQL error to a ProviderHttpError with status 403', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by integration' }]
+      })
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    const failure = await provider
+      .listPullRequestPage({
+        owner: 'acme',
+        repo: 'app',
+        state: 'open',
+        filter: 'assigned',
+        sort: 'updated',
+        perPage: 20,
+        page: 1,
+        cursor: null
+      })
+      .catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(ProviderHttpError)
+    expect(failure).toMatchObject({ status: 403 })
+    expect((failure as ProviderHttpError).message).toContain(
+      'Resource not accessible by integration'
+    )
   })
 
   it('resolves repository identity from HTTPS, SSH, and scp-like remote URLs', () => {
