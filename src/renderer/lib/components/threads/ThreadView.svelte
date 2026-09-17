@@ -46,7 +46,7 @@
   import ChatComposer from '../chats/ChatComposer.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
-  import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
+  import { normalizeComposerMessage } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -204,7 +204,6 @@
     AgentModelSelection,
     AgentRole,
     AgentQuestion,
-    ProviderCatalog,
     PromptAttachment,
     PromptAssignmentTaskReference,
     PromptProjectReference,
@@ -254,7 +253,6 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
-  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -288,6 +286,20 @@
     type ResponseBubblePosition,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
+  import {
+    explicitMessagePresentation,
+    harnessDisplayName,
+    inlineFileTagsForMessage,
+    messageHarnessName,
+    messageModelLabel,
+    messageProvider,
+    messageText,
+    messageThinkingLevel,
+    messageTokenRate,
+    resolveMessageHarnessId,
+    specActionLabel,
+    tracePreviewByUserMessage
+  } from './thread-message-presentation'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -7621,16 +7633,6 @@
     }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
   }
 
-  function harnessDisplayName(harnessId: string): string {
-    if (harnessId === 'opencode') return 'OpenCode'
-    if (harnessId === 'claude-code') return 'Claude Code'
-    if (harnessId === 'codex') return 'Codex'
-    if (harnessId === 'cline') return 'Cline'
-    if (harnessId === 'pi') return 'Pi'
-    if (harnessId === 'antigravity') return 'Antigravity'
-    return harnessId
-  }
-
   /** True when the selected model exposes a fast tier, per the live catalog. */
   function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
@@ -9137,135 +9139,6 @@
     void invoke('config:update', { imageDescriptorAskAgain: value }).catch(() => undefined)
   }
 
-  /** Extract display text only; transport instructions never enter `parts`. */
-  function rawMessageText(msg: AgentMessage): string {
-    return msg.parts
-      .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
-      .map((p) => p.text)
-      .join('\n')
-  }
-
-  function explicitMessagePresentation(msg: AgentMessage): UserMessagePresentation | null {
-    const part = msg.parts.find(
-      (candidate): candidate is Extract<AgentPart, { type: 'user-presentation' }> =>
-        candidate.type === 'user-presentation'
-    )
-    return part?.presentation ?? null
-  }
-
-  function specActionLabel(action: SpecActionIntent): string {
-    if (action === 'request') return 'Spec requested'
-    return action === 'implement' ? 'Implement spec' : 'Review spec'
-  }
-
-  /**
-   * Short work-trace snippets per user message, used as tree children in the
-   * history side panel: up to three labels from the turn that follows the
-   * message (its assistant reply), stopping at the next user message.
-   */
-  function tracePreviewByUserMessage(entries: AgentMessage[]): SvelteMap<string, string[]> {
-    const TRACE_PREVIEW_LIMIT = 3
-    const SNIPPET_LIMIT = 80
-    const previews = new SvelteMap<string, string[]>()
-    let currentUser: string | null = null
-    let snippets: string[] = []
-    const push = (snippet: string): void => {
-      if (currentUser === null || snippets.length >= TRACE_PREVIEW_LIMIT) return
-      const line = snippet.trim().split('\n', 1)[0] ?? ''
-      if (line.length === 0) return
-      snippets.push(line.length > SNIPPET_LIMIT ? `${line.slice(0, SNIPPET_LIMIT)}…` : line)
-    }
-    const flush = (): void => {
-      if (currentUser !== null && snippets.length > 0) previews.set(currentUser, snippets)
-      currentUser = null
-      snippets = []
-    }
-    for (const message of entries) {
-      if (message.role === 'user') {
-        flush()
-        currentUser = message.id
-        continue
-      }
-      if (currentUser === null) continue
-      for (const part of message.parts) {
-        if (part.type === 'tool') push(part.tool)
-        else if (part.type === 'reasoning') push(part.summary ?? part.text)
-        else if (part.type === 'subagent') push(part.activity.description)
-      }
-    }
-    flush()
-    return previews
-  }
-
-  /** Return only content stored in the durable display parts. */
-  function messageText(msg: AgentMessage): string {
-    const text = rawMessageText(msg)
-    const explicit = explicitMessagePresentation(msg)
-    if (explicit) return [explicit.action, explicit.body].filter(Boolean).join('\n\n')
-    // Restore the separator a tagged path lost when it was glued to the next
-    // word, so already-sent messages read with a clean space before the chip.
-    return msg.projectReferences?.length
-      ? spaceOutProjectReferences(text, msg.projectReferences)
-      : text
-  }
-
-  function escapeHtmlForChip(value: string): string {
-    return value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;')
-  }
-
-  function inlineChipHtml(reference: PromptProjectReference): string {
-    const safeName = escapeHtmlForChip(reference.name)
-    const safePath = escapeHtmlForChip(reference.path)
-    const safeTitle = escapeHtmlForChip(
-      `Tagged ${reference.kind}: ${reference.name}   ${reference.path}`
-    )
-    const icon =
-      reference.kind === 'directory'
-        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
-        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
-  }
-
-  function inlineUtilityChipHtml(): string {
-    // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
-    // selector can see the theme class on `<html>`   the mark's ink follows
-    // the active theme (black on light, white on dark). The chip's
-    // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
-    const icon = getVendorIconSvg(APP_NAME)
-    const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
-    const iconHtml = icon
-      ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
-      : ''
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
-  }
-
-  function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
-    const text = messageText(msg)
-    const tags: Array<{ token: string; html: string }> = []
-    // The `@cio-utility` tag renders as a badge on the conversation screen too,
-    // mirroring the composer badge for the same token.
-    if (text.includes('@cio-utility')) {
-      tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
-    }
-    if (!msg.projectReferences?.length) return tags
-    // Only inline references that actually appear as `@path` in the stored text;
-    // remaining references will still render as the legacy top pills so no tag
-    // is lost. Longest paths first prevents a parent directory token from
-    // swallowing the prefix of a longer child path.
-    const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
-    for (const reference of ordered) {
-      const token = `@${reference.path}`
-      if (!token || !text.includes(token)) continue
-      tags.push({ token, html: inlineChipHtml(reference) })
-    }
-    return tags
-  }
-
   // ─── Message actions (copy / fork / edit) ──────────────────────────────
 
   let copiedMessageId = $state<string | null>(null)
@@ -9665,6 +9538,12 @@
 
   let allModels = $derived(providers.flatMap((p) => p.models))
 
+  /**
+   * Harness attribution fallback for persisted messages: the session's owning
+   * harness first (stable across mid-run settings switches), then the thread's.
+   */
+  const messageHarnessFallback = $derived(thread.sessionHarnessId ?? settings.harnessId)
+
   /** True when the thread has no conversation yet   the composer is centered
    *  with suggested prompts instead of docked at the bottom. Declared here,
    *  after every state it reads (project, busy, pending queues, allModels),
@@ -9718,77 +9597,6 @@
     })
   }
 
-  /** Provider catalog entry the message was answered through, when known. */
-  function messageProvider(msg: AgentMessage): ProviderCatalog | undefined {
-    if (msg.providerId) {
-      const direct = providers.find((p) => p.id === msg.providerId)
-      if (direct) return direct
-    }
-    if (!msg.modelId) return undefined
-    return providers.find((p) => p.models.some((m) => m.id === msg.modelId))
-  }
-
-  /** Human model name   catalog display name, else the raw model id. */
-  function messageModelLabel(msg: AgentMessage): string | null {
-    if (!msg.modelId) return null
-    const model =
-      allModels.find(
-        (m) => m.id === msg.modelId && (!msg.providerId || m.providerId === msg.providerId)
-      ) ?? allModels.find((m) => m.id === msg.modelId)
-    if (model) return model.name
-    // Fast variants may be absent from harness catalogs   fall back to a derived label.
-    return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
-  }
-
-  /** Harness that produced the message   the session's owning harness first
-   *  (stable across mid-run settings switches), then the thread's harness. */
-  function messageHarnessId(msg: AgentMessage): string {
-    return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
-  }
-
-  /** Generation rate (tok/s) to show for a completed message: the rate
-   *  finalized at turn end when this view observed the turn live, otherwise
-   *  derived from the message's cumulative generated tokens over its own
-   *  duration (approximate   tool waits are included). `null` when the
-   *  harness reported no tokens. */
-  function messageTokenRate(msg: AgentMessage): number | null {
-    const finalized = finalizedTokenRates[msg.id]
-    if (finalized !== undefined && finalized > 0) return finalized
-    const generated = generatedTokens(msg.tokens)
-    if (generated <= 0) return null
-    if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
-    // Persisted generation window (first output token → turn end)   excludes
-    // pre-generation tool/setup time, so it is the accurate history basis.
-    if (msg.generationMs !== undefined && msg.generationMs > 0) {
-      return generated / (msg.generationMs / 1000)
-    }
-    if (msg.completedAt && msg.completedAt > msg.createdAt) {
-      return generated / ((msg.completedAt - msg.createdAt) / 1000)
-    }
-    return null
-  }
-
-  /** Thinking level used for the message's turn, when its model reasons. */
-  function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
-    if (!msg.modelId) return null
-    const modelId = fastBaseModelId(msg.modelId)
-    const model =
-      allModels.find(
-        (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
-      ) ?? allModels.find((m) => m.id === modelId)
-    const presets = model?.thinkingPresets ?? []
-    // A model known not to reason never shows a thinking badge, even when a
-    // generic level was stamped onto its rows.
-    if (model && presets.length === 0) return null
-    // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the model's own default. Never fall back to the live
-    // composer settings here: a finished message's badge must not mutate when
-    // the user changes the thinking level mid-conversation.
-    if (msg.thinkingLevel) return msg.thinkingLevel
-    if (presets.length === 0) return null
-    return resolveDefaultThinkingLevel(presets, undefined) ?? null
-  }
-
   /**
    * The in-progress assistant message may not have received its model metadata
    * yet. Use the selection that was sent to the harness until the live turn is
@@ -9837,11 +9645,6 @@
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
-
-  function messageHarnessName(msg: AgentMessage): string {
-    const id = messageHarnessId(msg)
-    return getAgentIcon(id)?.name ?? id
-  }
 
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
@@ -10656,12 +10459,12 @@
               {@const isTurnStart = isTurnStartIndex(messages, absIndex)}
               {@const isTurnEnd = isTurnEndIndex(messages, absIndex)}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
-              {@const provider = messageProvider(msg)}
-              {@const modelLabel = messageModelLabel(msg)}
-              {@const msgThinking = messageThinkingLevel(msg)}
+              {@const provider = messageProvider(msg, providers)}
+              {@const modelLabel = messageModelLabel(msg, allModels)}
+              {@const msgThinking = messageThinkingLevel(msg, allModels)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
-              {@const harnessId = messageHarnessId(msg)}
-              {@const harnessName = messageHarnessName(msg)}
+              {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
+              {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
               {@const useLiveAttribution = isLatestTurn && liveBusy}
               {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
@@ -10925,8 +10728,11 @@
                               class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
                               <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                                <AgentIcon agentId={messageHarnessId(msg)} size={14} />
-                                {messageHarnessName(msg)}
+                                <AgentIcon
+                                  agentId={resolveMessageHarnessId(msg, messageHarnessFallback)}
+                                  size={14}
+                                />
+                                {messageHarnessName(msg, messageHarnessFallback)}
                               </span>
                               {#if modelLabel}
                                 <span class="text-[0.625rem] text-dimmed">·</span>
@@ -10979,8 +10785,10 @@
                                   >· {formatDuration(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
-                              {#if messageTokenRate(msg) !== null}
-                                {@const rate = messageTokenRate(msg) ?? 0}
+                              {#if messageTokenRate( msg, { finalizedTokenRates, liveTokenRate } ) !== null}
+                                {@const rate =
+                                  messageTokenRate(msg, { finalizedTokenRates, liveTokenRate }) ??
+                                  0}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums">
                                   · {formatTokenRate(rate)}</span
                                 >
