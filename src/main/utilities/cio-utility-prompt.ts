@@ -147,7 +147,9 @@ Install defaults, which you follow unless the user asks otherwise:
   entry into a harness or project config. "always" is normalized to "on_demand" for kind "mcp",
   so never send it.
 - A skill is "on_demand" by default: the agent activates it when the task needs it. Use
-  "always" only when the user wants its instructions present in every turn.`
+  "always" only when the user wants its instructions present in every turn.
+- What you install is live for the rest of the turn. Search for it or activate it right after
+  install to confirm the tools work, and never tell the user to reload the app for it to appear.`
 
 /** Compact contract for turns that REUSE an earlier @cio-utility invocation in the
  *  same thread. Deliberately tiny: the full setup briefing above already ran in

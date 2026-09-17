@@ -196,6 +196,8 @@ interface TurnState {
   projectSearchTerms: Promise<Set<string>> | null
   /** This thread's utilities bank, restricted to utilities eligible this turn. */
   bank: Map<string, ThreadBankEntry>
+  /** When this turn last re-read the registry for newly installed utilities. */
+  eligibilityRefreshedAt: number
 }
 
 /**
@@ -215,6 +217,11 @@ interface ThreadBankEntry {
 const THREAD_BANK_DIRECTORY = 'utility-banks'
 const THREAD_BANK_MAX_ENTRIES = 64
 const THREAD_BANK_DESCRIPTION_LIMIT = 400
+
+/** Shortest gap between mid-turn eligibility refreshes. Installing forces one
+ *  immediately, so the interval only bounds how often a chatty agent re-reads the
+ *  registry while a human-paced install still lands on the next gateway call. */
+const ELIGIBILITY_REFRESH_INTERVAL_MS = 1_000
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
 type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) => Promise<unknown>
@@ -320,8 +327,19 @@ export class UtilityOrchestrationService {
     this.cuaActivityListener = listener
   }
 
-  async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
-    const id = randomUUID()
+  /** True when the harness already performs computer-use, so the Cua Driver MCP
+   *  utility must stay hidden from it. */
+  private hasNativeComputerUse(request: UtilityTurnRequest): boolean {
+    return request.nativeCapabilities.map(normalizeCapability).includes('computer_use')
+  }
+
+  /**
+   * Resolve the utilities one turn may reach, from the registry plus the
+   * interview-bound brainstorm capability. Shared by turn start and the mid-turn
+   * refresh, so a utility installed while the turn runs becomes searchable and
+   * activatable without waiting for the next turn, and the two paths cannot drift.
+   */
+  private async resolveEligibleUtilities(request: UtilityTurnRequest): Promise<ResolvedUtility[]> {
     let eligible = await this.registry.resolve({
       harnessId: request.harnessId,
       projectId: request.projectId,
@@ -338,19 +356,10 @@ export class UtilityOrchestrationService {
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
     }
-    const hasNativeComputerUse = request.nativeCapabilities
-      .map(normalizeCapability)
-      .includes('computer_use')
-    if (hasNativeComputerUse) {
+    if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
       // so enforce the native preference by stable utility identity too.
       eligible = eligible.filter(({ utility }) => utility.id !== CUA_UTILITY_ID)
-    } else {
-      const cuaUtility = await this.cuaBridge.resolveUtility(
-        request.harnessId,
-        request.permissionLevel
-      )
-      if (cuaUtility) eligible.push(cuaUtility)
     }
     // A model the user reported as vision-capable must never see the image
     // descriptor: announcing it invites the model to call it, which is exactly
@@ -358,9 +367,6 @@ export class UtilityOrchestrationService {
     if (request.executingModelVisionCapable === true) {
       eligible = eligible.filter(({ utility }) => utility.kind !== 'image_descriptor')
     }
-    const imageDescriptorEligible = eligible.some(
-      ({ utility }) => utility.kind === 'image_descriptor'
-    )
     // Stamp the thread's permission level onto the Cua Driver MCP utility so
     // its launch environment always matches how this thread runs tools.
     for (const entry of eligible) {
@@ -373,6 +379,24 @@ export class UtilityOrchestrationService {
           : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
       }
     }
+    return eligible
+  }
+
+  async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
+    const id = randomUUID()
+    const eligible = await this.resolveEligibleUtilities(request)
+    if (!this.hasNativeComputerUse(request)) {
+      // Resolved once per turn: it inspects the installed Cua Driver binary, which
+      // is far too expensive for the mid-turn refresh below to repeat.
+      const cuaUtility = await this.cuaBridge.resolveUtility(
+        request.harnessId,
+        request.permissionLevel
+      )
+      if (cuaUtility) eligible.push(cuaUtility)
+    }
+    const imageDescriptorEligible = eligible.some(
+      ({ utility }) => utility.kind === 'image_descriptor'
+    )
     // MCP servers are always `on_demand` and always reached through the gateway, so
     // they never appear in the native `always` overlay. Keep the kind check even though
     // the registry normalizes the activation: a legacy entry read straight from disk
@@ -413,7 +437,8 @@ export class UtilityOrchestrationService {
       managedUtilities: [],
       diagnostics: null,
       projectSearchTerms: null,
-      bank: new Map()
+      bank: new Map(),
+      eligibilityRefreshedAt: Date.now()
     }
     // Surface the thread's durable utilities bank so later turns can go
     // straight to usage: only banked utilities that are still eligible this
@@ -593,14 +618,18 @@ export class UtilityOrchestrationService {
       return
     }
     const threadId = state.request.threadId
-    const entries = await this.loadThreadBank(threadId)
-    if (entries.some((entry) => entry.id === utility.id)) return
-    entries.push({
+    const bankEntry: ThreadBankEntry = {
       id: utility.id,
       name: utility.name,
       kind: utility.kind,
       description: utility.description.slice(0, THREAD_BANK_DESCRIPTION_LIMIT)
-    })
+    }
+    // Register the entry for this turn too, so a search later in the same turn
+    // already reports the utility it just activated as banked.
+    state.bank.set(utility.id, bankEntry)
+    const entries = await this.loadThreadBank(threadId)
+    if (entries.some((entry) => entry.id === utility.id)) return
+    entries.push(bankEntry)
     await this.saveThreadBank(threadId, entries.slice(-THREAD_BANK_MAX_ENTRIES))
   }
 
@@ -643,6 +672,9 @@ export class UtilityOrchestrationService {
     })
     const installed = await this.registry.createMany(definitions)
     state.managedUtilities.push(...installed)
+    // Hot reload: make what this turn just installed reachable by the next search
+    // or activation in the same turn, without waiting for a reload.
+    await this.refreshEligible(state, { force: true })
     await this.audit(state, 'utility.managed', {
       action: 'install_bundle',
       utilityIds: installed.map((utility) => utility.id)
@@ -868,7 +900,42 @@ export class UtilityOrchestrationService {
     return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
   }
 
+  /**
+   * Re-read the registry for the current turn so a utility installed or removed
+   * while the turn is running is visible to the very next gateway call instead of
+   * only after a reload. Rate-limited because a chatty agent may search several
+   * times per second, and forced right after this turn installs something.
+   */
+  private async refreshEligible(
+    state: TurnState,
+    options: { force?: boolean } = {}
+  ): Promise<void> {
+    const now = Date.now()
+    if (
+      options.force !== true &&
+      now - state.eligibilityRefreshedAt < ELIGIBILITY_REFRESH_INTERVAL_MS
+    ) {
+      return
+    }
+    state.eligibilityRefreshedAt = now
+    const next = new Map(
+      (await this.resolveEligibleUtilities(state.request)).map((entry) => [entry.utility.id, entry])
+    )
+    // The Cua Driver entry came from inspecting the installed binary, so keep that
+    // resolution rather than paying installation discovery again.
+    const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
+    if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
+    // A utility this turn already activated stays reachable even if it was removed
+    // since activation, so refresh cannot break a call the transcript already made.
+    for (const [utilityId, resolved] of state.activated) {
+      if (!next.has(utilityId)) next.set(utilityId, resolved)
+    }
+    state.eligible = next
+  }
+
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    // A capability installed moments ago must be findable in this same turn.
+    await this.refreshEligible(state)
     const query = optionalString(input['query'], 500)
     const kinds = optionalKinds(input['kinds'])
     const requestedLimit = optionalNumber(input['limit'])
@@ -927,6 +994,9 @@ export class UtilityOrchestrationService {
 
   private async activate(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    // Re-check the registry first: the agent may be activating a utility that was
+    // installed or enabled after this turn started.
+    await this.refreshEligible(state)
     const resolved = state.eligible.get(utilityId)
     if (!resolved) throw new Error('Utility is unavailable in this project, thread, or harness')
     // Re-activating an already-active utility must be a no-op: re-listing the
