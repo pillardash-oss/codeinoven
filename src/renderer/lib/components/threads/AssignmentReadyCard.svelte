@@ -90,7 +90,7 @@
       </span>
       <ChevronDown
         size={14}
-        class="text-dimmed transition-transform {expanded ? 'rotate-180' : ''}"
+        class="text-dimmed transition-transform {expanded ? '' : 'rotate-180'}"
       />
     </div>
   </button>

@@ -18,7 +18,9 @@
 </script>
 
 <!-- Header control that folds a composer card down to its header row, mirroring
-the agent task card: the card stays identifiable, only its body is hidden. -->
+the agent task card: the card stays identifiable, only its body is hidden. The
+chevron points down while expanded (fold away) and up while folded (expand
+back), never sideways, so it never reads as a "next" affordance. -->
 <button
   type="button"
   class={[
@@ -33,6 +35,6 @@ the agent task card: the card stays identifiable, only its body is hidden. -->
 >
   <ChevronDown
     size={compact ? 13 : 15}
-    class="shrink-0 transition-transform {folded ? '-rotate-90' : ''}"
+    class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}"
   />
 </button>

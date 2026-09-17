@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronRight, Circle, ListChecks, Loader2 } from '@lucide/svelte'
+  import { Check, ChevronDown, Circle, ListChecks, Loader2 } from '@lucide/svelte'
   import {
     activeAgentTodoIndex,
     agentTodoProgressLabel,
@@ -72,9 +72,9 @@
     {:else}
       <span class="flex-1"></span>
     {/if}
-    <ChevronRight
+    <ChevronDown
       size={13}
-      class="shrink-0 text-dimmed transition-transform {open ? 'rotate-90' : ''}"
+      class="shrink-0 text-dimmed transition-transform {open ? '' : 'rotate-180'}"
     />
   </button>
 
