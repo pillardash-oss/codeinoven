@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
+import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
 import type { BrowserDownload } from '$shared/ipc-contract'
 
 export interface WorkspaceBrowserOptions {
@@ -11,6 +12,9 @@ export interface WorkspaceBrowserOptions {
  * Owns the workspace's browser chrome: the rail context menu, the cookie/site
  * data confirmation, and the downloads manager state machine, so
  * `Workspace.svelte` only wires the controller into the dock and its dialogs.
+ *
+ * The downloads list itself lives in the shared `browserDownloads` store so the
+ * toolbar list, this modal and the rail menu always render the same entries.
  */
 export class WorkspaceBrowserController {
   private readonly getSelectedProjectId: () => string | null
@@ -20,18 +24,23 @@ export class WorkspaceBrowserController {
   clearDataConfirmOpen = $state(false)
   clearDataProjectId = $state<string | null>(null)
   clearing = $state(false)
-  downloads = $state<BrowserDownload[]>([])
   downloadsOpen = $state(false)
 
   constructor(options: WorkspaceBrowserOptions) {
     this.getSelectedProjectId = options.getSelectedProjectId
   }
 
+  /** The selected project's downloads, newest first. No selected project means
+   *  no project-owned downloads to show. */
+  get downloads(): BrowserDownload[] {
+    const projectId = this.getSelectedProjectId()
+    if (!projectId) return []
+    return browserDownloads.forProject(projectId)
+  }
+
   activeDownloadCount = $derived.by(() => {
     const projectId = this.getSelectedProjectId()
-    return projectId
-      ? this.downloads.filter((download) => download.projectId === projectId).length
-      : 0
+    return projectId ? browserDownloads.activeCount(projectId) : 0
   })
 
   openContextMenu(event: MouseEvent): void {
@@ -72,27 +81,12 @@ export class WorkspaceBrowserController {
     }
   }
 
-  upsertDownload(next: BrowserDownload): void {
-    const index = this.downloads.findIndex((candidate) => candidate.id === next.id)
-    if (index >= 0) {
-      this.downloads[index] = next
-      return
-    }
-    this.downloads = [...this.downloads, next]
-  }
-
   openDownloads(): void {
     this.menuOpen = false
     this.downloadsOpen = true
     const projectId = this.getSelectedProjectId()
     if (!projectId) return
-    void invoke('browser:getDownloads', projectId)
-      .then((downloads) => {
-        this.downloads = downloads
-      })
-      .catch((error: unknown) => {
-        reportError(error, 'Browser downloads could not be loaded.')
-      })
+    void browserDownloads.load(projectId)
   }
 
   closeDownloads(): void {
@@ -100,26 +94,22 @@ export class WorkspaceBrowserController {
   }
 
   pauseDownload(download: BrowserDownload): void {
-    void invoke('browser:pauseDownload', download.id).catch(() => {})
+    browserDownloads.pause(download)
   }
 
   resumeDownload(download: BrowserDownload): void {
-    void invoke('browser:resumeDownload', download.id).catch(() => {})
+    browserDownloads.resume(download)
   }
 
   cancelDownload(download: BrowserDownload): void {
-    void invoke('browser:cancelDownload', download.id).catch(() => {})
+    browserDownloads.cancel(download)
   }
 
   openDownload(download: BrowserDownload): void {
-    void invoke('browser:openDownload', download.id).catch((error: unknown) => {
-      reportError(error, 'The downloaded file could not be opened.')
-    })
+    browserDownloads.open(download)
   }
 
   revealDownload(download: BrowserDownload): void {
-    void invoke('browser:revealDownload', download.id).catch((error: unknown) => {
-      reportError(error, 'The downloaded file could not be revealed.')
-    })
+    browserDownloads.reveal(download)
   }
 }

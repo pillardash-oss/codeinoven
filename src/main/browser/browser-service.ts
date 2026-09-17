@@ -4,6 +4,7 @@ import {
   webFrameMain,
   WebContentsView,
   type Session,
+  type WebContents,
   type WebFrameMain
 } from 'electron'
 import type { Database } from '../database/database'
@@ -24,6 +25,7 @@ import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
 import { BrowserDownloadTracker } from './browser-service/browser-downloads'
+import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
@@ -76,6 +78,7 @@ export class BrowserService {
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly downloadTracker: BrowserDownloadTracker
+  private readonly capture: BrowserCaptureObserver
   private readonly siteData: BrowserSiteDataService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
@@ -134,6 +137,11 @@ export class BrowserService {
       dismissPermissions: (projectId) => this.dismissProjectPermissions(projectId),
       clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
       cancelProjectDownloads: (projectId) => this.downloadTracker.cancelProject(projectId)
+    })
+    this.capture = new BrowserCaptureObserver({
+      // A capture change is a tab-level fact the user must see, so it is
+      // published on the same state event the tab strip already listens to.
+      onChange: (tabId) => this.publishState(tabId)
     })
   }
 
@@ -219,6 +227,18 @@ export class BrowserService {
     })
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
+    })
+    ipcMain.handle('browser:setMuted', (_event, rawTabId, rawMuted) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.requireTab(tabId)
+      if (typeof rawMuted !== 'boolean') {
+        throw new TypeError('Browser mute state must be a boolean')
+      }
+      tab.view.webContents.setAudioMuted(rawMuted)
+      // Publish rather than trust the caller: `isAudioMuted` is the state the
+      // renderer's indicator must show, including for a muted tab that the page
+      // silently unmuted through its own audio controls.
+      this.publishState(tabId)
     })
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))
@@ -321,6 +341,7 @@ export class BrowserService {
     this.permissionGrants.clear()
     this.permissionDenies.clear()
     this.downloadTracker.dispose()
+    this.capture.dispose()
   }
 
   async executeUtility(
@@ -495,13 +516,33 @@ export class BrowserService {
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
-    view.webContents.on('did-finish-load', () => this.injectDialogContext(tabId))
+    // Audio the page emits is a tab-level fact the strip renders, so the state
+    // event follows it the same way it follows a title or favicon change.
+    view.webContents.on('audio-state-changed', publish)
+    // The document is parsed at dom-ready, which is the earliest point at which
+    // the capture observer can be installed before the page's own scripts ask
+    // for the microphone.
+    view.webContents.on('dom-ready', () => {
+      this.capture.reset(tabId)
+      this.watchCaptureMainFrame(tabId, view.webContents)
+      publish()
+    })
+    view.webContents.on('did-finish-load', () => {
+      this.injectDialogContext(tabId)
+      // The dom-ready install can race the document it runs in; watching again is
+      // idempotent per frame and covers that case.
+      this.watchCaptureMainFrame(tabId, view.webContents)
+    })
     view.webContents.on(
       'did-frame-finish-load',
       (_event, isMainFrame, frameProcessId, frameRoutingId) => {
         if (isMainFrame) return
         const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
-        if (frame) this.injectDialogContext(tabId, frame)
+        if (frame) {
+          this.injectDialogContext(tabId, frame)
+          // A recorder embedded in an iframe is a capture of this tab too.
+          this.capture.watch(tabId, frame)
+        }
       }
     )
     view.webContents.on('devtools-opened', publish)
@@ -511,6 +552,9 @@ export class BrowserService {
     view.webContents.on('did-navigate', () => {
       // A new document starts without an icon; the old site's favicon must not linger.
       tab.favicon = null
+      // Capture state belongs to the document that ended here, so the tab must
+      // not keep claiming it is recording until the new page says otherwise.
+      this.capture.reset(tabId)
       publish()
     })
     view.webContents.on('did-navigate-in-page', publish)
@@ -589,6 +633,13 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab) throw new Error('Browser tab does not exist')
     return tab
+  }
+
+  /** Install the capture observer into a tab's main frame. Called again after
+   *  every navigation, because an observer lives in one document's world. */
+  private watchCaptureMainFrame(tabId: string, contents: WebContents): void {
+    if (contents.isDestroyed()) return
+    this.capture.watch(tabId, contents.mainFrame)
   }
 
   private sessionForProject(projectId: string): Session {
@@ -856,6 +907,12 @@ export class BrowserService {
       title: contents.getTitle(),
       favicon: tab.favicon,
       loading: contents.isLoading(),
+      // Read from the view rather than cached: these drive the tab's speaker and
+      // recording indicators, and a muted tab that the page itself unmuted must
+      // report the mute state that is actually in force.
+      audible: contents.isCurrentlyAudible(),
+      muted: contents.isAudioMuted(),
+      capturing: this.capture.isCapturing(tabId),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
     }
@@ -1068,6 +1125,7 @@ export class BrowserService {
     }
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
+    this.capture.forget(tabId)
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)

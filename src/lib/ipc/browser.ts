@@ -16,6 +16,14 @@ export interface BrowserPageState {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
+  /** True while the page is emitting audio to the output device. Drives the
+   *  tab's speaker indicator. */
+  audible: boolean
+  /** True while the user muted this tab's audio output. */
+  muted: boolean
+  /** True while the page holds a live microphone, camera or screen capture.
+   *  Drives the tab's recording indicator. */
+  capturing: boolean
 }
 
 /** DevTools open/closed state for a browser tab. */

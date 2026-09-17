@@ -1,5 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { SidebarBrowserTabs } from './context-sidebar-browser.svelte'
+import type { BrowserTabRuntime } from './browser-tab-status'
+import type { BrowserPageState } from '$shared/ipc-contract'
 import { loadTerminalPlacement, saveTerminalPlacement } from './context-sidebar-persistence'
 import { SidebarTabContexts } from './context-sidebar-tabs.svelte'
 import {
@@ -422,6 +424,25 @@ class ContextSidebarState {
 
   updateBrowserTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
     this.browser.updateTab(tabId, url, title, favicon)
+  }
+
+  /** Live audio and capture state of a browser tab, as the tab strips read it. */
+  browserRuntime(tabId: string): BrowserTabRuntime {
+    return this.browser.runtimeFor(tabId)
+  }
+
+  /** Mute or unmute one browser tab's audio output. */
+  toggleBrowserTabMute(tabId: string): void {
+    this.browser.toggleMute(tabId)
+  }
+
+  /** Apply a live page snapshot: the tab's identity, and its audio and capture
+   *  state. The browser store already applies every `browser:state` event; this
+   *  entry point is for a surface that also receives one directly, so the tab
+   *  strip still shows the audio state of a tab that main kept alive across a
+   *  renderer reload. */
+  applyBrowserPageState(state: BrowserPageState): void {
+    this.browser.applyPageState(state)
   }
 
   removeProjectBrowsers(projectId: string): string[] {

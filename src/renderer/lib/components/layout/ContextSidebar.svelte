@@ -24,10 +24,19 @@
     StickyNote,
     X
   } from '@lucide/svelte'
-  import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TerminalPlacement
+  } from '$lib/stores/context-sidebar.svelte'
+  import {
+    browserTabIndicators,
+    browserTabIndicatorSlotClass
+  } from '$lib/stores/browser-tab-status'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -299,6 +308,8 @@
         <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
+              {@const runtime = contextSidebarState.browserRuntime(tab.id)}
+              {@const indicators = browserTabIndicators(runtime)}
               <div
                 class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
                 tab.id
@@ -339,7 +350,17 @@
                   title={tab.title}
                   onclick={() => onSelect(tab.id)}
                 >
-                  {@render tabIcon(tab)}
+                  {#if indicators.length > 0}
+                    <!-- The slot keeps a favicon's exact width for one indicator
+                         and widens for the two-indicator case, so the row painted
+                         over it can never reach the title. -->
+                    <span
+                      class="shrink-0 {browserTabIndicatorSlotClass(indicators.length)}"
+                      aria-hidden="true"
+                    ></span>
+                  {:else}
+                    {@render tabIcon(tab)}
+                  {/if}
                   <span
                     class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' &&
                     tab.preview
@@ -363,6 +384,15 @@
                 >
                   <X size={11} />
                 </button>
+                {#if indicators.length > 0}
+                  <!-- Painted over the tab's own icon slot. A sibling of the
+                       select button, because a button cannot nest a button. -->
+                  <div
+                    class="absolute left-2.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
+                  >
+                    <BrowserTabIndicator tabId={tab.id} />
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>

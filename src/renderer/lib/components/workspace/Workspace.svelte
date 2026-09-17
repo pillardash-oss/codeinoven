@@ -1500,12 +1500,6 @@
     })
   })
 
-  $effect(() => {
-    return subscribe('browser:download', (download) => {
-      browser.upsertDownload(download)
-    })
-  })
-
   /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
    *  effect below only fires when the draft state actually transitions   never
    *  clobbering a manual slice switch while a draft stays unchanged. */

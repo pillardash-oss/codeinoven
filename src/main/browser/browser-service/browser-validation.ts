@@ -29,6 +29,7 @@ export const MAX_DIALOG_LABEL_LENGTH = 120
  *  another one. 1280x800 is a plain desktop size that most responsive layouts
  *  treat as a full desktop. */
 export const DEFAULT_PARKED_VIEWPORT: BrowserViewport = { width: 1280, height: 800 }
+
 /** How many tabs may render offscreen at once. A parked tab renders exactly like
  *  a displayed one, so the set stays bounded and evicts least-recently-used
  *  first. */
@@ -77,6 +78,20 @@ export const SCOPE_STORAGE_TYPES: Record<
   cookies: ['cookies'],
   'site-data': ['cachestorage', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
 }
+
+/** How many frames of one tab may hold a capture observer at once. A recording
+ *  lives in the top document or in one embedded widget, and every observed frame
+ *  costs an injected observer plus one pending promise. */
+export const MAX_CAPTURED_FRAMES = 48
+
+/** Minimum spacing between two re-arms of one tab's capture observer. A page can
+ *  start and stop a capture in a tight loop, and every change costs a
+ *  main-process message and a renderer state event. */
+export const CAPTURE_REARM_INTERVAL_MS = 120
+
+/** Consecutive failed arms tolerated for one frame before it is abandoned, so a
+ *  frame that cannot run the observer is not retried forever. */
+export const MAX_CAPTURE_ARM_FAILURES = 3
 
 export function validateTabId(value: unknown): string {
   if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {

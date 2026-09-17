@@ -26,6 +26,9 @@ export const invokeBrowserContract = {
   'browser:goForward': {} as Contract<[tabId: string], void>,
   'browser:reload': {} as Contract<[tabId: string], void>,
   'browser:stop': {} as Contract<[tabId: string], void>,
+  /** Mute or unmute one tab's audio output. Main publishes the applied state
+   *  back through `browser:state`. */
+  'browser:setMuted': {} as Contract<[tabId: string, muted: boolean], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   'browser:clearData': {} as Contract<[projectId: string], void>,

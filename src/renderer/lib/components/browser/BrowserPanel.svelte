@@ -4,6 +4,7 @@
   import {
     ArrowLeft,
     ArrowRight,
+    Download,
     LoaderCircle,
     Lock,
     LockOpen,
@@ -13,8 +14,10 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
+  import BrowserDownloadsMenu from './BrowserDownloadsMenu.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
@@ -60,7 +63,10 @@
       favicon: null,
       loading: true,
       canGoBack: false,
-      canGoForward: false
+      canGoForward: false,
+      audible: false,
+      muted: false,
+      capturing: false
     }
   }
 
@@ -84,6 +90,22 @@
    *  the view never has to detach for it; the open flag only tracks the
    *  expanded state of the anchor button. */
   let siteMenuOpen = $state(false)
+  /** Whether the in-flow downloads list under the toolbar is expanded. */
+  let downloadsOpen = $state(false)
+  const activeDownloadCount = $derived(browserDownloads.activeCount(tabProjectId))
+
+  function toggleDownloads(): void {
+    downloadsOpen = !downloadsOpen
+    if (downloadsOpen) void browserDownloads.load(tabProjectId)
+  }
+
+  /** Escape collapses the downloads list, the way it closes the app's other
+   *  anchored surfaces. Bound on the window rather than on the panel, so a
+   *  presentational layout wrapper never has to carry a key handler. */
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.key !== 'Escape') return
+    if (downloadsOpen) downloadsOpen = false
+  }
 
   let siteHost = $derived.by(() => {
     try {
@@ -186,12 +208,10 @@
     if (next.tabId !== tabId) return
     pageState = next
     if (next.url) address = next.url
-    contextSidebarState.updateBrowserTab(
-      tabId,
-      next.url || untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl),
-      next.title,
-      next.favicon
-    )
+    // Also routes the audio and capture state into the tab strip, so the tab's
+    // indicator is correct even for the first report of a tab main kept alive
+    // across a renderer reload.
+    contextSidebarState.applyBrowserPageState(next)
   }
 
   async function toggleDevTools(): Promise<void> {
@@ -245,6 +265,8 @@
     }
   })
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
   <form
@@ -324,6 +346,28 @@
     <button
       type="button"
       class={[
+        'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
+        downloadsOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label="Browser downloads"
+      aria-expanded={downloadsOpen}
+      title="Browser downloads"
+      onclick={toggleDownloads}
+    >
+      <Download size={13} />
+      {#if activeDownloadCount > 0}
+        <span
+          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
+        >
+          {activeDownloadCount}
+        </span>
+      {/if}
+    </button>
+    <button
+      type="button"
+      class={[
         'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
         fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
         devToolsOpen
@@ -341,6 +385,9 @@
       {/if}
     </button>
   </form>
+  {#if downloadsOpen}
+    <BrowserDownloadsMenu projectId={tabProjectId} onClose={() => (downloadsOpen = false)} />
+  {/if}
   {#if addressError}
     <p
       class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
