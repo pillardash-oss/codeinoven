@@ -154,7 +154,12 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   fi
   if [[ "$(git rev-parse origin/dev)" != "$DEV_SHA" ]]; then
     say "Pushing dev at $(git rev-parse --short "$DEV_SHA")..."
-    git push origin "$DEV_SHA:refs/heads/dev"
+    # A refused push is nearly always GitHub secret scanning push protection on
+    # an unpushed commit, which is not something a retry or a force can clear.
+    # Spell out what the remote is asking for instead of leaving a bare git error.
+    if ! git push origin "$DEV_SHA:refs/heads/dev"; then
+      die "The remote refused the push (see the reason printed above). If it is GITHUB PUSH PROTECTION, the pushed commits introduce a credential: allow each credential from the 'unblock-secret' link in its block (right for a published installed-app value), or purge it from the commits being pushed. Then re-run the promotion."
+    fi
     ok "Pushed dev at $(git rev-parse --short "$DEV_SHA")."
   fi
 else
