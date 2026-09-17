@@ -196,7 +196,6 @@
     AgentPart,
     AgentEvent,
     AgentContextUsage,
-    AgentRateLimitWindow,
     AgentHarnessUsage,
     AgentProviderIssue,
     AgentSessionStatus,
@@ -300,6 +299,7 @@
     specActionLabel,
     tracePreviewByUserMessage
   } from './thread-message-presentation'
+  import { mergeContextUsage, mergeRateLimitWindows } from './thread-usage-merge'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -1153,27 +1153,7 @@
     const limit = rateLimitWindowFromProviderIssue(issue)
     return limit ? [limit] : []
   })
-  function mergeRateLimitWindows(
-    reported: readonly AgentRateLimitWindow[],
-    authoritative: readonly AgentRateLimitWindow[]
-  ): AgentRateLimitWindow[] {
-    const merged = [...reported]
-    for (const incoming of authoritative) {
-      const match = merged.findIndex(
-        (candidate) =>
-          (incoming.windowMinutes !== undefined &&
-            candidate.windowMinutes === incoming.windowMinutes) ||
-          candidate.label.toLowerCase() === incoming.label.toLowerCase()
-      )
-      if (match === -1) {
-        merged.push(incoming)
-      } else {
-        const current = merged[match]
-        if (current) merged[match] = { ...current, ...incoming, id: current.id }
-      }
-    }
-    return merged
-  }
+
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1824,43 +1804,6 @@
   let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
-
-  /**
-   * Fold a fresh usage snapshot over whatever the meter already shows without
-   * ever *losing* telemetry. A quota refresh that returns no rate limits, no
-   * credits, or no context fields must not erase the bars/value the user is
-   * currently viewing   only a newer, richer snapshot may replace them.
-   */
-  function mergeContextUsage(
-    previous: AgentContextUsage | undefined,
-    incoming: AgentContextUsage
-  ): AgentContextUsage {
-    if (!previous) return incoming
-    return {
-      ...previous,
-      ...incoming,
-      tokens: incoming.tokens ?? previous.tokens,
-      costUsd: incoming.costUsd ?? previous.costUsd,
-      contextUsed: incoming.contextUsed ?? previous.contextUsed,
-      contextEstimated:
-        incoming.contextUsed !== undefined
-          ? incoming.contextEstimated === true
-          : previous.contextEstimated === true,
-      contextWindow: incoming.contextWindow ?? previous.contextWindow,
-      contextPercent: incoming.contextPercent ?? previous.contextPercent,
-      rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,
-      ...(incoming.credits
-        ? { credits: incoming.credits }
-        : previous.credits
-          ? { credits: previous.credits }
-          : {}),
-      ...(incoming.bankedResets
-        ? { bankedResets: incoming.bankedResets }
-        : previous.bankedResets
-          ? { bankedResets: previous.bankedResets }
-          : {})
-    }
-  }
 
   function commitContextUsage(usage: AgentContextUsage): void {
     contextUsageDisplay = usage
