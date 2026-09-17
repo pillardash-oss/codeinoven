@@ -1,46 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { Component } from 'svelte'
-  import {
-    Bell,
-    Blocks,
-    BookOpen,
-    Brain,
-    FileSearch,
-    FolderOpen,
-    FolderPlus,
-    GitBranch,
-    GraduationCap,
-    Info,
-    Keyboard,
-    LayoutDashboard,
-    ListTree,
-    MessageSquarePlus,
-    MessagesSquare,
-    Server,
-    SlidersHorizontal,
-    SquarePen,
-    Terminal,
-    ChartColumn,
-    Users,
-    Wrench
-  } from '@lucide/svelte'
+  import { FileSearch, MessagesSquare } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import {
-    captureError,
-    errorHeadline,
-    showToastError,
-    showToastWarning
-  } from '$lib/stores/app-errors.svelte'
-  import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
-  import { openProjectFileFromAbsolutePath } from '$lib/reveal-file'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import {
     rendererRecovery,
@@ -49,8 +17,7 @@
     isSettingsView,
     settingsSectionForView,
     settingsViewForSection,
-    type MainView,
-    type SettingsSection
+    type MainView
   } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
@@ -64,29 +31,21 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { showOpenedFiles, standaloneFiles } from '$lib/stores/standalone-files.svelte'
+  import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
-  import { clearDraftLabelCookie } from '$lib/stores/draft-label'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
-  import { APP_NAME } from '$shared/brand'
-  import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
-  import {
-    getInlineFileTypeIconDataUri,
-    getInlineFolderTypeIconDataUri
-  } from '$lib/components/files/file-type-icons'
+  import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
     captureElementSelection,
@@ -95,61 +54,30 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
-    isOrchestrationChildThread,
     isThreadWorking,
     type AppConfig,
     type AppConfigPatch,
-    type OpenedPath,
     type Project,
     type ThemePreference,
-    type Thread,
-    type ThreadSearchResult
+    type Thread
   } from '$shared/types'
-  import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
-  import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
-  import type {
-    AgentNotificationPayload,
-    CloseConfirmationPayload,
-    CloseConfirmationProject,
-    ThreadClickedPayload
-  } from '$shared/ipc-contract'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
   import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
-  import { statusBadgeForThread } from '$lib/thread-status-badge'
+  import {
+    actionId,
+    buildPaletteContextActions,
+    navigationActions,
+    settingsActions,
+    settingsTabs
+  } from './app-palette-actions'
+  import { defaultConfig } from './app-defaults'
+  import { FileSearchPaletteController } from './app-file-search.svelte'
+  import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
+  import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
 
   type View = MainView
-
-  const defaultConfig: AppConfig = {
-    theme: 'system',
-    fontFamily: 'jetbrains-mono',
-    appFontSize: 15,
-    fontWeight: 200,
-    zoomLevel: 1,
-    onboardingCompleted: false,
-    threadLimit: 70,
-    questionTimeoutMs: 300_000,
-    keybindings: {},
-    slashCommandMode: 'app',
-    preferredEditor: 'system',
-    memory: { enabled: true, chatEnabled: true, entries: [] },
-    agentDefaults: { syncFromThreadChanges: false },
-    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
-    autoDownloadUpdates: true,
-    autoInstallUpdates: true,
-    updateChannel: 'stable',
-    keepAwakeWhileWorking: false,
-    keepAwakeWhileRemoteConnected: true,
-    imageDescriptorAskAgain: false,
-    autoRetryAfterReset: true,
-    resumeWorkOnRestart: true,
-    defaultMergeMethod: 'squash',
-    defaultPullStrategy: 'ask',
-    maxDiffLines: 100,
-    openLocalhostInCioBrowser: true,
-    sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
-  }
 
   let config = $state<AppConfig>(defaultConfig)
   let settingsReady = $state(false)
@@ -158,22 +86,16 @@
   let activeView = $state<View>(rendererRecovery.activeView)
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
-  let fileSearchPaletteOpen = $state(false)
-  let fileSearchActions = $state<ActionDefinition[]>([])
-  let fileSearchLoading = $state(false)
-  let fileSearchTimer: number | null = null
-  let fileSearchRequest = 0
-  /** Scoped project ids for the footer picker; empty = all projects. */
-  let fileSearchProjectIds = $state<string[]>([])
-  let lastFileSearchQuery = ''
-  let threadSearchPaletteOpen = $state(false)
-  let threadSearchActions = $state<ActionDefinition[]>([])
-  let threadSearchLoading = $state(false)
-  let threadSearchTimer: number | null = null
-  let threadSearchRequest = 0
-  /** Scoped project ids for the footer picker; empty = all projects. */
-  let threadSearchProjectIds = $state<string[]>([])
-  let lastThreadSearchQuery = ''
+  const fileSearch = new FileSearchPaletteController()
+  const threadSearch = new ThreadSearchPaletteController({
+    openThread: (thread) => void openThreadFromSearch(thread)
+  })
+
+  const osHandoffDeps: OsHandoffDeps = {
+    navigate: (view) => navigate(view),
+    onProjectCreated: (project) => handleProjectCreated(project)
+  }
+
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -181,304 +103,16 @@
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
-  interface FileSearchTarget {
-    projectId: string
-    path: string
-    kind: 'file' | 'directory'
-  }
-
-  interface ThreadSearchTarget {
-    thread: Thread
-  }
-
-  const fileSearchTargets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
-  const threadSearchTargets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
-
-  const applicationSource = {
-    id: 'application',
-    label: APP_NAME,
-    kind: 'app'
-  } satisfies ActionSource
-
-  const navigationActions = [
-    {
-      id: 'app:projects',
-      title: 'Open projects',
-      description: 'Browse projects and engineering threads',
-      category: 'navigation',
-      source: applicationSource,
-      icon: FolderOpen,
-      keywords: ['workspace', 'threads']
-    },
-    {
-      id: 'app:chats',
-      title: 'Open chats',
-      description: 'Browse standalone conversations',
-      category: 'navigation',
-      source: applicationSource,
-      icon: MessagesSquare,
-      keywords: ['conversations', 'messages']
-    },
-    {
-      id: 'app:scope',
-      title: 'Open scope',
-      description: 'Review work across projects',
-      category: 'navigation',
-      source: applicationSource,
-      icon: LayoutDashboard,
-      keywords: ['board', 'overview']
-    },
-    {
-      id: 'app:threads',
-      title: 'Open threads',
-      description: 'Browse threads across all projects',
-      category: 'navigation',
-      source: applicationSource,
-      icon: ListTree,
-      keywords: ['timeline', 'all']
-    }
-  ] satisfies ActionDefinition[]
-
-  const settingsTabs: Array<{
-    id: SettingsSection
-    label: string
-    keywords: string[]
-    icon: Component
-  }> = [
-    {
-      id: 'general',
-      label: 'General',
-      keywords: ['appearance', 'theme', 'preferences'],
-      icon: SlidersHorizontal
-    },
-    {
-      id: 'memory',
-      label: 'Memory',
-      keywords: ['instructions', 'knowledge'],
-      icon: Brain
-    },
-    {
-      id: 'audits',
-      label: 'Agents',
-      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
-      icon: Users
-    },
-    {
-      id: 'harnesses',
-      label: 'Harnesses',
-      keywords: ['models', 'providers', 'harnesses'],
-      icon: Blocks
-    },
-    {
-      id: 'utilities',
-      label: 'Utilities',
-      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
-      icon: Wrench
-    },
-    {
-      id: 'keymap',
-      label: 'Keymap',
-      keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
-      icon: Keyboard
-    },
-    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
-    {
-      id: 'profile',
-      label: 'Usage',
-      keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
-      icon: ChartColumn
-    },
-    {
-      id: 'about',
-      label: 'About',
-      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
-      icon: Info
-    }
-  ]
-
-  function actionId(value: string): ActionDefinition['id'] {
-    return value as ActionDefinition['id']
-  }
-
-  const settingsActions = settingsTabs.map((tab): ActionDefinition => ({
-    id: actionId(`settings:${tab.id}`),
-    title: `Settings: ${tab.label}`,
-    description: `Open the ${tab.label} settings tab`,
-    category: 'navigation',
-    source: applicationSource,
-    icon: tab.icon,
-    keywords: ['settings', 'preferences', ...tab.keywords],
-    ...(tab.id === 'general' ? { shortcut: ['Ctrl', ','] } : {})
-  }))
-
-  let paletteContextActions = $derived.by((): ActionDefinition[] => {
-    const workspaceVisible =
-      activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
-    const hasLocalProjects = scopeState.projectRecords.some(
-      (project) => !project.hidden && project.source === 'local' && project.path
-    )
-    const actions: ActionDefinition[] = [
-      {
-        id: 'app:new-project',
-        title: 'Create new project',
-        description: 'Choose how to add a project   local folder or SSH',
-        category: 'command',
-        source: applicationSource,
-        icon: FolderPlus,
-        shortcut: ['Ctrl', 'Shift', 'N'],
-        keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
-      },
-      {
-        id: 'app:notifications',
-        title: 'Toggle notifications',
-        description: 'Open or close the notifications sidebar',
-        category: 'navigation',
-        source: applicationSource,
-        icon: Bell,
-        keywords: ['alerts', 'completed', 'attention']
-      },
-      {
-        id: 'app:getting-started',
-        title: 'Open getting started guide',
-        description: 'Tour the workspace and set up a project and coding agent',
-        category: 'navigation',
-        source: applicationSource,
-        icon: GraduationCap,
-        keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
-      }
-    ]
-
-    if (hasLocalProjects) {
-      actions.push({
-        id: 'app:file-search',
-        title: 'Search files across projects',
-        description: 'Find and open a file from any local project',
-        category: 'file',
-        source: applicationSource,
-        icon: FileSearch,
-        keywords: ['quick open', 'find', 'workspace']
-      })
-    }
-
-    if (activeView === 'chats') {
-      actions.unshift({
-        id: 'app:new-chat',
-        title: 'New chat',
-        description: 'Start a standalone conversation',
-        category: 'command',
-        source: applicationSource,
-        icon: MessageSquarePlus,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['conversation', 'message']
-      })
-    } else if (activeView === 'scope' && scopeState.activeProjectId) {
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === scopeState.activeProjectId
-      )
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project']
-      })
-    } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === scopeState.sidebarContext?.projectId
-      )
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project', 'scope']
-      })
-    } else if (
-      (activeView === 'projects' || activeView === 'threads') &&
-      workspaceState.activeProject &&
-      workspaceState.activeProject.id !== INBOX_PROJECT_ID
-    ) {
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: `Create a thread in ${workspaceState.activeProject.name}`,
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project']
-      })
-    }
-
-    const thread = workspaceVisible ? workspaceState.selectedThread : null
-    if (thread) {
-      const threadProject = scopeState.projectRecords.find(
-        (candidate) => candidate.id === thread.projectId
-      )
-      actions.push(
-        {
-          id: 'app:terminal',
-          title: 'Open terminal',
-          description: 'Open a terminal for this thread',
-          category: 'navigation',
-          source: applicationSource,
-          icon: Terminal,
-          keywords: ['shell', 'console', 'command line', 'run']
-        },
-        {
-          id: 'app:git',
-          title: 'Open git panel',
-          description: 'View changes, commits and branches for this project',
-          category: 'navigation',
-          source: applicationSource,
-          icon: GitBranch,
-          keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
-          ...(threadProject?.changeTrackingMode !== 'git'
-            ? { disabledReason: 'This project does not use Git tracking' }
-            : {})
-        },
-        {
-          id: 'app:memory',
-          title: 'Toggle memory sidebar',
-          description: 'View the memory context available to this thread',
-          category: 'navigation',
-          source: applicationSource,
-          icon: Brain,
-          keywords: ['prompt', 'instructions', 'context']
-        },
-        {
-          id: 'app:sources',
-          title: 'Toggle sources sidebar',
-          description: 'View sources attached to this conversation',
-          category: 'navigation',
-          source: applicationSource,
-          icon: BookOpen,
-          keywords: ['citations', 'references', 'attachments']
-        }
-      )
-    }
-
-    if (hasLocalProjects) {
-      // Unshifted last so it always lands first in the palette.
-      actions.unshift({
-        id: 'app:thread-search',
-        title: 'Search threads across projects',
-        description: 'Find a conversation by title or message content in any project',
-        category: 'thread',
-        source: applicationSource,
-        icon: MessagesSquare,
-        keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
-      })
-    }
-
-    return actions
-  })
+  let paletteContextActions = $derived(
+    buildPaletteContextActions({
+      activeView,
+      projectRecords: scopeState.projectRecords,
+      activeProjectId: scopeState.activeProjectId,
+      sidebarContext: scopeState.sidebarContext,
+      activeProject: workspaceState.activeProject,
+      selectedThread: workspaceState.selectedThread
+    })
+  )
 
   let paletteActions = $derived([
     ...paletteContextActions,
@@ -763,10 +397,10 @@
         }
         return
       case 'app:file-search':
-        openFileSearchPalette()
+        fileSearch.openPalette()
         return
       case 'app:thread-search':
-        openThreadSearchPalette()
+        threadSearch.openPalette()
         return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
@@ -858,13 +492,11 @@
   }
 
   function toggleCommandPalette(): void {
-    if (fileSearchPaletteOpen) {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
+    if (fileSearch.paletteOpen) {
+      fileSearch.close()
     }
-    if (threadSearchPaletteOpen) {
-      threadSearchPaletteOpen = false
-      resetThreadSearch()
+    if (threadSearch.paletteOpen) {
+      threadSearch.close()
     }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
@@ -874,295 +506,14 @@
     commandPaletteOpen = true
   }
 
-  function resetFileSearch(): void {
-    if (fileSearchTimer !== null) {
-      window.clearTimeout(fileSearchTimer)
-      fileSearchTimer = null
-    }
-    fileSearchRequest++
-    fileSearchLoading = false
-    fileSearchActions = []
-    fileSearchTargets.clear()
-    fileSearchProjectIds = []
-    lastFileSearchQuery = ''
-  }
-
-  function openFileSearchPalette(): void {
-    resetFileSearch()
-    fileSearchPaletteOpen = true
-  }
-
-  async function searchFilesAcrossProjects(query: string, request: number): Promise<void> {
-    const selectedIds = new Set(fileSearchProjectIds)
-    const projects = scopeState.projectRecords.filter(
-      (project) =>
-        !project.hidden &&
-        project.source === 'local' &&
-        project.path &&
-        (selectedIds.size === 0 || selectedIds.has(project.id))
-    )
-    const projectResults = await Promise.all(
-      projects.map(async (project) => {
-        try {
-          const entries = await invoke(
-            'projectFiles:search',
-            project.id,
-            query,
-            'all',
-            workspaceState.activeScopeBucketIdFor(project.id)
-          )
-          return { project, entries: entries.slice(0, 12) }
-        } catch {
-          return { project, entries: [] }
-        }
-      })
-    )
-    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
-
-    const resolved = await Promise.all(
-      projectResults.flatMap(({ project, entries }) =>
-        entries.map(async (entry) => ({
-          project,
-          entry,
-          iconUri:
-            entry.kind === 'directory'
-              ? await getInlineFolderTypeIconDataUri(entry.name)
-              : await getInlineFileTypeIconDataUri(entry.path)
-        }))
-      )
-    )
-    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
-
-    const targets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
-    const actions: ActionDefinition[] = []
-    for (const { project, entry, iconUri } of resolved) {
-      const id = actionId(`file:${project.id}:${entry.path}`)
-      targets.set(id, { projectId: project.id, path: entry.path, kind: entry.kind })
-      actions.push({
-        id,
-        title: entry.name,
-        description: `${project.name} · ${entry.path}`,
-        category: 'file',
-        source: {
-          id: `project:${project.id}`,
-          label: project.name,
-          kind: 'app',
-          ...(project.color ? { color: project.color } : {})
-        },
-        iconUri,
-        keywords: [project.name, entry.path, entry.name]
-      })
-    }
-    fileSearchTargets.clear()
-    for (const [id, target] of targets) fileSearchTargets.set(id, target)
-    fileSearchActions = actions.slice(0, 60)
-    fileSearchLoading = false
-  }
-
-  /** Re-run the in-flight file search immediately when the project scope changes. */
-  function setFileSearchScope(projectIds: string[]): void {
-    fileSearchProjectIds = projectIds
-    if (!fileSearchPaletteOpen || lastFileSearchQuery.trim().length < 2) return
-    if (fileSearchTimer !== null) {
-      window.clearTimeout(fileSearchTimer)
-      fileSearchTimer = null
-    }
-    const request = ++fileSearchRequest
-    fileSearchLoading = true
-    void searchFilesAcrossProjects(lastFileSearchQuery.trim(), request)
-  }
-
-  function handleFileSearchQuery(query: string): void {
-    lastFileSearchQuery = query
-    if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer)
-    const request = ++fileSearchRequest
-    const normalized = query.trim()
-    if (normalized.length < 2) {
-      fileSearchLoading = false
-      fileSearchActions = []
-      fileSearchTargets.clear()
-      return
-    }
-
-    fileSearchLoading = true
-    fileSearchTimer = window.setTimeout(() => {
-      fileSearchTimer = null
-      void searchFilesAcrossProjects(normalized, request)
-    }, 160)
-  }
-
-  function handleFileSearchSelection(selection: ActionSelection): void {
-    const target = fileSearchTargets.get(selection.action.id)
-    if (!target) return
-    fileSearchPaletteOpen = false
-    resetFileSearch()
-    workspaceState.requestProjectFileOpen(target.projectId, target.path, target.kind)
-  }
-
   function backToCommandPaletteFromFileSearch(): void {
-    fileSearchPaletteOpen = false
-    resetFileSearch()
+    fileSearch.close()
     commandPaletteOpen = true
   }
 
-  function resetThreadSearch(): void {
-    if (threadSearchTimer !== null) {
-      window.clearTimeout(threadSearchTimer)
-      threadSearchTimer = null
-    }
-    threadSearchRequest++
-    threadSearchLoading = false
-    threadSearchActions = []
-    threadSearchTargets.clear()
-    threadSearchProjectIds = []
-    lastThreadSearchQuery = ''
-  }
-
-  function openThreadSearchPalette(): void {
-    resetThreadSearch()
-    threadSearchPaletteOpen = true
-  }
-
-  function relativeThreadTime(timestamp: number): string {
-    const minutes = Math.floor((Date.now() - timestamp) / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    const months = Math.floor(days / 30)
-    if (months < 12) return `${months}mo`
-    return `${Math.floor(days / 365)}y`
-  }
-
-  async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
-    let results: ThreadSearchResult[]
-    try {
-      // Scoped search: fan out per selected project so the manager can use its
-      // per-project index; empty selection searches all projects in one call.
-      results =
-        threadSearchProjectIds.length > 0
-          ? (
-              await Promise.all(
-                threadSearchProjectIds.map((projectId) =>
-                  invoke('threads:search', query, { projectId, limit: 50 }).catch(
-                    (): ThreadSearchResult[] => []
-                  )
-                )
-              )
-            ).flat()
-          : await invoke('threads:search', query, { limit: 50 })
-    } catch {
-      results = []
-    }
-    if (request !== threadSearchRequest || !threadSearchPaletteOpen) return
-
-    const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
-    const actions: ActionDefinition[] = []
-    for (const result of results) {
-      const thread = result.thread
-      if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === thread.projectId
-      )
-      const id = actionId(`thread:${thread.projectId}:${thread.id}`)
-      targets.set(id, { thread })
-      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
-      // Threads carry their project's icon and color, not a generic thread icon.
-      // Resolve the icon from the scope state so it stays in sync with whatever
-      // hydration owns the project/icon cache (Workspace on startup, App when a
-      // new project is created). App's own projectIconUrls was never populated on
-      // startup, so it always fell back to the generic monochrome thread icon.
-      const projectIconUri = scopeState.projects.find(
-        (candidate) => candidate.id === thread.projectId
-      )?.iconUrl
-      const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
-        ? agentRuns.isBusy(thread.projectId, thread.id)
-        : Boolean(thread.sessionId) && isThreadWorking(thread)
-      const status = statusBadgeForThread(thread, isLiveWorking)
-      // Model/harness metadata for the result row: while the thread is working
-      // the current provider + model is shown, otherwise the thread's harnesses
-      // and provider appear as icons   mirroring the sidebar thread row.
-      const harnessIds = Array.from(
-        new Set([
-          ...(thread.usedHarnessIds ?? []),
-          ...(thread.settings?.harnessId ? [thread.settings.harnessId] : [])
-        ])
-      )
-      const providerId = thread.settings?.providerId ?? thread.providerId
-      const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-      const providerName = providerId
-        ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
-        : null
-      const projectLabel = project?.name ?? thread.projectId
-      // Thread rows always surface the thread's last-activity time, never its
-      // creation time, so freshly worked-on threads read as "1h" etc.
-      const activityLabel = relativeThreadTime(thread.lastActivity)
-      actions.push({
-        id,
-        title: thread.title,
-        description: snippet
-          ? `${projectLabel} · ${activityLabel} · ${snippet}`
-          : `${projectLabel} · ${activityLabel}`,
-        category: 'thread',
-        source: {
-          id: `project:${thread.projectId}`,
-          label: projectLabel,
-          kind: 'app',
-          ...(project?.color ? { color: project.color } : {})
-        },
-        showSourceBadge: false,
-        ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
-        ...(status ? { status } : {}),
-        threadMeta: {
-          working: isLiveWorking,
-          harnessIds,
-          providerName,
-          providerId,
-          modelId: thread.settings?.modelId ?? null
-        },
-        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
-      })
-    }
-    threadSearchTargets.clear()
-    for (const [id, target] of targets) threadSearchTargets.set(id, target)
-    threadSearchActions = actions.slice(0, 60)
-    threadSearchLoading = false
-  }
-
-  /** Re-run the in-flight thread search immediately when the project scope changes. */
-  function setThreadSearchScope(projectIds: string[]): void {
-    threadSearchProjectIds = projectIds
-    if (!threadSearchPaletteOpen || lastThreadSearchQuery.trim().length < 2) return
-    if (threadSearchTimer !== null) {
-      window.clearTimeout(threadSearchTimer)
-      threadSearchTimer = null
-    }
-    const request = ++threadSearchRequest
-    threadSearchLoading = true
-    void searchThreadsAcrossProjects(lastThreadSearchQuery.trim(), request)
-  }
-
-  function handleThreadSearchQuery(query: string): void {
-    lastThreadSearchQuery = query
-    if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
-    const request = ++threadSearchRequest
-    const normalized = query.trim()
-    if (normalized.length < 2) {
-      threadSearchLoading = false
-      threadSearchActions = []
-      threadSearchTargets.clear()
-      return
-    }
-
-    threadSearchLoading = true
-    threadSearchTimer = window.setTimeout(() => {
-      threadSearchTimer = null
-      void searchThreadsAcrossProjects(normalized, request)
-    }, 160)
+  function backToCommandPaletteFromThreadSearch(): void {
+    threadSearch.close()
+    commandPaletteOpen = true
   }
 
   /** Preserve the current content view / project sidebar state when opening a
@@ -1172,20 +523,6 @@
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
     await openThreadFromNotification(thread, project)
-  }
-
-  function handleThreadSearchSelection(selection: ActionSelection): void {
-    const target = threadSearchTargets.get(selection.action.id)
-    if (!target) return
-    threadSearchPaletteOpen = false
-    resetThreadSearch()
-    void openThreadFromSearch(target.thread)
-  }
-
-  function backToCommandPaletteFromThreadSearch(): void {
-    threadSearchPaletteOpen = false
-    resetThreadSearch()
-    commandPaletteOpen = true
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -1283,105 +620,6 @@
     }
   }
 
-  /**
-   * OS "Open in CodeInOven" hand-off (Finder/Explorer "Open With", a drop on the
-   * Dock/taskbar icon, or a launch argument).
-   *
-   * Folders become projects, or focus the project that already owns that folder
-   * so the same folder is never registered twice. Single files open on their own
-   * in the standalone viewer.
-   */
-  async function handleOpenedPaths(paths: OpenedPath[]): Promise<void> {
-    if (!Array.isArray(paths) || paths.length === 0) return
-    const files = paths.filter((entry) => entry.kind === 'file')
-    if (files.length > 0) await openFilesFromOs(files)
-    for (const directory of paths) {
-      if (directory.kind === 'directory') await openDirectoryAsProject(directory)
-    }
-  }
-
-  /**
-   * Route the files from one OS hand-off. A file that already lives inside a
-   * project opens in that project's own editor (file tree, scopes, save flow),
-   * because that is where the user expects to find it; every other file opens in
-   * the standalone viewer, where it is editable against the grant the hand-off
-   * registered. A file whose project-relative path no longer resolves falls back
-   * to the viewer so the hand-off is never silently dropped.
-   */
-  async function openFilesFromOs(files: OpenedPath[]): Promise<void> {
-    const loose: OpenedPath[] = []
-    for (const file of files) {
-      const owner = await invoke('project:findFileOwner', file.path).catch(() => null)
-      if (!owner) {
-        loose.push(file)
-        continue
-      }
-      const project = await invoke('project:get', owner.projectId).catch(() => null)
-      if (!project) {
-        loose.push(file)
-        continue
-      }
-      focusProject(project)
-      const opened = await openProjectFileFromAbsolutePath(
-        owner.projectId,
-        owner.relativePath
-      ).catch(() => false)
-      if (!opened) loose.push(file)
-    }
-    if (loose.length > 0) showOpenedFiles(loose)
-  }
-
-  /**
-   * Show a project in the workspace: navigate to it and open its most recent
-   * thread, so a file opened into the project is actually on screen.
-   */
-  function focusProject(project: Project): void {
-    navigate('projects')
-    const thread = scopeState.allScopeThreads
-      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
-      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
-    if (thread) {
-      workspaceState.openThread(thread, project)
-    } else {
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-    }
-  }
-
-  /** Focus the project that already covers an opened folder. */
-  function focusOpenedProject(project: Project): void {
-    focusProject(project)
-    toast.info(`${project.name} is already a project`, {
-      description: 'Opened the existing project instead of adding the folder twice.'
-    })
-  }
-
-  async function openDirectoryAsProject(directory: OpenedPath): Promise<void> {
-    try {
-      const existing = await invoke('project:findByPath', directory.path)
-      if (existing) {
-        focusOpenedProject(existing)
-        return
-      }
-      // A folder that is not a git repository is registered with manual change
-      // tracking instead of interrupting the OS hand-off with the
-      // tracking-setup dialog; the mode stays editable from Edit project.
-      const preflight = await invoke('repository:preflight', directory.path).catch(() => null)
-      const project = await invoke('project:create', {
-        name: directory.name,
-        path: directory.path,
-        source: 'local',
-        changeTrackingMode: preflight?.status === 'git' ? 'git' : 'manual'
-      })
-      navigate('projects')
-      await handleProjectCreated(project)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'The folder could not be opened'
-      captureError(message)
-      showToastError(message)
-    }
-  }
-
   function updateOnboardingStep(step: number): void {
     if (step === 4) navigate('chats')
     onboardingStep = step
@@ -1466,82 +704,6 @@
     }
   }
 
-  async function openNotificationThread(payload: ThreadClickedPayload): Promise<void> {
-    const { projectId, threadId } = payload
-    notificationPanelState.dismissForThread(projectId, threadId)
-    try {
-      const [project, thread] = await Promise.all([
-        invoke('project:get', projectId),
-        invoke('thread:get', projectId, threadId)
-      ])
-      if (!project || !thread) return
-      await openThreadFromNotification(thread, project, payload.temporaryChatId)
-    } catch {
-      // The project or thread may have been deleted before the notification was clicked.
-    }
-  }
-
-  function showAgentNotification(payload: AgentNotificationPayload): void {
-    const onSelectedThread =
-      workspaceState.selectedThread?.id === payload.threadId &&
-      workspaceState.selectedThread?.projectId === payload.projectId
-    if (
-      !onSelectedThread &&
-      payload.source === 'temporary-chat' &&
-      payload.kind === 'chat-completed' &&
-      payload.temporaryChatId
-    ) {
-      // The side chat finished while the user is away from its thread: flag
-      // the parent thread's row so the response is discoverable from the
-      // thread list. Cleared when the side-chat panel is focused.
-      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
-    }
-    if (onSelectedThread) {
-      return
-    }
-    notificationPanelState.add(payload)
-    const id = payload.id
-    const options = {
-      id,
-      description: payload.body,
-      duration: 8_000,
-      onDismiss: () => notificationPanelState.dismiss(id),
-      action: {
-        label: 'Open thread',
-        onClick: (): void => {
-          void openNotificationThread(payload)
-        }
-      }
-    }
-
-    const chatResponseToastStyle =
-      '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
-      ' --success-border: var(--color-chat-success);' +
-      ' --success-text: var(--color-chat-success);'
-
-    if (payload.kind === 'completed') {
-      toast.success(payload.title, options)
-    } else if (payload.kind === 'chat-completed') {
-      toast.success(payload.title, { ...options, style: chatResponseToastStyle })
-    } else if (payload.kind === 'attention') {
-      // A thread waiting for input is a status notice owned by the panel's
-      // Attention tab, never an app error/warning entry.
-      showToastWarning(payload.title, options)
-    } else if (payload.kind === 'spec') {
-      toast.info(payload.title, options)
-    } else {
-      // Record the real failure (message plus raw detail/stack) for the app
-      // errors panel, then toast the generic title directly so the wrapper does
-      // not re-capture a details-less duplicate entry.
-      const detail = payload.errorDetail?.trim()
-      captureError(detail ? errorHeadline(detail) : payload.title, {
-        ...(detail ? { details: detail } : {}),
-        thread: { projectId: payload.projectId, threadId: payload.threadId }
-      })
-      showToastError(payload.title, options)
-    }
-  }
-
   /** The user approved the force close   tell main to proceed with quitting. */
   async function confirmForceClose(): Promise<void> {
     await invoke('app:confirmClose')
@@ -1590,104 +752,6 @@
     }
   }
 
-  function installIpcSubscriptions(): () => void {
-    const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
-      void openNotificationThread(payload)
-    })
-    const unsubscribeShow = subscribe('notification:show', showAgentNotification)
-    const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
-      // The renderer owns the unsaved-file editor state, so it computes the
-      // pending files here. With nothing pending the close proceeds right away.
-      const files = [
-        ...projectFilesWorkspace.getUnsavedFiles(),
-        ...standaloneFiles.getUnsavedFiles()
-      ]
-      if (payload.projects.length === 0 && files.length === 0) {
-        void confirmForceClose()
-        return
-      }
-      closeConfirmation = { projects: payload.projects, files }
-    })
-    const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
-      const thread = args[0] as Thread
-      // Once a real title exists the draft-derived label is no longer needed.
-      if (thread.title !== DEFAULT_THREAD_TITLE) {
-        clearDraftLabelCookie(thread.id)
-      }
-      scopeState.updateThread(thread)
-      if (workspaceState.selectedThread?.id === thread.id) {
-        workspaceState.updateThread(thread)
-      }
-      if (thread.read) {
-        notificationPanelState.dismissForThread(thread.projectId, thread.id)
-      }
-      settleCloseConfirmationThread(thread)
-    })
-    const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
-      scopeState.removeThread(threadId)
-      notificationPanelState.dismissForThread(projectId, threadId)
-      temporaryChatUnread.clearThread(projectId, threadId)
-      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
-    })
-    // An agent created, renamed, archived, deleted, synced or merged a scope:
-    // reload the board it changed so the user sees the worktree it made instead
-    // of a stale snapshot.
-    const unsubscribeScopeBoardChanged = subscribe('scope:boardChanged', (event) => {
-      void scopeState.handleBoardChangedEvent(event)
-    })
-    // A destructive scope action an agent asked for waits on this dialog; its
-    // answer is what releases the agent's parked tool call.
-    const unsubscribeScopeConfirmation = subscribe('scope:agentConfirmation', (request) => {
-      scopeConfirmations.enqueue(request)
-    })
-    // Listen from app start (not from the first local job): an agent-run
-    // worktree has no renderer-owned job until its first progress event.
-    scopeJobs.listen()
-    const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
-      handleCloseShortcut()
-    })
-    const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
-      handleNewTerminalShortcut()
-    })
-    const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
-      void goBack()
-    })
-    const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
-      void goForward()
-    })
-    // OS hand-offs that arrive after mount; the queue drain below covers the
-    // paths that were already waiting when the renderer started.
-    const unsubscribeOpenedPaths = subscribe('openWith:paths', (paths: OpenedPath[]) => {
-      void handleOpenedPaths(paths)
-    })
-    void invoke('openWith:consumePending')
-      .then((paths: OpenedPath[]) => handleOpenedPaths(paths))
-      .catch(() => undefined)
-    updaterState.init()
-    // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
-    // initialise the store here so the overlay's dynamic import can be gated on
-    // `pipState.active` without ever missing a frame.
-    pipState.init()
-    // Load which threads carry a user note so sidebar rows and the right-dock
-    // indicator can react; the store keeps itself in sync via `note:changed`.
-    threadNotesState.init()
-    return () => {
-      unsubscribeClick()
-      unsubscribeShow()
-      unsubscribeConfirmClose()
-      unsubscribeThreadUpdated()
-      unsubscribeThreadDeleted()
-      unsubscribeScopeBoardChanged()
-      unsubscribeScopeConfirmation()
-      unsubscribeCloseShortcut()
-      unsubscribeNewTerminalShortcut()
-      unsubscribeHistoryBack()
-      unsubscribeHistoryForward()
-      unsubscribeOpenedPaths()
-      updaterState.destroy()
-    }
-  }
-
   /** Clean up renderer resources when the main process signals shutdown. */
   function installShutdownSubscription(): () => void {
     return subscribe('window:beforeQuit', () => {
@@ -1709,14 +773,12 @@
    */
   function handleCloseShortcut(): void {
     // App-managed palettes first   they float above every view.
-    if (fileSearchPaletteOpen) {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
+    if (fileSearch.paletteOpen) {
+      fileSearch.close()
       return
     }
-    if (threadSearchPaletteOpen) {
-      threadSearchPaletteOpen = false
-      resetThreadSearch()
+    if (threadSearch.paletteOpen) {
+      threadSearch.close()
       return
     }
     if (commandPaletteOpen) {
@@ -1982,7 +1044,17 @@
     const uninstallVoiceShortcut = initVoiceShortcutListener()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
-    const unsubscribeIpc = installIpcSubscriptions()
+    const unsubscribeIpc = installAppIpcSubscriptions({
+      openThreadFromNotification,
+      setCloseConfirmation: (payload) => (closeConfirmation = payload),
+      confirmForceClose,
+      settleCloseConfirmationThread,
+      handleCloseShortcut,
+      handleNewTerminalShortcut,
+      goBack,
+      goForward,
+      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
+    })
     const unsubscribeShutdown = installShutdownSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
     const originalClearThread = workspaceState.clearThread.bind(workspaceState)
@@ -2087,40 +1159,37 @@
       />
     {/await}
   {/if}
-  {#if fileSearchPaletteOpen}
+  {#if fileSearch.paletteOpen}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
       <FileSearchPalette
-        open={fileSearchPaletteOpen}
-        actions={fileSearchActions}
+        open={fileSearch.paletteOpen}
+        actions={fileSearch.actions}
         title="Search files across projects"
         placeholder="Type at least two characters…"
-        emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+        emptyLabel={fileSearch.loading ? 'Searching project files…' : 'No matching files'}
         headerIcon={FileSearch}
         headerIconBadge
         headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
         serverFiltered
         projects={scopeState.projects}
-        selectedProjectIds={fileSearchProjectIds}
-        onSelectedProjectsChange={setFileSearchScope}
+        selectedProjectIds={fileSearch.projectIds}
+        onSelectedProjectsChange={(projectIds) => fileSearch.setScope(projectIds)}
         onBack={backToCommandPaletteFromFileSearch}
-        onQueryChange={handleFileSearchQuery}
-        onSelect={handleFileSearchSelection}
+        onQueryChange={(query) => fileSearch.handleQuery(query)}
+        onSelect={(selection) => fileSearch.select(selection)}
         closeOnSelect={false}
-        onClose={() => {
-          fileSearchPaletteOpen = false
-          resetFileSearch()
-        }}
+        onClose={() => fileSearch.close()}
       />
     {/await}
   {/if}
-  {#if threadSearchPaletteOpen}
+  {#if threadSearch.paletteOpen}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
       <ThreadSearchPalette
-        open={threadSearchPaletteOpen}
-        actions={threadSearchActions}
+        open={threadSearch.paletteOpen}
+        actions={threadSearch.actions}
         title="Search threads across projects"
         placeholder="Search thread titles and messages across all projects…"
-        emptyLabel={threadSearchLoading
+        emptyLabel={threadSearch.loading
           ? 'Searching threads…'
           : 'Type at least two characters to search all projects'}
         headerIcon={MessagesSquare}
@@ -2128,16 +1197,13 @@
         headerIconBadgeClass="border-info/25 bg-info/10 text-info"
         serverFiltered
         projects={scopeState.projects}
-        selectedProjectIds={threadSearchProjectIds}
-        onSelectedProjectsChange={setThreadSearchScope}
+        selectedProjectIds={threadSearch.projectIds}
+        onSelectedProjectsChange={(projectIds) => threadSearch.setScope(projectIds)}
         onBack={backToCommandPaletteFromThreadSearch}
-        onQueryChange={handleThreadSearchQuery}
-        onSelect={handleThreadSearchSelection}
+        onQueryChange={(query) => threadSearch.handleQuery(query)}
+        onSelect={(selection) => threadSearch.select(selection)}
         closeOnSelect={false}
-        onClose={() => {
-          threadSearchPaletteOpen = false
-          resetThreadSearch()
-        }}
+        onClose={() => threadSearch.close()}
       />
     {/await}
   {/if}
