@@ -2910,7 +2910,16 @@ export class ChatEngine {
   ): Promise<void> {
     const previous = this.utilityTurns.get(sessionId)
     if (previous?.cleanupPromise) await previous.cleanupPromise
-    if (this.utilityTurns.has(sessionId)) return
+    const allowManagement = await this.hasCioUtilityInvocation(projectId, threadId)
+    if (this.utilityTurns.has(sessionId)) {
+      // A steer that invokes @cio-utility has to manage utilities for the rest of
+      // the turn. A gateway fixes its tool set when the turn starts, and the live
+      // one was built for an earlier message, so granting management means
+      // rebuilding the utility turn. A gateway that already manages, or a steer
+      // without the setup contract, keeps the live turn untouched.
+      if (!allowManagement || previous?.gateway.managementEnabled === true) return
+      await this.cleanupTurnUtilities(sessionId)
+    }
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     if (!publishUtilityEndpoint) return
     const nativeCapabilities = Object.entries(driver.capabilities ?? {})
@@ -2941,7 +2950,7 @@ export class ChatEngine {
         // A steered turn keeps the setup + diagnostics contract alive when the
         // user has invoked @cio-utility in this thread, so reuse survives a
         // steer landing after the previous turn's gateway cleanup.
-        allowManagement: await this.hasCioUtilityInvocation(projectId, threadId),
+        allowManagement,
         ...(this.pendingBrainstormTurns.has(sessionId)
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -2956,6 +2965,11 @@ export class ChatEngine {
         await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
       }
       this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
+      // Rebuilding the turn purged this thread's secret files, and a steered turn
+      // keeps running, so put them back for the rest of the turn's tool calls.
+      await this.agentSecrets
+        .materializeSecretFiles(threadId)
+        .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
     } catch (error) {
       await gateway?.cleanup()
       Logger.error('Steer utility re-arm failed:', error)

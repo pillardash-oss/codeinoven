@@ -160,6 +160,13 @@ export interface UtilityTurnGateway {
    * `null` when the direct path is not in use for this turn.
    */
   directEndpoint: { url: string; token: string } | null
+  /**
+   * Whether this turn carries the explicit-setup contract (utility management and
+   * app diagnostics). A gateway fixes its tool set when the turn starts, so a
+   * caller that needs to grant management mid-turn has to read this to decide
+   * whether the live gateway can serve the request or must be rebuilt.
+   */
+  managementEnabled: boolean
   cleanup(): Promise<void>
 }
 
@@ -465,6 +472,7 @@ export class UtilityOrchestrationService {
         instructions: '',
         directInstructions: '',
         directEndpoint: null,
+        managementEnabled: false,
         cleanup: async () => undefined
       }
     }
@@ -558,6 +566,7 @@ export class UtilityOrchestrationService {
       instructions: toolInstructions,
       directInstructions: toolInstructions,
       directEndpoint: { url: bridgeUrl, token },
+      managementEnabled: request.allowManagement === true,
       cleanup
     }
   }
