@@ -1,9 +1,11 @@
 import {
   applyEdits,
   format,
-  parse,
+  parseTree,
   printParseErrorCode,
+  stripComments,
   type FormattingOptions,
+  type Node as JsonNode,
   type ParseError
 } from 'jsonc-parser'
 
@@ -17,7 +19,7 @@ import {
 const JSON_PATH_PATTERN = /\.(?:json|jsonc)$/iu
 
 const DEFAULT_INDENT_WIDTH = 2
-const MAX_INDENT_WIDTH = 8
+const BYTE_ORDER_MARK = '\uFEFF'
 
 export type FileBeautifyOutcome =
   /** `text` is the reformatted document, ready to become the editor draft. */
@@ -43,30 +45,37 @@ export function fileBeautifyLabel(path: string): string | null {
  *
  * The content is parsed first so an unparseable document is reported instead of
  * being mangled; whitespace is then re-emitted from the document's own tokens so
- * comments and trailing commas survive. The document's line endings, indentation
- * style and final newline are preserved.
+ * comments and trailing commas survive. The document's own indentation style,
+ * line endings and final newline are all preserved, and a document that already
+ * reads that way comes back as `unchanged` rather than as a pointless rewrite.
  */
 export function beautifyFileContent(path: string, content: string): FileBeautifyOutcome {
   if (fileBeautifyLabel(path) === null) return { status: 'unsupported' }
-  // An empty document has nothing to lay out, and the parser's "value expected"
-  // would be noise rather than help.
-  if (content.trim() === '') return { status: 'unchanged' }
+  // A byte-order mark is not JSON, but it is content: format the document behind
+  // it and put it back, so a file written by a Windows tool is not reported as
+  // broken.
+  const bom = content.startsWith(BYTE_ORDER_MARK) ? BYTE_ORDER_MARK : ''
+  const document = bom ? content.slice(bom.length) : content
+  // Nothing to lay out in a document that holds no value at all, and the parser's
+  // "value expected" would be noise rather than help for comments-only content.
+  if (stripComments(document).trim() === '') return { status: 'unchanged' }
   const errors: ParseError[] = []
-  parse(content, errors, { allowTrailingComma: true })
+  const tree = parseTree(document, errors, { allowTrailingComma: true })
   const firstError = errors[0]
   if (firstError) {
-    return { status: 'invalid', message: describeParseError(firstError, content) }
+    return { status: 'invalid', message: describeParseError(firstError, document) }
   }
   const formatted = applyEdits(
-    content,
-    format(content, { offset: 0, length: content.length }, formattingOptions(content))
+    document,
+    format(document, { offset: 0, length: document.length }, formattingOptions(document, tree))
   )
-  return formatted === content ? { status: 'unchanged' } : { status: 'formatted', text: formatted }
+  if (formatted === document) return { status: 'unchanged' }
+  return { status: 'formatted', text: `${bom}${formatted}` }
 }
 
 /** Keep the style the document already reads in; only its layout may change. */
-function formattingOptions(content: string): FormattingOptions {
-  const indent = detectIndent(content)
+function formattingOptions(content: string, tree: JsonNode | undefined): FormattingOptions {
+  const indent = detectIndent(content, tree)
   return {
     tabSize: indent.width,
     insertSpaces: indent.spaces,
@@ -78,17 +87,34 @@ function formattingOptions(content: string): FormattingOptions {
 }
 
 /**
- * Indentation of the first indented line, which is the document's own style
- * (a minified one-line document has none, so the default applies). A line inside
- * a block comment can win that race, but only when it agrees with the file's
- * indentation anyway.
+ * Indentation of the document's own first indented value, read from the parse
+ * tree so comment continuation lines (indented text, but not code) cannot be
+ * mistaken for the file's style. A minified single-line document has no
+ * indentation to read, so the default applies.
  */
-function detectIndent(content: string): { spaces: boolean; width: number } {
-  const match = /^([ \t]+)\S/mu.exec(content)
-  const indent = match?.[1]
-  if (!indent) return { spaces: true, width: DEFAULT_INDENT_WIDTH }
+function detectIndent(
+  content: string,
+  tree: JsonNode | undefined
+): { spaces: boolean; width: number } {
+  const offset = tree ? firstIndentedTokenOffset(tree, content) : null
+  if (offset === null) return { spaces: true, width: DEFAULT_INDENT_WIDTH }
+  const lineStart = content.lastIndexOf('\n', offset - 1) + 1
+  const indent = content.slice(lineStart, offset)
   if (indent.includes('\t')) return { spaces: false, width: DEFAULT_INDENT_WIDTH }
-  return { spaces: true, width: Math.min(Math.max(indent.length, 1), MAX_INDENT_WIDTH) }
+  return { spaces: true, width: indent.length }
+}
+
+/** Offset of the first token that begins its own line, or `null` when the
+ *  document is written as one line (or all its values follow another token). */
+function firstIndentedTokenOffset(node: JsonNode, content: string): number | null {
+  const lineStart = content.lastIndexOf('\n', node.offset - 1) + 1
+  const prefix = content.slice(lineStart, node.offset)
+  if (prefix.length > 0 && /^[ \t]+$/u.test(prefix)) return node.offset
+  for (const child of node.children ?? []) {
+    const offset = firstIndentedTokenOffset(child, content)
+    if (offset !== null) return offset
+  }
+  return null
 }
 
 /** Turns the parser's error code into a sentence for the user, pointing at the
@@ -106,7 +132,8 @@ function offsetToLineColumn(content: string, offset: number): { line: number; co
 }
 
 /** `PropertyNameExpected` reads like a compiler; "property name expected" like
- *  a sentence. */
+ *  a sentence. Plain `toLowerCase` on purpose: the code is an ASCII identifier,
+ *  and a locale-aware variant mangles it (Turkish dotless i). */
 function humanizeParseErrorCode(code: string): string {
-  return code.replace(/(?<=[a-z])(?=[A-Z])/gu, ' ').toLocaleLowerCase()
+  return code.replace(/(?<=[a-z])(?=[A-Z])/gu, ' ').toLowerCase()
 }
