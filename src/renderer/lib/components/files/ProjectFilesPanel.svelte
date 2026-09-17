@@ -35,6 +35,7 @@
   import FileDiffView from './FileDiffView.svelte'
   import { diffDetails } from './file-diff'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
+  import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
@@ -140,6 +141,19 @@
       !deletedAtCheckpoint &&
       !activePathIsConflicted &&
       activeTab?.view === 'source'
+  )
+  /** Beautify is offered for the same editable source view as undo/redo, and
+   *  only for a format the editor can reformat. The label doubles as the flag,
+   *  so no action is shown that could not run. */
+  let beautifyLabel = $derived(
+    activeTab !== null &&
+      activeSession !== null &&
+      !deletedAtCheckpoint &&
+      !activePathIsConflicted &&
+      !projectState.loadingPaths[activeTab.path] &&
+      activeTab.view === 'source'
+      ? fileBeautifyLabel(activeTab.path)
+      : null
   )
   /** The Save button only exists for editable content: a conflicted file being
    *  resolved, or a text session with unsaved changes. Preview-only content
@@ -393,6 +407,29 @@
     void projectFilesWorkspace.reload(projectId, activeTab.path)
   }
 
+  /** Reformat the active file's draft in place. The result is left unsaved on
+   *  purpose: the tab goes dirty, the Save button lights up, and the editor's own
+   *  history keeps the previous layout one undo away. */
+  function beautifyActiveFile(): void {
+    if (!activeTab || !activeSession) return
+    const label = fileBeautifyLabel(activeTab.path)
+    if (label === null) return
+    const outcome = beautifyFileContent(activeTab.path, activeSession.draft)
+    if (outcome.status === 'invalid') {
+      toast.error(`${label} could not be beautified`, { description: outcome.message })
+      return
+    }
+    if (outcome.status === 'unchanged') {
+      toast.info(`${label} is already beautified`)
+      return
+    }
+    if (outcome.status !== 'formatted') return
+    projectFilesWorkspace.updateDraft(projectId, activeTab.path, outcome.text)
+    // The document changed under the find bar, so its match count is stale.
+    editorFind.rescan()
+    toast.success(`${label} beautified`, { description: 'Save the file to keep the change.' })
+  }
+
   function fullscreenOpenFile(path: string): void {
     if (path === activeTab?.path) return
     // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
@@ -606,6 +643,7 @@
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
           {wrapLines}
+          {beautifyLabel}
           {showSaveButton}
           saveDisabled={deletedAtCheckpoint ||
             (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
@@ -621,6 +659,7 @@
           onReload={reloadSelected}
           onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
           onToggleWrap={() => wrapTextState.toggle()}
+          onBeautify={beautifyActiveFile}
           onFullscreen={() => (fullscreenOpen = true)}
           onRename={startRename}
           onDelete={() => (deleteTargetPath = activeTab.path)}
@@ -893,6 +932,7 @@
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
           {wrapLines}
+          {beautifyLabel}
           showSaveButton={false}
           saveDisabled
           saving={false}
@@ -904,6 +944,7 @@
           onReload={reloadSelected}
           onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
           onToggleWrap={() => wrapTextState.toggle()}
+          onBeautify={beautifyActiveFile}
           onFullscreen={() => (fullscreenOpen = true)}
           onRename={startRename}
           onDelete={() => (deleteTargetPath = activeTab.path)}

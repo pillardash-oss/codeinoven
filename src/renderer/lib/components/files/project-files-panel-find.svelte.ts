@@ -51,6 +51,12 @@ export class ProjectFilesPanelFind {
     findNavState.editorFindMatches = matches
   }
 
+  /** Re-scan the current query against a document that changed without going
+   *  through the find bar (for example after the file was beautified). */
+  rescan(): void {
+    this.nonce += 1
+  }
+
   next(): void {
     if (this.total === 0) return
     const next = (this.active + 1) % this.total

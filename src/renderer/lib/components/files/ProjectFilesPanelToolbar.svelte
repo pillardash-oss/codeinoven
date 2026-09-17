@@ -22,6 +22,9 @@
     mutationDisabled: boolean
     showLineNumbers: boolean
     wrapLines: boolean
+    /** Format label the active file can be beautified as, or null when the
+     *  editor cannot reformat it. */
+    beautifyLabel: string | null
     showSaveButton: boolean
     saveDisabled: boolean
     saving: boolean
@@ -33,6 +36,7 @@
     onReload: () => void
     onToggleLineNumbers: () => void
     onToggleWrap: () => void
+    onBeautify: () => void
     onFullscreen: () => void
     onRename: () => void
     onDelete: () => void
@@ -51,6 +55,7 @@
     mutationDisabled,
     showLineNumbers,
     wrapLines,
+    beautifyLabel,
     showSaveButton,
     saveDisabled,
     saving,
@@ -62,6 +67,7 @@
     onReload,
     onToggleLineNumbers,
     onToggleWrap,
+    onBeautify,
     onFullscreen,
     onRename,
     onDelete,
@@ -143,15 +149,17 @@
     {reloadDisabled}
     {mutationDisabled}
     {showUndoRedo}
+    {beautifyLabel}
+    {fullscreen}
     {onUndo}
     {onRedo}
     {onReload}
     {onToggleLineNumbers}
     {onToggleWrap}
+    {onBeautify}
     {onFullscreen}
     {onRename}
     {onDelete}
-    hideFullscreen={fullscreen}
   />
   {#if showSaveButton}
     <button
