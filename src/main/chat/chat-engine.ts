@@ -336,6 +336,7 @@ import type {
   AgentMemoryProposalInput,
   AssignmentApiCapability,
   AssignmentAuditRepairManifest,
+  AssignmentGenerationSource,
   AuxiliaryRoute,
   AssignmentWorkerContext,
   AssignmentWorkerRoutingResult,
@@ -456,6 +457,7 @@ import {
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
   CHAT_WEB_ONLY_TOOLS,
+  CONVERSATION_ASSIGNMENT_INSTRUCTION,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
   IMAGE_DESCRIPTOR_SYSTEM_NOTE,
   MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
@@ -1959,8 +1961,13 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:generateAssignmentDraft',
-      (_, projectId: string, coordinatorThreadId: string, settings: ThreadSettings) =>
-        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings)
+      (
+        _,
+        projectId: string,
+        coordinatorThreadId: string,
+        settings: ThreadSettings,
+        instructions?: string
+      ) => this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, instructions)
     )
     ipcMain.handle(
       'agent:ensureAchievementScope',
@@ -10721,7 +10728,7 @@ export class ChatEngine {
         sessionId: planningSessionId
       })
     }
-    const assignment = await this.assignmentEngine.approveWithSpec(
+    const assignment = await this.assignmentEngine.approve(
       projectId,
       coordinatorThreadId,
       this.specEngine
@@ -13754,11 +13761,16 @@ export class ChatEngine {
     throw repairError ?? lastError ?? new Error('The specification agent failed.')
   }
 
-  /** Generate a reviewable Assignment from the exact active Spec without revising that Spec. */
+  /**
+   * Generate a reviewable Assignment from the exact active Spec without revising
+   * that Spec, or from the thread conversation when no Spec exists. `instructions`
+   * is the user's own request for the Assignment and is optional either way.
+   */
   async generateAssignmentDraft(
     projectId: string,
     coordinatorThreadId: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    instructions?: string
   ): Promise<AssignmentPlan> {
     projectId = validateEntityId(projectId, 'Project ID')
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
@@ -13766,6 +13778,10 @@ export class ChatEngine {
     if (settings.assignmentMode !== true) {
       throw new Error('Assignment mode must be enabled to generate an Assignment.')
     }
+    const request =
+      instructions === undefined
+        ? undefined
+        : validateBoundedString(instructions, 'Assignment instructions', 1, 20_000)
 
     const active = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (active) return active
@@ -13774,7 +13790,12 @@ export class ChatEngine {
     const running = this.activeAssignmentDraftRuns.get(key)
     if (running) return running
 
-    const task = this.createAssignmentDraftFromActiveSpec(projectId, coordinatorThreadId, settings)
+    const task = this.createAssignmentDraftFromSource(
+      projectId,
+      coordinatorThreadId,
+      settings,
+      request
+    )
     this.activeAssignmentDraftRuns.set(key, task)
     void task.then(
       () => {
@@ -13791,19 +13812,29 @@ export class ChatEngine {
     return task
   }
 
-  private async createAssignmentDraftFromActiveSpec(
+  /**
+   * An approved specification is the authoritative source when one exists.
+   * Without one the Assignment is decomposed from the thread conversation, so a
+   * thread that already describes its work never needs a specification first.
+   */
+  private async createAssignmentDraftFromSource(
     projectId: string,
     coordinatorThreadId: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    instructions?: string
   ): Promise<AssignmentPlan> {
     const existing = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (existing) return existing
 
     const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
-    if (!spec) throw new Error('Generate a specification before generating an Assignment.')
-    if (spec.status !== 'approved') {
-      throw new Error('Approve the specification before generating an Assignment.')
+    if (spec && spec.status !== 'approved') {
+      throw new Error(
+        'Approve the specification before generating an Assignment from it, or dismiss the specification to build the Assignment from this conversation.'
+      )
     }
+    const source: AssignmentGenerationSource = spec
+      ? { kind: 'spec', spec }
+      : { kind: 'conversation' }
 
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'planning', { read: false })
     try {
@@ -13811,7 +13842,8 @@ export class ChatEngine {
         projectId,
         coordinatorThreadId,
         settings,
-        spec
+        source,
+        instructions
       )
       const concurrentlyCreated = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
       if (concurrentlyCreated) {
@@ -13821,18 +13853,25 @@ export class ChatEngine {
         return concurrentlyCreated
       }
 
-      const currentSpec = await this.getActiveSpec(projectId, coordinatorThreadId)
-      if (!currentSpec || currentSpec.id !== spec.id || currentSpec.version !== spec.version) {
-        throw new Error(
-          'The active specification changed while the Assignment was being generated. Review it and generate the Assignment again.'
-        )
+      if (source.kind === 'spec') {
+        const currentSpec = await this.getActiveSpec(projectId, coordinatorThreadId)
+        if (
+          !currentSpec ||
+          currentSpec.id !== source.spec.id ||
+          currentSpec.version !== source.spec.version
+        ) {
+          throw new Error(
+            'The active specification changed while the Assignment was being generated. Review it and generate the Assignment again.'
+          )
+        }
       }
 
       const assignment = await this.assignmentEngine.createDraft({
         projectId,
         coordinatorThreadId,
-        specId: spec.id,
-        specVersion: spec.version,
+        ...(source.kind === 'spec'
+          ? { specId: source.spec.id, specVersion: source.spec.version }
+          : {}),
         content,
         provenance: {
           source: 'agent',
@@ -13865,17 +13904,13 @@ export class ChatEngine {
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings,
-    spec: EngineeringSpec
+    source: AssignmentGenerationSource,
+    instructions?: string
   ): Promise<AssignmentPlanContent> {
     const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, coordinatorThreadId)
     const messages = await this.threadManager.loadMessageRecords(projectId, coordinatorThreadId)
     const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
-    const specPath = await this.artifactRef(
-      projectId,
-      coordinatorThreadId,
-      join('versions', `${spec.id}-v${spec.version}.md`)
-    )
     const artifactDirectory = featureArtifactDirectory(
       await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
     )
@@ -13883,13 +13918,32 @@ export class ChatEngine {
       await this.cioPrompt('assignment-plan'),
       engineeringArtifactBoundaryInstruction(artifactDirectory)
     ].join('\n\n')
-    const prompt = [
-      `Create an Assignment graph for the specification at this project-relative path (read it first): ${specPath}`,
-      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`,
-      transcript ? `Conversation context:\n${transcript}` : ''
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+    // The specification branch reads the persisted spec by path; the
+    // conversation branch has no spec to read, so the transcript is the only
+    // authoritative scope and the model verifies it against the project.
+    const prompt =
+      source.kind === 'spec'
+        ? [
+            `Create an Assignment graph for the specification at this project-relative path (read it first): ${await this.artifactRef(
+              projectId,
+              coordinatorThreadId,
+              join('versions', `${source.spec.id}-v${source.spec.version}.md`)
+            )}`,
+            `Open annotations on the specification:\n${formatOpenAnnotations(source.spec.annotations)}`,
+            instructions ? `The user's request for this Assignment:\n${instructions}` : '',
+            transcript ? `Conversation context:\n${transcript}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n\n')
+        : [
+            CONVERSATION_ASSIGNMENT_INSTRUCTION,
+            instructions ? `The user's request for this Assignment:\n${instructions}` : '',
+            transcript
+              ? `Conversation context (authoritative scope):\n${transcript}`
+              : 'Conversation context (authoritative scope):\n(none recorded)'
+          ]
+            .filter(Boolean)
+            .join('\n\n')
     const structuredOutputKey = `${driverId}:${settings.providerId}:${settings.modelId}`
     const isZenFreeModel =
       driverId === 'opencode' &&
@@ -15439,7 +15493,8 @@ export class ChatEngine {
   private async completeAssignmentAudit(input: {
     projectId: string
     coordinatorThreadId: string
-    spec: EngineeringSpec
+    /** Approved specification, or null for a spec-less Assignment audit. */
+    spec: EngineeringSpec | null
     assignment: AssignmentPlan
     content: AuditReportContent
     auditorThread: Thread
@@ -15448,8 +15503,7 @@ export class ChatEngine {
     const report = await this.auditEngine.create({
       projectId: input.projectId,
       threadId: input.coordinatorThreadId,
-      specId: input.spec.id,
-      specVersion: input.spec.version,
+      ...(input.spec ? { specId: input.spec.id, specVersion: input.spec.version } : {}),
       assignmentId: input.assignment.id,
       assignmentVersion: input.assignment.version,
       reworkCycle: input.assignment.auditCycle?.reworkCycle,
@@ -15495,10 +15549,12 @@ export class ChatEngine {
     coordinatorThreadId: string,
     settings: ThreadSettings
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
-    const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
-    if (!spec || spec.status !== 'approved') {
-      throw new Error('An approved specification is required before audit.')
-    }
+    // A spec-less Assignment is audited against its own conversation contract,
+    // exactly like an independent audit: the user's requests and the completed
+    // Assignment graph are the standard, and every claim is verified against
+    // the repository. An approved specification wins whenever it exists.
+    const activeSpec = await this.getActiveSpec(projectId, coordinatorThreadId)
+    const spec = activeSpec && activeSpec.status === 'approved' ? activeSpec : null
     const assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (!assignment || assignment.status !== 'completed') {
       throw new Error('A completed Assignment is required before its durable audit can start.')
@@ -15516,11 +15572,13 @@ export class ChatEngine {
     // Durable sessions must remain loadable after the run. OpenCode accepts a
     // JSON-schema request but cannot decode that persisted message later, so
     // enforce the same contract through JSON-only prompts and validation.
-    const specPath = await this.artifactRef(
-      projectId,
-      coordinatorThreadId,
-      join('versions', `${spec.id}-v${spec.version}.md`)
-    )
+    const specPath = spec
+      ? await this.artifactRef(
+          projectId,
+          coordinatorThreadId,
+          join('versions', `${spec.id}-v${spec.version}.md`)
+        )
+      : null
     const assignmentPath = await this.artifactRef(projectId, coordinatorThreadId, 'assignment.md')
     const featureSlug = await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
     const taskScope = assignment.content.tasks
@@ -15549,12 +15607,16 @@ export class ChatEngine {
       })
       .join('\n\n')
     const basePrompt = [
-      'Audit the current project implementation against the approved specification and completed Assignment:',
-      `Specification: ${specPath}`,
+      spec
+        ? 'Audit the current project implementation against the approved specification and completed Assignment:'
+        : 'Audit the current project implementation against the completed Assignment and the thread that defined it. No specification exists for this work; the Assignment graph and its task prompts are the contract.',
+      ...(specPath ? [`Specification: ${specPath}`] : []),
       `Assignment: ${assignmentPath}`,
       `Assignment implementation scope and persisted evidence:\n${taskScope}`,
       'Treat the expected-file lists as the minimum scope, then use the reported commits, repository status/history, imports, and affected consumers to enumerate every additional implementation file that must be audited.',
-      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
+      ...(spec
+        ? [`Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`]
+        : [])
     ].join('\n\n')
     let terminalFailure: Error
     const resumingAudit = assignment.auditCycle?.status === 'running'
@@ -15567,8 +15629,8 @@ export class ChatEngine {
     let repairManifest: AssignmentAuditRepairManifest | null =
       priorRepair?.status === 'invalid' &&
       priorRepair.assignmentId === assignment.id &&
-      priorRepair.specId === spec.id &&
-      priorRepair.specVersion === spec.version
+      priorRepair.specId === spec?.id &&
+      priorRepair.specVersion === spec?.version
         ? priorRepair
         : null
     let recoveredContent: AuditReportContent | null = null
@@ -15615,8 +15677,8 @@ export class ChatEngine {
             projectId,
             threadId: coordinatorThreadId,
             assignmentId: assignment.id,
-            specId: spec.id,
-            specVersion: spec.version,
+            specId: spec?.id,
+            specVersion: spec?.version,
             runId,
             attempt: 1,
             attemptPath: recoveredAttempt.artifactPath,
@@ -15632,8 +15694,8 @@ export class ChatEngine {
             projectId,
             threadId: coordinatorThreadId,
             assignmentId: assignment.id,
-            specId: spec.id,
-            specVersion: spec.version,
+            specId: spec?.id,
+            specVersion: spec?.version,
             runId,
             attempt: 1,
             attemptPath: recoveredAttempt.artifactPath,
@@ -15725,7 +15787,7 @@ export class ChatEngine {
         const auditSystemPrompt = repairing
           ? await this.cioPrompt('audit-repair')
           : [
-              await this.cioPrompt('audit-report'),
+              await this.cioPrompt(spec ? 'audit-report' : 'independent-audit-report'),
               ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
               utilityInstructions
             ]
@@ -15808,8 +15870,8 @@ export class ChatEngine {
             projectId,
             threadId: coordinatorThreadId,
             assignmentId: assignment.id,
-            specId: spec.id,
-            specVersion: spec.version,
+            specId: spec?.id,
+            specVersion: spec?.version,
             runId,
             attempt: attemptIndex + 1,
             attemptPath: persistedAttempt.artifactPath,
@@ -15833,8 +15895,8 @@ export class ChatEngine {
           projectId,
           threadId: coordinatorThreadId,
           assignmentId: assignment.id,
-          specId: spec.id,
-          specVersion: spec.version,
+          specId: spec?.id,
+          specVersion: spec?.version,
           runId,
           attempt: attemptIndex + 1,
           attemptPath: persistedAttempt.artifactPath,

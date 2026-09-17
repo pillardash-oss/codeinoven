@@ -52,8 +52,8 @@ export function buildCoordinatorSnapshotJson(plan: AssignmentPlan, allThreads: T
   return JSON.stringify({
     assignmentId: plan.id,
     version: plan.version,
-    specId: plan.specId,
-    specVersion: plan.specVersion,
+    specId: plan.specId ?? null,
+    specVersion: plan.specVersion ?? null,
     status: plan.status,
     phases: plan.content.phases,
     tasks,

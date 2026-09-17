@@ -154,8 +154,15 @@ export const invokeAgentContract = {
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
     { report: AuditReport; auditorThread: Thread }
   >,
+  /** `instructions` carries the user's own request when no Spec exists, so the
+   *  Assignment is decomposed from the message that triggered it. */
   'agent:generateAssignmentDraft': {} as Contract<
-    [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
+    [
+      projectId: string,
+      coordinatorThreadId: string,
+      settings: ThreadSettings,
+      instructions?: string
+    ],
     AssignmentPlan
   >,
   'agent:ensureAchievementScope': {} as Contract<

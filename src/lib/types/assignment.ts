@@ -217,8 +217,10 @@ export interface AssignmentPlan {
   id: string
   projectId: string
   coordinatorThreadId: string
-  specId: string
-  specVersion: number
+  /** Linked approved specification. Absent when the Assignment was decomposed
+   *  directly from the thread conversation because no specification exists. */
+  specId?: string
+  specVersion?: number
   version: number
   status: AssignmentStatus
   statusBeforeStop?: Exclude<AssignmentStatus, 'stopped'>

@@ -188,15 +188,27 @@ export const ASSIGNMENT_GENERATION_INSTRUCTION = [
 ].join(' ')
 
 export const EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT = [
-  'You are the Sr. Engineer decomposing an existing engineering specification into a reviewable Assignment graph.',
-  'The supplied specification is authoritative and immutable for this operation. Do not rewrite, reinterpret, expand, or omit its scope.',
-  'Use the conversation only to preserve relevant implementation context, ownership constraints, dependencies, and user decisions.',
+  'You are the Sr. Engineer decomposing an authoritative source into a reviewable Assignment graph. The source is an approved engineering specification when one is supplied; otherwise it is the thread conversation, and no specification exists for this work.',
+  'The supplied source is authoritative and immutable for this operation. Do not rewrite, reinterpret, expand, or omit its scope, and never drop a work item it names.',
+  'Use the conversation to preserve relevant implementation context, ownership constraints, dependencies, and user decisions.',
   'Do not implement, mutate files, dispatch workers, choose models, ask questions, or explain the result.',
   'Return exactly one complete Assignment object with this shape: {"title":"string","summary":"concise TL;DR","phases":[{"id":"phase-id","title":"string","description":"string","info":"optional string"}],"tasks":[{"id":"task-id","phaseId":"phase-id","title":"string","description":"string","info":"optional string","prompt":"self-contained worker instructions","owner":"senior|worker","dependsOn":[],"expectedFiles":["project/relative/path"],"auditChecklist":["concrete verification"]}]}.',
   'Break work into narrowly scoped tasks, explicitly model dependencies and safe parallel work, and avoid overlapping expected files between parallel tasks.',
   'Use owner senior only for coordinator work and owner worker for durable worker threads. Every task needs a self-contained prompt and concrete audit checklist.',
   'Assignment tasks describe product implementation only. Never create tasks for plan/progress scaffolding, test-output archival, Assignment documents, audit documents, or other platform bookkeeping, and never list those artifacts in expectedFiles.',
   'The first response character must be { and the last must be } when structured output is unavailable.'
+].join(' ')
+
+/**
+ * Application-supplied scope rule for a conversation-sourced decomposition: no
+ * specification exists, so the user's own message and thread history carry the
+ * authoritative scope and every work item it names must become a task.
+ */
+export const CONVERSATION_ASSIGNMENT_INSTRUCTION = [
+  'No specification exists for this thread; the conversation context supplied with this request is the authoritative scope.',
+  'Convert every distinct work item the user asked for in the conversation into its own Assignment task. Never merge unrelated items, never silently drop one, and never invent work the conversation does not describe.',
+  'Inspect the project with read-only tools to resolve concrete project-relative expectedFiles for each task instead of guessing paths.',
+  'Return one complete Assignment object and nothing else.'
 ].join(' ')
 
 export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [

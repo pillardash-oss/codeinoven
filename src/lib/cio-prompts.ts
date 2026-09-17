@@ -184,7 +184,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Assignment',
     modes: ['assignment'],
     defaultTemplate:
-      'Decompose the authoritative engineering specification into one reviewable Assignment graph. Do not rewrite scope, implement, mutate files, dispatch workers, choose models, or ask questions. Create narrowly scoped tasks, explicit dependencies and safe parallel work, no overlapping expected files, self-contained worker prompts, and concrete audit checklists. Exclude platform bookkeeping artifacts.'
+      'Decompose the authoritative source into one reviewable Assignment graph. The source is an approved engineering specification when one is supplied, otherwise the thread conversation, in which case every distinct work item the user named becomes its own task. Do not rewrite scope, implement, mutate files, dispatch workers, choose models, or ask questions. Create narrowly scoped tasks, explicit dependencies and safe parallel work, no overlapping expected files, self-contained worker prompts, and concrete audit checklists. Exclude platform bookkeeping artifacts.'
   },
   {
     id: 'achievement-implementation',

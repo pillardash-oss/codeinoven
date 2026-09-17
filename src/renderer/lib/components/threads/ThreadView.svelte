@@ -2380,6 +2380,11 @@
   let specError = $state('')
   let idleAttentionHandled = false
   let specReadyToolVisible = $state(false)
+  /** True once the persisted workflow lookup has resolved for this mount, so no
+   *  ready card can flash before the thread's real Spec/Assignment is known. */
+  let workflowReady = $state(false)
+  /** Session-local dismissal of the spec-less Assignment entry card. */
+  let conversationAssignmentDismissed = $state(false)
   let assignment = $state<AssignmentPlan | null>(null)
   let assignmentVersions = $state<AssignmentPlan[]>([])
   let selectedAssignmentVersion = $state<number | undefined>()
@@ -2391,6 +2396,17 @@
   /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
   let assignmentFormulating = $state(false)
   let assignmentError = $state('')
+  /** Spec-less Assignment entry: the Assignment stage is selected, this thread
+   *  has no Spec, and no Assignment draft exists yet. */
+  const conversationAssignmentVisible = $derived(
+    workflowReady &&
+      !conversationAssignmentDismissed &&
+      settings.assignmentMode === true &&
+      spec === null &&
+      assignment === null &&
+      !specFormulating &&
+      !assignmentFormulating
+  )
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
   let assignmentWorkerRetryingId = $state<string | null>(null)
@@ -5214,8 +5230,11 @@
 
     const selectedAssignment = engineeringLifecycle?.activeStage === 'assignment'
     if (selectedAssignment && specAction === undefined) {
-      if (!spec || spec.status !== 'approved') {
-        assignmentError = 'Assignment requires an approved Spec.'
+      // A Spec that exists but is not approved still owns the Assignment, so ask
+      // for approval first. With no Spec at all the user's own message is the
+      // authoritative scope, so this send is never silently discarded.
+      if (spec && spec.status !== 'approved') {
+        assignmentError = 'Approve the Spec before generating an Assignment from it.'
         return
       }
       if (engineeringLifecycle?.activeStage === undefined) {
@@ -5223,7 +5242,7 @@
           await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
         ).state
       }
-      await generateAssignmentDraft()
+      await generateAssignmentDraft(msg)
       return
     }
 
@@ -6075,6 +6094,9 @@
       specVersions = []
       specReadyToolVisible = false
     }
+    // The Spec/Assignment state above is now authoritative for this mount, so the
+    // composer may show its ready card without a stale flash.
+    workflowReady = true
     auditState = workflowThread?.auditState
     const activeAudit = await invoke('audit:getActive', projectId, workflowThreadId)
     if (!alive) return
@@ -6377,41 +6399,47 @@
     })
   }
 
-  async function generateAssignmentDraft(): Promise<void> {
-    if (!spec || assignmentBusy) return
+  /**
+   * Generate the Assignment draft. An active Spec is approved in place first so
+   * the explicit "Generate Assignment" action never fails on an unapproved Spec;
+   * without any Spec the main process decomposes the supplied conversation
+   * instead, which is why `instructions` can carry the user's own request.
+   */
+  async function generateAssignmentDraft(instructions?: string): Promise<void> {
+    if (assignmentBusy) return
     assignmentBusy = true
     assignmentFormulating = true
     assignmentError = ''
     try {
-      // The main process only generates an Assignment from an approved Spec.
-      // Sign the active Spec in place (draft -> in_review -> approved) so the
-      // explicit "Generate Assignment" action never fails on an unapproved Spec.
       let signingSpec = spec
-      if (signingSpec.status === 'draft') {
-        signingSpec = await invoke(
-          'spec:setReview',
-          signingSpec.projectId,
-          signingSpec.threadId,
-          signingSpec.id,
-          signingSpec.version
-        )
-        spec = signingSpec
-      }
-      if (signingSpec.status === 'in_review') {
-        signingSpec = await invoke(
-          'spec:approve',
-          signingSpec.projectId,
-          signingSpec.threadId,
-          signingSpec.id,
-          signingSpec.version
-        )
-        await setActiveSpec(signingSpec)
+      if (signingSpec) {
+        if (signingSpec.status === 'draft') {
+          signingSpec = await invoke(
+            'spec:setReview',
+            signingSpec.projectId,
+            signingSpec.threadId,
+            signingSpec.id,
+            signingSpec.version
+          )
+          spec = signingSpec
+        }
+        if (signingSpec.status === 'in_review') {
+          signingSpec = await invoke(
+            'spec:approve',
+            signingSpec.projectId,
+            signingSpec.threadId,
+            signingSpec.id,
+            signingSpec.version
+          )
+          await setActiveSpec(signingSpec)
+        }
       }
       assignment = await invoke(
         'agent:generateAssignmentDraft',
         thread.projectId,
         thread.id,
-        settings
+        settings,
+        instructions && instructions.trim() ? instructions : undefined
       )
       assignmentVersions = await invoke(
         'assignment:listVersions',
@@ -7390,6 +7418,14 @@
       specFormulating = false
       specBusy = false
     }
+  }
+
+  /** Hide the spec-less Assignment entry for this mount. Nothing persisted is
+   *  dismissed   there is no Spec review to record   so re-enabling the
+   *  Assignment stage in the Toolbox brings the card back. */
+  function dismissConversationAssignment(): void {
+    conversationAssignmentDismissed = true
+    assignmentError = ''
   }
 
   async function cancelSpecReadyTool(): Promise<void> {
@@ -11497,6 +11533,29 @@
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
+            {:else if conversationAssignmentVisible && !busy && !failureRetryVisible}
+              <SpecReadyCard
+                {providers}
+                projectId={thread.projectId}
+                {settings}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                busy={assignmentBusy}
+                specless
+                assignmentMode
+                error={assignmentError}
+                onCancel={dismissConversationAssignment}
+                onReview={reviewReadySpec}
+                onProceed={proceedWithReadySpec}
+                onGenerateAssignment={() => void generateAssignmentDraft()}
+                onOpenAssignment={openAssignmentStudio}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
             {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating && !failureRetryVisible}
               <SpecReadyCard
                 {providers}
@@ -11511,7 +11570,7 @@
                 onCancel={cancelSpecReadyTool}
                 onReview={reviewReadySpec}
                 onProceed={proceedWithReadySpec}
-                onGenerateAssignment={generateAssignmentDraft}
+                onGenerateAssignment={() => void generateAssignmentDraft()}
                 onOpenAssignment={openAssignmentStudio}
                 onModelChange={changeSpecModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>

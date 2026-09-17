@@ -66,8 +66,10 @@ type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentV
 export interface CreateAssignmentInput {
   projectId: string
   coordinatorThreadId: string
-  specId: string
-  specVersion: number
+  /** Approved specification this Assignment implements. Omit both fields when the
+   *  Assignment was decomposed from the thread conversation instead. */
+  specId?: string
+  specVersion?: number
   content: AssignmentPlanContent
   provenance: NewAssignmentProvenance
 }
@@ -103,20 +105,28 @@ export class AssignmentEngine {
         'Coordinator thread does not belong to the project'
       )
     }
-    const spec = this.db.get<{ project_id: string; thread_id: string }>(
-      'SELECT project_id, thread_id FROM spec_versions WHERE spec_id=? AND version=?',
-      input.specId,
-      input.specVersion
-    )
-    if (
-      !spec ||
-      spec.project_id !== input.projectId ||
-      spec.thread_id !== input.coordinatorThreadId
-    ) {
-      throw new AssignmentEngineError(
-        'unauthorized',
-        'Linked specification does not belong to the coordinator'
+    if (input.specId !== undefined) {
+      if (input.specVersion === undefined) {
+        throw new AssignmentEngineError(
+          'validation_failed',
+          'A linked specification requires its version'
+        )
+      }
+      const spec = this.db.get<{ project_id: string; thread_id: string }>(
+        'SELECT project_id, thread_id FROM spec_versions WHERE spec_id=? AND version=?',
+        input.specId,
+        input.specVersion
       )
+      if (
+        !spec ||
+        spec.project_id !== input.projectId ||
+        spec.thread_id !== input.coordinatorThreadId
+      ) {
+        throw new AssignmentEngineError(
+          'unauthorized',
+          'Linked specification does not belong to the coordinator'
+        )
+      }
     }
     const validation = validateAssignment(input.content)
     if (!validation.valid) {
@@ -131,8 +141,9 @@ export class AssignmentEngine {
       id: this.idFactory(),
       projectId: input.projectId,
       coordinatorThreadId: input.coordinatorThreadId,
-      specId: input.specId,
-      specVersion: input.specVersion,
+      ...(input.specId !== undefined
+        ? { specId: input.specId, specVersion: input.specVersion }
+        : {}),
       version: 1,
       status: 'draft',
       content: structuredClone(input.content),
@@ -471,24 +482,31 @@ export class AssignmentEngine {
     return resumed
   }
 
-  async approveWithSpec(
+  /**
+   * Sign off the active Assignment. A spec-backed Assignment approves its linked
+   * specification first; a spec-less Assignment (decomposed from the
+   * conversation) has nothing to approve and activates directly.
+   */
+  async approve(
     projectId: string,
     coordinatorThreadId: string,
     specEngine: SpecEngine
   ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
-    const spec = await specEngine.getVersion(
-      projectId,
-      coordinatorThreadId,
-      active.specId,
-      active.specVersion
-    )
-    if (!spec) throw new AssignmentEngineError('not_found', 'Linked specification not found')
-    if (spec.status === 'draft') {
-      await specEngine.setReview(projectId, coordinatorThreadId, spec.id, spec.version)
-    }
-    if (spec.status !== 'approved') {
-      await specEngine.approve(projectId, coordinatorThreadId, spec.id, spec.version)
+    if (active.specId !== undefined && active.specVersion !== undefined) {
+      const spec = await specEngine.getVersion(
+        projectId,
+        coordinatorThreadId,
+        active.specId,
+        active.specVersion
+      )
+      if (!spec) throw new AssignmentEngineError('not_found', 'Linked specification not found')
+      if (spec.status === 'draft') {
+        await specEngine.setReview(projectId, coordinatorThreadId, spec.id, spec.version)
+      }
+      if (spec.status !== 'approved') {
+        await specEngine.approve(projectId, coordinatorThreadId, spec.id, spec.version)
+      }
     }
     return this.activate(projectId, coordinatorThreadId)
   }

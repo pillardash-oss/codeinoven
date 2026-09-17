@@ -12,6 +12,7 @@ import type {
   AgentQuestionResolution,
   AssignmentPlan,
   AssignmentTask,
+  EngineeringSpec,
   PendingAgentQuestionRequest,
   ImageDescriptorErrorRequest,
   MemoryCategory,
@@ -396,6 +397,15 @@ export interface PendingInitialSpecGeneration {
 
 export type SpecGenerationFormatMode = 'structured' | 'json' | 'domain'
 
+/**
+ * Authoritative source for one Assignment decomposition. An approved
+ * specification wins whenever it exists; otherwise the thread conversation
+ * (the user's own message) is the scope, so an Assignment never requires a
+ * specification to be generated first.
+ */
+export type AssignmentGenerationSource =
+  { kind: 'spec'; spec: EngineeringSpec } | { kind: 'conversation' }
+
 export interface SpecGenerationLesson {
   code: string
   instruction: string
@@ -433,8 +443,9 @@ export interface AssignmentAuditRepairManifest {
   projectId: string
   threadId: string
   assignmentId: string
-  specId: string
-  specVersion: number
+  /** Absent for a spec-less Assignment whose audit has no specification. */
+  specId?: string
+  specVersion?: number
   runId: string
   attempt: number
   attemptPath: string

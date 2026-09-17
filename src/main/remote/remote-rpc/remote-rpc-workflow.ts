@@ -111,7 +111,8 @@ export async function callRemoteWorkflowRpc(
       return chatEngine.generateAssignmentDraft(
         requireString(args[0]),
         requireString(args[1]),
-        args[2] as ThreadSettings
+        args[2] as ThreadSettings,
+        args[3] === undefined ? undefined : requireString(args[3])
       )
     case 'agent:ensureAchievementScope':
       return chatEngine.ensureAchievementScope(requireString(args[0]), requireString(args[1]))

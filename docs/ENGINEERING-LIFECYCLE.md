@@ -15,15 +15,26 @@ A plain chat message sent while the lifecycle is parked is answered normally in 
 
 ## Stage behavior
 
-Dependencies cascade when a switch is enabled: **Assignment and Achievement both imply Spec**, so enabling either one leaves the Spec switch on. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm   instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
+Dependencies cascade when a switch is enabled: **Achievement implies Spec**, so enabling it leaves the Spec switch on. **Assignment stands alone** and never turns Spec on see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
-Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Assignment and Achievement require an approved Spec.
+Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Achievement requires an approved Spec; Assignment does not.
+
+### Assignment sources
+
+An Assignment always has exactly one authoritative source, resolved when generation runs:
+
+- **Spec-backed** an approved Spec exists, so it is the immutable scope and the Assignment records the Spec identifier and version. A Spec that exists but is not yet approved still owns the Assignment: approve it first, or dismiss the Spec review to fall back to the conversation.
+- **Conversation-backed** no Spec exists, so the user's message and the thread conversation are the scope. Every distinct work item the message names becomes its own task, the Sr. Engineer inspects the project read-only to resolve concrete `expectedFiles`, and the Assignment is persisted with no Spec identifier.
+
+Both sources produce the same reviewable draft, the same human Assignment-approval gate, and the same durable worker threads. A conversation-backed Assignment completes into an audit run against its own task prompts and conversation, because there is no specification to audit against.
+
+The user's message that triggers generation is passed to the Sr. Engineer as that Assignment's request, so a send in the Assignment stage is never silently discarded.
 
 After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document. Likewise, after a PRD finalizes, the PRD Studio offers a **Next step** menu to Generate Spec.
 
 ### Auto Pilot
 
-Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs   the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention.
+Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention. Auto Pilot therefore always takes the spec-backed source above.
 
 ## Stage behavior (original single-run notes)
 

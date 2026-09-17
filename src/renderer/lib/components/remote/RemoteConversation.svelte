@@ -301,7 +301,7 @@
     )
     pendingLifecycleSelection = null
     lifecycleGuardOpen = false
-    // The staged intent was either applied or discarded by this confirmation  
+    // The staged intent was either applied or discarded by this confirmation
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -805,7 +805,7 @@
         return
       }
       if (engineeringLifecycle?.activeStage === 'assignment') {
-        await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings)
+        await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings, text)
         failedDelivery = null
         engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
         agentRuns.setIdle(thread.projectId, thread.id)
@@ -1369,7 +1369,7 @@
 
       {#if queuedMessage}
         <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[0.75rem] text-dimmed">
-          Queued   will send once {queuedMessage.startAfterThreads.length === 1
+          Queued will send once {queuedMessage.startAfterThreads.length === 1
             ? 'the selected thread finishes'
             : 'the selected threads finish'}.
         </p>
