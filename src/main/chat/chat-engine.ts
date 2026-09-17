@@ -1078,7 +1078,11 @@ export class ChatEngine {
     this.rankingRepo = new ModelRankingRepo(database)
     this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
     this.projectManager = new ProjectManager(database)
-    this.projectFilesService = new ProjectFilesService(this.projectManager)
+    // Tagged composer references are resolved against the sending thread's
+    // scope root, so this service needs the same scope authority every other
+    // file surface uses. Without it, a thread that carries a scope bucket
+    // (the Default scope included) fails closed before a turn can start.
+    this.projectFilesService = new ProjectFilesService(this.projectManager, this.scopeRoots)
     this.checkpointManager = new CheckpointManager(database)
     this.threadManager = new ThreadManager(
       database,
