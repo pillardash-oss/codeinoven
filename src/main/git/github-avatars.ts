@@ -1,7 +1,8 @@
 import { fetchImageAsDataUrl } from '../editor/favicon-service'
+import type { GitHubAvatarRequest } from '../../lib/types'
 
 /**
- * Avatars for the GitHub logins a pull request conversation names.
+ * Avatars for the GitHub accounts a pull request conversation names.
  *
  * The renderer CSP is `img-src 'self' data: blob: file: appfile:`, so an
  * `avatars.githubusercontent.com` URL renders as a broken image and every picture
@@ -10,11 +11,16 @@ import { fetchImageAsDataUrl } from '../editor/favicon-service'
  * conversation, cached by login so thirty comments from five people cost five
  * downloads. Link favicons come through the same inliner for the same reason.
  *
- * One URL covers both kinds of account: the CDN answers the `[bot]` form GitHub
- * uses for app accounts (checked: `dependabot[bot]` returns the app's picture),
- * and an account GitHub has never heard of gets GitHub's own placeholder, which is
- * what their site shows too. A fetch that fails outright is remembered as null so
- * the UI keeps its monogram and no second request is spent on it.
+ * The URL the provider declared always wins over the login. Deriving the URL from
+ * the login alone is right for people and wrong for apps: GitHub answers
+ * `pullfrog[bot]` with a generated identicon, while the `avatar_url` on the very
+ * same comment is the app's real picture   the one github.com shows. Accounts
+ * arrive without a declared URL in some payloads (mention candidates for one), so
+ * the login fallback stays.
+ *
+ * An account GitHub has never heard of gets its own placeholder, which is what
+ * their site shows too. A fetch that fails outright is remembered as null so the
+ * UI keeps its monogram and no second request is spent on it.
  */
 
 /** Avatars change rarely and a login is stable, so a hit is worth keeping most of a day. */
@@ -31,23 +37,44 @@ const AVATAR_SIZE_PIXELS = 128
 
 const cache = new Map<string, { dataUrl: string | null; expiresAt: number }>()
 
-/** Resolve avatars for many logins in one call. Keys are the logins as asked for. */
-export async function resolveAvatars(logins: string[]): Promise<Record<string, string | null>> {
+/** Resolve avatars for many accounts in one call. Keys are the logins as asked for. */
+export async function resolveAvatars(
+  accounts: GitHubAvatarRequest[]
+): Promise<Record<string, string | null>> {
   const result: Record<string, string | null> = {}
   await Promise.all(
-    [...new Set(logins)].map(async (login) => {
-      result[login] = await avatarFor(login)
+    dedupeByLogin(accounts).map(async (account) => {
+      result[account.login] = await avatarFor(account)
     })
   )
   return result
 }
 
-async function avatarFor(login: string): Promise<string | null> {
-  const trimmed = login.trim()
-  const cached = cache.get(trimmed)
+/**
+ * One request per login. A login asked for twice   once with the provider's URL and
+ * once without   keeps its declared URL, since that is the only form that can be
+ * right for an app account.
+ */
+function dedupeByLogin(accounts: GitHubAvatarRequest[]): GitHubAvatarRequest[] {
+  const byLogin = new Map<string, GitHubAvatarRequest>()
+  for (const account of accounts) {
+    const login = account.login.trim()
+    if (login.length === 0) continue
+    const existing = byLogin.get(login)
+    if (!existing || (!existing.avatarUrl && account.avatarUrl)) {
+      byLogin.set(login, { login, avatarUrl: account.avatarUrl ?? null })
+    }
+  }
+  return [...byLogin.values()]
+}
+
+async function avatarFor(account: GitHubAvatarRequest): Promise<string | null> {
+  const login = account.login.trim()
+  const declared = account.avatarUrl?.trim()
+  const cached = cache.get(login)
   if (cached && cached.expiresAt > Date.now()) return cached.dataUrl
-  const dataUrl = trimmed.length === 0 ? null : await fetchImageAsDataUrl(avatarUrl(trimmed))
-  remember(trimmed, dataUrl)
+  const dataUrl = await fetchImageAsDataUrl(declared ? declared : avatarUrl(login))
+  remember(login, dataUrl)
   return dataUrl
 }
 

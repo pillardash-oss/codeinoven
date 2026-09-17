@@ -77,6 +77,7 @@ import type {
   GitDiff,
   GitFileChange,
   GitHubAuthStatus,
+  GitHubAvatarRequest,
   GitHubDeviceCode,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
@@ -2043,7 +2044,18 @@ export const IPC_INVOKE_CONTRACT = {
    * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
    * comes back as null, which the UI draws as its monogram.
    */
-  'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>,
+  /**
+   * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
+   * image hosts). Each account carries the URL its provider declared, which wins
+   * over the login-derived guess   a bot account's login alone resolves to
+   * GitHub's generated identicon rather than the app's real picture. A login
+   * GitHub has no picture for comes back as null, which the UI draws as its
+   * monogram.
+   */
+  'github:avatars': {} as Contract<
+    [accounts: GitHubAvatarRequest[]],
+    Record<string, string | null>
+  >,
   /**
    * Resolve images embedded in provider-authored markdown, as `data:` URLs, for
    * the same CSP reason. Only `https:` is accepted, and main additionally refuses

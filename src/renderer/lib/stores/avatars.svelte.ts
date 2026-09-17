@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import type { GitHubAvatarRequest } from '$shared/types'
 
 /**
  * Shared, reactive cache of GitHub avatars keyed by login.
@@ -18,7 +19,7 @@ class AvatarState {
   /** logins already sent to main, positive or negative. */
   private readonly requested = new Set<string>()
   /** logins waiting for the next batch. */
-  private readonly pending = new Set<string>()
+  private readonly pending = new Map<string, string | null>()
   private inflight: Promise<void> | null = null
   /** Reactive version, bumped whenever a batch lands. */
   private refreshKey = $state(0)
@@ -37,13 +38,21 @@ class AvatarState {
     return this.resolved.get(login) ?? null
   }
 
-  /** Queue resolution for every login that has not been asked about yet. */
-  ensureResolved(logins: readonly string[]): void {
+  /**
+   * Queue resolution for every account that has not been asked about yet.
+   *
+   * A login can be asked for twice with and without a declared URL (the same
+   * person may appear in a bundle that carries the provider's `avatar_url` and in
+   * one that does not), and the first answer wins. That is deliberate: a login's
+   * picture is stable, and re-asking would spend a download to learn nothing.
+   */
+  ensureResolved(accounts: readonly GitHubAvatarRequest[]): void {
     let queued = false
-    for (const login of logins) {
+    for (const account of accounts) {
+      const login = account.login?.trim() ?? ''
       if (login.length === 0 || this.requested.has(login)) continue
       this.requested.add(login)
-      this.pending.add(login)
+      this.pending.set(login, account.avatarUrl ?? null)
       queued = true
     }
     if (!queued || this.inflight !== null) return
@@ -57,17 +66,18 @@ class AvatarState {
 
   private async drain(): Promise<void> {
     while (this.pending.size > 0) {
-      const batch = [...this.pending].slice(0, AvatarState.BATCH_SIZE)
-      for (const login of batch) this.pending.delete(login)
+      const batch = [...this.pending.entries()].slice(0, AvatarState.BATCH_SIZE)
+      for (const [login] of batch) this.pending.delete(login)
+      const accounts = batch.map(([login, avatarUrl]) => ({ login, avatarUrl }))
       try {
-        const resolved = await invoke('github:avatars', batch)
+        const resolved = await invoke('github:avatars', accounts)
         for (const [login, dataUrl] of Object.entries(resolved)) {
           this.resolved.set(login, dataUrl)
         }
       } catch {
         // A batch that fails leaves every login in it without a picture, and the
         // monogram stands in.
-        for (const login of batch) {
+        for (const [login] of batch) {
           if (!this.resolved.has(login)) this.resolved.set(login, null)
         }
       }

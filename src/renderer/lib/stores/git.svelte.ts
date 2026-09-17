@@ -34,9 +34,11 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrCommentKind,
   PrComposeInput,
   PrComposeReport,
   PrMergeMethod,
+  PrMinimizeReason,
   PrResolveOptions,
   PrReviewEvent,
   PrState,
@@ -85,6 +87,9 @@ export type GitOperation =
   | 'pr-merge'
   | 'pr-ready'
   | 'pr-comment'
+  | 'pr-comment-edit'
+  | 'pr-comment-delete'
+  | 'pr-comment-hide'
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
@@ -235,6 +240,17 @@ export class GitState {
   githubConnection: 'unknown' | 'connecting' | 'connected' | 'disconnected' = $state('unknown')
   private githubProbe: Promise<boolean> | null = null
   private lastGithubProbeAt = 0
+
+  /**
+   * The signed-in GitHub login, once a status probe has named one.
+   *
+   * The pull request reader needs it to tell the user's own comment from someone
+   * else's: GitHub only exposes Edit and Delete to an author, and only hides the
+   * Block action on yourself. Kept here rather than passed down from the panel so
+   * the dock reader, the full screen reader and the panel menu all agree without
+   * a prop chain through three components.
+   */
+  githubViewerLogin: string | null = $state(null)
 
   private resolveGitHubMutation<T>(result: GitHubMutationResult<T>): T | null {
     if (result.status === 'permission_required') {
@@ -2176,6 +2192,99 @@ export class GitState {
     }
   }
 
+  /**
+   * Rewrite an already-posted comment in place.
+   *
+   * `kind` selects the collection because GitHub stores conversation comments and
+   * inline diff comments in two unrelated endpoints with independent id sequences.
+   * The mutation returns only whether the write landed: the caller refetches the
+   * bundle, which is the one path that keeps the reader's conversation, counts and
+   * "edited" marker consistent with the server.
+   */
+  async editPrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    this.markBusy('pr-comment-edit', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return (
+        this.resolveGitHubMutation(
+          await invoke('pr:commentEdit', projectId, owner, repo, pullNumber, kind, commentId, body)
+        ) === true
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The comment could not be saved')
+      return false
+    } finally {
+      this.markBusy('pr-comment-edit', false)
+    }
+  }
+
+  /**
+   * Permanently delete a comment. GitHub only allows this for its author, so the
+   * caller is responsible for only offering it on your own comment.
+   */
+  async deletePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number
+  ): Promise<boolean> {
+    this.markBusy('pr-comment-delete', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return (
+        this.resolveGitHubMutation(
+          await invoke('pr:commentDelete', projectId, owner, repo, pullNumber, kind, commentId)
+        ) === true
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The comment could not be deleted')
+      return false
+    } finally {
+      this.markBusy('pr-comment-delete', false)
+    }
+  }
+
+  /**
+   * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
+   * its GraphQL node id, because GitHub exposes no REST endpoint for this.
+   */
+  async minimizePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    reason: PrMinimizeReason
+  ): Promise<boolean> {
+    this.markBusy('pr-comment-hide', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return (
+        this.resolveGitHubMutation(
+          await invoke('pr:commentMinimize', projectId, owner, repo, pullNumber, nodeId, reason)
+        ) === true
+      )
+    } catch (error) {
+      this.error = errorMessage(error, 'The comment could not be hidden')
+      return false
+    } finally {
+      this.markBusy('pr-comment-hide', false)
+    }
+  }
+
   async reviewPullRequest(
     projectId: string,
     owner: string,
@@ -2307,7 +2416,9 @@ export class GitState {
 
   async githubAuthStatus(): Promise<GitHubAuthStatus> {
     try {
-      return await invoke('github:authStatus')
+      const status = await invoke('github:authStatus')
+      this.githubViewerLogin = status.connected ? (status.user?.login ?? null) : null
+      return status
     } catch {
       return { connected: false, configured: false }
     }

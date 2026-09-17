@@ -2,7 +2,13 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
-import type { GitConflictSide, GitRebaseAction, GitRestoreTarget } from '../../lib/types'
+import type {
+  GitConflictSide,
+  GitRebaseAction,
+  GitRestoreTarget,
+  GitHubAvatarRequest
+} from '../../lib/types'
+import { isLocalDevelopmentUrl } from '../../lib/local-development-url'
 import { toPosixPath } from '../../lib/paths'
 import { Logger } from '../system/logger'
 import type {
@@ -1577,31 +1583,61 @@ const MAX_GITHUB_LOGIN_LENGTH = 44
 const GITHUB_LOGIN_PATTERN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/iu
 
 /**
- * Validate the logins an avatar request carries. Each entry has to be login-shaped,
- * `[bot]` accounts included, so nothing but a GitHub account name can reach the
- * avatar host. Entries that are not are dropped rather than failing the batch, the
- * way favicon hostnames are, because a provider writes `unknown` for a comment whose
- * user record is missing and that should not cost a request.
+ * Validate the accounts an avatar request carries.
+ *
+ * Each entry has to be login-shaped, `[bot]` accounts included, so nothing but a
+ * GitHub account name can reach the avatar host. The optional declared URL arrives
+ * from the provider rather than from user content, but it is still checked before
+ * main fetches it: HTTPS only, plus the local-development exception the provider
+ * base URL already allows, so a self-hosted or test server can serve a picture.
+ * Entries that fail are dropped rather than failing the batch, the way favicon
+ * hostnames are, because a provider writes `unknown` for a comment whose user
+ * record is missing and that should not cost a request.
  */
-export function validateGitHubLogins(value: unknown): string[] {
-  if (!Array.isArray(value)) throw new TypeError('Avatar logins must be an array')
+export function validateGitHubAvatarRequests(value: unknown): GitHubAvatarRequest[] {
+  if (!Array.isArray(value)) throw new TypeError('Avatar accounts must be an array')
   if (value.length === 0 || value.length > MAX_AVATAR_LOGINS) {
-    throw new TypeError(`Avatar logins must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
+    throw new TypeError(`Avatar accounts must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
   }
-  const logins: string[] = []
+  const accounts: GitHubAvatarRequest[] = []
   for (let index = 0; index < value.length; index += 1) {
     const entry = value[index]
-    if (typeof entry !== 'string' || entry.length === 0 || entry.length > MAX_GITHUB_LOGIN_LENGTH) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      Logger.dev(`Skipping non-object avatar entry at index ${index}`)
+      continue
+    }
+    const record = entry as Record<string, unknown>
+    const login = typeof record['login'] === 'string' ? record['login'].trim() : ''
+    if (login.length === 0 || login.length > MAX_GITHUB_LOGIN_LENGTH) {
       Logger.dev(`Skipping invalid avatar login at index ${index}`)
       continue
     }
-    if (!GITHUB_LOGIN_PATTERN.test(entry)) {
+    if (!GITHUB_LOGIN_PATTERN.test(login)) {
       Logger.dev(`Skipping non-login avatar entry at index ${index}`)
       continue
     }
-    if (!logins.includes(entry)) logins.push(entry)
+    accounts.push({ login, avatarUrl: validateDeclaredAvatarUrl(record['avatarUrl'], index) })
   }
-  return logins
+  return accounts
+}
+
+/** The provider-declared picture URL, or null when absent or not fetchable. */
+function validateDeclaredAvatarUrl(value: unknown, index: number): string | null {
+  if (typeof value !== 'string') return null
+  const candidate = value.trim()
+  if (candidate.length === 0) return null
+  let url: URL
+  try {
+    url = new URL(candidate)
+  } catch {
+    Logger.dev(`Skipping malformed avatar URL at index ${index}`)
+    return null
+  }
+  if (url.protocol !== 'https:' && !isLocalDevelopmentUrl(candidate)) {
+    Logger.dev(`Skipping non-HTTPS avatar URL at index ${index}`)
+    return null
+  }
+  return url.href
 }
 
 /**

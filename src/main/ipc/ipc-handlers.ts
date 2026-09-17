@@ -129,7 +129,7 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
-  validateGitHubLogins,
+  validateGitHubAvatarRequests,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -4672,9 +4672,9 @@ export function registerIpcHandlers(
   // Avatars for the logins a pull request conversation names. Same reason as the
   // favicons above: the renderer's `img-src` allows `data:` and nothing remote, so
   // the picture is downloaded here and handed over inlined.
-  ipcMain.handle('github:avatars', async (_event, rawLogins: unknown) => {
-    const logins = validateGitHubLogins(rawLogins)
-    return resolveAvatars(logins)
+  ipcMain.handle('github:avatars', async (_event, rawAccounts: unknown) => {
+    const accounts = validateGitHubAvatarRequests(rawAccounts)
+    return resolveAvatars(accounts)
   })
 
   // Images embedded in provider-authored markdown (a pull request body, a comment
