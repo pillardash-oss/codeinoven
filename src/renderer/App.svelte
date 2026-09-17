@@ -26,6 +26,7 @@
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { schemeState } from '$lib/stores/scheme.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -137,6 +138,7 @@
 
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
+    schemeState.sync(effectiveTheme)
   }
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */

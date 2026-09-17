@@ -7,6 +7,8 @@
  * from the desktop's appearance.
  */
 
+import { schemeState } from '$lib/stores/scheme.svelte'
+
 export type ResolvedTheme = 'light' | 'dark'
 
 /** `--color-app` for each theme, mirrored into the mobile status-bar colour. */
@@ -21,10 +23,16 @@ const APP_BACKGROUND: Record<ResolvedTheme, string> = {
  * Also updates `meta[name="theme-color"]`, which drives the browser chrome and
  * status bar on a phone   a fixed value there leaves the notch area clashing
  * with the page whenever the theme changes.
+ *
+ * The scheme is also recorded in `schemeState`, which is what provider markdown
+ * reads: a `<picture>` in a comment selects its artwork with
+ * `(prefers-color-scheme: dark)`, and the browser's answer for that is the OS's,
+ * not this setting.
  */
 export function applyTheme(theme: ResolvedTheme): void {
   document.documentElement.classList.toggle('dark', theme === 'dark')
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', APP_BACKGROUND[theme])
+  schemeState.sync(theme)
 }
 
 /**

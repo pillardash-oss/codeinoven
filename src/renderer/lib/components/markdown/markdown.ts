@@ -21,16 +21,22 @@ import {
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
 import { faviconState } from '$lib/stores/favicons.svelte'
 import { githubImageState } from '$lib/stores/github-images.svelte'
+import { schemeState } from '$lib/stores/scheme.svelte'
+import type { ResolvedTheme } from '$lib/theme'
 import {
   EMOJI_GLYPH_PATTERN,
+  HTML_SOURCE_TAG,
   IMAGE_ATTR_ALT,
   IMAGE_ATTR_CLASS,
   IMAGE_ATTR_SRC,
   IMAGE_ATTR_SRC_ANY,
   IMAGE_ATTR_SRCSET_ANY,
   IMAGE_TAG,
+  TAG_ATTR_SRCSET,
   decodeMarkdownAttribute,
-  hasRemoteImage
+  firstSrcsetUrl,
+  hasRemoteImage,
+  isDarkSchemeSource
 } from '$lib/markdown-remote-images'
 import { githubReferencesExtension, type GithubRepoContext } from '$lib/github-references'
 import { githubEmojiExtension } from './github-emoji'
@@ -477,13 +483,19 @@ export function blockHtml(
   const resolution = `${hasExternalLink ? `f${faviconState.version}` : ''}${
     hasImage ? `i${githubImageState.version}` : ''
   }`
-  const cacheKey = `${HTML_CACHE_VERSION}:${mode}:${scope}:${resolution}:${footnoteKey}:${token.raw}`
+  // A picture's variant depends on the app's scheme, so that is part of the key
+  // for a picture-bearing block only: folding it into every image block would make
+  // a theme switch recompute HTML that cannot differ.
+  const variant = PICTURE_SOURCE.test(token.raw) ? `v${schemeState.isDark ? 'd' : 'l'}` : ''
+  const cacheKey = `${HTML_CACHE_VERSION}:${mode}:${scope}:${resolution}${variant}:${footnoteKey}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
   const parser = parserFor(allowHtml, repository)
   const sanitized = DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
   const withFavicons = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
-  const html = hasImage ? injectContentImages(unwrapPictureElements(withFavicons)) : withFavicons
+  const html = hasImage
+    ? injectContentImages(selectPictureVariant(withFavicons, schemeState.current))
+    : withFavicons
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
@@ -581,22 +593,54 @@ function isMediaOnlyAnchor(inner: string): boolean {
 }
 
 const PICTURE_ELEMENT = /<picture\b[^>]*>([\s\S]*?)<\/picture>/giu
+/** Whether a source can hold a `<picture>` at all, for the cache key. */
+const PICTURE_SOURCE = /<picture\b/iu
 const IMG_TAG = /<img\b[^>]*>/iu
 
 /**
- * Replace a `<picture>` with the `<img>` a browser without its sources draws.
+ * The remote URL of a `<picture>`'s dark asset, as written, or null.
  *
- * A dark-mode variant arrives as `<source srcset="https://…">`, and the renderer
- * CSP blocks remote image hosts, so that source can never load. Worse, a matching
- * media query makes the browser pick it *instead* of the `<img>` — a broken
- * picture even after the `<img>` beside it has been inlined. Dropping to the
- * `<img>` is exactly what a browser with no matching source does.
+ * Read from the tag rather than from a capture group of the whole element because
+ * a picture can carry several sources (format hints, width queries), and only the
+ * one asking for a dark surface is a second *picture* rather than a second
+ * encoding of the same one.
  */
-function unwrapPictureElements(html: string): string {
-  return html.replace(
-    PICTURE_ELEMENT,
-    (whole: string, inner: string) => IMG_TAG.exec(inner)?.[0] ?? whole
-  )
+function darkPictureSource(inner: string): string | null {
+  for (const match of inner.matchAll(HTML_SOURCE_TAG)) {
+    const tag = match[0]
+    if (!isDarkSchemeSource(tag)) continue
+    const srcset = TAG_ATTR_SRCSET.exec(tag)?.[1]
+    if (!srcset) continue
+    return firstSrcsetUrl(srcset)
+  }
+  return null
+}
+
+/**
+ * Replace a `<picture>` with the one asset this app should draw.
+ *
+ * A provider offers its artwork twice: a `<source media="(prefers-color-scheme:
+ * dark)">` for a dark surface, and the `<img>` beside it as the fallback. Both are
+ * remote, and the renderer CSP blocks remote hosts, so what has to survive is one
+ * `<img>` whose `src` this module can then inline. Which one is decided by the
+ * app's own scheme rather than by the browser: the media query inside the source
+ * asks the OS, so a reader who picked light in Appearance while their OS is dark
+ * would get dark artwork on a light panel.
+ *
+ * Replacing the `src` instead of rebuilding the tag keeps the `<img>`'s other
+ * attributes (alt, width, height, class), which GitHub's logo relies on for its
+ * 9px box.
+ */
+function selectPictureVariant(html: string, scheme: ResolvedTheme): string {
+  return html.replace(PICTURE_ELEMENT, (whole: string, inner: string) => {
+    const imgTag = IMG_TAG.exec(inner)?.[0] ?? null
+    // Anything else in the picture is an encoding hint whose URL the fallback
+    // already covers, so a light app has nothing to choose between.
+    const dark = scheme === 'dark' ? darkPictureSource(inner) : null
+    if (!dark) return imgTag ?? whole
+    if (!imgTag) return `<img src="${dark}" alt="">`
+    return imgTag.replace(IMAGE_ATTR_SRC_ANY, `src="${dark}"`)
+  })
 }
 
 /**
