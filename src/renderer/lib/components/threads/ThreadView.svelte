@@ -1,10 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import {
-    mergeSubagentParts,
-    mergeWorkingParts,
-    shouldMountWorkingTrace
-  } from '$lib/working-trace-parts'
+  import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
@@ -267,6 +263,21 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
+  import {
+    auditReportForTurn,
+    getTurnFinalText,
+    getTurnWorkingParts,
+    hasRenderableWorkingParts,
+    isActivityOnlyUserMessage,
+    isTurnCompleted,
+    isTurnEndIndex,
+    isTurnStartIndex,
+    lastTurnStartIndex,
+    resolvedSubagentPart,
+    streamWorkingPartsForTurn,
+    turnStartPromptsBefore,
+    type SubagentPart
+  } from './thread-turn-parts'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -584,6 +595,7 @@
       return []
     if (latestTurnInfo.startIndex === -1) return []
     const { leading, body } = getTurnWorkingParts(
+      messages,
       latestTurnInfo.startIndex,
       conversationBusy && latestTurnInfo.active
     )
@@ -3432,7 +3444,7 @@
       // bounded 40-message page and turns that span more than one page keep
       // it fetching until three deduped turn starts exist before the anchor.
       for (let attempt = 0; attempt < 30; attempt++) {
-        if (turnStartPromptsBefore(mountedStartIndex, 3).length === 3) break
+        if (turnStartPromptsBefore(messages, mountedStartIndex, 3).length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3507,7 +3519,7 @@
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
-      const starts = turnStartPromptsBefore(mountedStartIndex, 3)
+      const starts = turnStartPromptsBefore(messages, mountedStartIndex, 3)
       let target = starts.length === 3 ? starts[starts.length - 1] : 0
       const isRealPrompt = (index: number): boolean => {
         const message = messages[index]
@@ -9950,22 +9962,6 @@
     return getAgentIcon(id)?.name ?? id
   }
 
-  type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
-
-  function resolvedSubagentPart(part: SubagentPart): SubagentPart | null {
-    const childSessionId = part.activity.childSessionId
-    if (!childSessionId) return part
-    const related = messages.flatMap((message) =>
-      message.parts.filter(
-        (candidate): candidate is SubagentPart =>
-          candidate.type === 'subagent' && candidate.activity.childSessionId === childSessionId
-      )
-    )
-    const first = related[0]
-    if (!first || first.id !== part.id || first.messageID !== part.messageID) return null
-    return related.slice(1).reduce(mergeSubagentParts, first)
-  }
-
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
   }
@@ -9974,7 +9970,7 @@
     for (const message of messages) {
       for (const part of message.parts) {
         if (part.type !== 'subagent') continue
-        const resolved = resolvedSubagentPart(part)
+        const resolved = resolvedSubagentPart(part, messages)
         if (!resolved) continue
         contextSidebarState.updateSubagent(
           thread.projectId,
@@ -9986,181 +9982,6 @@
     }
   }
 
-  function appendWorkingPart(parts: AgentPart[], part: AgentPart): void {
-    if (part.type === 'compaction-summary') {
-      const compactionIndex = parts.findLastIndex((candidate) => candidate.type === 'compaction')
-      const compaction = parts[compactionIndex]
-      if (compaction?.type === 'compaction') {
-        parts[compactionIndex] = { ...compaction, summary: part.text }
-      } else {
-        parts.push(part)
-      }
-      return
-    }
-    if (part.type !== 'subagent') {
-      parts.push(part)
-      return
-    }
-    const resolved = resolvedSubagentPart(part)
-    if (resolved) parts.push(resolved)
-  }
-
-  function isActivityOnlyUserMessage(message: AgentMessage): boolean {
-    return (
-      message.parts.length > 0 &&
-      message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-    )
-  }
-
-  /** Deduped turn-start prompt indices before `fromIndex`, newest-first.
-   *  Every persisted turn carries the prompt twice (the display row and the
-   *  harness echo under its own id); counting both corrupts the "three pages"
-   *  anchor math, so adjacent prompt copies count as one turn start. */
-  function turnStartPromptsBefore(fromIndex: number, count: number): number[] {
-    const starts: number[] = []
-    for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
-      const message = messages[index]
-      if (!message) break
-      if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
-      const previous = messages[index - 1]
-      if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
-      starts.push(index)
-    }
-    return starts
-  }
-
-  /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
-   *  mid-turn on the user role. They must stay invisible in the transcript but
-   *  also transparent to turn grouping: one prompt → one working trace, with
-   *  the final output after it. */
-  function isTurnStartIndex(index: number): boolean {
-    for (let i = index - 1; i >= 0; i--) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'assistant') return false
-      if (!isActivityOnlyUserMessage(message)) return true
-    }
-    return true
-  }
-
-  function isTurnEndIndex(index: number): boolean {
-    for (let i = index + 1; i < messages.length; i++) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'assistant') return false
-      if (!isActivityOnlyUserMessage(message)) return true
-    }
-    return true
-  }
-
-  /** Return the index of the first assistant message of the last turn in the
-   *  list. A trailing steer   a user message the agent has not responded to yet
-   *    does not end the turn it intervenes in, so the last turn is the one that
-   *  contains the last assistant message, regardless of unresponded steers
-   *  appended after it. Returns -1 when no assistant message exists. */
-  function lastTurnStartIndex(messageList: AgentMessage[]): number {
-    for (let i = messageList.length - 1; i >= 0; i--) {
-      if (messageList[i]?.role !== 'assistant') continue
-      let j = i
-      while (j > 0) {
-        const previous = messageList[j - 1]
-        if (previous?.role === 'assistant') {
-          j--
-          continue
-        }
-        if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
-          j--
-          continue
-        }
-        break
-      }
-      return j
-    }
-    return -1
-  }
-
-  /** Collect every ordered intermediate part as two runs: `leading` holds the
-   *  compaction/sub-agent context harvested from the activity messages that
-   *  precede the prompt, `body` holds the turn itself. They are kept apart
-   *  because the durable stream window can only supply the turn body: the leading
-   *  context must stay in front of it, while the body has to follow the log's
-   *  own order. Only the final text is rendered below the trace.
-   *  Activity-only user messages (sub-agent envelopes, compaction notices) are
-   *  transparent: the turn spans them and their sub-agent/compaction parts are
-   *  harvested so one prompt keeps a single continuous working trace. */
-  function getTurnWorkingParts(
-    startMsgIndex: number,
-    includeCurrentFinal: boolean
-  ): { leading: AgentPart[]; body: AgentPart[] } {
-    const leading: AgentPart[] = []
-    for (let i = startMsgIndex - 1; i >= 0; i--) {
-      const preceding = messages[i]
-      if (!preceding || preceding.role !== 'user') break
-      for (const part of preceding.parts) {
-        if (part.type === 'compaction' || part.type === 'subagent') {
-          appendWorkingPart(leading, part)
-        }
-      }
-      if (!isActivityOnlyUserMessage(preceding)) break
-    }
-    const body: AgentPart[] = []
-    let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length) {
-      const next = messages[turnEndIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        turnEndIndex += 1
-        continue
-      }
-      break
-    }
-    const finalText = getTurnFinalText(turnEndIndex)
-    for (let i = startMsgIndex; i <= turnEndIndex; i++) {
-      const m = messages[i]
-      if (!m) break
-      if (m.role === 'user') {
-        if (!isActivityOnlyUserMessage(m)) break
-        for (const part of m.parts) {
-          if (part.type === 'compaction' || part.type === 'subagent') {
-            appendWorkingPart(body, part)
-          }
-        }
-        continue
-      }
-      for (const p of m.parts) {
-        if (
-          p.type === 'text' &&
-          finalText &&
-          p.id === finalText.id &&
-          (!includeCurrentFinal || p.phase === 'final_answer')
-        ) {
-          continue
-        }
-        if (p.type === 'question') continue
-        if (isTodoToolPart(p)) continue
-        appendWorkingPart(body, p)
-      }
-    }
-    return { leading, body }
-  }
-
-  /** True once the turn starting at `startMsgIndex` produced a completed
-   *  assistant message   the only state in which the working trace may fold. */
-  function isTurnCompleted(startMsgIndex: number): boolean {
-    let endIndex = startMsgIndex
-    while (endIndex + 1 < messages.length) {
-      const next = messages[endIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        endIndex += 1
-        continue
-      }
-      break
-    }
-    const last = messages[endIndex]
-    return last?.role === 'assistant' && last.completedAt !== undefined
-  }
-
   /** True when the persisted latest turn shows a run was mid-flight when the
    *  live stream went away: the turn has not completed a terminal message but
    *  already persisted real working parts (reasoning, tool calls, sub-agents).
@@ -10170,61 +9991,18 @@
   function hasPersistedInFlightWork(): boolean {
     const startIndex = latestTurnInfo.startIndex
     if (startIndex === -1) return false
-    if (isTurnCompleted(startIndex)) return false
-    const { leading, body } = getTurnWorkingParts(startIndex, false)
+    if (isTurnCompleted(messages, startIndex)) return false
+    const { leading, body } = getTurnWorkingParts(messages, startIndex, false)
     return hasRenderableWorkingParts([...leading, ...body])
-  }
-
-  function hasRenderableWorkingParts(parts: AgentPart[]): boolean {
-    return parts.some(
-      (part) =>
-        part.type === 'reasoning' ||
-        part.type === 'tool' ||
-        part.type === 'subagent' ||
-        part.type === 'compaction' ||
-        part.type === 'compaction-summary' ||
-        part.type === 'step-finish' ||
-        part.type === 'file'
-    )
   }
 
   function isLatestTurnCompleted(): boolean {
     const startIndex = latestTurnInfo.startIndex
-    return startIndex !== -1 && isTurnCompleted(startIndex)
+    return startIndex !== -1 && isTurnCompleted(messages, startIndex)
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
    *  and preserving the preferred list's order (see `mergeWorkingParts`). */
-  function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
-    let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length) {
-      const next = messages[turnEndIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        turnEndIndex += 1
-        continue
-      }
-      break
-    }
-    const finalText = getTurnFinalText(turnEndIndex)
-    // The durable stream log is thread-wide and its turn tags are not a safe
-    // scope: a steered continuation keeps the original turn's anchor, and log
-    // segments written before turn binding fold into the latest turn. Drop
-    // every durable part the mirror already persisted BEFORE this turn started
-    // so earlier traces can never bleed into the newest one; parts not yet in
-    // the mirror (the current turn's in-flight work) are exactly the gap this
-    // list exists to fill.
-    const priorPartIds = new SvelteSet<string>()
-    for (let i = 0; i < startMsgIndex; i++) {
-      for (const part of messages[i]?.parts ?? []) priorPartIds.add(part.id)
-    }
-    return streamParts.filter((part) => {
-      if (part.type === 'question' || isTodoToolPart(part)) return false
-      if (part.type === 'text' && finalText?.id === part.id) return false
-      return !priorPartIds.has(part.id)
-    })
-  }
-
   /** The main-process stream fold is already scoped to the newest real user
    *  message by event timestamp. Do not filter it against historical part IDs:
    *  a resumed Pi process may restart its local message counter, so an old and
@@ -10241,55 +10019,6 @@
 
   /** Find the last text part in a turn ending at the given message index.
    *  Activity-only user messages are transparent to the turn span. */
-  function getTurnFinalText(endMsgIndex: number): AgentPart | null {
-    let turnStart = endMsgIndex
-    for (let i = endMsgIndex; i >= 0; i--) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role !== 'user') continue
-      if (isActivityOnlyUserMessage(message)) continue
-      turnStart = i + 1
-      break
-    }
-    let finalText: AgentPart | null = null
-    for (let i = turnStart; i <= endMsgIndex; i++) {
-      if (i >= messages.length) break
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'user') {
-        if (isActivityOnlyUserMessage(message)) continue
-        break
-      }
-      for (const p of message.parts) {
-        if (p.type === 'text') finalText = p
-      }
-    }
-    return finalText
-  }
-
-  /** Match a completed auditor turn to the report version created before the next turn. */
-  function auditReportForTurn(msgIndex: number): AuditReport | null {
-    let turnStartedAt = 0
-    for (let index = msgIndex; index >= 0; index -= 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'user') continue
-      turnStartedAt = candidate.createdAt
-      break
-    }
-    let nextTurnStartedAt = Number.POSITIVE_INFINITY
-    for (let index = msgIndex + 1; index < messages.length; index += 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'user') continue
-      nextTurnStartedAt = candidate.createdAt
-      break
-    }
-    return (
-      auditVersions.find(
-        (report) => report.createdAt >= turnStartedAt && report.createdAt < nextTurnStartedAt
-      ) ?? null
-    )
-  }
-
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
 
   function closeFind(): void {
@@ -11043,8 +10772,8 @@
               {/if}
             {:else}
               <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(absIndex)}
-              {@const isTurnEnd = isTurnEndIndex(absIndex)}
+              {@const isTurnStart = isTurnStartIndex(messages, absIndex)}
+              {@const isTurnEnd = isTurnEndIndex(messages, absIndex)}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
@@ -11060,21 +10789,23 @@
               {@const turnDuration = getCurrentTurnDuration(absIndex)}
               {@const turnCheckpoint = checkpointForTurn(absIndex)}
               {@const turnAuditReport =
-                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(absIndex) : null}
+                isAssignmentAuditorThread && isTurnEnd
+                  ? auditReportForTurn(messages, auditVersions, absIndex)
+                  : null}
 
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(absIndex)}
+                    {@const turnDone = isTurnCompleted(messages, absIndex)}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const turnWorkingParts = getTurnWorkingParts(absIndex, traceIsLive)}
+                    {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(absIndex)}
+                      : streamWorkingPartsForTurn(messages, streamParts, absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
@@ -11178,7 +10909,7 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(absIndex)}
+                      {@const turnFinalText = getTurnFinalText(messages, absIndex)}
                       {@const finalAnswerReady =
                         turnFinalText?.type === 'text' &&
                         turnFinalText.text.trim().length > 0 &&
