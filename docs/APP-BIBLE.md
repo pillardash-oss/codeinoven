@@ -125,6 +125,23 @@ Every consumer keeps importing `$shared/types` and `$shared/ipc-contract`.
   `drivers/persistent-cli-driver.ts` base.
 - `git/git-service.ts` composes `git/git/`; `git/scope-worktree-service.ts` composes
   `git/scope-worktree/` (porcelain parsing, environment, git ops, setup, health, merge).
+- `index.ts` keeps the boot sequence and composes `bootstrap/` (bootstrap state, data
+  root, splash, keyboard shortcuts, open-with, session guards, post-paint services,
+  shutdown pipeline, quit lifecycle, fatal startup).
+- `browser/browser-service.ts` composes `browser/browser-service/`;
+  `editor/project-files-service.ts` composes `editor/project-files/`;
+  `workspaces/scope-tool-service.ts` composes `workspaces/scope-tool/`.
+- Drivers that were split later follow the same pattern: `drivers/opencode/`,
+  `drivers/muse/`, `drivers/persistent-cli/`, `drivers/cline/`.
+
+**Shared engines** (`src/lib/engines/`)
+`thread-manager.ts` composes `thread-manager-{capacity,deletion,lineage,search,transcripts,fork}.ts`
+and `assignment-engine.ts` composes
+`assignment-engine-{error,plan-lookup,snapshot,annotations,artifacts,audit-cycle,tasks,workers}.ts`.
+
+**Speech** (`src/renderer/lib/speech/`)
+`speech-controller.svelte.ts` keeps the rune state and orchestration over
+`speech-controller-{types,capture,voice-send,artifacts,playback,cues}`.
 
 **Renderer stores** (`src/renderer/lib/stores/`)
 Each store is the composition root over its own prefixed modules:
@@ -139,6 +156,16 @@ Each store is the composition root over its own prefixed modules:
 `components/specs/SpecStudio.svelte` composes
 `SpecStudio{Document,ResolutionSection,ContextSection,EditableListSection,EditableMiniList,AnnotationBubbles}.svelte`
 plus `spec-studio-{document-anchors,draft-edits,formatting,context-picker}`.
+
+**Settings, providers and shared pickers**
+`settings/UtilityEditorModal.svelte`, `settings/SoundSettingsTab.svelte`,
+`providers/AddProviderModal.svelte`, `shared/ModelPicker.svelte`,
+`shared/RichMarkdownEditor.svelte`, `files/ProjectFileExplorer.svelte`,
+`files/ProjectFilesPanel.svelte`, `settings/ProfileSettingsTab.svelte`,
+`git/GitPullRequestDetail.svelte` and `git/GitPullRequestSheet.svelte` each keep
+their public props and compose owner-prefixed section components plus one
+`<owner>-helpers.ts` (or `-format.ts`) module for their pure logic. Destructive
+confirmations in these surfaces all route through the shared `ConfirmDialog`.
 
 ---
 
