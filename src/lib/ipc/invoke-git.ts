@@ -23,9 +23,9 @@ import type {
   GitStashEntry,
   GitStatus,
   GitSyncDirection,
+  GitSyncOutcome,
   GitSyncPeer,
   GitSyncPeerOption,
-  GitSyncResult,
   MergeSummary,
   PrAgentReport,
   PrCommentKind,
@@ -227,7 +227,7 @@ export const invokeGitContract = {
       },
       scopeBucketId?: string
     ],
-    GitSyncResult
+    GitSyncOutcome
   >,
   /** Every checkout and branch this project can sync with, as main names them. */
   'git:syncPeers': {} as Contract<[projectId: string, scopeBucketId?: string], GitSyncPeerOption[]>,

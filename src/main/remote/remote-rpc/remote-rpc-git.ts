@@ -10,6 +10,7 @@
  */
 
 import type { GitConflictSide, GitRebaseAction, GitResetMode } from '../../../lib/types'
+import { gitSyncOutcome } from '../../git/git-refusal'
 import { validateSyncWithOptions } from '../../ipc/validation/pr'
 import type { RemoteRpcCallContext } from './remote-rpc-context'
 import { REMOTE_RPC_UNHANDLED } from './remote-rpc-context'
@@ -280,13 +281,20 @@ export async function callRemoteGitRpc(
         ? await ctx.vault.resolve(tokenRef)
         : undefined
       const peer = await ctx.syncPeers.resolve({ projectId, peer: options.peer })
-      return ctx.gitService.syncWith(
-        await resolveRemoteProjectPath(
-          ctx,
-          projectId,
-          args[2] === undefined ? undefined : requireString(args[2])
-        ),
-        { direction: options.direction, peer: peer.target, strategy: options.strategy, token }
+      const projectPath = await resolveRemoteProjectPath(
+        ctx,
+        projectId,
+        args[2] === undefined ? undefined : requireString(args[2])
+      )
+      // A refusal is a state the user resolves, so it travels as data: the
+      // phone renders the same sentence the desktop panel does.
+      return gitSyncOutcome(() =>
+        ctx.gitService.syncWith(projectPath, {
+          direction: options.direction,
+          peer: peer.target,
+          strategy: options.strategy,
+          token
+        })
       )
     }
     case 'git:syncPeers': {

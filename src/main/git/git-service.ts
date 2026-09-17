@@ -27,6 +27,7 @@ import type {
   PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { GitRefusal, isUncommittedChangesRefusal } from './git-refusal'
 import {
   createAuthenticatedGitClient,
   createGitClient,
@@ -93,6 +94,15 @@ import {
 process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
 
 export type { PullRequestComposeContext } from './git/git-service-pull-request'
+
+/**
+ * Tracked, not-yet-committed files in a checkout: what a rebase refuses and a
+ * merge only tolerates while nothing would be overwritten. Untracked files are
+ * excluded because no integration ever touches them.
+ */
+function uncommittedCount(status: GitStatus): number {
+  return status.changes.filter((change) => change.status !== 'untracked').length
+}
 
 /**
  * Main-process git runtime built on `simple-git`   the same thin wrapper over
@@ -1159,12 +1169,12 @@ export class GitService {
       // own state. A merge keeps HEAD on the branch, so for it the two checks
       // agree either way.
       if (before.conflictState !== 'none') {
-        throw new Error(
+        throw new GitRefusal(
           `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} ${options.peer.label}`
         )
       }
       if (before.detached || !before.branch) {
-        throw new Error(
+        throw new GitRefusal(
           `Check out a branch in this worktree before syncing ${toward} ${options.peer.label}`
         )
       }
@@ -1172,7 +1182,7 @@ export class GitService {
 
       if (options.direction === 'to') {
         if (!peerDirectory) {
-          throw new Error(
+          throw new GitRefusal(
             `${options.peer.label} is not a checkout, so it cannot receive commits. Pick a worktree or the project root to sync to`
           )
         }
@@ -1183,14 +1193,14 @@ export class GitService {
         ? await this.branchOfCheckout(peerDirectory, options.peer.label)
         : options.peer.branch
       if (!sourceBranch) {
-        throw new Error(`${options.peer.label} has no branch to sync from`)
+        throw new GitRefusal(`${options.peer.label} has no branch to sync from`)
       }
       if (!peerDirectory) {
         const exists = await this.wrapError(projectPath, 'read', () =>
           this.refExists(this.client(directory), `refs/heads/${sourceBranch}`)
         )
         if (!exists) {
-          throw new Error(`The branch ${sourceBranch} does not exist in this repository`)
+          throw new GitRefusal(`The branch ${sourceBranch} does not exist in this repository`)
         }
       }
 
@@ -1218,7 +1228,28 @@ export class GitService {
       const ref = await this.pickSyncSourceRef(directory, projectPath, localRef, remoteRef)
       const incoming = await this.countCommitsAhead(directory, projectPath, ref)
       if (incoming > 0) {
-        await this.integrateFromRef(directory, projectPath, ref, options.strategy)
+        const uncommitted = uncommittedCount(before)
+        // A rebase refuses any tracked change outright, so answer before git
+        // does: its own wording ("cannot rebase: You have unstaged changes...")
+        // names the mechanism instead of what the user has to do about it.
+        if (options.strategy === 'rebase' && uncommitted > 0) {
+          throw new GitRefusal(
+            `This checkout has ${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'}. Commit or stash ${uncommitted === 1 ? 'it' : 'them'} before syncing from ${options.peer.label}`
+          )
+        }
+        try {
+          await this.integrateFromRef(directory, projectPath, ref, options.strategy)
+        } catch (failure) {
+          // A merge or fast-forward only refuses for local changes that would
+          // be overwritten, and git answers with the same advice in its own
+          // words. Report the count the refusal is about in the panel's voice.
+          if (uncommitted > 0 && isUncommittedChangesRefusal(failure)) {
+            throw new GitRefusal(
+              `This checkout has ${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'} that would be overwritten. Commit or stash ${uncommitted === 1 ? 'it' : 'them'} before syncing from ${options.peer.label}`
+            )
+          }
+          throw failure
+        }
       }
 
       return {
@@ -1242,7 +1273,7 @@ export class GitService {
       await this.client(directory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])
     ).trim()
     if (!resolved || resolved === 'HEAD') {
-      throw new Error(`${label} is not on a branch, so there is nothing to sync from`)
+      throw new GitRefusal(`${label} is not on a branch, so there is nothing to sync from`)
     }
     return resolved
   }
@@ -1271,12 +1302,9 @@ export class GitService {
     options: { direction: GitSyncDirection; peer: GitSyncPeerTarget; strategy: GitPullStrategy }
   ): Promise<GitSyncResult> {
     const label = options.peer.label
-    const uncommitted = (status: GitStatus): number =>
-      status.changes.filter((change) => change.status !== 'untracked').length
-
-    const dirty = uncommitted(before)
+    const dirty = uncommittedCount(before)
     if (dirty > 0) {
-      throw new Error(
+      throw new GitRefusal(
         `This checkout has ${dirty} uncommitted file${dirty === 1 ? '' : 's'}. Commit or stash ${dirty === 1 ? 'it' : 'them'} before syncing to ${label}`
       )
     }
@@ -1286,17 +1314,17 @@ export class GitService {
     // its HEAD, and "not on a branch" is not what the user needs to hear while
     // its rebase is sitting half-finished.
     if (peerStatus.conflictState !== 'none') {
-      throw new Error(
+      throw new GitRefusal(
         `Finish or abort the in-progress ${peerStatus.conflictState} in ${label} before syncing to it`
       )
     }
     if (peerStatus.detached || !peerStatus.branch) {
-      throw new Error(`${label} is not on a branch, so there is nothing to sync to`)
+      throw new GitRefusal(`${label} is not on a branch, so there is nothing to sync to`)
     }
     const peerBranch = peerStatus.branch
-    const peerDirty = uncommitted(peerStatus)
+    const peerDirty = uncommittedCount(peerStatus)
     if (peerDirty > 0) {
-      throw new Error(
+      throw new GitRefusal(
         `${label} has ${peerDirty} uncommitted file${peerDirty === 1 ? '' : 's'}. Commit or stash ${peerDirty === 1 ? 'it' : 'them'} there before syncing to it`
       )
     }
@@ -1370,14 +1398,14 @@ export class GitService {
         () => true,
         () => false
       )
-      throw new Error(
+      throw new GitRefusal(
         rolledBack
           ? `Merging ${branch} into ${peerBranch} would conflict. Sync from ${label} in this worktree, resolve the conflicts here, then sync to it again`
           : `Merging ${branch} into ${peerBranch} conflicted and could not be rolled back. Resolve it in ${label} first`
       )
     }
     if (strategy === 'ff-only') {
-      throw new Error(
+      throw new GitRefusal(
         `${peerBranch} has diverged from ${branch}, so it cannot fast-forward. Merge instead`
       )
     }
@@ -1461,7 +1489,7 @@ export class GitService {
     if (!failure) return 'done'
     if (await conflicted()) return 'conflicted'
     if (strategy === 'ff-only') {
-      throw new Error(
+      throw new GitRefusal(
         `This branch has diverged from ${ref}, so it cannot fast-forward. Merge or rebase instead`
       )
     }

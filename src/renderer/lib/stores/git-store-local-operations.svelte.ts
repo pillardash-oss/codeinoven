@@ -463,6 +463,12 @@ export class GitLocalOperations {
    * returned status carries the conflicts and the caller hands over to the
    * conflict UI.
    *
+   * A refusal (uncommitted work, a detached HEAD, an open integration, a peer
+   * that cannot receive commits) arrives as `{ ok: false }` rather than as a
+   * rejection, because Electron logs every rejected invoke as a console error;
+   * either way it lands in `error`, which is exactly what the sync dialogs
+   * render.
+   *
    * `scopeBucketId` is the checkout the sync runs in, which is not always the
    * active one: a scope's own menu syncs that scope's worktree while the panel
    * shows something else. Only a run in the active checkout may touch the
@@ -476,9 +482,14 @@ export class GitLocalOperations {
     this.access.markBusy('sync', true)
     this.error = null
     try {
-      const result = scopeBucketId
+      const outcome = scopeBucketId
         ? await invoke('git:syncWith', projectId, options, scopeBucketId)
         : await invoke('git:syncWith', projectId, options)
+      if (!outcome.ok) {
+        this.error = outcome.refusal
+        return null
+      }
+      const result = outcome.result
       if (this.access.scopeFor(projectId) === scopeBucketId) {
         this.status = result.status
         if (result.status.conflicted.length === 0) this.conflictsMode = false

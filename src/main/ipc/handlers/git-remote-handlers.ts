@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { gitSyncOutcome } from '../../git/git-refusal'
 import {
   validateBranchName,
   validateEntityId,
@@ -134,12 +135,20 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
     const tokenRef = gitCredentialRef(safeProjectId)
     const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
     const peer = await syncPeers.resolve({ projectId: safeProjectId, peer: safeOptions.peer })
-    return gitService.syncWith(await resolveProjectPath(safeProjectId, safeScopeBucketId), {
-      direction: safeOptions.direction,
-      peer: peer.target,
-      strategy: safeOptions.strategy,
-      token
-    })
+    const projectPath = await resolveProjectPath(safeProjectId, safeScopeBucketId)
+    // A refusal (uncommitted work, a detached HEAD, an open integration) is a
+    // state the renderer resolves in its own dialog, so it returns as data
+    // rather than a rejected invoke: Electron logs every rejected
+    // `ipcMain.handle` call as a console error, which would broadcast to the
+    // log a sentence the panel is already showing.
+    return gitSyncOutcome(() =>
+      gitService.syncWith(projectPath, {
+        direction: safeOptions.direction,
+        peer: peer.target,
+        strategy: safeOptions.strategy,
+        token
+      })
+    )
   }
   ipcMain.handle(
     'git:syncWith',
