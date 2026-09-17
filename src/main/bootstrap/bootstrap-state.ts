@@ -74,6 +74,8 @@ export interface BootstrapState {
   remoteCredentials: DeviceCredentialService | null
   remoteMode: RemoteModeController | null
   stopRemoteOwnershipListener: (() => void) | null
+  /** Stops the instance take-over watcher registered after launch recovery. */
+  stopInstanceTakeOverListener: (() => void) | null
   remoteOwnershipPromise: Promise<void> | null
   remoteOwnershipReconcilePending: boolean
   modelPricingService: ModelPricingService | null
@@ -127,6 +129,7 @@ export function createBootstrapState(): BootstrapState {
     remoteCredentials: null,
     remoteMode: null,
     stopRemoteOwnershipListener: null,
+    stopInstanceTakeOverListener: null,
     remoteOwnershipPromise: null,
     remoteOwnershipReconcilePending: false,
     modelPricingService: null,

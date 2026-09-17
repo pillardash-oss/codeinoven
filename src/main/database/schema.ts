@@ -651,10 +651,15 @@ CREATE TABLE IF NOT EXISTS turn_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_thread ON turn_checkpoints(project_id, thread_id);
 
 -- ─── Active Turns ────────────────────────────────────────────────────
+-- owner_pid records the CodeInOven process running the turn, so a second
+-- instance sharing this config root can tell an orphaned turn from a turn a
+-- sibling is still working on. NULL only for rows written before that column
+-- existed.
 CREATE TABLE IF NOT EXISTS active_turns (
   project_id TEXT NOT NULL,
   thread_id  TEXT NOT NULL,
   turn_id    TEXT,
+  owner_pid  INTEGER,
   PRIMARY KEY (project_id, thread_id)
 );
 

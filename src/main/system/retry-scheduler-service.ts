@@ -1,4 +1,5 @@
 import { Logger } from './logger'
+import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 
@@ -249,6 +250,12 @@ export class RetrySchedulerService {
 
   private tick(): void {
     if (!this.enabled) return
+    // The ledger of pending resets is shared by every instance using this config
+    // root, and each instance holds its own in-memory copy of it. Only the
+    // longest-running instance fires a continuation, so a second window can
+    // never resume a thread the first one already owns, and a fired record is
+    // removed from the shared ledger by exactly one process.
+    if (!instanceRegistry.isIncumbentInstance()) return
     const now = Date.now()
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {

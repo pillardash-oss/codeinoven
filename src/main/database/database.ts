@@ -734,6 +734,7 @@ export class Database {
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateAgentMessageNormalizedUsageColumn(connection)
+      this.migrateActiveTurnOwnerColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -891,6 +892,18 @@ export class Database {
       connection.exec(
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate the in-flight turn owner recorded for cross-instance recovery. */
+  private migrateActiveTurnOwnerColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(active_turns)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('owner_pid')) {
+      connection.exec('ALTER TABLE active_turns ADD COLUMN owner_pid INTEGER')
     }
   }
 

@@ -154,8 +154,8 @@ export class CheckpointManager {
       }
       await this.save(checkpoint)
       await this.writeRow(
-        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-        [projectId, threadId, id]
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id, owner_pid) VALUES(?, ?, ?, ?)',
+        [projectId, threadId, id, process.pid]
       )
       return checkpoint
     })
@@ -500,8 +500,8 @@ export class CheckpointManager {
       delete reopened.completedAt
       await this.save(reopened)
       await this.writeRow(
-        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-        [projectId, threadId, turnId]
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id, owner_pid) VALUES(?, ?, ?, ?)',
+        [projectId, threadId, turnId, process.pid]
       )
       return reopened
     })

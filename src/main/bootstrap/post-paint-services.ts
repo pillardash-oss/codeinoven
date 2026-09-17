@@ -24,11 +24,7 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
 import { readMemorySyncState } from '../remote/memory-sync-state'
-import {
-  broadcastThreadUpdate,
-  setNotificationService,
-  setPowerWakeService
-} from '../chat/thread-events'
+import { setNotificationService, setPowerWakeService } from '../chat/thread-events'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -37,6 +33,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import type { BootstrapState } from './bootstrap-state'
+import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 
@@ -299,8 +296,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       { DeviceCredentialService },
       { HarnessUsageRepo },
       { MemoryService },
-      { NotificationService },
-      { RestartRecoveryService }
+      { NotificationService }
     ] = await Promise.all([
       import('../system/pty-service'),
       import('../providers/provider-connection'),
@@ -312,8 +308,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../remote/device-credential-service'),
       import('../database/repositories/harness-usage-repo'),
       import('../chat/memory-service'),
-      import('../notifications/notification-service'),
-      import('../system/restart-recovery-service')
+      import('../notifications/notification-service')
     ])
 
     state.ptyService = new PtyService(
@@ -506,50 +501,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
 
     try {
-      const recovery = await new RestartRecoveryService(database).recover()
-      if (recovery.recovered.length > 0) {
-        Logger.info('Recovered interrupted threads', {
-          inspected: recovery.inspected,
-          recovered: recovery.recovered.map((thread) => ({
-            projectId: thread.projectId,
-            threadId: thread.id
-          }))
-        })
-        // The renderer's thread list was hydrated before recovery ran, so its
-        // in-memory rows still hold the stale planning/executing status. Push
-        // the corrected snapshots so sidebar indicators flip to "interrupted"
-        // immediately instead of lingering on "working" until the thread is
-        // reopened. `interrupted` is not a notifiable status, so this cannot
-        // fire spurious OS notifications.
-        for (const thread of recovery.recovered) {
-          broadcastThreadUpdate(thread)
-        }
-      }
-      // Threads whose turns demonstrably completed before the stop are finalized
-      // as `completed`, never resumed. Broadcast their corrected status too so the
-      // sidebar doesn't linger on the stale "working" indicator.
-      if (recovery.completed.length > 0) {
-        Logger.info('Finalized completed interrupted threads', {
-          inspected: recovery.inspected,
-          completed: recovery.completed.map((thread) => ({
-            projectId: thread.projectId,
-            threadId: thread.id
-          }))
-        })
-        for (const thread of recovery.completed) {
-          broadcastThreadUpdate(thread)
-        }
-      }
-      if (recovery.failures.length > 0) {
-        Logger.error('Restart recovery completed with failures', recovery.failures)
-      }
-      await state.chatEngine?.resumePendingWork()
-      // Resume the interrupted threads themselves (regular + Sr. Engineer),
-      // gated by the "Resume work on restart" setting. Each resumed thread
-      // broadcasts a working status so the sidebar flips immediately.
-      if (recovery.recovered.length > 0) {
-        await state.chatEngine?.resumeRecoveredThreads(recovery.recovered)
-      }
+      // The watcher keeps the same pass available for the moment the last
+      // sibling exits, so arm it before the launch pass can fail.
+      state.stopInstanceTakeOverListener = watchForInstanceTakeOver(state, database)
+      // Settles and resumes work left in flight by a process that stopped, while
+      // leaving every turn a sibling instance is still running alone.
+      await reconcileInterruptedWork(state, database, 'launch')
     } catch (error) {
       Logger.error('Restart recovery failed (non-fatal):', error)
     }

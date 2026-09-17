@@ -130,6 +130,10 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   state.stopRemoteOwnershipListener?.()
   state.stopRemoteOwnershipListener = null
 
+  // A take-over pass must never start while the process is shutting down.
+  state.stopInstanceTakeOverListener?.()
+  state.stopInstanceTakeOverListener = null
+
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.
   try {

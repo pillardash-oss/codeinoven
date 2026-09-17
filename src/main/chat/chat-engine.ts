@@ -6601,7 +6601,18 @@ export class ChatEngine {
     return drain
   }
 
-  private async restoreCoordinatorHandoffQueues(): Promise<void> {
+  /**
+   * Deliver queued coordinator handoffs left behind by a process that stopped.
+   *
+   * Runs at launch and again when this process takes over from a sibling that
+   * exited, so a deferred queue is never stranded. Delivery is otherwise driven
+   * by the coordinator's own runtime (`queueCoordinatorHandoff` and the session
+   * idle signal), which is why the launch pass defers to a live instance: the
+   * queue file is shared, and only the instance running the coordinator may
+   * decide that its handoff is due.
+   */
+  async restoreCoordinatorHandoffQueues(): Promise<void> {
+    if (this.deferAutomaticResumeToLiveInstance('queued coordinator handoffs')) return
     for (const projectId of await this.storage.listDirectories(COORDINATOR_HANDOFF_QUEUE_DIR)) {
       const projectQueuePath = join(COORDINATOR_HANDOFF_QUEUE_DIR, projectId)
       for (const entry of await this.storage.list(projectQueuePath)) {
@@ -16369,7 +16380,34 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Whether this launch must leave work that carries no turn owner alone.
+   *
+   * Every instance shares one config root, so the thread table, the persisted
+   * retry ledger, and the queued coordinator handoffs are common. The paths this
+   * guards resume work from persisted state that names no owning process, so a
+   * launch that finds another live instance cannot tell whether that instance is
+   * already driving it. The driver busy probes cannot help: `isSessionBusy` only
+   * sees harnesses owned by this process. Starting the work anyway would send a
+   * hidden `Continue` and spawn a second concurrent harness run for a session
+   * that is already working   which then rewrites that session's per-turn runtime
+   * files and strips the original run of its tools.
+   *
+   * Turns that DO record an owner are handled precisely instead: restart recovery
+   * settles only turns whose owner process is gone, so a launch never has to
+   * guess about them.
+   */
+  private deferAutomaticResumeToLiveInstance(reason: string): boolean {
+    if (!instanceRegistry.hasOtherLiveInstance()) return false
+    Logger.info('Automatic resume deferred to another live CodeInOven instance', {
+      pid: process.pid,
+      reason
+    })
+    return true
+  }
+
   async resumePendingWork(): Promise<void> {
+    if (this.deferAutomaticResumeToLiveInstance('pending workflows')) return
     try {
       const config = await this.storage.getConfig()
       if (config.resumeWorkOnRestart === false) return
@@ -16423,6 +16461,10 @@ export class ChatEngine {
    * children are intentionally skipped   their owner workflows (assignments,
    * achievement loops) are resumed by `resumePendingWork`. Gated by the
    * "Resume work on restart" setting.
+   *
+   * `recovered` is already filtered by turn ownership, so this needs no
+   * cross-instance gate of its own: it can only name turns whose owning process
+   * is gone.
    */
   async resumeRecoveredThreads(recovered: Thread[]): Promise<void> {
     const config = await this.storage.getConfig()
@@ -16488,6 +16530,7 @@ export class ChatEngine {
 
   /** Repair specifications persisted before their ready lifecycle finished. */
   private async recoverReadyInitialSpecs(): Promise<void> {
+    if (this.deferAutomaticResumeToLiveInstance('ready specifications')) return
     try {
       const threads = await this.threadManager.listAllThreads()
       await Promise.all(
@@ -16517,6 +16560,7 @@ export class ChatEngine {
 
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */
   private async recoverInterruptedBrainstormEntries(): Promise<void> {
+    if (this.deferAutomaticResumeToLiveInstance('interrupted Brainstorm entries')) return
     try {
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
@@ -19646,6 +19690,7 @@ export class ChatEngine {
 
   /** Repair stale working rows for scheduler-restored retries so UI shows Waiting to retry immediately on launch. */
   async repairPendingRetryThreadStatuses(): Promise<void> {
+    if (this.deferAutomaticResumeToLiveInstance('paused retry statuses')) return
     const scheduler = this.retryScheduler
     // 1) Repair threads that have a persisted scheduler pending (finite retryAt)   original path.
     if (scheduler) {
