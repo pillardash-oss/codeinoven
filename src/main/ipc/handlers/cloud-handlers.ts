@@ -18,6 +18,10 @@ import {
   validateBranchName,
   validateEntityId,
   validatePrCommentBody,
+  validatePrCommentId,
+  validatePrCommentKind,
+  validatePrMinimizeReason,
+  validateGraphqlNodeId,
   validatePrNumber,
   validatePrReviewEvent,
   validateThreadSettings
@@ -1515,6 +1519,83 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
           body: validatePrCommentBody(body)
         })
       )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentEdit',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      const text = validatePrCommentBody(body)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        if (comment.kind === 'review') {
+          await provider.updatePullRequestReviewComment({ ...comment, body: text })
+        } else {
+          await provider.updatePullRequestComment({ ...comment, body: text })
+        }
+        // The reader refetches the bundle either way, so the edited entity is not
+        // worth serializing, only whether the write landed.
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentDelete',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      kind: unknown,
+      commentId: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const comment = {
+        ...target,
+        kind: validatePrCommentKind(kind),
+        commentId: validatePrCommentId(commentId)
+      }
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.deletePullRequestComment(comment)
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commentMinimize',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      nodeId: unknown,
+      reason: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const id = validateGraphqlNodeId(nodeId)
+      const classifier = validatePrMinimizeReason(reason)
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.minimizePullRequestComment({ nodeId: id, reason: classifier })
+        return true
+      })
     }
   )
 

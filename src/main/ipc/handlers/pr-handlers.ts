@@ -13,7 +13,8 @@ import {
   validatePrCreateInput,
   validatePrNumber,
   validatePrPage,
-  validatePrState
+  validatePrState,
+  validateWorkflowRerunMode
 } from '../ipc-validation'
 import { canonicalGitHubBranch, runGitHubMutation } from './shared'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
@@ -362,6 +363,31 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
         jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:rerunRun',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown, mode: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to re-run workflow runs')
+      const target = {
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+      }
+      return runGitHubMutation(
+        target.owner,
+        target.repo,
+        async () => {
+          await provider.rerunWorkflowRun({
+            ...target,
+            runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID),
+            mode: validateWorkflowRerunMode(mode)
+          })
+          return null
+        },
+        'Actions read and write access'
+      )
     }
   )
 }

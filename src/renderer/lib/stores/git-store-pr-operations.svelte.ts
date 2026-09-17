@@ -2,10 +2,12 @@ import { invoke } from '$lib/ipc.svelte'
 import type {
   GitHubMutationResult,
   GitHubPermissionRequired,
+  PrCommentKind,
   PrComposeInput,
   PrComposeReport,
   PrCreateInput,
   PrMergeMethod,
+  PrMinimizeReason,
   PrReviewEvent,
   PrState,
   PullRequestComment,
@@ -317,6 +319,99 @@ export class GitPullRequestOperations {
       return false
     } finally {
       this.access.markBusy('pr-review', false)
+    }
+  }
+
+  /**
+   * Rewrite an already-posted comment in place.
+   *
+   * `kind` selects the collection because GitHub stores conversation comments and
+   * inline diff comments in two unrelated endpoints with independent id sequences.
+   * The mutation returns only whether the write landed: the caller refetches the
+   * bundle, which is the one path that keeps the reader's conversation, counts and
+   * "edited" marker consistent with the server.
+   */
+  async editPrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    this.access.markBusy('pr-comment-edit', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke('pr:commentEdit', projectId, owner, repo, pullNumber, kind, commentId, body)
+        ) === true
+      )
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'The comment could not be saved'))
+      return false
+    } finally {
+      this.access.markBusy('pr-comment-edit', false)
+    }
+  }
+
+  /**
+   * Permanently delete a comment. GitHub only allows this for its author, so the
+   * caller is responsible for only offering it on your own comment.
+   */
+  async deletePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number
+  ): Promise<boolean> {
+    this.access.markBusy('pr-comment-delete', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke('pr:commentDelete', projectId, owner, repo, pullNumber, kind, commentId)
+        ) === true
+      )
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'The comment could not be deleted'))
+      return false
+    } finally {
+      this.access.markBusy('pr-comment-delete', false)
+    }
+  }
+
+  /**
+   * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
+   * its GraphQL node id, because GitHub exposes no REST endpoint for this.
+   */
+  async minimizePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    reason: PrMinimizeReason
+  ): Promise<boolean> {
+    this.access.markBusy('pr-comment-hide', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke('pr:commentMinimize', projectId, owner, repo, pullNumber, nodeId, reason)
+        ) === true
+      )
+    } catch (error) {
+      this.access.setError(errorMessage(error, 'The comment could not be hidden'))
+      return false
+    } finally {
+      this.access.markBusy('pr-comment-hide', false)
     }
   }
 

@@ -8,6 +8,7 @@ import type {
   GitDiff,
   GitFileChange,
   GitHubAuthStatus,
+  GitHubAvatarRequest,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
@@ -24,9 +25,11 @@ import type {
   GitStatus,
   MergeSummary,
   PrAgentReport,
+  PrCommentKind,
   PrComposeReport,
   PrCreateInput,
   PrMergeMethod,
+  PrMinimizeReason,
   PrResolveOptions,
   PrReviewEvent,
   PrState,
@@ -39,7 +42,9 @@ import type {
   PullRequestReference,
   PullRequestReviewResult,
   RepositoryMentionUser,
-  ThreadSettings
+  ThreadSettings,
+  WorkflowRerunMode,
+  WorkflowRerunResult
 } from '../types'
 import type { Contract } from './contract-helpers'
 
@@ -373,6 +378,15 @@ export const invokeGitContract = {
     GitHubDeploymentJobLog
   >,
   /**
+   * Replay a workflow run's jobs (all, or only the failed ones). Returns the
+   * mutation envelope so a read-only grant surfaces its permission prompt
+   * instead of a bare failure.
+   */
+  'deployment:rerunRun': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number, mode: WorkflowRerunMode],
+    WorkflowRerunResult
+  >,
+  /**
    * Read a project's cloud deployment config, or null when none exists. The
    * config is persisted by main under the CodeInOven config directory; the
    * renderer never touches the filesystem or Node APIs for it.
@@ -563,6 +577,47 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     GitHubMutationResult<PullRequestComment>
   >,
+  /**
+   * Rewrite a comment you authored. `kind` picks the collection: GitHub files
+   * conversation comments and inline diff comments in two unrelated endpoints
+   * with independent id sequences.
+   */
+  'pr:commentEdit': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number,
+      body: string
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Permanently delete a comment you authored. */
+  'pr:commentDelete': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      kind: PrCommentKind,
+      commentId: number
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /** Hide a comment behind GitHub's minimised treatment, by GraphQL node id. */
+  'pr:commentMinimize': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      nodeId: string,
+      reason: PrMinimizeReason
+    ],
+    GitHubMutationResult<boolean>
+  >,
   'pr:review': {} as Contract<
     [
       projectId: string,
@@ -595,9 +650,21 @@ export const invokeGitContract = {
   'github:poll': {} as Contract<[deviceCode: string], GitHubPollResult>,
   'github:logout': {} as Contract<[], GitHubAuthStatus>,
   /**
-   * Resolve account avatars for a list of GitHub logins, as `data:` URLs (the
-   * renderer's CSP blocks remote image hosts). A login GitHub has no picture for
-   * comes back as null, which the UI draws as its monogram.
+   * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
+   * image hosts). Each account carries the URL its provider declared, which wins
+   * over the login-derived guess: a bot account's login alone resolves to
+   * GitHub's generated identicon rather than the app's real picture. A login
+   * GitHub has no picture for comes back as null, which the UI draws as its
+   * monogram.
    */
-  'github:avatars': {} as Contract<[logins: string[]], Record<string, string | null>>
+  'github:avatars': {} as Contract<
+    [accounts: GitHubAvatarRequest[]],
+    Record<string, string | null>
+  >,
+  /**
+   * Resolve images embedded in provider-authored markdown, as `data:` URLs, for
+   * the same CSP reason. Only `https:` is accepted, and main additionally refuses
+   * literal private hosts because it is the side that opens the connection.
+   */
+  'github:image': {} as Contract<[urls: string[]], Record<string, string | null>>
 }

@@ -8,12 +8,14 @@ import { atomicWrite } from '../../../lib/utils'
 import { Logger } from '../../system/logger'
 import { resolveFavicons } from '../../editor/favicon-service'
 import { resolveAvatars } from '../../git/github-avatars'
+import { resolveImages } from '../../git/github-images'
 import { retainTemporaryAttachment } from '../../editor/temporary-attachment-retention'
 import { readDocumentPreviewHtml } from '../../drivers/document-attachment'
 import {
   isMissingScopedPathError,
   validateFaviconHostnames,
-  validateGitHubLogins
+  validateGitHubAvatarRequests,
+  validateRemoteImageUrls
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
@@ -295,9 +297,17 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
   // Avatars for the logins a pull request conversation names. Same reason as the
   // favicons above: the renderer's `img-src` allows `data:` and nothing remote, so
   // the picture is downloaded here and handed over inlined.
-  ipcMain.handle('github:avatars', async (_event, rawLogins: unknown) => {
-    const logins = validateGitHubLogins(rawLogins)
-    return resolveAvatars(logins)
+  ipcMain.handle('github:avatars', async (_event, rawAccounts: unknown) => {
+    const accounts = validateGitHubAvatarRequests(rawAccounts)
+    return resolveAvatars(accounts)
+  })
+
+  // Images embedded in provider-authored markdown (a pull request body, a comment
+  // with a pasted screenshot). Same CSP constraint again, and the URLs come from
+  // third-party content, so the resolver re-validates every one of them itself
+  // rather than trusting the renderer's filtering.
+  ipcMain.handle('github:image', async (_event, rawUrls: unknown) => {
+    return resolveImages(validateRemoteImageUrls(rawUrls))
   })
 
   // Reveal a chat artifact (uploaded or agent-created file) in the system file

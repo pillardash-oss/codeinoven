@@ -3,7 +3,9 @@ import type {
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
-  GitHubWorkflowRunDetail
+  GitHubPermissionRequired,
+  GitHubWorkflowRunDetail,
+  WorkflowRerunMode
 } from '$shared/types'
 import {
   DEPLOYMENT_CACHE_TTL_MS,
@@ -12,6 +14,7 @@ import {
   deploymentDetailKey,
   deploymentKey,
   deploymentLogKey,
+  errorMessage,
   workflowRunKey,
   type GitOperation
 } from './git-store-helpers'
@@ -42,7 +45,11 @@ export class GitDeploymentCache {
     Promise<GitHubDeploymentOverviewResult | null> | undefined
   > = {}
 
-  constructor(private readonly markBusy: (operation: GitOperation, busy: boolean) => void) {}
+  constructor(
+    private readonly markBusy: (operation: GitOperation, busy: boolean) => void,
+    private readonly setError: (message: string | null) => void,
+    private readonly setGitHubPermission: (permission: GitHubPermissionRequired | null) => void
+  ) {}
 
   /** True while a key is inside its post-failure cooldown. */
   private coolingDown(key: string): boolean {
@@ -206,5 +213,57 @@ export class GitDeploymentCache {
     } finally {
       this.markBusy('deployment-log', false)
     }
+  }
+
+  /**
+   * Replay a workflow run's jobs, then drop the cached views so the run, its
+   * deployment and its logs are read again instead of showing the stale pre-run
+   * state. Returns false when GitHub refused (the reason lands in `error`).
+   */
+  async rerunWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number,
+    mode: WorkflowRerunMode
+  ): Promise<boolean> {
+    this.markBusy('deployment-rerun', true)
+    this.setError(null)
+    this.setGitHubPermission(null)
+    try {
+      const result = await invoke('deployment:rerunRun', projectId, owner, repo, runId, mode)
+      if (result.status === 'permission_required') {
+        this.setGitHubPermission(result)
+        return false
+      }
+      this.invalidateWorkflowRun(owner, repo, runId)
+      return true
+    } catch (reason) {
+      this.setError(errorMessage(reason, 'The workflow run could not be re-run'))
+      return false
+    } finally {
+      this.markBusy('deployment-rerun', false)
+    }
+  }
+
+  /**
+   * Forget everything a re-run invalidates for one run: the run detail, its job
+   * logs (a re-run replaces them), the deployment that owns it, and the overview
+   * list that shows its state. The deployment is matched by dropping the whole
+   * repository's deployment details, because a run id does not name one.
+   */
+  private invalidateWorkflowRun(owner: string, repo: string, runId: number): void {
+    const runKey = workflowRunKey(owner, repo, runId)
+    const jobIds = (this.runDetails[runKey]?.detail.jobs ?? []).map((job) => job.id)
+
+    delete this.runDetails[runKey]
+    delete this.overviews[deploymentKey(owner, repo)]
+
+    const detailKeys = Object.keys(this.details).filter((key) =>
+      key.startsWith(`${deploymentKey(owner, repo)}#`)
+    )
+    for (const key of detailKeys) delete this.details[key]
+
+    for (const jobId of jobIds) delete this.logs[deploymentLogKey(owner, repo, jobId)]
   }
 }

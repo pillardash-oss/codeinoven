@@ -18,7 +18,8 @@ export function canonicalGitHubBranch(branch: string): string {
 export function githubPermissionRequired(
   error: unknown,
   owner: string,
-  repo: string
+  repo: string,
+  accessLabel = 'Pull requests read and write access'
 ): GitHubPermissionRequired | null {
   if (
     !(error instanceof ProviderHttpError) ||
@@ -30,7 +31,7 @@ export function githubPermissionRequired(
   return {
     status: 'permission_required',
     message:
-      `CodeInOven needs Pull requests read and write access for ${owner}/${repo}. ` +
+      `CodeInOven needs ${accessLabel} for ${owner}/${repo}. ` +
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
@@ -41,12 +42,13 @@ export function githubPermissionRequired(
 export async function runGitHubMutation<T>(
   owner: string,
   repo: string,
-  mutation: () => Promise<T>
+  mutation: () => Promise<T>,
+  accessLabel?: string
 ): Promise<GitHubMutationResult<T>> {
   try {
     return { status: 'completed', value: await mutation() }
   } catch (error) {
-    const permission = githubPermissionRequired(error, owner, repo)
+    const permission = githubPermissionRequired(error, owner, repo, accessLabel)
     if (permission) return permission
     throw error
   }

@@ -4,11 +4,16 @@ import { errorMessage } from './git-store-helpers'
 
 /** GitHub account auth calls, kept apart from the repository git operations. */
 export class GitGitHubAuth {
-  constructor(private readonly setError: (message: string | null) => void) {}
+  constructor(
+    private readonly setError: (message: string | null) => void,
+    private readonly setViewerLogin: (login: string | null) => void
+  ) {}
 
   async githubAuthStatus(): Promise<GitHubAuthStatus> {
     try {
-      return await invoke('github:authStatus')
+      const status = await invoke('github:authStatus')
+      this.setViewerLogin(status.connected ? (status.user?.login ?? null) : null)
+      return status
     } catch {
       return { connected: false, configured: false }
     }

@@ -34,6 +34,9 @@ export type GitOperation =
   | 'pr-merge'
   | 'pr-ready'
   | 'pr-comment'
+  | 'pr-comment-edit'
+  | 'pr-comment-delete'
+  | 'pr-comment-hide'
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
@@ -44,6 +47,7 @@ export type GitOperation =
   | 'deployment-detail'
   | 'deployment-run-detail'
   | 'deployment-log'
+  | 'deployment-rerun'
 
 /** How long a cached PR page or bundle is served without refetching. */
 export const PR_CACHE_TTL_MS = 60_000

@@ -31,11 +31,14 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   PrAgentReport,
+  PrCommentKind,
+  PrMinimizeReason,
   PrResolveOptions,
   PullRequestBundle,
   PullRequestPage,
   PullRequestSummary,
-  RepositoryMentionUser
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -76,6 +79,17 @@ export class GitState {
   githubConnection: 'unknown' | 'connecting' | 'connected' | 'disconnected' = $state('unknown')
   private githubProbe: Promise<boolean> | null = null
   private lastGithubProbeAt = 0
+
+  /**
+   * The signed-in GitHub login, once a status probe has named one.
+   *
+   * The pull request reader needs it to tell the user's own comment from someone
+   * else's: GitHub only exposes Edit and Delete to an author, and only hides the
+   * Block action on yourself. Kept here rather than passed down from the panel so
+   * the dock reader, the full screen reader and the panel menu all agree without
+   * a prop chain through three components.
+   */
+  githubViewerLogin: string | null = $state(null)
 
   /**
    * The project whose data currently lives in the shared fields above. The
@@ -140,8 +154,10 @@ export class GitState {
   )
 
   /** Cached deployment overviews, details, and job logs. */
-  private readonly deployments = new GitDeploymentCache((operation, busy) =>
-    this.markBusy(operation, busy)
+  private readonly deployments = new GitDeploymentCache(
+    (operation, busy) => this.markBusy(operation, busy),
+    (message) => (this.error = message),
+    (permission) => (this.githubPermission = permission)
   )
 
   /** Open-PR conflict indicators, persisted across restarts. */
@@ -164,7 +180,10 @@ export class GitState {
   })
 
   /** GitHub account auth calls. */
-  private readonly github = new GitGitHubAuth((message) => (this.error = message))
+  private readonly github = new GitGitHubAuth(
+    (message) => (this.error = message),
+    (login) => (this.githubViewerLogin = login)
+  )
 
   get status(): GitStatus | null {
     return this.local.status
@@ -1097,6 +1116,21 @@ export class GitState {
     return this.github.githubAuthStatus()
   }
 
+  /**
+   * Replay a workflow run's jobs, then drop the cached views so the run, its
+   * deployment and its logs are read again instead of showing the stale pre-run
+   * state. Returns false when GitHub refused (the reason lands in `error`).
+   */
+  rerunWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number,
+    mode: WorkflowRerunMode
+  ): Promise<boolean> {
+    return this.deployments.rerunWorkflowRun(projectId, owner, repo, runId, mode)
+  }
+
   startGitHubDeviceFlow() {
     return this.github.startGitHubDeviceFlow()
   }
@@ -1107,6 +1141,57 @@ export class GitState {
 
   logoutGitHub() {
     return this.github.logoutGitHub()
+  }
+
+  /**
+   * Rewrite an already-posted comment in place.
+   *
+   * `kind` selects the collection because GitHub stores conversation comments and
+   * inline diff comments in two unrelated endpoints with independent id sequences.
+   * The mutation returns only whether the write landed: the caller refetches the
+   * bundle, which is the one path that keeps the reader's conversation, counts and
+   * "edited" marker consistent with the server.
+   */
+  editPrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    return this.prOps.editPrComment(projectId, owner, repo, pullNumber, kind, commentId, body)
+  }
+
+  /**
+   * Permanently delete a comment. GitHub only allows this for its author, so the
+   * caller is responsible for only offering it on your own comment.
+   */
+  deletePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    kind: PrCommentKind,
+    commentId: number
+  ): Promise<boolean> {
+    return this.prOps.deletePrComment(projectId, owner, repo, pullNumber, kind, commentId)
+  }
+
+  /**
+   * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
+   * its GraphQL node id, because GitHub exposes no REST endpoint for this.
+   */
+  minimizePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    reason: PrMinimizeReason
+  ): Promise<boolean> {
+    return this.prOps.minimizePrComment(projectId, owner, repo, pullNumber, nodeId, reason)
   }
 
   static pageKey(owner: string, repo: string, state: string, page: number): string {

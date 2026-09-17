@@ -4,8 +4,10 @@
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitHubDeploymentJobLog, PullRequestCheck, PullRequestChecks } from '$shared/types'
   import GitJobLogView from './GitJobLogView.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
   import {
     checkClass,
+    checkFailed,
     checkIcon,
     checkKey,
     checkLogMessage,
@@ -18,9 +20,11 @@
     checks: PullRequestChecks | null
     /** Reveal a GitHub Actions check in the in-app Deployments tab. */
     onOpenWorkflowRun: (runId: number) => void
+    /** Reload the bundle after a re-run of one of the checks. */
+    onRefresh: () => Promise<void>
   }
 
-  let { projectId, identity, checks, onOpenWorkflowRun }: Props = $props()
+  let { projectId, identity, checks, onOpenWorkflowRun, onRefresh }: Props = $props()
 
   /** Which check's log is open, keyed the way the checks list is keyed. */
   let expandedCheck = $state<string | null>(null)
@@ -110,6 +114,20 @@
           </span>
           <span class="shrink-0 text-[0.5625rem] text-dimmed">{checkStateLabel(check)}</span>
         </button>
+        {#if checkFailed(check) && runId !== null}
+          <!-- A failing check is a job with a problem, so the re-run lives on
+               its row. GitHub only re-runs a whole run, which is why the menu
+               offers "all jobs" beside "failed jobs only". -->
+          <RerunRunMenu
+            {projectId}
+            {identity}
+            {runId}
+            runStatus="completed"
+            hasFailedJobs
+            compact
+            onRerun={() => void onRefresh()}
+          />
+        {/if}
         {#if check.url}
           <button
             type="button"

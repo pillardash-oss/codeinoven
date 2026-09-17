@@ -9,8 +9,18 @@ title = 'CodeInOven gitleaks config'
 useDefault = true
 
 [allowlist]
-description = 'Fake credentials in test fixtures'
+description = 'Fake credentials in test fixtures, plus the published installed-app OAuth client secret'
 paths = [
   '''^src/main/remote/remote-gateway\.test\.ts$''',
   '''^tests/main/utilities/cio-diagnostics-service\.test\.ts$'''
+]
+# Antigravity's installed-application OAuth client secret, pinned in
+# `src/main/usage/antigravity-quota.ts`. Google does not treat an installed-app
+# "secret" as confidential: it ships inside every copy of the Antigravity CLI
+# and is required to exchange the account's own stored refresh token for an
+# access token, so it cannot be removed from the code. Only this exact value is
+# allowlisted rather than the whole file, so any other credential reaching that
+# file is still caught.
+regexes = [
+  '''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'''
 ]

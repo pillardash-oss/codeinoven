@@ -4,8 +4,10 @@ import type {
   GitHubDeploymentOverview,
   GitHubWorkflowRunDetail,
   GitRepositoryIdentity,
+  PrCommentKind,
   PrDraft,
   PrMergeMethod,
+  PrMinimizeReason,
   PrReviewEvent,
   PrState,
   PullRequestComment,
@@ -18,7 +20,8 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
-  RepositoryMentionUser
+  RepositoryMentionUser,
+  WorkflowRerunMode
 } from '../../lib/types'
 
 /** Merge a pull request with the given method. */
@@ -60,6 +63,30 @@ export interface CreatePrCommentInput extends PullRequestTarget {
   body: string
 }
 
+/**
+ * Address one already-posted comment. `kind` matters because GitHub stores
+ * conversation comments and inline diff comments in two unrelated collections
+ * with independent id sequences, so an id alone is ambiguous.
+ */
+export interface PrCommentTarget extends PullRequestTarget {
+  kind: PrCommentKind
+  commentId: number
+}
+
+/** Rewrite an already-posted comment's body. */
+export interface UpdatePrCommentInput extends PrCommentTarget {
+  body: string
+}
+
+/**
+ * Hide a comment behind GitHub's "minimised" treatment. GraphQL-only, so the
+ * caller supplies the node id rather than the numeric one.
+ */
+export interface MinimizePrCommentInput {
+  nodeId: string
+  reason: PrMinimizeReason
+}
+
 /** Submit a review verdict on a pull request. */
 export interface CreatePrReviewInput extends PullRequestTarget {
   event: PrReviewEvent
@@ -98,6 +125,19 @@ export interface GitProvider {
   listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]>
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>
   createPullRequestComment(input: CreatePrCommentInput): Promise<PullRequestComment>
+  /** Rewrite a conversation comment's body. Only the author may do this. */
+  updatePullRequestComment(input: UpdatePrCommentInput): Promise<PullRequestComment>
+  /** Permanently delete a conversation comment. Only the author may do this. */
+  deletePullRequestComment(input: PrCommentTarget): Promise<void>
+  /** Rewrite an inline diff comment's body. Only the author may do this. */
+  updatePullRequestReviewComment(input: UpdatePrCommentInput): Promise<PullRequestReviewComment>
+  /** Permanently delete an inline diff comment. Only the author may do this. */
+  deletePullRequestReviewComment(input: PrCommentTarget): Promise<void>
+  /**
+   * Hide a comment behind GitHub's minimised treatment. There is no equivalent
+   * REST endpoint   only the GraphQL `minimizeComment` mutation.
+   */
+  minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void>
   createPullRequestReview(input: CreatePrReviewInput): Promise<void>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
@@ -129,6 +169,16 @@ export interface GitProvider {
     repo: string
     jobId: number
   }): Promise<GitHubDeploymentJobLog>
+  /**
+   * Replay a workflow run's jobs, either every job or only the failed ones.
+   * Needs `actions: write`, so a read-only grant answers 403 rather than a result.
+   */
+  rerunWorkflowRun(input: {
+    owner: string
+    repo: string
+    runId: number
+    mode: WorkflowRerunMode
+  }): Promise<void>
   /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.

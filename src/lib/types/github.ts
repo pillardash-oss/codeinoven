@@ -49,6 +49,15 @@ export interface PullRequestSummary {
   state: 'open' | 'closed' | 'merged'
   draft: boolean
   authorLogin: string
+  /**
+   * The author's picture as the provider declares it. Authoritative over the
+   * login-derived guess: a bot account's `[bot]` login resolves to a meaningless
+   * identicon on the avatar CDN, while this URL is the app's real picture, the
+   * one github.com shows.
+   */
+  authorAvatarUrl?: string | null
+  /** True for app/bot accounts, which GitHub labels with a `Bot` badge. */
+  authorIsBot?: boolean
   headRef: string
   baseRef: string
   createdAt: string
@@ -127,12 +136,47 @@ export interface PullRequestCommit {
   date: string
 }
 
+/**
+ * Which provider collection a comment lives in. GitHub keeps conversation
+ * comments and inline diff comments on two separate endpoints with unrelated
+ * ids, so every comment mutation has to say which one it means.
+ */
+export type PrCommentKind = 'issue' | 'review'
+
+/**
+ * An account whose picture the UI wants.
+ *
+ * The declared URL is authoritative and the login is the fallback. That order
+ * matters for app accounts: asking the avatar CDN for `pullfrog[bot]` by login
+ * alone answers with GitHub's meaningless generated identicon, while the URL the
+ * provider returned for the same comment is the picture the app itself published,
+ * the one github.com shows next to that comment.
+ */
+export interface GitHubAvatarRequest {
+  login: string
+  avatarUrl?: string | null
+}
+
+/**
+ * Why a comment was hidden. GitHub's own minimisation classifiers, in its own
+ * order: `minimizeComment` rejects anything outside this set.
+ */
+export type PrMinimizeReason = 'ABUSE' | 'OFF_TOPIC' | 'OUTDATED' | 'RESOLVED' | 'SPAM'
+
 /** One issue comment on a pull request. */
 export interface PullRequestComment {
   id: number
   authorLogin: string
+  /** Provider-declared picture, preferred over the login-derived guess. */
+  authorAvatarUrl: string | null
+  /** True for app/bot accounts, so the row can draw GitHub's `Bot` badge. */
+  authorIsBot: boolean
   body: string
   createdAt: string
+  /** Last edit time, null when the comment has never been edited. */
+  updatedAt: string | null
+  /** GraphQL global id, the only handle `minimizeComment` accepts. */
+  nodeId: string | null
   url: string
 }
 
@@ -168,21 +212,37 @@ export interface PullRequestFile {
 export interface PullRequestReview {
   id: number
   authorLogin: string
+  authorAvatarUrl: string | null
+  authorIsBot: boolean
   /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
   state: string
   body: string
   submittedAt: string
+  /** Permalink to the review inside the pull request conversation. */
+  url: string
+  /**
+   * GraphQL global id. Present so the reader can address the review, but note
+   * that GitHub exposes no edit or delete for a submitted review's body, so the
+   * actions menu deliberately offers only the copy and quote actions for one.
+   */
+  nodeId: string | null
 }
 
 /** An inline code comment attached to a line of the diff. */
 export interface PullRequestReviewComment {
   id: number
   authorLogin: string
+  authorAvatarUrl: string | null
+  authorIsBot: boolean
   body: string
   path: string
   /** Line in the file the comment anchors to; null once outdated. */
   line: number | null
   createdAt: string
+  updatedAt: string | null
+  nodeId: string | null
+  /** Permalink to the inline comment inside the pull request conversation. */
+  url: string
 }
 
 /** One CI check or commit status on the PR head. */
@@ -414,3 +474,12 @@ export interface GitHubWorkflowRunDetail {
   jobs: GitHubDeploymentJob[]
   fetchedAt: number
 }
+
+/**
+ * Which jobs a workflow re-run replays. GitHub offers exactly these two: every
+ * job in the run, or only the ones that failed.
+ */
+export type WorkflowRerunMode = 'all' | 'failed'
+
+/** A workflow re-run answers with an empty body, so the result carries no value. */
+export type WorkflowRerunResult = GitHubMutationResult<null>

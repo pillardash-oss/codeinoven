@@ -2,6 +2,8 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'path'
 import type { WebFrameMain } from 'electron'
+import type { GitHubAvatarRequest } from '../../../lib/types'
+import { isLocalDevelopmentUrl } from '../../../lib/local-development-url'
 import { Logger } from '../../system/logger'
 
 const HOSTNAME_PATTERN =
@@ -75,6 +77,12 @@ export function validateFaviconHostnames(value: unknown): string[] {
   return hostnames
 }
 
+/** Matches the renderer store's batch size, so one batch is never truncated. */
+const MAX_REMOTE_IMAGE_URLS = 32
+
+/** Longer than any real image URL; the resolver only needs the origin and path. */
+const MAX_REMOTE_IMAGE_URL_LENGTH = 2_048
+
 /** How many logins one avatar request may carry, matching the favicon batch cap. */
 const MAX_AVATAR_LOGINS = 64
 /** A GitHub login is at most 39 characters, and the `[bot]` suffix adds five. */
@@ -83,31 +91,96 @@ const MAX_GITHUB_LOGIN_LENGTH = 44
 const GITHUB_LOGIN_PATTERN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}(?:\[bot\])?$/iu
 
 /**
- * Validate the logins an avatar request carries. Each entry has to be login-shaped,
- * `[bot]` accounts included, so nothing but a GitHub account name can reach the
- * avatar host. Entries that are not are dropped rather than failing the batch, the
- * way favicon hostnames are, because a provider writes `unknown` for a comment whose
- * user record is missing and that should not cost a request.
+ * Validate the accounts an avatar request carries.
+ *
+ * Each entry has to be login-shaped, `[bot]` accounts included, so nothing but a
+ * GitHub account name can reach the avatar host. The optional declared URL arrives
+ * from the provider rather than from user content, but it is still checked before
+ * main fetches it: HTTPS only, plus the local-development exception the provider
+ * base URL already allows, so a self-hosted or test server can serve a picture.
+ * Entries that fail are dropped rather than failing the batch, the way favicon
+ * hostnames are, because a provider writes `unknown` for a comment whose user
+ * record is missing and that should not cost a request.
  */
-export function validateGitHubLogins(value: unknown): string[] {
-  if (!Array.isArray(value)) throw new TypeError('Avatar logins must be an array')
+export function validateGitHubAvatarRequests(value: unknown): GitHubAvatarRequest[] {
+  if (!Array.isArray(value)) throw new TypeError('Avatar accounts must be an array')
   if (value.length === 0 || value.length > MAX_AVATAR_LOGINS) {
-    throw new TypeError(`Avatar logins must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
+    throw new TypeError(`Avatar accounts must contain between 1 and ${MAX_AVATAR_LOGINS} entries`)
   }
-  const logins: string[] = []
+  const accounts: GitHubAvatarRequest[] = []
   for (let index = 0; index < value.length; index += 1) {
     const entry = value[index]
-    if (typeof entry !== 'string' || entry.length === 0 || entry.length > MAX_GITHUB_LOGIN_LENGTH) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      Logger.dev(`Skipping non-object avatar entry at index ${index}`)
+      continue
+    }
+    const record = entry as Record<string, unknown>
+    const login = typeof record['login'] === 'string' ? record['login'].trim() : ''
+    if (login.length === 0 || login.length > MAX_GITHUB_LOGIN_LENGTH) {
       Logger.dev(`Skipping invalid avatar login at index ${index}`)
       continue
     }
-    if (!GITHUB_LOGIN_PATTERN.test(entry)) {
+    if (!GITHUB_LOGIN_PATTERN.test(login)) {
       Logger.dev(`Skipping non-login avatar entry at index ${index}`)
       continue
     }
-    if (!logins.includes(entry)) logins.push(entry)
+    accounts.push({ login, avatarUrl: validateDeclaredAvatarUrl(record['avatarUrl'], index) })
   }
-  return logins
+  return accounts
+}
+
+/** The provider-declared picture URL, or null when absent or not fetchable. */
+function validateDeclaredAvatarUrl(value: unknown, index: number): string | null {
+  if (typeof value !== 'string') return null
+  const candidate = value.trim()
+  if (candidate.length === 0) return null
+  let url: URL
+  try {
+    url = new URL(candidate)
+  } catch {
+    Logger.dev(`Skipping malformed avatar URL at index ${index}`)
+    return null
+  }
+  if (url.protocol !== 'https:' && !isLocalDevelopmentUrl(candidate)) {
+    Logger.dev(`Skipping non-HTTPS avatar URL at index ${index}`)
+    return null
+  }
+  return url.href
+}
+
+/**
+ * Validate the image URLs found inside provider-authored markdown.
+ *
+ * Only `https:` survives. The resolver re-checks this and additionally refuses
+ * literal private hosts, because it is the side that actually opens the
+ * connection; this pass exists so an obviously unusable URL never reaches the
+ * network layer at all. Malformed entries are skipped rather than failing the
+ * batch: the list is derived from arbitrary comment text, and one bad URL must
+ * not blank out every other picture in the same message.
+ */
+export function validateRemoteImageUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Image URLs must be an array')
+  if (value.length === 0 || value.length > MAX_REMOTE_IMAGE_URLS) {
+    throw new TypeError(`Image URLs must contain between 1 and ${MAX_REMOTE_IMAGE_URLS} entries`)
+  }
+  const urls: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > MAX_REMOTE_IMAGE_URL_LENGTH
+    ) {
+      Logger.dev(`Skipping invalid image URL at index ${index}`)
+      continue
+    }
+    if (!entry.startsWith('https://')) {
+      Logger.dev(`Skipping non-HTTPS image URL at index ${index}`)
+      continue
+    }
+    if (!urls.includes(entry)) urls.push(entry)
+  }
+  return urls
 }
 
 // ─── Privileged-IPC validation wrapper ──────────────────────────────────────

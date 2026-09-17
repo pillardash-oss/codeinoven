@@ -17,7 +17,7 @@
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -38,7 +38,11 @@
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
   import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
-  import { buildConversation } from './git-pull-request-detail-format'
+  import {
+    buildConversation,
+    conversationQuoteBlock,
+    type ConversationEntry
+  } from './git-pull-request-detail-format'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -289,6 +293,22 @@
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * Quote a comment into the composer, the way GitHub's own action does.
+   *
+   * The composer is a disclosure in the dock, so it has to be opened first, and
+   * the editor only exists after the next tick, which is also what lets the caret
+   * land at the end of the inserted quote instead of nowhere.
+   */
+  async function quoteEntry(entry: ConversationEntry): Promise<void> {
+    tab = 'conversation'
+    composerOpen = true
+    const block = conversationQuoteBlock(entry)
+    commentBody = commentBody.trim() ? `${commentBody.trim()}\n\n${block}` : block
+    await tick()
+    commentEditor?.focusAtBookmark(null)
   }
 
   /**
@@ -846,7 +866,16 @@
         Loading pull request…
       </div>
     {:else if tab === 'conversation'}
-      <GitPullRequestDetailConversation entries={conversation} />
+      <GitPullRequestDetailConversation
+        entries={conversation}
+        {projectId}
+        {identity}
+        {number}
+        authorLogin={summary.authorLogin}
+        onQuote={(entry) => void quoteEntry(entry)}
+        onNotice={(message) => (notice = message)}
+        onRefresh={refresh}
+      />
     {:else if tab === 'commits'}
       <GitPullRequestDetailChanges
         mode="commits"
@@ -864,7 +893,13 @@
           gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)}
       />
     {:else if tab === 'checks'}
-      <GitPullRequestDetailChecks {projectId} {identity} {checks} {onOpenWorkflowRun} />
+      <GitPullRequestDetailChecks
+        {projectId}
+        {identity}
+        {checks}
+        {onOpenWorkflowRun}
+        onRefresh={refresh}
+      />
     {:else}
       <GitPullRequestDetailAgentReport
         {number}
