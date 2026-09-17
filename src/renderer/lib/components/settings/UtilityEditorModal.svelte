@@ -39,6 +39,7 @@
     buildConfig,
     buildCredential,
     buildScope,
+    effectiveActivation,
     emptyDraft,
     parseRecord,
     setAllHarnessBindings,
@@ -330,7 +331,7 @@
       name: metadata.name,
       description: metadata.description,
       enabled: draft.enabled,
-      activation: draft.activation,
+      activation: effectiveActivation(draft),
       scope: buildScope(draft),
       config: buildConfig(draft),
       harnessBindings: buildBindings(draft, installedHarnessIds)
@@ -666,11 +667,14 @@
             <label class="space-y-1 text-xs font-medium">
               <span>Activation</span>
               <select
-                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
+                disabled={draft.kind === 'mcp'}
                 bind:value={draft.activation}
               >
                 <option value="on_demand">On demand</option>
-                <option value="always">Always available</option>
+                {#if draft.kind !== 'mcp'}
+                  <option value="always">Always available</option>
+                {/if}
               </select>
             </label>
             <label class="space-y-1 text-xs font-medium">
@@ -687,6 +691,12 @@
               </select>
             </label>
           </div>
+          {#if draft.kind === 'mcp'}
+            <p class="text-xs text-muted">
+              MCP servers always load on demand and run behind the CodeInOven utility gateway, so
+              nothing is written into your harness or project config.
+            </p>
+          {/if}
           {#if draft.scopeLevel !== 'global'}
             <div class="grid grid-cols-2 gap-3">
               <label class="space-y-1 text-xs font-medium">

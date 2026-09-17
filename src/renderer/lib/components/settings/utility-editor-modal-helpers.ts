@@ -218,6 +218,16 @@ export function buildScope(draft: UtilityDraft): UtilityScope {
   }
 }
 
+/**
+ * An MCP server always loads on demand: the app starts it inside the turn the
+ * agent activates it, behind the utility gateway, and never writes a native MCP
+ * entry into a harness or project config. The editor fixes the value, and this
+ * guards the save path against a stale draft.
+ */
+export function effectiveActivation(draft: UtilityDraft): UtilityActivation {
+  return draft.kind === 'mcp' ? 'on_demand' : draft.activation
+}
+
 export function buildConfig(draft: UtilityDraft): UtilityConfigMap[UtilityKind] {
   switch (draft.kind) {
     case 'mcp': {

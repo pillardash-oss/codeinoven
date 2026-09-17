@@ -373,6 +373,10 @@ export class UtilityOrchestrationService {
           : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
       }
     }
+    // MCP servers are always `on_demand` and always reached through the gateway, so
+    // they never appear in the native `always` overlay. Keep the kind check even though
+    // the registry normalizes the activation: a legacy entry read straight from disk
+    // must not sneak into a harness launch. See normalizeActivation in the registry.
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )

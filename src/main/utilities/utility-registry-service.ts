@@ -282,7 +282,7 @@ export class UtilityRegistryService {
   }
 
   async create(input: UtilityDefinitionInput): Promise<UtilityDefinition> {
-    const normalized = normalizeInput(input)
+    const normalized = normalizeInput(input, { acceptMissingScope: true })
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -302,7 +302,7 @@ export class UtilityRegistryService {
     if (!Array.isArray(inputs) || inputs.length === 0) {
       throw new TypeError('Utility bundle must contain at least one utility')
     }
-    const normalized = inputs.map((input) => normalizeInput(input))
+    const normalized = inputs.map((input) => normalizeInput(input, { acceptMissingScope: true }))
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -512,7 +512,15 @@ function parseStoredUtility(value: unknown, index: number): UtilityDefinition {
   } as UtilityDefinition
 }
 
-function normalizeInput(value: unknown): UtilityDefinitionInput {
+/** Write-path options. A missing scope is tolerated only for input the app is about to
+ *  persist, where the global default applies. A stored entry must still carry an explicit
+ *  scope, so a corrupted registry file keeps failing loudly instead of silently turning an
+ *  entry into a global capability. */
+interface NormalizeOptions {
+  acceptMissingScope?: boolean
+}
+
+function normalizeInput(value: unknown, options: NormalizeOptions = {}): UtilityDefinitionInput {
   if (!isRecord(value)) throw new TypeError('Utility definition must be an object')
   const kind = value['kind']
   if (typeof kind !== 'string' || !UTILITY_KINDS.has(kind as UtilityKind)) {
@@ -530,8 +538,8 @@ function normalizeInput(value: unknown): UtilityDefinitionInput {
     name: boundedString(value['name'], 'Utility name', 1, 120),
     description: boundedString(value['description'], 'Utility description', 0, 2_000),
     enabled,
-    activation: activation as UtilityActivation,
-    scope: parseScope(value['scope']),
+    activation: normalizeActivation(kind as UtilityKind, activation as UtilityActivation),
+    scope: normalizeScope(value['scope'], options),
     config: parseConfig(kind as UtilityKind, value['config']),
     credentials: parseCredentials(value['credentials']),
     harnessBindings: parseBindings(value['harnessBindings'])
@@ -619,6 +627,26 @@ function parseWebToolProvider(value: unknown): WebToolProviderId {
     throw new TypeError('Web utility provider is invalid')
   }
   return value as WebToolProviderId
+}
+
+/**
+ * App-owned scope default. A definition that arrives without a scope is stored as global:
+ * it is what the installation contract means, and narrowing it stays an explicit choice.
+ */
+function normalizeScope(value: unknown, options: NormalizeOptions): UtilityScope {
+  if (value === undefined && options.acceptMissingScope === true) return { level: 'global' }
+  return parseScope(value)
+}
+
+/**
+ * App-owned activation invariant. An MCP server is never launched natively into
+ * a harness: the app starts its client inside the turn and exposes its tools
+ * through the utility gateway, so `always` has no path to run and would leave
+ * the utility inert. Normalize it to `on_demand` on every write and on every
+ * registry read, which also repairs entries stored before this invariant.
+ */
+function normalizeActivation(kind: UtilityKind, activation: UtilityActivation): UtilityActivation {
+  return kind === 'mcp' ? 'on_demand' : activation
 }
 
 function parseScope(value: unknown): UtilityScope {

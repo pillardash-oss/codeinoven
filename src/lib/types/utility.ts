@@ -126,8 +126,10 @@ export interface UtilityDefinitionInput<Kind extends UtilityKind = UtilityKind> 
   name: string
   description: string
   enabled?: boolean
+  /** Defaults to `on_demand`; an MCP server is always normalized to `on_demand`. */
   activation?: UtilityActivation
-  scope: UtilityScope
+  /** Optional on install: a definition without a scope is stored as global. */
+  scope?: UtilityScope
   config: UtilityConfigMap[Kind]
   credentials?: UtilityCredentialMetadata[]
   harnessBindings?: HarnessUtilityBinding[]
