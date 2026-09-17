@@ -58,7 +58,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { filterActions } from '$lib/actions'
+  import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
@@ -943,6 +943,14 @@
       // Same commit path as the plus-menu switch, chat mode only. Selecting the
       // action has already consumed the typed `/query` text.
       toggleFileSystemMode()
+      return
+    }
+
+    // Chat mode: the slash menu offers the permission levels once File System is
+    // on, and the picker chip takes the exact same commit path.
+    const permissionLevel = permissionLevelForAction(action)
+    if (permissionLevel) {
+      selectPermission(permissionLevel)
       return
     }
 

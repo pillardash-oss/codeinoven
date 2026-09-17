@@ -94,6 +94,7 @@
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { isAtLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
   import { actionContext } from '$lib/stores/action-context.svelte'
+  import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
   import BrainstormStudio from '../specs/BrainstormStudio.svelte'
@@ -179,7 +180,6 @@
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
-    PermissionLevel,
     ScopedHarnessCommand,
     AgentCapabilityEntry,
     AgentMessage,
@@ -1198,11 +1198,6 @@
     })
     return levels
   })
-  const actionPermissionLevels: Array<{ id: PermissionLevel; label: string }> = [
-    { id: 'auto_review', label: 'Auto Review' },
-    { id: 'full_access', label: 'Full Access' }
-  ]
-
   /** Engineering lifecycle stages exposed as individual action-menu toggles.
    *  Mirrors the Engineering Toolbox rows so both surfaces stay in sync. */
   const engineeringStageActions: ReadonlyArray<{
@@ -1341,22 +1336,10 @@
       })
     }
 
-    // Chat mode only surfaces permission levels once File System is enabled
+    // Chat mode only surfaces permission levels once File System is enabled:
     // chats run with auto permission review until the user opts into files.
     if (!chatMode || settings.fileSystemMode === true) {
-      for (const permission of actionPermissionLevels) {
-        actions.push({
-          id: actionId(`mode:permission:${permission.id}`),
-          title: `Permissions: ${permission.label}`,
-          description:
-            permission.id === 'full_access'
-              ? 'Run in yolo mode   every operation auto-approved'
-              : 'Auto-run every permission unless it is explicitly denied',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['access', 'approval', 'security', permission.label]
-        })
-      }
+      actions.push(...permissionLevelActions(applicationActionSource))
     }
 
     actions.push({
@@ -5608,9 +5591,7 @@
       return
     }
 
-    const permissionLevel = actionPermissionLevels.find(
-      (permission) => actionId(`mode:permission:${permission.id}`) === action.id
-    )?.id
+    const permissionLevel = permissionLevelForAction(action)
     if (permissionLevel) {
       updateSettings({ ...settings, permissionLevel })
       return

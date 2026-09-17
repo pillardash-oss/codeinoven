@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Shield, ShieldAlert, ShieldCheck } from '@lucide/svelte'
+  import { PERMISSION_LEVELS, permissionLevelLabel } from '$lib/actions'
   import type { PermissionLevel } from '$shared/types'
 
   interface Props {
@@ -25,11 +26,6 @@
     onClose,
     onSelect
   }: Props = $props()
-
-  const permissionLabels: Record<PermissionLevel, string> = {
-    auto_review: 'Auto Review',
-    full_access: 'Full Access'
-  }
 </script>
 
 <!-- Permission level selector -->
@@ -51,7 +47,7 @@
       'full_access'
         ? 'font-bold text-warning'
         : 'text-muted hover:text-foreground'}"
-      aria-label={`Permission level: ${permissionLabels[permissionLevel]}`}
+      aria-label={`Permission level: ${permissionLevelLabel(permissionLevel)}`}
       title={working
         ? 'Permission level for the next turn   the current run is unchanged'
         : 'Permission level   controls how tool-call permissions are handled'}
@@ -63,7 +59,7 @@
         <Shield size={12} class="shrink-0" />
       {/if}
       <span class="composer-control-label min-w-0 truncate"
-        >{permissionLabels[permissionLevel]}</span
+        >{permissionLevelLabel(permissionLevel)}</span
       >
     </button>
 
@@ -74,25 +70,23 @@
         {#if working}
           <p class="px-2 pb-1 pt-1 text-[0.5625rem] text-dimmed">Applies to the next turn</p>
         {/if}
-        {#each Object.entries(permissionLabels) as [level, label] (level)}
+        {#each PERMISSION_LEVELS as level (level.id)}
           <button
             class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {permissionLevel ===
-            level
-              ? level === 'full_access'
+            level.id
+              ? level.id === 'full_access'
                 ? 'font-bold text-warning'
                 : 'font-medium text-foreground'
               : 'text-muted'}"
-            title={level === 'full_access'
-              ? 'Full Access   yolo mode, every operation auto-approved'
-              : 'Auto Review   auto-run any permission that is not explicitly denied'}
-            onclick={() => onSelect(level as PermissionLevel)}
+            title={level.description}
+            onclick={() => onSelect(level.id)}
           >
-            {#if level === 'full_access'}
+            {#if level.id === 'full_access'}
               <ShieldAlert size={12} strokeWidth={2.75} class="text-warning" />
             {:else}
               <ShieldCheck size={12} class="text-info" />
             {/if}
-            {label}
+            {level.label}
           </button>
         {/each}
       </div>
