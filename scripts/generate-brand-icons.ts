@@ -147,10 +147,9 @@ Logger.dev(`[generate-brand-icons] Wrote vendored opencode mark to ${vendorOutDi
 // transparent oven+code artwork (`icon-mark.svg`), whose ink strokes are flat
 // pure #000000 on light surfaces and pure #ffffff on dark (the SVG carries its
 // own embedded style keyed off the app's `.dark` document class, keeping the
-// mark sharp at small sizes). The squircle-tile app icon (`icon.svg`) is the
-// in-app identity instead (`components/files/cio-folder-icons.ts`), not the
-// vendor mark. Serves the model picker, custom `cio-` providers, and the
-// about-screen identity/link rows.
+// mark sharp at small sizes). Serves the model picker, custom `cio-` providers,
+// and the about-screen identity/link rows. The squircle-tile app icon
+// (`icon.svg`) is a second, separate in-app identity and is generated below.
 let cioMark = readFileSync(join(root, 'src/renderer/static/icon-mark.svg'), 'utf8')
 cioMark = cioMark
   .replace(/^<\?[\s\S]*?\?>\s*/i, '')
@@ -159,6 +158,29 @@ cioMark = cioMark
   .replace(/(<svg[^>]*>)/, '$1<title>CodeInOven</title>')
 writeFileSync(join(vendorOutDir, 'cio.svg'), cioMark)
 Logger.dev(`[generate-brand-icons] Wrote vendored CodeInOven mark to ${vendorOutDir}.`)
+
+// The `.cio` scratch folder wears the app icon itself
+// (`components/files/cio-folder-icons.ts`). The renderer serves
+// `src/renderer/static/` as its Vite `publicDir`, and a `?raw` import from there
+// makes the dev server warn that public assets cannot be imported from
+// JavaScript, so the artwork is generated into a source directory instead — the
+// same reason every vendor and agent mark above is a committed copy.
+//
+// Framing is the only edit: the XML declaration and comments are dropped (they
+// would ride into the `data:` URI and the inline badge markup) and the viewBox
+// is tightened from the 1024-unit canvas to the 800-unit tile, so a file-tree
+// row does not spend a fifth of its slot on transparent padding. No path,
+// colour, gradient or transform is touched — verified pixel-identical to the
+// master tile with `magick compare -metric AE` (0).
+const appIconOutFile = join(root, 'src/renderer/lib/components/files/cio-app-icon.svg')
+const appIcon = readFileSync(join(root, 'src/renderer/static/icon.svg'), 'utf8')
+  .replace(/^<\?[\s\S]*?\?>\s*/, '')
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace('viewBox="0 0 1024 1024"', 'viewBox="112 112 800 800"')
+  .replace('width="1024" height="1024"', 'width="800" height="800"')
+  .trimEnd()
+writeFileSync(appIconOutFile, `${appIcon}\n`, 'utf8')
+Logger.dev(`[generate-brand-icons] Wrote the framed app icon to ${appIconOutFile}.`)
 
 // ─── Agents ─────────────────────────────────────────────────────────────────
 

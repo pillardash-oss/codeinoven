@@ -11,7 +11,13 @@
  * flat, tile-free vendor mark (`vendor-icons/icons/cio.svg`, derived from
  * `icon-mark.svg`) drops all of it and renders as bare strokes.
  *
- * The only change made to the artwork is its framing. `icon.svg` draws the
+ * The artwork below is generated from the master `src/renderer/static/icon.svg`
+ * by `scripts/generate-brand-icons.ts`, not imported from it: the renderer
+ * serves `src/renderer/static/` as its Vite `publicDir`, and importing a public
+ * asset from JavaScript makes the dev server warn ("Assets in public directory
+ * cannot be imported from JavaScript"). Rerun that script after a logo change.
+ *
+ * The generator's only edit to the artwork is its framing. `icon.svg` draws the
  * 800-unit tile inside a 1024-unit canvas, so a fifth of the box would be
  * transparent padding in a file-tree row; the viewBox is tightened to the tile
  * so the icon fills its slot the way every other file icon does. No path,
@@ -28,19 +34,10 @@
  * - `getCioIconMarkup()`, raw markup for renderers that inject the icon into the
  *   app document (the composer's inline mention badges).
  */
-import cioAppIcon from '../../../static/icon.svg?raw'
+import cioAppIcon from './cio-app-icon.svg?raw'
 
-/**
- * The app icon as a self-contained SVG: the XML declaration and the artwork's
- * comments are dropped, the viewBox is tightened from the 1024-unit canvas to
- * the tile, and the intrinsic size follows the tightened viewBox so the icon
- * stays square in a box that sizes it by aspect ratio.
- */
-const CIO_ICON_SVG = cioAppIcon
-  .replace(/^<\?[\s\S]*?\?>\s*/, '')
-  .replace(/<!--[\s\S]*?-->/g, '')
-  .replace('viewBox="0 0 1024 1024"', 'viewBox="112 112 800 800"')
-  .replace('width="1024" height="1024"', 'width="800" height="800"')
+/** The generated, tile-framed app icon as a self-contained SVG. */
+const CIO_ICON_SVG = cioAppIcon.trimEnd()
 
 /**
  * `data:` URI form of the icon, for the `<img>` consumers. The artwork is
