@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Loader2, ShieldCheck } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
@@ -68,7 +70,11 @@
   }
 </script>
 
-<section class="rounded-xl border bg-surface p-4" aria-label="Audit implementation">
+<section
+  out:slide={dismissSlide()}
+  class="rounded-xl border bg-surface p-4"
+  aria-label="Audit implementation"
+>
   <div class="flex items-start gap-3">
     <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
     <div class="min-w-0 flex-1">
@@ -93,38 +99,40 @@
   </div>
 
   {#if !folded}
-    <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-      <button class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay" onclick={onCancel}>
-        Cancel
-      </button>
-      <div class="ml-auto flex items-center justify-end gap-2">
-        <ModelPicker
-          {providers}
-          {projectId}
-          harnessId={settings.harnessId}
-          providerId={settings.providerId}
-          modelId={settings.modelId}
-          accountId={settings.accountId}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          side="top"
-          label="Change"
-          variant="action"
-          onSelect={chooseModel}
-          thinkingLevel={settings.thinkingLevel}
-          onSelectThinking={chooseThinking}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-        <button
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-          disabled={busy}
-          onclick={() => onAudit(settings)}
-        >
-          {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-          {reworkCycle ? 'Audit again' : 'Audit'}
+    <div transition:slide={foldSlide()}>
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <button class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay" onclick={onCancel}>
+          Cancel
         </button>
+        <div class="ml-auto flex items-center justify-end gap-2">
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={settings.harnessId}
+            providerId={settings.providerId}
+            modelId={settings.modelId}
+            accountId={settings.accountId}
+            {favoriteModels}
+            {recentModels}
+            {onRemoveRecent}
+            side="top"
+            label="Change"
+            variant="action"
+            onSelect={chooseModel}
+            thinkingLevel={settings.thinkingLevel}
+            onSelectThinking={chooseThinking}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+            disabled={busy}
+            onclick={() => onAudit(settings)}
+          >
+            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
+            {reworkCycle ? 'Audit again' : 'Audit'}
+          </button>
+        </div>
       </div>
     </div>
   {/if}

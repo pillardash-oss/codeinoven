@@ -1,9 +1,12 @@
 <script lang="ts">
   import { Plug, Sparkles, X } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'
   import { APP_NAME } from '$shared/brand'
   import type { ProviderCatalog, ThinkingLevel, ThreadSettings } from '$shared/types'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
 
   interface Props {
@@ -51,6 +54,7 @@
       .map((provider) => provider.name)
       .join(', ')
   )
+  let folded = $state(false)
 
   function chooseModel(
     providerId: string,
@@ -74,6 +78,7 @@
 </script>
 
 <div
+  out:slide={dismissSlide()}
   class="rounded-2xl border border-primary/25 bg-surface px-4 py-3.5 shadow-sm"
   role="status"
   aria-live="polite"
@@ -100,63 +105,70 @@
         </span>
       </div>
 
-      <p class="mt-1 text-sm leading-relaxed text-muted">
-        {#if !connected}
-          {APP_NAME} works through the AI accounts you already have. Connect OpenAI, Anthropic, Google,
-          or another provider, then pick a model and send your message.
-        {:else if connectedNames}
-          {connectedNames} connected. Pick the model this thread should use.
-        {:else}
-          Pick the model this thread should use.
-        {/if}
-      </p>
-
-      <div class="mt-3">
-        {#if !connected}
-          <button
-            type="button"
-            class="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover"
-            onclick={onConnect}
-          >
-            <Plug size={14} />
-            Connect Your AI Account
-          </button>
-          <p class="mt-2 text-[0.6875rem] leading-relaxed text-dimmed">
-            Signing in happens inside {APP_NAME}. Credentials are stored by {APP_NAME} in
-            {harnessName}'s own credential file on this machine.
+      {#if !folded}
+        <div transition:slide={foldSlide()}>
+          <p class="mt-1 text-sm leading-relaxed text-muted">
+            {#if !connected}
+              {APP_NAME} works through the AI accounts you already have. Connect OpenAI, Anthropic, Google,
+              or another provider, then pick a model and send your message.
+            {:else if connectedNames}
+              {connectedNames} connected. Pick the model this thread should use.
+            {:else}
+              Pick the model this thread should use.
+            {/if}
           </p>
-        {:else}
-          <ModelPicker
-            {providers}
-            {projectId}
-            harnessId={settings.harnessId}
-            providerId={settings.providerId}
-            modelId={settings.modelId}
-            accountId={settings.accountId}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            side="top"
-            variant="field"
-            label="Choose a model"
-            onSelect={chooseModel}
-            thinkingLevel={settings.thinkingLevel}
-            onSelectThinking={chooseThinking}
-            {onToggleFavorite}
-            {onReorderFavorite}
-          />
-        {/if}
-      </div>
+
+          <div class="mt-3">
+            {#if !connected}
+              <button
+                type="button"
+                class="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+                onclick={onConnect}
+              >
+                <Plug size={14} />
+                Connect Your AI Account
+              </button>
+              <p class="mt-2 text-[0.6875rem] leading-relaxed text-dimmed">
+                Signing in happens inside {APP_NAME}. Credentials are stored by {APP_NAME} in
+                {harnessName}'s own credential file on this machine.
+              </p>
+            {:else}
+              <ModelPicker
+                {providers}
+                {projectId}
+                harnessId={settings.harnessId}
+                providerId={settings.providerId}
+                modelId={settings.modelId}
+                accountId={settings.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="top"
+                variant="field"
+                label="Choose a model"
+                onSelect={chooseModel}
+                thinkingLevel={settings.thinkingLevel}
+                onSelectThinking={chooseThinking}
+                {onToggleFavorite}
+                {onReorderFavorite}
+              />
+            {/if}
+          </div>
+        </div>
+      {/if}
     </div>
 
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="Dismiss AI account setup"
-      title="Dismiss"
-      onclick={onDismiss}
-    >
-      <X size={14} />
-    </button>
+    <div class="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Dismiss AI account setup"
+        title="Dismiss"
+        onclick={onDismiss}
+      >
+        <X size={14} />
+      </button>
+      <CardFoldToggle bind:folded label="AI account setup" />
+    </div>
   </div>
 </div>

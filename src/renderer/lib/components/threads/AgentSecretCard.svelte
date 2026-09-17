@@ -9,8 +9,10 @@
     ShieldCheck,
     X
   } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type { AgentSecretSubmission, PendingAgentQuestionRequest } from '$shared/types'
 
   interface Props {
@@ -87,6 +89,7 @@
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="overflow-hidden rounded-xl border bg-surface shadow-sm"
   aria-label="Agent secret request"
 >
@@ -137,77 +140,79 @@
   </div>
 
   {#if !folded}
-    <div class="space-y-3 p-4">
-      <div class="space-y-1">
-        <!-- Card-scale markdown: the same renderer the transcript uses, sized by
+    <div transition:slide={foldSlide()}>
+      <div class="space-y-3 p-4">
+        <div class="space-y-1">
+          <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
-        <div class="text-sm text-foreground">
-          <MarkdownView text={question.prompt} class="markdown-body-card" />
-        </div>
-        {#if question.description}
-          <div class="text-xs text-muted">
-            <MarkdownView text={question.description} class="markdown-body-card" />
+          <div class="text-sm text-foreground">
+            <MarkdownView text={question.prompt} class="markdown-body-card" />
           </div>
-        {/if}
-      </div>
-
-      {#key currentIndex}
-        <div class="space-y-1.5">
-          <label
-            class="block text-xs font-medium text-muted"
-            for={`secret-value-${request.requestId}-${currentIndex}`}
-          >
-            {allFilled ? 'Value' : 'Paste the value'}
-          </label>
-          <div class="relative">
-            <span
-              class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dimmed"
-              aria-hidden="true"
-            >
-              <KeyRound size={14} />
-            </span>
-            <input
-              id={`secret-value-${request.requestId}-${currentIndex}`}
-              class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
-              type={currentRevealed ? 'text' : 'password'}
-              autocomplete="off"
-              autocapitalize="off"
-              autocorrect="off"
-              spellcheck="false"
-              disabled={working}
-              placeholder="Paste the value"
-              bind:value={values[currentIndex]}
-            />
-            <button
-              class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
-              type="button"
-              disabled={working}
-              aria-pressed={currentRevealed}
-              title={currentRevealed ? 'Hide the value' : 'Show the value'}
-              aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
-              onclick={toggleReveal}
-            >
-              {#if currentRevealed}
-                <EyeOff size={14} />
-              {:else}
-                <Eye size={14} />
-              {/if}
-            </button>
-          </div>
-          {#if question.secretEnvironmentVariable}
-            <p class="text-xs text-dimmed">
-              Available to the agent as
-              <span class="font-mono text-foreground">${question.secretEnvironmentVariable}</span>
-            </p>
+          {#if question.description}
+            <div class="text-xs text-muted">
+              <MarkdownView text={question.description} class="markdown-body-card" />
+            </div>
           {/if}
         </div>
-      {/key}
 
-      {#if actionError}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-          {actionError}
-        </p>
-      {/if}
+        {#key currentIndex}
+          <div class="space-y-1.5">
+            <label
+              class="block text-xs font-medium text-muted"
+              for={`secret-value-${request.requestId}-${currentIndex}`}
+            >
+              {allFilled ? 'Value' : 'Paste the value'}
+            </label>
+            <div class="relative">
+              <span
+                class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dimmed"
+                aria-hidden="true"
+              >
+                <KeyRound size={14} />
+              </span>
+              <input
+                id={`secret-value-${request.requestId}-${currentIndex}`}
+                class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                type={currentRevealed ? 'text' : 'password'}
+                autocomplete="off"
+                autocapitalize="off"
+                autocorrect="off"
+                spellcheck="false"
+                disabled={working}
+                placeholder="Paste the value"
+                bind:value={values[currentIndex]}
+              />
+              <button
+                class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
+                type="button"
+                disabled={working}
+                aria-pressed={currentRevealed}
+                title={currentRevealed ? 'Hide the value' : 'Show the value'}
+                aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
+                onclick={toggleReveal}
+              >
+                {#if currentRevealed}
+                  <EyeOff size={14} />
+                {:else}
+                  <Eye size={14} />
+                {/if}
+              </button>
+            </div>
+            {#if question.secretEnvironmentVariable}
+              <p class="text-xs text-dimmed">
+                Available to the agent as
+                <span class="font-mono text-foreground">${question.secretEnvironmentVariable}</span>
+              </p>
+            {/if}
+          </div>
+        {/key}
+
+        {#if actionError}
+          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {actionError}
+          </p>
+        {/if}
+      </div>
     </div>
   {/if}
 

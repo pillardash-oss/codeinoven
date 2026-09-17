@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Check, ChevronDown, Circle, ListChecks, Loader2, X } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import {
     activeAgentTodoIndex,
     agentTodoProgressLabel,
@@ -55,6 +57,7 @@
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="overflow-hidden rounded-t-xl border border-b-0 border-info/20 bg-elevated/50"
   aria-label="Agent task progress"
 >
@@ -99,7 +102,11 @@
   </div>
 
   {#if open}
-    <div class="max-h-56 overflow-y-auto border-t px-3 py-2" aria-live="polite">
+    <div
+      transition:slide={foldSlide()}
+      class="max-h-56 overflow-y-auto border-t px-3 py-2"
+      aria-live="polite"
+    >
       <ul class="space-y-1.5">
         {#each items as item, index (`${item.id}-${index}`)}
           <li class="flex items-start gap-2 text-xs">

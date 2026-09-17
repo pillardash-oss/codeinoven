@@ -1,6 +1,8 @@
 <script lang="ts">
   import { FileText, ListChecks, Play, X } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
@@ -82,6 +84,7 @@
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="overflow-hidden rounded-xl border bg-surface shadow-sm"
   aria-label={specless ? 'Assignment' : 'Specification ready'}
 >
@@ -111,93 +114,99 @@
   </div>
 
   {#if !folded}
-    <div class="space-y-1.5 p-4">
-      {#if specless}
-        <p class="text-sm font-semibold text-foreground">No specification for this thread.</p>
-        <p class="text-xs leading-relaxed text-muted">
-          Generate an Assignment from this conversation. Every task it produces gets its own worker
-          thread you can follow and chat with independently.
-        </p>
-      {:else}
-        <p class="text-sm font-semibold text-foreground">The engineering specification is ready.</p>
-        <p class="text-xs leading-relaxed text-muted">
-          {assignmentMode
-            ? 'Review and annotate the persisted spec, then prepare or open its Assignment.'
-            : 'Review and annotate the persisted spec, or proceed with the signed version.'}
-        </p>
+    <div transition:slide={foldSlide()}>
+      <div class="space-y-1.5 p-4">
+        {#if specless}
+          <p class="text-sm font-semibold text-foreground">No specification for this thread.</p>
+          <p class="text-xs leading-relaxed text-muted">
+            Send the work you want assigned. The Sr. Engineer breaks it into tasks with their own
+            worker threads you can follow and chat with independently, and it asks you the missing
+            questions first whenever your message and this conversation cannot carry a task graph
+            yet.
+          </p>
+        {:else}
+          <p class="text-sm font-semibold text-foreground">
+            The engineering specification is ready.
+          </p>
+          <p class="text-xs leading-relaxed text-muted">
+            {assignmentMode
+              ? 'Review and annotate the persisted spec, then prepare or open its Assignment.'
+              : 'Review and annotate the persisted spec, or proceed with the signed version.'}
+          </p>
+        {/if}
+      </div>
+
+      {#if error}
+        <p class="border-t px-4 py-2 text-xs text-danger" role="alert">{error}</p>
       {/if}
-    </div>
 
-    {#if error}
-      <p class="border-t px-4 py-2 text-xs text-danger" role="alert">{error}</p>
-    {/if}
-
-    <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
-      <button
-        class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        disabled={busy}
-        onclick={onCancel}
-      >
-        Cancel
-      </button>
-      <div class="flex items-center gap-2">
-        {#if settings}
-          <ModelPicker
-            {providers}
-            {projectId}
-            harnessId={settings.harnessId}
-            providerId={settings.providerId}
-            modelId={settings.modelId}
-            accountId={settings.accountId}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            side="top"
-            label="Change"
-            variant="action"
-            onSelect={chooseModel}
-            thinkingLevel={settings.thinkingLevel}
-            onSelectThinking={chooseThinking}
-            {onToggleFavorite}
-            {onReorderFavorite}
-          />
-        {:else}
-          <button
-            class="flex min-h-8 items-center gap-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-40"
-            disabled
-            title="Choose a model before proceeding"
-          >
-            Change
-          </button>
-        {/if}
-        {#if !specless}
-          <button
-            class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-            disabled={busy}
-            onclick={onReview}
-          >
-            Review spec
-          </button>
-        {/if}
-        {#if assignmentMode}
-          <button
-            class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-            disabled={busy}
-            onclick={assignmentAvailable ? onOpenAssignment : onGenerateAssignment}
-          >
-            {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
-            <Play size={13} />
-          </button>
-        {:else}
-          <button
-            class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-            disabled={busy}
-            onclick={onProceed}
-          >
-            Implement
-            <Play size={13} />
-          </button>
-        {/if}
+      <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
+        <button
+          class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={busy}
+          onclick={onCancel}
+        >
+          Cancel
+        </button>
+        <div class="flex items-center gap-2">
+          {#if settings}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={settings.harnessId}
+              providerId={settings.providerId}
+              modelId={settings.modelId}
+              accountId={settings.accountId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              side="top"
+              label="Change"
+              variant="action"
+              onSelect={chooseModel}
+              thinkingLevel={settings.thinkingLevel}
+              onSelectThinking={chooseThinking}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+          {:else}
+            <button
+              class="flex min-h-8 items-center gap-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-40"
+              disabled
+              title="Choose a model before proceeding"
+            >
+              Change
+            </button>
+          {/if}
+          {#if !specless}
+            <button
+              class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+              disabled={busy}
+              onclick={onReview}
+            >
+              Review spec
+            </button>
+          {/if}
+          {#if assignmentMode}
+            <button
+              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+              disabled={busy}
+              onclick={assignmentAvailable ? onOpenAssignment : onGenerateAssignment}
+            >
+              {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
+              <Play size={13} />
+            </button>
+          {:else}
+            <button
+              class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+              disabled={busy}
+              onclick={onProceed}
+            >
+              Implement
+              <Play size={13} />
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
   {/if}
