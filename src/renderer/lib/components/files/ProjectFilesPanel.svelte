@@ -907,13 +907,13 @@
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
     >
       <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-0 border-b border-border pr-3"
+        class="titlebar-drag flex h-10 shrink-0 items-center gap-0 border-b border-border pr-4"
         style={trafficLightInsetStyle()}
       >
         <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
           <Dialog.Title
-            class="min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
+            class="min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold leading-none text-foreground"
           >
             {activeTab?.path ?? 'File'}
           </Dialog.Title>
