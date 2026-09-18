@@ -10287,6 +10287,7 @@
         <AssignmentStudio
           assignment={studioAssignment}
           threadId={thread.id}
+          projectId={thread.projectId}
           versions={assignmentVersions}
           history={assignmentStudioHistories.forDocument(
             `${studioAssignment.id}:${studioAssignment.version}`
@@ -10327,7 +10328,7 @@
           onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
           onTaskScopeChange={updateAssignmentTaskScope}
-          assignmentScopeBucketId={assignmentScopeBucketId}
+          {assignmentScopeBucketId}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -11867,7 +11868,7 @@
                   onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
                   onSeniorModelChange={updateAssignmentSeniorModel}
                   onTaskScopeChange={updateAssignmentTaskScope}
-                  assignmentScopeBucketId={assignmentScopeBucketId}
+                  {assignmentScopeBucketId}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>

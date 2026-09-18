@@ -39,6 +39,8 @@
     threadId: string
     versions?: AssignmentPlan[]
     providers: ProviderCatalog[]
+    /** Needed by the worker scope picker, which resolves scopes per project. */
+    projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
     seniorModel: AssignmentModelSelection
@@ -104,6 +106,7 @@
     threadId,
     versions = [],
     providers,
+    projectId = null,
     harnessId,
     fallbackModel,
     seniorModel,
@@ -653,6 +656,7 @@
         </div>
         <AssignmentReviewContent
           content={draft}
+          {projectId}
           {readOnly}
           reworkCycle={assignment.auditCycle?.reworkCycle}
           forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
