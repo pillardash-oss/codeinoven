@@ -57,7 +57,7 @@
     /** Whether the Conflicts filter is active (shared with the git panel routing). */
     conflictsOnly?: boolean
     onToggleConflicts?: () => void
-    onFileSelect?: (path: string) => void
+    onFileSelect?: (path: string, mode: 'normal' | 'preview') => void
   }
 
   let {
@@ -490,7 +490,7 @@
 
     if (entry.kind === 'file') {
       if (onFileSelect) {
-        onFileSelect(entry.path)
+        onFileSelect(entry.path, mode)
       } else if (lastTurnOnly && activeCheckpointId && activeCheckpointPaths.includes(entry.path)) {
         await projectFilesWorkspace.openCheckpointFile(
           projectId,

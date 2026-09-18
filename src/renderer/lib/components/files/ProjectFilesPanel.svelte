@@ -458,7 +458,7 @@
     contextSidebarState.focus(sidebarId)
   }
 
-  function fullscreenOpenFile(path: string): void {
+  function fullscreenOpenFile(path: string, mode: 'normal' | 'preview' = 'preview'): void {
     if (path === activeTab?.path) return
     // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
     // switch to the new file's diff in place.
@@ -472,7 +472,9 @@
     // by opening it normally. The fullscreen request survives the context-tab
     // remount caused by focusing that new tab.
     keepFullscreenOpen()
-    void projectFilesWorkspace.openFilePreview(projectId, path)
+    void (mode === 'normal'
+      ? projectFilesWorkspace.openFile(projectId, path)
+      : projectFilesWorkspace.openFilePreview(projectId, path))
   }
 
   async function confirmFullscreenSaveAndNavigate(): Promise<void> {
