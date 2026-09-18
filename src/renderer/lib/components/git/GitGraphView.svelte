@@ -77,6 +77,17 @@
 
   {#each rows as row, index (row.commit.hash)}
     {@const edges = graphRowEdges(row)}
+    {@const subject = row.commit.message.split('\n')[0] ?? ''}
+    <!--
+      Commits above the pushed boundary are local only, so their node is amber
+      instead of the lane colour: lane 0 paints in `--color-primary`, which is
+      near-black in the light theme and near-white in the dark one, and a
+      monochrome dot is exactly what hid the pushed/not-pushed split.
+    -->
+    {@const pushed = index >= unpushedCount}
+    {@const syncLabel = pushed
+      ? `Pushed to ${upstream ?? 'the remote'}`
+      : `Not pushed to ${upstream ?? 'the remote'} yet`}
     {#if unpushedCount > 0 && index === unpushedCount}
       <div class="flex items-center gap-2 px-2 py-1">
         <span class="h-px flex-1 bg-border"></span>
@@ -106,11 +117,22 @@
             {#each edges as edge, edgeIndex (edgeIndex)}
               <path d={edge.path} fill="none" stroke={edge.color} stroke-width="1.5" />
             {/each}
+            {#if !pushed}
+              <!-- A soft halo, so the unpushed run reads as a block at a glance
+                   without the amber having to shout over the lane colours. -->
+              <circle
+                cx={graphLaneX(row.lane)}
+                cy={GRAPH_ROW_HEIGHT / 2}
+                r="5"
+                fill="var(--color-warning)"
+                opacity="0.18"
+              />
+            {/if}
             <circle
               cx={graphLaneX(row.lane)}
               cy={GRAPH_ROW_HEIGHT / 2}
               r="3"
-              fill={graphLaneColor(row.lane)}
+              fill={pushed ? graphLaneColor(row.lane) : 'var(--color-warning)'}
               stroke="var(--color-app)"
               stroke-width="1.5"
             />
@@ -119,15 +141,15 @@
             type="button"
             class={[
               'flex min-w-0 flex-1 items-center gap-2 px-2 text-left',
-              index < unpushedCount ? 'text-muted' : 'text-foreground'
+              pushed ? 'text-foreground' : 'text-muted'
             ]}
             style={`height: ${GRAPH_ROW_HEIGHT}px`}
-            title={`View ${row.commit.shortHash}: ${row.commit.message.split('\n')[0] ?? ''}`}
-            aria-label={`View commit ${row.commit.shortHash}: ${row.commit.message.split('\n')[0] ?? ''}`}
+            title={`View ${row.commit.shortHash}: ${subject}. ${syncLabel}`}
+            aria-label={`View commit ${row.commit.shortHash}: ${subject}. ${syncLabel}`}
             onclick={() => onSelectCommit(row.commit)}
           >
             <span class="min-w-0 flex-1 truncate text-[0.6875rem] leading-snug">
-              {row.commit.message.split('\n')[0]}
+              {subject}
             </span>
             {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
               <span
