@@ -957,6 +957,10 @@ export class GitState {
     return this.local.getLog(projectId, limit, offset, query)
   }
 
+  getRemoteUpdates(projectId: string) {
+    return this.local.getRemoteUpdates(projectId)
+  }
+
   getCommitDiff(projectId: string, hash: string) {
     return this.local.getCommitDiff(projectId, hash)
   }

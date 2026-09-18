@@ -1,4 +1,4 @@
-import type { GitCommitInfo } from '$shared/types'
+import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
 
 /** Horizontal pitch of one graph lane, in px. */
 export const GRAPH_LANE_WIDTH = 12
@@ -122,6 +122,39 @@ export function assignGraphLanes(commits: readonly GitCommitInfo[]): GitGraphRow
   }
 
   return rows
+}
+
+/**
+ * Row index -> the upstream update whose batch of commits starts on that row.
+ *
+ * An update is stamped on the ref, so its commit is the newest one in that
+ * batch, which is exactly the row the batch's boundary sits above. An update
+ * whose commit is not among the rows (older than the pages loaded so far, or no
+ * longer in this branch's history after a rewrite) is skipped rather than
+ * guessed at, because a boundary anchored to no row would be drawn in the wrong
+ * place. When two entries name the same commit, the newest wins: that is the
+ * entry that actually moved the ref last.
+ *
+ * `unpushedCount` is the panel's drift with the upstream, and it bounds the
+ * answer: a commit above that boundary is not on the remote now, so an entry
+ * naming it describes a position the remote has since been rewritten away from.
+ * Skipping those keeps a `Pushed` line from sitting on top of the amber run that
+ * says the opposite.
+ */
+export function graphBatchStarts(
+  rows: readonly GitGraphRow[],
+  updates: readonly GitRemoteUpdate[],
+  unpushedCount: number
+): Map<number, GitRemoteUpdate> {
+  const indexByHash = new Map<string, number>()
+  for (const [index, row] of rows.entries()) indexByHash.set(row.commit.hash, index)
+  const starts = new Map<number, GitRemoteUpdate>()
+  for (const update of updates) {
+    const index = indexByHash.get(update.sha)
+    if (index === undefined || index < unpushedCount || starts.has(index)) continue
+    starts.set(index, update)
+  }
+  return starts
 }
 
 /** One SVG path segment of a graph row. */

@@ -13,6 +13,7 @@ import type {
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
+  GitRemoteUpdate,
   GitResetMode,
   GitRestoreTarget,
   GitStashEntry,
@@ -762,6 +763,19 @@ export class GitLocalOperations {
   ): Promise<GitCommitInfo[]> {
     try {
       return await invoke('git:log', ...this.access.scopedGitArgs(projectId, limit, offset, query))
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * When each batch of commits reached the upstream, newest first. Empty when
+   * the branch has no remote-tracking upstream or git kept no reflog for it, so
+   * callers treat "no answer" as "no batch boundaries to draw".
+   */
+  async getRemoteUpdates(projectId: string): Promise<GitRemoteUpdate[]> {
+    try {
+      return await invoke('git:remoteUpdates', ...this.access.scopedGitArgs(projectId))
     } catch {
       return []
     }

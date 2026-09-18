@@ -14,6 +14,7 @@ import type {
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
+  GitRemoteUpdate,
   GitRestoreTarget,
   GitResetMode,
   GitStashEntry,
@@ -43,6 +44,12 @@ import {
   comparePullRequestBranches as comparePullRequestRefs
 } from './git/git-service-pull-request'
 import type { ConflictWorkMetadata } from './git/git-service-conflicts'
+import {
+  REMOTE_REF_PREFIX,
+  REMOTE_UPDATE_FORMAT,
+  REMOTE_UPDATE_LIMIT,
+  parseRemoteUpdates
+} from './git/git-service-remote-updates'
 import {
   buildInitialConflictWorkFile,
   conflictSourceHash,
@@ -808,6 +815,53 @@ export class GitService {
         await git.raw(['worktree', 'prune']).catch(() => undefined)
       })
     }
+  }
+
+  /**
+   * Every movement of the current branch's upstream ref, newest first.
+   *
+   * Read from git's reflog for that remote-tracking ref, which is the only
+   * native record of when commits actually reached the remote (a commit's own
+   * dates say when it was written, not when it was published). Each entry names
+   * the commit the ref moved to, so the history view can draw where one push
+   * ended and the next began.
+   *
+   * Returns an empty list rather than failing whenever the answer is simply
+   * unknown: no upstream, an upstream that is not a remote-tracking ref, or a
+   * ref whose reflog was never written or has expired.
+   */
+  async remoteUpdates(projectPath: string): Promise<GitRemoteUpdate[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        // The full name, so a branch that tracks another *local* branch (where
+        // `branch.<name>.remote` is `.`) is not mistaken for a remote. Such a
+        // ref's reflog records local commits, which are not pushes at all.
+        const upstream = await git
+          .raw(['rev-parse', '--symbolic-full-name', '@{upstream}'])
+          .catch(() => '')
+        const fullRef = upstream.trim()
+        if (!fullRef.startsWith(REMOTE_REF_PREFIX)) return []
+        const ref = fullRef.slice(REMOTE_REF_PREFIX.length)
+        try {
+          const raw = await git.raw([
+            'reflog',
+            'show',
+            '-n',
+            String(REMOTE_UPDATE_LIMIT),
+            '--date=iso-strict',
+            `--format=${REMOTE_UPDATE_FORMAT}`,
+            fullRef
+          ])
+          return parseRemoteUpdates(ref, raw)
+        } catch {
+          // No reflog for this ref: the clone never fetched (or reflog writing
+          // is off). The history view then falls back to its plain boundary.
+          return []
+        }
+      })
+    })
   }
 
   /** `offset` skips the N newest commits   pages in older history for infinite scroll. */

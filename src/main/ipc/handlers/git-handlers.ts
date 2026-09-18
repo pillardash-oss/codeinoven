@@ -374,6 +374,14 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       )
     }
   )
+  ipcMain.handle('git:remoteUpdates', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.remoteUpdates(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
+  )
   ipcMain.handle(
     'git:commitDiff',
     async (_, projectId: unknown, hash: unknown, scopeBucketId?: unknown) => {

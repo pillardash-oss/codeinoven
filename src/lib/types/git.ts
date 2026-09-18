@@ -130,6 +130,32 @@ export interface GitCommitInfo {
   refs: GitCommitRef[]
 }
 
+/**
+ * One movement of the checked-out branch's upstream ref, read from git's own
+ * reflog for that remote-tracking ref.
+ *
+ * Git writes a reflog entry every time the ref moves, and unlike commit dates
+ * those entries carry the moment the remote learned about the commits, which is
+ * the only native record of when something was actually pushed.
+ */
+export interface GitRemoteUpdate {
+  /** Short upstream ref that moved, e.g. `origin/main`. */
+  ref: string
+  /** Commit the ref pointed at after the update: the newest commit in the batch. */
+  sha: string
+  /** When the ref moved, epoch ms. Null when git wrote no parsable date. */
+  at: number | null
+  /**
+   * `push` when this checkout is what moved the ref, so the batch below is
+   * something we published. `received` for every other movement (fetch, pull,
+   * clone, a peer's push that arrived on the next fetch), where the batch was
+   * already on the remote and we only learned about it.
+   */
+  kind: 'push' | 'received'
+  /** git's own reflog message, kept for the tooltip. */
+  message: string
+}
+
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
 export type GitResetMode = 'soft' | 'mixed' | 'hard'
 

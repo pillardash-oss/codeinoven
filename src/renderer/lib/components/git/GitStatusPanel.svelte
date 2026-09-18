@@ -36,6 +36,7 @@
     GitHubUser,
     GitHubWorkflowRun,
     GitResetMode,
+    GitRemoteUpdate,
     GitRestoreTarget,
     GitStashEntry,
     ThreadStatus
@@ -209,6 +210,15 @@
   let restoreWorktreeConfirm = $state<{ source: string; path: string } | null>(null)
   let commitSelection = $state(false)
   let commitHistory = $state<GitCommitInfo[]>([])
+  /**
+   * Where each batch of commits reached the upstream, newest first, read from
+   * the upstream ref's reflog. Empty when the branch has no remote-tracking
+   * upstream or git kept no reflog for it, in which case the graph falls back to
+   * its single unpushed boundary.
+   */
+  let remoteUpdates = $state.raw<GitRemoteUpdate[]>([])
+  /** Invalidates an in-flight reflog read whose drift has already moved on. */
+  let remoteUpdatesRequestId = 0
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
   let commitSearchQuery = $state('')
@@ -795,6 +805,33 @@
     }
   }
 
+  /**
+   * Read the upstream ref's reflog: git stamps every movement of that ref, which
+   * is the only native record of when commits actually reached the remote.
+   * `remoteUpdatesRequestId` drops an answer whose drift has already moved on.
+   */
+  async function loadRemoteUpdates(): Promise<void> {
+    const request = ++remoteUpdatesRequestId
+    const updates = await gitState.getRemoteUpdates(projectId)
+    if (request !== remoteUpdatesRequestId) return
+    remoteUpdates = updates
+  }
+
+  /**
+   * The drift this panel has with its upstream, plus the worktree it belongs to.
+   * Pushing and fetching both move it, and both add a reflog entry, so it is the
+   * cheap signal that the batch boundaries in the graph are out of date. The
+   * scope bucket is part of the key so a worktree swap always re-reads, even
+   * when two checkouts happen to sit at the same drift.
+   */
+  const remoteUpdatesKey = $derived(
+    status?.upstream === null || status?.upstream === undefined
+      ? null
+      : [scopeBucketId ?? '', status.upstream, String(status.ahead), String(status.behind)].join(
+          '|'
+        )
+  )
+
   /** Infinite scroll for the History tab   the panel's tabs share one scroll container. */
   function handleContentScroll(event: Event): void {
     if (activeTab !== 'history') return
@@ -1101,6 +1138,8 @@
    */
   function resetForScopeSwap(): void {
     historyRequestId += 1
+    remoteUpdatesRequestId += 1
+    remoteUpdates = []
     closeCommitSearch()
     selectedCommit = null
     selectedStash = null
@@ -1213,6 +1252,14 @@
     // Loaded eagerly (not just when the History tab opens) so the composer
     // knows whether there's a commit to amend before the user gets there.
     if (repoState === 'git' || activeTab === 'history') void loadHistory()
+  })
+
+  $effect(() => {
+    // The graph's push boundaries lag behind the repository until this re-reads,
+    // and this effect is what re-reads: `remoteUpdatesKey` is the panel's drift
+    // with its upstream, which only a push or a fetch moves.
+    if (repoState !== 'git' || remoteUpdatesKey === null) return
+    void loadRemoteUpdates()
   })
 
   $effect(() => {
@@ -3289,6 +3336,7 @@
           hasMore={historyHasMore}
           {unpushedCount}
           upstream={status?.upstream ?? null}
+          {remoteUpdates}
           selectedHash={selectedCommit?.hash ?? null}
           onSelectCommit={(commit) => void selectCommit(commit)}
         >

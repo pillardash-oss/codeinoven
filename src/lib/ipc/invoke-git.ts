@@ -21,6 +21,7 @@ import type {
   GitInvocation,
   GitRebaseAction,
   GitRemoteInfo,
+  GitRemoteUpdate,
   GitStashEntry,
   GitStatus,
   GitSyncDirection,
@@ -155,6 +156,10 @@ export const invokeGitContract = {
   'git:log': {} as Contract<
     [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
     GitCommitInfo[]
+  >,
+  'git:remoteUpdates': {} as Contract<
+    [projectId: string, scopeBucketId?: string],
+    GitRemoteUpdate[]
   >,
   'git:commitDiff': {} as Contract<
     [projectId: string, hash: string, scopeBucketId?: string],

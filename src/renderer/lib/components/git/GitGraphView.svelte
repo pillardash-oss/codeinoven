@@ -1,14 +1,21 @@
 <script lang="ts">
-  import { GitCommit as GitCommitIcon, Loader2 } from '@lucide/svelte'
+  import {
+    GitCommit as GitCommitIcon,
+    ArrowDownToLine,
+    ArrowUpFromLine,
+    Loader2
+  } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
-  import type { GitCommitInfo } from '$shared/types'
+  import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
   import { relativeTime } from '$lib/format/relative-time'
+  import { absoluteTime } from './git-status-panel-format'
   import {
     GRAPH_LANE_WIDTH,
     GRAPH_MAX_LANES,
     GRAPH_ROW_HEIGHT,
     assignGraphLanes,
+    graphBatchStarts,
     graphLaneColor,
     graphLaneX,
     graphRowEdges
@@ -24,6 +31,12 @@
     unpushedCount: number
     /** Upstream ref name, for the pushed-boundary label. */
     upstream: string | null
+    /**
+     * Every recorded movement of the upstream ref, newest first. Each one marks
+     * where a batch of commits reached the remote, so the graph can show a push
+     * of five commits separately from the push of two that followed it.
+     */
+    remoteUpdates: GitRemoteUpdate[]
     /** Hash of the commit whose diff is currently shown, if any. */
     selectedHash: string | null
     onSelectCommit: (commit: GitCommitInfo) => void
@@ -38,6 +51,7 @@
     hasMore,
     unpushedCount,
     upstream,
+    remoteUpdates,
     selectedHash,
     onSelectCommit,
     menu
@@ -55,7 +69,59 @@
 
   /** True once history needs more lanes than the column draws. */
   const lanesClipped = $derived(rows.some((row) => row.laneCount > GRAPH_MAX_LANES))
+
+  /**
+   * Row index -> the update whose batch starts on that row. An update whose
+   * commit is not in the loaded pages, or that names a commit this branch has
+   * not pushed, draws nothing: a boundary with no row to anchor it would be a
+   * line in the wrong place.
+   */
+  const batchStarts = $derived(graphBatchStarts(rows, remoteUpdates, unpushedCount))
+
+  /**
+   * True when no recorded update lands on the unpushed boundary, so the plain
+   * "Pushed to <upstream>" line still has to be drawn. That is the case when the
+   * reflog is gone past git's expiry, or when the remote was never fetched from
+   * this clone, and the split between pushed and unpushed is still real.
+   */
+  const needsPlainBoundary = $derived(
+    unpushedCount > 0 && unpushedCount < rows.length && !batchStarts.has(unpushedCount)
+  )
 </script>
+
+<!--
+  A line where a batch of commits reached the remote, and what happened to it:
+  `Pushed to` is this checkout publishing them, `Received from` is this clone
+  learning they were already there (a fetch, a pull, a clone, or a peer's push
+  that only arrived here on the next fetch). Git stamps the movement itself, so
+  the batch below the line went up in one action, which is what makes a five
+  commit push readable as separate from the two commit one that followed it.
+
+  A null update is the fallback for a boundary git kept no record of (an expired
+  reflog, or a clone that never fetched): the split between pushed and unpushed
+  is still real, only its moment is unknown.
+-->
+{#snippet batchBoundary(update: GitRemoteUpdate | null)}
+  {@const direction = update === null || update.kind === 'push' ? 'Pushed to' : 'Received from'}
+  {@const ref = update?.ref ?? upstream ?? 'the remote'}
+  {@const at = update?.at ?? null}
+  <div class="flex items-center gap-2 px-2 py-1">
+    <span class="h-px flex-1 bg-border"></span>
+    <span
+      class="flex shrink-0 items-center gap-1 text-[0.5625rem] font-medium text-dimmed"
+      title={`${direction} ${ref}${at === null ? '' : ` on ${absoluteTime(at)}`}`}
+    >
+      {#if direction === 'Pushed to'}
+        <ArrowUpFromLine size={10} class="shrink-0" aria-hidden="true" />
+      {:else}
+        <ArrowDownToLine size={10} class="shrink-0" aria-hidden="true" />
+      {/if}
+      {direction}
+      {ref}{at === null ? '' : ` · ${relativeTime(at)}`}
+    </span>
+    <span class="h-px flex-1 bg-border"></span>
+  </div>
+{/snippet}
 
 {#if loading}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
@@ -88,14 +154,11 @@
     {@const syncLabel = pushed
       ? `Pushed to ${upstream ?? 'the remote'}`
       : `Not pushed to ${upstream ?? 'the remote'} yet`}
-    {#if unpushedCount > 0 && index === unpushedCount}
-      <div class="flex items-center gap-2 px-2 py-1">
-        <span class="h-px flex-1 bg-border"></span>
-        <span class="shrink-0 text-[0.5625rem] font-medium text-dimmed">
-          Pushed to {upstream ?? 'the remote'}
-        </span>
-        <span class="h-px flex-1 bg-border"></span>
-      </div>
+    {@const batchStart = batchStarts.get(index) ?? null}
+    {#if batchStart}
+      {@render batchBoundary(batchStart)}
+    {:else if needsPlainBoundary && index === unpushedCount}
+      {@render batchBoundary(null)}
     {/if}
     <ContextMenu.Root>
       <ContextMenu.Trigger
