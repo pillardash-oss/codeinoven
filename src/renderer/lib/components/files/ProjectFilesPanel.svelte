@@ -913,7 +913,7 @@
         <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
           <Dialog.Title
-            class="min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold leading-none text-foreground"
+            class="relative top-px min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold leading-none text-foreground"
           >
             {activeTab?.path ?? 'File'}
           </Dialog.Title>
