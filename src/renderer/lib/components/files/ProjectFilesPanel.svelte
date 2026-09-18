@@ -459,7 +459,13 @@
   }
 
   function fullscreenOpenFile(path: string, mode: 'normal' | 'preview' = 'preview'): void {
-    if (path === activeTab?.path) return
+    if (path === activeTab?.path) {
+      if (mode === 'normal') {
+        keepFullscreenOpen()
+        void projectFilesWorkspace.openFile(projectId, path)
+      }
+      return
+    }
     // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
     // switch to the new file's diff in place.
     if (activeTab?.checkpointId && activeCheckpointPaths.includes(path)) {
