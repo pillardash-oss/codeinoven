@@ -1828,6 +1828,7 @@
         isNewThread={scopeShoe.isNewThread}
         isWorking={scopeShoe.isWorking}
         onOpenScopeView={scopeShoe.onOpenScopeView}
+        report={scopeShoe.report}
       />
     </div>
   </div>
