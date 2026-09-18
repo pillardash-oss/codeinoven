@@ -6,6 +6,7 @@ import type {
   PromptReference,
   UserMessagePresentation
 } from '$shared/types'
+import { uuidv7 } from '$shared/id'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -85,6 +86,8 @@ export interface QueuedResponseReference extends PromptReference {
  * composer, or deleted.
  */
 export interface QueuedMessageEntry {
+  /** Stable identity for this queued item, independent of its message text. */
+  id: string
   text: string
   attachments: PromptAttachment[]
   promptContext?: string
@@ -95,6 +98,8 @@ export interface QueuedMessageEntry {
   /** Source threads that must all reach a terminal state before delivery. */
   startAfterThreads: StartAfterThreadReference[]
 }
+
+export type QueuedMessageEntryInput = Omit<QueuedMessageEntry, 'id'> & { id?: string }
 
 export interface RendererRecoverySnapshot {
   version: 1
@@ -431,6 +436,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
     // object per thread — accept both so a pre-FIFO queue survives the upgrade.
     const rawEntries: unknown[] = Array.isArray(raw) ? raw : isRecord(raw) ? [raw] : []
     const entries: QueuedMessageEntry[] = []
+    const entryIds = new Set<string>()
     for (const item of rawEntries) {
       if (count >= MAX_RECOVERY_DRAFTS) break
       if (!isRecord(item)) continue
@@ -449,7 +455,11 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
       const taskReferences = Array.isArray(item.taskReferences)
         ? item.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
         : []
+      let id = typeof item.id === 'string' && item.id.length > 0 ? item.id : uuidv7()
+      while (entryIds.has(id)) id = uuidv7()
+      entryIds.add(id)
       entries.push({
+        id,
         text,
         attachments,
         promptContext: typeof item.promptContext === 'string' ? item.promptContext : undefined,

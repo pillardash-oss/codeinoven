@@ -11465,7 +11465,7 @@
                         </p>
                         {#each rendererRecovery
                           .queuedMessagesFor(thread.projectId, thread.id)
-                          .slice(1) as next (next.text)}
+                          .slice(1) as next (next.id)}
                           <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
                         {/each}
                       </div>
