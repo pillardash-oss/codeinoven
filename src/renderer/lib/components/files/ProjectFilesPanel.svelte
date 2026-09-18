@@ -448,30 +448,30 @@
     toast.success(`${label} beautified`, { description: 'Save the file to keep the change.' })
   }
 
+  function keepFullscreenOpen(): void {
+    projectFilesWorkspace.requestFullscreen(projectId)
+  }
+
+  function focusFullscreenFileTab(sidebarId: string): void {
+    keepFullscreenOpen()
+    contextSidebarState.focus(sidebarId)
+  }
+
   function fullscreenOpenFile(path: string): void {
     if (path === activeTab?.path) return
     // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
     // switch to the new file's diff in place.
     if (activeTab?.checkpointId && activeCheckpointPaths.includes(path)) {
+      keepFullscreenOpen()
       void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
       return
     }
-    if (!activeTab) {
-      void projectFilesWorkspace.openFile(projectId, path)
-      return
-    }
-    if (dirty) {
-      fullscreenPendingPath = path
-      return
-    }
-    const currentPath = activeTab.path
-    contextSidebarState.updateProjectFileMapping(
-      projectId,
-      `working:${currentPath}`,
-      `working:${path}`,
-      path
-    )
-    void projectFilesWorkspace.swapFileSilent(projectId, currentPath, path)
+    // Match the sidebar's single-click behavior: a normal active file stays
+    // open, while the selected file becomes a preview tab that can be pinned
+    // by opening it normally. The fullscreen request survives the context-tab
+    // remount caused by focusing that new tab.
+    keepFullscreenOpen()
+    void projectFilesWorkspace.openFilePreview(projectId, path)
   }
 
   async function confirmFullscreenSaveAndNavigate(): Promise<void> {
@@ -946,7 +946,7 @@
                   data-active={contextTab?.id === fileTab.id ? 'true' : undefined}
                   class="flex min-w-0 items-center gap-1.5 py-1.5 pl-2 text-left"
                   title={fileTab.path ?? fileTab.title}
-                  onclick={() => contextSidebarState.focus(fileTab.id)}
+                  onclick={() => focusFullscreenFileTab(fileTab.id)}
                 >
                   <FileTypeIcon path={fileTab.path ?? fileTab.title} size={12} />
                   <span
