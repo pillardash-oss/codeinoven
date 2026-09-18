@@ -451,6 +451,7 @@ import {
   assertHarnessRequestCapabilities,
   attributionModeFor,
   dedupeCapabilities,
+  isIdleSignalEvent,
   isTerminalSubagentPatch,
   mcpDetail,
   scopeAppliesToThread,
@@ -19046,6 +19047,26 @@ export class ChatEngine {
       // keeps spinning after the stop that produced it.
       isTerminalSubagentPatch(event)
     if (stoppedSessionEvent && !stoppedSessionTerminalEvent) return
+    // A settle is only the turn's end when the driver has released the turn. A
+    // driver that still registers the turn is going to resume it: pi's page
+    // checkpoint aborts the run, compacts and re-prompts it inside the same
+    // logical turn, and codex holds its turn across the retry gaps. Honoring
+    // this idle ended the turn mid-flight, tearing down the turn's utility
+    // gateway (handoff clear + cleanup) while the resumed run was still calling
+    // `cio_util_*`. Nothing downstream may see it: not the status map, the
+    // watchdog, the retry scheduler, the completion waiters, or the renderers.
+    // The driver's own terminal idle arrives after it clears the registration,
+    // so ignoring this one costs nothing, and the watchdog still recovers a
+    // registration a driver never releases (it probes the live harness and
+    // fails the session when the process is gone).
+    const idleEvent = isIdleSignalEvent(event)
+    if (idleEvent && this.driverHoldsTurn(event.sessionId, driverId, sourceDriver)) {
+      Logger.dev('Ignored an idle from a driver that still holds the turn:', {
+        sessionId: event.sessionId,
+        driverId
+      })
+      return
+    }
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
 
@@ -19316,10 +19337,7 @@ export class ChatEngine {
     }
 
     // Terminal events trigger state transitions.
-    if (
-      event.type === 'session.idle' ||
-      (event.type === 'session.status' && event.status.state === 'idle')
-    ) {
+    if (idleEvent) {
       const currentStatus = this.sessionStatuses.get(event.sessionId)
       // A usage-limit reset wait is not really idle: keep the waiting card and
       // suppress this trailing idle broadcast so the card survives until the
@@ -23585,6 +23603,31 @@ export class ChatEngine {
       return
     }
 
+    // A driver that still owns the turn has not failed. Pi's page checkpoint
+    // aborts the in-flight run (leaving an aborted-message error in the
+    // transcript) while it compacts and re-prompts the same turn, and codex
+    // holds its turn across the retry gaps; the recovered issue would
+    // otherwise park a live turn on a failed card. While the live probe still
+    // reports the harness busy, the turn is working: keep the window open and
+    // let the driver finish it. A registration the driver never releases is
+    // still surfaced, because the probe then reports the process idle or
+    // wedged and this block does not apply.
+    const watchdogDriver = this.driverForRuntime(info.driverId, info.accountId)
+    if (
+      watchdogDriver?.hasActiveTurn &&
+      watchdogDriver.hasActiveTurn(sessionId) &&
+      watchdogDriver.isSessionBusy &&
+      (await probeSessionLiveness(watchdogDriver, info, sessionId)) === 'busy'
+    ) {
+      Logger.info('Session silent while its driver still owns the turn   extending watchdog', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId
+      })
+      this.startSessionWatchdog(sessionId, ChatEngine.SILENT_WORK_GRACE_MS)
+      return
+    }
+
     // A harness can settle a session without the driver noticing: pi's
     // auto-compaction aborts the active run, compacts, and (on overflow)
     // retries, and the driver's turn registration is gone by the time the
@@ -23593,7 +23636,6 @@ export class ChatEngine {
     // session with no registered driver turn is not an error: emit a synthetic
     // idle so the engine's normal finalization runs (its incomplete-turn
     // recovery continues the thread) instead of parking it on an error card.
-    const watchdogDriver = this.driverForRuntime(info.driverId, info.accountId)
     if (
       watchdogDriver?.hasActiveTurn &&
       !watchdogDriver.hasActiveTurn(sessionId) &&
@@ -23634,6 +23676,33 @@ export class ChatEngine {
       if (driver) await driver.abort(info.projectPath, sessionId)
     } catch {
       /* abort is best-effort */
+    }
+  }
+
+  /**
+   * Whether the emitting driver still declares a live turn for this session.
+   *
+   * The turn lifecycle belongs to the driver: it registers a turn when it
+   * dispatches one and clears it only when nothing can resume it. An idle that
+   * arrives before that clearance is an intermediate settle, not the turn's end,
+   * and the engine must not finalize on it. Mirrors the watchdog, which only
+   * synthesizes a missing idle when the driver has NO registered turn, so both
+   * sides of the contract ask the same question.
+   */
+  private driverHoldsTurn(
+    sessionId: string,
+    driverId: string,
+    sourceDriver?: HarnessDriver
+  ): boolean {
+    const driver =
+      sourceDriver ??
+      this.driverForRuntime(driverId, this.sessionRegistry.get(sessionId)?.accountId)
+    if (!driver?.hasActiveTurn) return false
+    try {
+      return driver.hasActiveTurn(sessionId)
+    } catch (error) {
+      Logger.dev('Driver active-turn probe failed:', error)
+      return false
     }
   }
 

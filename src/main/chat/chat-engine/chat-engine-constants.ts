@@ -30,6 +30,19 @@ export function isTerminalSubagentPatch(event: SessionAgentEvent): boolean {
 }
 
 /**
+ * A driver signal that the session settled: the dedicated `session.idle` event
+ * or an idle `session.status`. Both mean the same thing to every consumer, and
+ * both are only the turn's end when the emitting driver has released the turn
+ * (see ChatEngine's `driverHoldsTurn`).
+ */
+export function isIdleSignalEvent(event: SessionAgentEvent): boolean {
+  return (
+    event.type === 'session.idle' ||
+    (event.type === 'session.status' && event.status.state === 'idle')
+  )
+}
+
+/**
  * Cooldown used to schedule an automatic retry for a quota/rate-limit wait
  * when the provider's error carries no parseable reset time (or one already
  * in the past). Without this, such a wait would show no timer and never
