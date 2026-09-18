@@ -15,9 +15,9 @@
     GRAPH_MAX_LANES,
     GRAPH_ROW_HEIGHT,
     assignGraphLanes,
-    graphBatchStarts,
     graphLaneColor,
     graphLaneX,
+    graphRemotePlacement,
     graphRowEdges
   } from '$lib/git-graph'
 
@@ -34,7 +34,8 @@
     /**
      * Every recorded movement of the upstream ref, newest first. Each one marks
      * where a batch of commits reached the remote, so the graph can show a push
-     * of five commits separately from the push of two that followed it.
+     * of five commits separately from the push of two that followed it, and can
+     * still name the commits a later rewrite took back off the remote.
      */
     remoteUpdates: GitRemoteUpdate[]
     /** Hash of the commit whose diff is currently shown, if any. */
@@ -71,22 +72,37 @@
   const lanesClipped = $derived(rows.some((row) => row.laneCount > GRAPH_MAX_LANES))
 
   /**
-   * Row index -> the update whose batch starts on that row. An update whose
-   * commit is not in the loaded pages, or that names a commit this branch has
-   * not pushed, draws nothing: a boundary with no row to anchor it would be a
-   * line in the wrong place.
+   * Where the recorded movements land: a live boundary for every batch the
+   * upstream still holds, and a rewrite mark on every commit a recorded movement
+   * put on the ref that the upstream has since moved off.
    */
-  const batchStarts = $derived(graphBatchStarts(rows, remoteUpdates, unpushedCount))
+  const placement = $derived(graphRemotePlacement(rows, remoteUpdates, unpushedCount))
 
   /**
-   * True when no recorded update lands on the unpushed boundary, so the plain
-   * "Pushed to <upstream>" line still has to be drawn. That is the case when the
-   * reflog is gone past git's expiry, or when the remote was never fetched from
-   * this clone, and the split between pushed and unpushed is still real.
+   * True when no movement the upstream still holds lands on the unpushed
+   * boundary, so the plain "Pushed to <upstream>" line still has to be drawn.
+   * That is the case when the reflog is gone past git's expiry, or when the
+   * remote was never fetched from this clone, and the split between pushed and
+   * unpushed is still real.
    */
   const needsPlainBoundary = $derived(
-    unpushedCount > 0 && unpushedCount < rows.length && !batchStarts.has(unpushedCount)
+    unpushedCount > 0 && unpushedCount < rows.length && !placement.boundaries.has(unpushedCount)
   )
+
+  /**
+   * The last thing the upstream is known to have done with a commit it was
+   * rewritten off, as a sentence for that row's tooltip. The rewrite itself has
+   * no time here (a fetch only reports that the ref was already gone), so the
+   * moment given is when the ref last pointed at the commit.
+   */
+  function rewriteLabel(update: GitRemoteUpdate, upstreamRef: string | null): string {
+    const ref = update.ref || upstreamRef || 'the remote'
+    const reached = update.at === null ? '' : ` on ${absoluteTime(update.at)}`
+    // Same wording as the boundary lines, so the mark reads as the other half of
+    // the same story: the batch went up, and a later rewrite took it off.
+    const published = update.kind === 'push' ? `Pushed to ${ref}` : `Received from ${ref}`
+    return `${published}${reached}; no longer on it, the remote was rewritten off it.`
+  }
 </script>
 
 <!--
@@ -148,13 +164,19 @@
       Commits above the pushed boundary are local only, so their node is amber
       instead of the lane colour: lane 0 paints in `--color-primary`, which is
       near-black in the light theme and near-white in the dark one, and a
-      monochrome dot is exactly what hid the pushed/not-pushed split.
+      monochrome dot is exactly what hid the pushed/not-pushed split. A commit
+      the upstream was rewritten off keeps that amber and gains a badge: it is
+      missing from the remote for the same reason, only it got there once.
     -->
     {@const pushed = index >= unpushedCount}
-    {@const syncLabel = pushed
-      ? `Pushed to ${upstream ?? 'the remote'}`
-      : `Not pushed to ${upstream ?? 'the remote'} yet`}
-    {@const batchStart = batchStarts.get(index) ?? null}
+    {@const rewrittenBy = placement.rewritten.get(index) ?? null}
+    {@const syncLabel =
+      rewrittenBy !== null
+        ? rewriteLabel(rewrittenBy, upstream)
+        : pushed
+          ? `Pushed to ${upstream ?? 'the remote'}`
+          : `Not pushed to ${upstream ?? 'the remote'} yet`}
+    {@const batchStart = placement.boundaries.get(index) ?? null}
     {#if batchStart}
       {@render batchBoundary(batchStart)}
     {:else if needsPlainBoundary && index === unpushedCount}
@@ -214,6 +236,16 @@
             <span class="min-w-0 flex-1 truncate text-[0.6875rem] leading-snug">
               {subject}
             </span>
+            {#if rewrittenBy !== null}
+              <!-- Amber like the unpushed run it sits in, because the commit is
+                   not on the remote now; the badge is what says it was there
+                   once, and the row's tooltip names the movement and its time. -->
+              <span
+                class="shrink-0 rounded-sm bg-warning/10 px-1 py-px text-[0.5rem] font-medium text-warning"
+              >
+                rewritten
+              </span>
+            {/if}
             {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
               <span
                 class={[

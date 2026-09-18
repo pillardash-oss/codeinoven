@@ -124,37 +124,102 @@ export function assignGraphLanes(commits: readonly GitCommitInfo[]): GitGraphRow
   return rows
 }
 
+/** Where every recorded movement of the upstream ref lands on the graph. */
+export interface GitGraphRemotePlacement {
+  /**
+   * Row index -> the movement whose batch of commits starts on that row, i.e.
+   * the rows from it down to the next boundary. An update is stamped on the ref,
+   * so its commit is the newest one in that batch, which is exactly the row the
+   * boundary sits above.
+   *
+   * Only movements the ref still holds appear here. They are the live
+   * `Pushed to` / `Received from` lines.
+   */
+  boundaries: Map<number, GitRemoteUpdate>
+  /**
+   * Row index -> the movement that had this commit on the ref, for commits the
+   * ref has since moved off.
+   *
+   * A commit is marked when a recorded movement reached it and the upstream no
+   * longer contains it: it was genuinely on the remote, and a rewrite (a
+   * force-push, or a reset we then fetched) took it away. It is drawn as a mark
+   * on the row, never as a boundary line, because a line at that position would
+   * claim the rows below it had just been pushed, which is now the opposite of
+   * the truth.
+   */
+  rewritten: Map<number, GitRemoteUpdate>
+}
+
 /**
- * Row index -> the upstream update whose batch of commits starts on that row.
+ * Places the recorded ref movements on the rows they belong to.
  *
- * An update is stamped on the ref, so its commit is the newest one in that
- * batch, which is exactly the row the batch's boundary sits above. An update
- * whose commit is not among the rows (older than the pages loaded so far, or no
- * longer in this branch's history after a rewrite) is skipped rather than
- * guessed at, because a boundary anchored to no row would be drawn in the wrong
- * place. When two entries name the same commit, the newest wins: that is the
- * entry that actually moved the ref last.
+ * `unpushedCount` is the panel's drift with the upstream, and it splits the
+ * answer in two: a movement at or below that boundary still stands, so it draws
+ * a boundary line, while a movement above it names a commit the upstream no
+ * longer holds. That second case is not dropped: the commits the movement
+ * carried that this branch still has and the upstream no longer does were
+ * published and then rewritten away, and they are reported as `rewritten` so the
+ * graph can say so.
  *
- * `unpushedCount` is the panel's drift with the upstream, and it bounds the
- * answer: a commit above that boundary is not on the remote now, so an entry
- * naming it describes a position the remote has since been rewritten away from.
- * Skipping those keeps a `Pushed` line from sitting on top of the amber run that
- * says the opposite.
+ * A movement whose commit is not among the rows (older than the loaded pages) is
+ * skipped rather than guessed at, because it has no row to anchor to. When two
+ * entries name the same commit, the newest wins: that is the entry that moved
+ * the ref last.
  */
-export function graphBatchStarts(
+export function graphRemotePlacement(
   rows: readonly GitGraphRow[],
   updates: readonly GitRemoteUpdate[],
   unpushedCount: number
-): Map<number, GitRemoteUpdate> {
+): GitGraphRemotePlacement {
   const indexByHash = new Map<string, number>()
   for (const [index, row] of rows.entries()) indexByHash.set(row.commit.hash, index)
-  const starts = new Map<number, GitRemoteUpdate>()
+
+  const boundaries = new Map<number, GitRemoteUpdate>()
+  const rewritten = new Map<number, GitRemoteUpdate>()
+
+  // Newest first, so the first update to claim a row is the movement that put
+  // the ref there last, and a newer rewrite outranks an older one.
   for (const update of updates) {
     const index = indexByHash.get(update.sha)
-    if (index === undefined || index < unpushedCount || starts.has(index)) continue
-    starts.set(index, update)
+    if (index === undefined) continue
+    if (index >= unpushedCount) {
+      if (!boundaries.has(index)) boundaries.set(index, update)
+      continue
+    }
+    // The ref has moved off this commit. Everything the movement carried that
+    // this branch still has, and the upstream no longer does, is unpublished now
+    // but went up once.
+    for (const reached of reachableRowIndexes(index, rows, indexByHash)) {
+      if (reached < unpushedCount && !rewritten.has(reached)) rewritten.set(reached, update)
+    }
   }
-  return starts
+
+  return { boundaries, rewritten }
+}
+
+/**
+ * Row indexes reachable from `start` by walking first and merge parents, so a
+ * movement marks the whole batch it carried and not just its newest commit.
+ */
+function reachableRowIndexes(
+  start: number,
+  rows: readonly GitGraphRow[],
+  indexByHash: ReadonlyMap<string, number>
+): number[] {
+  const reached: number[] = []
+  const seen = new Set<number>([start])
+  const queue: number[] = [start]
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const index = queue[cursor]
+    reached.push(index)
+    for (const parent of rows[index].commit.parents) {
+      const parentIndex = indexByHash.get(parent)
+      if (parentIndex === undefined || seen.has(parentIndex)) continue
+      seen.add(parentIndex)
+      queue.push(parentIndex)
+    }
+  }
+  return reached
 }
 
 /** One SVG path segment of a graph row. */
