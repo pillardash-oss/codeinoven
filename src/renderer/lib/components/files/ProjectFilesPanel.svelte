@@ -265,7 +265,7 @@
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
-  let fullscreenOpen = $state(projectState.fullscreenActive)
+  let fullscreenOpen = $derived(projectState.fullscreenActive)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
   // returned cleanup matters here: this panel is unmounted whenever the sidebar
