@@ -1,6 +1,16 @@
 import type { ThinkingLevel } from './common'
 
-/** Provider-normalized token accounting for one assistant turn or step. */
+/**
+ * Provider-normalized token accounting for one assistant turn or step.
+ *
+ * `output` is the provider's total generated tokens for the turn and is always
+ * INCLUSIVE of `reasoning`: every driver mapper normalizes to that rule, folding
+ * a separately reported reasoning count into `output` when the provider treats
+ * the two as disjoint (opencode does; pi, codex, claude-code and antigravity
+ * report reasoning as a breakdown of output). `reasoning` is therefore
+ * informational, and a generated-token total must never be computed as
+ * `output + reasoning`. Use `generatedTokens` in `src/lib/usage-rate.ts`.
+ */
 export interface AgentTokenUsage {
   input: number
   output: number

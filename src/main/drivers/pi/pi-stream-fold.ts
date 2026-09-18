@@ -1,6 +1,7 @@
 import type {
   AgentMessage,
   AgentPart,
+  AgentTokenUsage,
   AgentToolStatus,
   SessionAgentEvent
 } from '../../../lib/types'
@@ -165,6 +166,42 @@ function latestPiTurnIndex(messages: readonly AgentMessage[], sessionId: string)
   return latest
 }
 
+/**
+ * Sum a request's reported usage into the turn's running total.
+ *
+ * Pi opens a turn per request and reports that request's usage on `message_end`,
+ * so the sum normally equals the request's own usage. The guard matters when a
+ * turn does span several requests: carrying only the last one would
+ * under-report the turn and make its tokens/second rate divide one request's
+ * output by the whole turn's generation time. `turn_end` repeats the final
+ * request's usage immediately after that request's `message_end`, so an
+ * unchanged payload signature marks a repeat instead of a second request; an
+ * assistant `message_start` clears the signature so the next request
+ * accumulates on its own.
+ */
+function accumulateTurnUsage(
+  turnState: PiTurnState,
+  usage: AgentTokenUsage | undefined
+): AgentTokenUsage | undefined {
+  if (!usage) return turnState.usageTotals
+  const signature = `${usage.input}|${usage.output}|${usage.reasoning}|${usage.cacheRead}|${usage.cacheWrite}`
+  if (turnState.usageSignature === signature) return turnState.usageTotals
+  turnState.usageSignature = signature
+  const previous = turnState.usageTotals
+  const totals: AgentTokenUsage = previous
+    ? {
+        input: previous.input + usage.input,
+        output: previous.output + usage.output,
+        reasoning: previous.reasoning + usage.reasoning,
+        cacheRead: previous.cacheRead + usage.cacheRead,
+        cacheWrite: previous.cacheWrite + usage.cacheWrite,
+        total: previous.total + usage.total
+      }
+    : { ...usage }
+  turnState.usageTotals = totals
+  return totals
+}
+
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
   value: unknown,
@@ -179,6 +216,8 @@ export function mapPiRecord(
     turnState.turnIndex += 1
     turnState.assistantMessageId = null
     turnState.announcedStreamParts?.clear()
+    turnState.usageTotals = undefined
+    turnState.usageSignature = undefined
     return { events: [] }
   }
 
@@ -186,6 +225,8 @@ export function mapPiRecord(
     const message = record(entry['message'])
     if (message?.['role'] === 'assistant') {
       turnState.assistantMessageId = `pi-${context.sessionId}-${turnState.turnIndex}`
+      // Arm the next request so its usage accumulates onto the turn's total.
+      turnState.usageSignature = undefined
     }
     return { events: [] }
   }
@@ -240,6 +281,56 @@ export function mapPiRecord(
             messageId,
             partId,
             field: 'text',
+            delta
+          }
+        ]
+      }
+    }
+    if (eventType === 'toolcall_start' || eventType === 'toolcall_delta') {
+      const contentKey = `toolcall:${contentIndex}`
+      let toolCalls = turnState.streamToolCalls
+      if (!toolCalls) {
+        toolCalls = new Map()
+        turnState.streamToolCalls = toolCalls
+      }
+      if (eventType === 'toolcall_start') {
+        const callId = stringValue(event?.['id'])
+        if (!callId) return { events: [] }
+        toolCalls.set(contentKey, {
+          callId,
+          tool: stringValue(event?.['toolName']) ?? 'tool'
+        })
+        // Announce the call so the arguments that follow have a part to extend
+        // (the mirror drops a delta whose part does not exist yet) and the
+        // working trace shows the tool while it streams instead of only at
+        // `message_end`. The sub-agent tool is skipped: its card is published
+        // from the tool result, so announcing it here would show two cards.
+        if (stringValue(event?.['toolName']) === CIO_SPAWN_TOOL) return { events: [] }
+        return {
+          events: announceStreamPart(context.sessionId, turnState, {
+            type: 'tool',
+            id: `${messageId}:tool:${callId}`,
+            messageID: messageId,
+            callID: callId,
+            tool: stringValue(event?.['toolName']) ?? 'tool',
+            state: { status: 'pending', input: {} }
+          })
+        }
+      }
+      const delta = stringValue(event?.['delta'])
+      const call = toolCalls.get(contentKey)
+      if (!delta || !call) return { events: [] }
+      // Tool-call arguments are generated output too: a request that emits only
+      // a call would otherwise show no generation window at all, and the
+      // characters keep the tokens/second estimate honest.
+      return {
+        events: [
+          {
+            type: 'message.part.delta',
+            sessionId: context.sessionId,
+            messageId,
+            partId: `${messageId}:tool:${call.callId}`,
+            field: 'input',
             delta
           }
         ]
@@ -446,7 +537,7 @@ export function mapPiRecord(
         }
       })
     }
-    const usage = mapPiUsage(message['usage'])
+    const usage = accumulateTurnUsage(turnState, mapPiUsage(message['usage']))
     const normalizedUsage = mapPiNormalizedUsage(message['usage'])
     const cost = mapPiCost(message['usage'])
     const rawError = errorText(message)
@@ -680,7 +771,7 @@ function buildAssistantMessage(
     parts.push(part)
     events.push({ type: 'message.part.updated', sessionId, part })
   })
-  const usage = mapPiUsage(message['usage'])
+  const usage = accumulateTurnUsage(turnState, mapPiUsage(message['usage']))
   const normalizedUsage = mapPiNormalizedUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
   const rawError = errorText(message)

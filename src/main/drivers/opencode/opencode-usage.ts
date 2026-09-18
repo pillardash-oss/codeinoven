@@ -1,7 +1,13 @@
 import type { AgentTokenUsage, NormalizedUsage } from '../../../lib/types'
 import { numberValue, recordValue } from './opencode-values'
 
-/** Map OpenCode accounting into the canonical normalized contract and display aggregates. */
+/**
+ * Map OpenCode accounting into the canonical normalized contract and display
+ * aggregates. OpenCode reports `reasoning` as a category DISJOINT from
+ * `output` (its own total is `input + output + reasoning + cache.read +
+ * cache.write`), so the display aggregate's `output` is the generated total
+ * inclusive of reasoning while `reasoning` stays the reported subset.
+ */
 export function mapOpenCodeUsage(raw: unknown): {
   aggregateTokens: AgentTokenUsage | undefined
   normalizedUsage: NormalizedUsage | undefined
@@ -44,7 +50,10 @@ export function mapOpenCodeUsage(raw: unknown): {
       ? undefined
       : {
           input: input ?? 0,
-          output: output ?? 0,
+          // Reasoning is reported beside `output` rather than inside it, so the
+          // display total for generated tokens is their sum; the normalized
+          // contract below keeps the raw per-category values untouched.
+          output: (output ?? 0) + (reasoning ?? 0),
           reasoning: reasoning ?? 0,
           cacheRead: cachedInput ?? 0,
           cacheWrite: cacheWrite ?? 0,

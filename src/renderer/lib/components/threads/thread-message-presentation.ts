@@ -5,7 +5,7 @@ import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
-import { generatedTokens, type LiveTokenRate } from '$lib/token-rate.svelte'
+import { generatedTokens, type LiveGenerationRate } from '$lib/token-rate.svelte'
 import type {
   AgentMessage,
   AgentPart,
@@ -215,27 +215,26 @@ export function harnessDisplayName(harnessId: string): string {
 
 export interface MessageTokenRateSource {
   finalizedTokenRates: Record<string, number>
-  liveTokenRate: LiveTokenRate
+  liveTokenRate: LiveGenerationRate
 }
 
-/** Generation rate (tok/s) to show for a completed message: the rate
- *  finalized at turn end when this view observed the turn live, otherwise
- *  derived from the message's cumulative generated tokens over its own
- *  duration (approximate: tool waits are included). `null` when the harness
- *  reported no tokens. */
+/** Generation rate (tok/s) to show for a completed message: the rate finalized
+ *  at turn end when this view observed the turn live, otherwise the message's
+ *  generated tokens over its accumulated model-active generation window.
+ *
+ *  `generationMs` is the only honest denominator: it sums the streaming time of
+ *  every request in the message and excludes tool waits. A message whose
+ *  generation window was never recorded shows no rate rather than dividing its
+ *  tokens by wall-clock time, which counts tool execution as generation.
+ *  `null` also when the harness reported no tokens. */
 export function messageTokenRate(msg: AgentMessage, source: MessageTokenRateSource): number | null {
   const finalized = source.finalizedTokenRates[msg.id]
   if (finalized !== undefined && finalized > 0) return finalized
   const generated = generatedTokens(msg.tokens)
   if (generated <= 0) return null
   if (msg.id === source.liveTokenRate.messageId) return source.liveTokenRate.rate()
-  // Persisted generation window (first output token to turn end) excludes
-  // pre-generation tool/setup time, so it is the accurate history basis.
   if (msg.generationMs !== undefined && msg.generationMs > 0) {
     return generated / (msg.generationMs / 1000)
-  }
-  if (msg.completedAt && msg.completedAt > msg.createdAt) {
-    return generated / ((msg.completedAt - msg.createdAt) / 1000)
   }
   return null
 }

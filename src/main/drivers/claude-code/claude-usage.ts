@@ -60,13 +60,12 @@ function usageFields(value: unknown): ClaudeUsageFields | undefined {
  *
  * Anthropic reports `input_tokens` exclusive of both cache categories, so the
  * cache counts sit beside the input and are additive rather than a subset of
- * it; `aggregateModelUsage` treats them the same way. Thinking tokens are
- * reported as their own field (`reasoning_tokens`, or `thinking_tokens` under
- * the output details), and CodeInOven carries reasoning as its own normalized
- * category the way `aggregateModelUsage` and the analytics KPI that sums output
- * and reasoning already do, so the synthesized total adds it to the reported
- * output. A provider-reported `total_tokens` is used as-is when a compatible
- * payload carries one.
+ * it; `aggregateModelUsage` treats them the same way. Thinking tokens are a
+ * SUBSET of the reported output: Anthropic surfaces them as `thinking_tokens`
+ * under `output_tokens_details` (or as a top-level `reasoning_tokens` on
+ * OpenAI-compatible passthroughs), so the synthesized total counts them only
+ * through `output` and never adds them a second time. A provider-reported
+ * `total_tokens` is used as-is when a compatible payload carries one.
  */
 export function tokenUsage(value: unknown): AgentTokenUsage | undefined {
   const fields = usageFields(value)
@@ -76,7 +75,7 @@ export function tokenUsage(value: unknown): AgentTokenUsage | undefined {
   const reasoning = fields.reasoning ?? 0
   const cacheRead = fields.cacheRead ?? 0
   const cacheWrite = fields.cacheWrite ?? 0
-  const total = fields.rawTotal ?? input + output + reasoning + cacheRead + cacheWrite
+  const total = fields.rawTotal ?? input + output + cacheRead + cacheWrite
   return total > 0 ? { input, output, reasoning, cacheRead, cacheWrite, total } : undefined
 }
 
@@ -167,11 +166,11 @@ export function modelUsageRecords(value: unknown): Record<string, unknown>[] {
 
 /**
  * Sum Claude Code's per-model `modelUsage` records into display aggregates and
- * the canonical normalized contract. The synthesized total adds every reported
- * category once, including the per-model `thinkingTokens` that the earlier
- * read of `reasoningTokens` alone dropped, so a reasoning-heavy turn cannot
- * lose tokens from the analytics ledger. `modelUsage` carries no token total of
- * its own, so `rawTotal` stays null and its semantics are `unavailable`.
+ * the canonical normalized contract. Each record's `thinkingTokens` is a
+ * SUBSET of its `outputTokens` (the same Anthropic breakdown `tokenUsage`
+ * encodes), so the synthesized total adds every billed category once and
+ * counts reasoning only through `output`. `modelUsage` carries no token total
+ * of its own, so `rawTotal` stays null and its semantics are `unavailable`.
  */
 export function aggregateModelUsage(value: unknown): {
   tokens?: AgentTokenUsage
@@ -220,7 +219,7 @@ export function aggregateModelUsage(value: unknown): {
     const candidateWindow = numberProperty(entry, 'contextWindow', 'context_window')
     if (candidateWindow !== undefined) contextWindow = Math.max(contextWindow ?? 0, candidateWindow)
   }
-  const total = input + output + reasoning + cacheRead + cacheWrite
+  const total = input + output + cacheRead + cacheWrite
   const reported = hasInput || hasOutput || hasReasoning || hasCacheRead || hasCacheWrite
   const raw = record(value)
   const normalizedUsage: NormalizedUsage | undefined = reported

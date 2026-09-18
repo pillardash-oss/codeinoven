@@ -26,7 +26,25 @@ export function mapOpenCodeEvent(type: string, props: Record<string, unknown>): 
   switch (type) {
     case 'message.part.updated': {
       const part = mapOpenCodePart(props['part'])
-      return part ? [{ type: 'message.part.updated', sessionId, part }] : []
+      if (!part) return []
+      // OpenCode reports token counts only on a completed step's `step-finish`
+      // part, and never emits `usage.updated` of its own. Surfacing the step's
+      // accounting here is what gives the conversation its mid-turn token
+      // count, and it is the only token signal a tokens/second rate can use
+      // before the turn ends.
+      if (part.type === 'step-finish' && part.tokens) {
+        return [
+          {
+            type: 'usage.updated',
+            sessionId,
+            messageId: part.messageID,
+            tokens: part.tokens,
+            ...(part.normalizedUsage ? { normalizedUsage: part.normalizedUsage } : {})
+          },
+          { type: 'message.part.updated', sessionId, part }
+        ]
+      }
+      return [{ type: 'message.part.updated', sessionId, part }]
     }
     case 'message.part.delta':
       return [

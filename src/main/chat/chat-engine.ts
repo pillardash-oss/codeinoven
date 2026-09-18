@@ -307,6 +307,7 @@ import {
   presentProviderError
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
+import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   PROJECT_DATA_DIRECTORY,
@@ -1028,13 +1029,13 @@ export class ChatEngine {
   private toolTimes = new Map<string, Map<string, { start: number; end?: number }>>()
 
   /**
-   * Tracks generation windows per session per assistant message id: `start` is
-   * the timestamp of the first streamed output part (the model's first token),
-   * `end` is stamped when the message completes. Used to persist
-   * `AgentMessage.generationMs` so tokens-per-second rates reflect actual
-   * generation time instead of wall-clock turn time.
+   * Accumulated model-active generation time per session and assistant message.
+   * The stream is the only clock available, so output signals and request
+   * boundaries are folded into a {@link GenerationClock} whose total is stamped
+   * onto the message as `generationMs`: the time the model spent generating,
+   * excluding time-to-first-token and every tool wait.
    */
-  private generationWindows = new Map<string, Map<string, { start: number; end?: number }>>()
+  private generationClock = new GenerationClock()
 
   /** Steered messages held back from the harness while its active turn has a
    *  tool call in flight   the undo window. Keyed by sessionId. */
@@ -4254,7 +4255,7 @@ export class ChatEngine {
     updateRetryWakeWindow(sessionId, null)
     this.reasoningTimes.delete(sessionId)
     this.toolTimes.delete(sessionId)
-    this.generationWindows.delete(sessionId)
+    this.generationClock.dropSession(sessionId)
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
@@ -18837,16 +18838,16 @@ export class ChatEngine {
       return
     }
     // Delta events can be the first signal of generated output (some drivers
-    // stream text purely as deltas). Record the generation-window start for
-    // the message they belong to.
+    // stream text purely as deltas, and pi streams tool-call arguments this
+    // way). Count the streamed characters as generation progress: a request
+    // that emits only a tool call would otherwise show no window at all.
     if (event.type === 'message.part.delta' && streamedMessageId) {
-      let perSession = this.generationWindows.get(event.sessionId)
-      if (!perSession) {
-        perSession = new Map()
-        this.generationWindows.set(event.sessionId, perSession)
-      }
-      if (!perSession.has(streamedMessageId))
-        perSession.set(streamedMessageId, { start: Date.now() })
+      this.generationClock.noteDelta(
+        GenerationClock.key(event.sessionId, streamedMessageId),
+        Date.now(),
+        event.partId,
+        event.delta.length
+      )
     }
     if (
       eventOwner &&
@@ -19030,17 +19031,17 @@ export class ChatEngine {
 
     // Stamp thinking start time on reasoning parts that lack it.
     // Stamp tool start/end times on tool parts as their state transitions.
-    // Stamp the generation window (first output token → turn end) so the
-    // persisted generation duration reflects real generation time.
+    // Count streamed output characters as generation progress, so a driver that
+    // publishes part snapshots instead of deltas still gets a real window.
     if (event.type === 'message.part.updated') {
       const part = event.part
       if (part.type === 'reasoning' || part.type === 'text') {
-        let perSession = this.generationWindows.get(event.sessionId)
-        if (!perSession) {
-          perSession = new Map()
-          this.generationWindows.set(event.sessionId, perSession)
-        }
-        if (!perSession.has(part.messageID)) perSession.set(part.messageID, { start: Date.now() })
+        this.generationClock.noteSnapshot(
+          GenerationClock.key(event.sessionId, part.messageID),
+          Date.now(),
+          part.id,
+          part.text.length + (part.type === 'reasoning' ? (part.summary?.length ?? 0) : 0)
+        )
       }
       if (part.type === 'reasoning' && !part.time?.start) {
         const now = Date.now()
@@ -19160,16 +19161,17 @@ export class ChatEngine {
           if (!entry[1].end) entry[1].end = now
         }
       }
-      const sessionGeneration = this.generationWindows.get(event.sessionId)
-      if (sessionGeneration) {
-        if (event.type === 'message.completed') {
-          const window = sessionGeneration.get(event.messageId)
-          if (window && !window.end) window.end = now
-        } else {
-          for (const entry of sessionGeneration) {
-            if (!entry[1].end) entry[1].end = now
-          }
+      // Close the generation window at this request boundary and record what
+      // the harness reported, so a message that spans several requests sums the
+      // generation time of all of them instead of only the first.
+      if (event.type === 'message.completed') {
+        const clockKey = GenerationClock.key(event.sessionId, event.messageId)
+        if ((event.tokens?.output ?? 0) > 0) {
+          this.generationClock.noteReported(clockKey, generatedTokens(event.tokens), now)
         }
+        this.generationClock.completeRequest(clockKey, now)
+      } else {
+        this.generationClock.settleSession(event.sessionId, now)
       }
     }
 
@@ -22838,19 +22840,15 @@ export class ChatEngine {
   }
 
   /**
-   * Apply in-memory generation windows to loaded assistant messages,
-   * persisting the first-token-to-completion duration as `generationMs`.
+   * Apply the accumulated generation window to loaded assistant messages,
+   * persisting the model-active duration as `generationMs`.
    */
   private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
-    const sessionGeneration = this.generationWindows.get(sessionId)
-    if (!sessionGeneration) return
     for (const msg of messages) {
       if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
-      const window = sessionGeneration.get(msg.id)
-      if (!window?.start) continue
-      const end = window.end ?? msg.completedAt ?? Date.now()
-      const duration = end - window.start
-      if (duration > 0) msg.generationMs = duration
+      const sample = this.generationClock.sample(GenerationClock.key(sessionId, msg.id))
+      if (!sample || sample.activeMs <= 0) continue
+      msg.generationMs = Math.round(sample.activeMs)
     }
   }
 

@@ -15,12 +15,15 @@ import { numberValue, record } from './pi-values'
 /**
  * Parse a Pi token/cost accounting object into the shared usage shape.
  *
- * The aggregate total sums every reported category, including `reasoning`,
- * which Pi reports on its own field beside `output` (the shared accumulator in
- * `pi-compaction-extension.ts` carries it as a separate field too). Pi's own
- * `totalTokens` for the turn is preserved on the normalized payload as
- * `rawTotal` rather than being trusted as the display total, so this aggregate
- * never drops a billed category.
+ * Pi reports `reasoning` as a SUBSET of `output`, not as a category beside it:
+ * its usage type documents the field as already included in `output`, and its
+ * OpenAI-compatible adapters read `output` from `completion_tokens` with
+ * `reasoning` taken from that completion's details. Pi's own
+ * `totalTokens = input + output + cacheRead + cacheWrite` leaves `reasoning`
+ * out for the same reason, so the synthesized total counts every billed
+ * category exactly once. Pi's own `totalTokens` for the turn is preserved on
+ * the normalized payload as `rawTotal` rather than being trusted as the
+ * display total.
  */
 function mapPiUsage(value: unknown): AgentTokenUsage | undefined {
   const usage = record(value)
@@ -36,7 +39,7 @@ function mapPiUsage(value: unknown): AgentTokenUsage | undefined {
     reasoning,
     cacheRead,
     cacheWrite,
-    total: input + output + reasoning + cacheRead + cacheWrite
+    total: input + output + cacheRead + cacheWrite
   }
 }
 

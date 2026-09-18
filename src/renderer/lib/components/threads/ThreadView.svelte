@@ -252,7 +252,7 @@
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
-  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
+  import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
@@ -641,25 +641,16 @@
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const knownEphemeralSessionIds = new Set<string>()
   // Live tokens-per-second tracker for the assistant message currently streaming,
-  // plus finalized per-message rates kept for the turn's hover row.
-  const liveTokenRate = new LiveTokenRate()
+  // plus finalized per-message rates kept for the turn's hover row. The tracker
+  // learns its characters-per-token factor from the requests that report token
+  // counts, so a harness that reports late (pi reports at each request end,
+  // cline only at turn end, muse never) is estimated at its own tokenization
+  // rather than a fixed average.
+  const liveTokenRate = new LiveGenerationRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  // Feed the live rate tracker from real usage reports only   the streamed-text
-  // estimate was too crude to display and has been removed with the live rate.
-  // The tracker remains for the finalized end-of-turn rate.
   $effect(() => {
-    if (!busy) return
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (message.role !== 'assistant') continue
-      // Only stream-observe an unfinished message so restored history can never
-      // restart the clock for an old turn.
-      if (message.tokens && !message.completedAt) {
-        liveTokenRate.observe(message.id, generatedTokens(message.tokens), false)
-      }
-      break
-    }
+    liveTokenRate.begin(sessionId)
   })
   // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
@@ -4425,17 +4416,39 @@
             : streamParts.map((part, index) =>
                 index === streamPartIndex ? mergeStreamedPart(part, event.part) : part
               )
+        // Every harness publishes its output as part snapshots, so the text
+        // length is the one progress signal available everywhere. Snapshots
+        // repeat the whole text, so only growth counts.
+        const part = event.part
+        if (part.type === 'text' || part.type === 'reasoning') {
+          liveTokenRate.noteSnapshot(
+            part.messageID,
+            part.id,
+            part.text.length + (part.type === 'reasoning' ? (part.summary?.length ?? 0) : 0)
+          )
+        }
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
       case 'message.part.delta': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
+        if (event.delta.length > 0) {
+          liveTokenRate.noteDelta(event.messageId, event.partId, event.delta.length)
+        }
         break
       }
       case 'message.completed': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
+        // Record what the harness reported before closing the window, so this
+        // request's own count teaches the characters-per-token calibration.
+        if (event.tokens && generatedTokens(event.tokens) > 0) {
+          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+        }
+        // The request's generation window ends here, so the next request starts
+        // a fresh one and the tool wait between them is never counted.
+        liveTokenRate.completeRequest(event.messageId)
         if (event.compaction) {
           turnSawCompaction = true
         } else {
@@ -4458,11 +4471,14 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        liveTokenRate.observe(event.messageId, generatedTokens(event.tokens), false)
+        if (event.tokens && generatedTokens(event.tokens) > 0) {
+          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+        }
         break
       }
       case 'session.idle': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.settle()
         if (liveTokenRate.messageId) {
           const finalizedId = liveTokenRate.messageId
           const rate = liveTokenRate.finalize()

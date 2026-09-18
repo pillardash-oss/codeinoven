@@ -252,6 +252,10 @@ export function mapCurrentClineRecord(
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId: state.messageId,
+      // Cline reports its whole run once, at the end, so this is the only
+      // token-bearing event it emits. It has to be carried here or the turn's
+      // tokens/second rate would have nothing to divide by.
+      ...(usage ? { tokens: usage } : {}),
       ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(failed ? { error: finalText || 'Cline turn failed' } : {})
     })
