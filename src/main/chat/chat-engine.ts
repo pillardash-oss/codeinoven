@@ -5777,9 +5777,24 @@ export class ChatEngine {
   }
 
   /**
+   * A genuinely working worker owns its task again. `attention` with a failed
+   * report is the original recovery case; a `completed` task is the same
+   * situation after a successful run, and once a user prompts the finished
+   * worker the run is new work: the task must read `running` so the coordinator
+   * panel reflects it and so the worker can report its fresh evidence. The
+   * mid-review states (`reported`, `auditing`, `rework`) stay untouched because
+   * the coordinator owns those transitions while the report is being reviewed.
+   */
+  private workerTaskNeedsReactivation(task: AssignmentTask): boolean {
+    return task.status === 'attention' || task.status === 'completed' || task.status === 'failed'
+  }
+
+  /**
    * Live provider work is authoritative for Assignment recovery. Retry can
    * originate from the worker, the coordinator, or the provider itself; once
-   * a linked worker is genuinely active, clear its stale failure state.
+   * a linked worker is genuinely active, clear its stale resting state so the
+   * coordinator panel, the Assignment studio, and the worker's own reporting
+   * all agree that the task is running again.
    */
   private async reconcileWorkingAssignmentState(thread: Thread): Promise<boolean> {
     try {
@@ -5794,9 +5809,9 @@ export class ChatEngine {
         if (
           !assignment ||
           assignment.id !== thread.assignmentId ||
+          assignment.status === 'stopped' ||
           !task ||
-          task.status !== 'attention' ||
-          task.report?.status !== 'failed'
+          !this.workerTaskNeedsReactivation(task)
         ) {
           return false
         }
@@ -5807,14 +5822,10 @@ export class ChatEngine {
       if (thread.assignmentRole !== 'coordinator' || !thread.assignmentId) return false
       let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
       if (!assignment || assignment.id !== thread.assignmentId) return false
+      if (assignment.status === 'stopped') return false
       let changed = false
       for (const task of assignment.content.tasks) {
-        if (
-          task.owner !== 'worker' ||
-          !task.threadId ||
-          task.status !== 'attention' ||
-          task.report?.status !== 'failed'
-        ) {
+        if (task.owner !== 'worker' || !task.threadId || !this.workerTaskNeedsReactivation(task)) {
           continue
         }
         const worker = await this.threadManager.getThread(thread.projectId, task.threadId)
@@ -5831,6 +5842,62 @@ export class ChatEngine {
       })
       return false
     }
+  }
+
+  /**
+   * A user prompt to a worker whose Assignment task had already finished is new
+   * work, and live-provider reconciliation reactivates that task a moment later.
+   * The worker's capability, however, is revoked when its Assignment completes,
+   * so the reactivated turn carries the API contract that lets the worker submit
+   * fresh evidence and report the task back to the coordinator. A worker whose
+   * capability is still live already has that contract from its dispatch prompt,
+   * so nothing is injected and the turn stays a clean user message.
+   */
+  private async workerAssignmentTurnDirective(thread: Thread | null): Promise<string> {
+    if (thread?.assignmentRole !== 'worker' || !thread.assignmentId || !thread.assignmentTaskId) {
+      return ''
+    }
+    const assignment = this.assignmentEngine.listVersions(thread.assignmentId).at(-1)
+    const task = assignment?.content.tasks.find(
+      (candidate) => candidate.id === thread.assignmentTaskId
+    )
+    if (
+      !assignment ||
+      assignment.status === 'stopped' ||
+      !task ||
+      task.threadId !== thread.id ||
+      !this.workerTaskNeedsReactivation(task)
+    ) {
+      return ''
+    }
+    await this.ensureAssignmentApi()
+    if (this.hasWorkerApiCapability(assignment.id, thread.id, task.id)) return ''
+    const workerToken = this.assignmentApiCapability({
+      role: 'worker',
+      assignmentId: assignment.id,
+      threadId: thread.id,
+      taskId: task.id
+    })
+    return [
+      `Your Assignment task “${task.title}” is active again. Continue within its existing scope and preserve unrelated concurrent work.`,
+      this.assignmentApiInstructions(workerToken, 'worker'),
+      `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When this update is complete, POST report-task with assignmentId ${assignment.id}, taskId ${task.id}, and workerThreadId ${thread.id}.`
+    ].join('\n\n')
+  }
+
+  /** Whether a live worker capability already covers this Assignment task. */
+  private hasWorkerApiCapability(assignmentId: string, threadId: string, taskId: string): boolean {
+    for (const capability of this.assignmentApiCapabilities.values()) {
+      if (
+        capability.role === 'worker' &&
+        capability.assignmentId === assignmentId &&
+        capability.threadId === threadId &&
+        capability.taskId === taskId
+      ) {
+        return true
+      }
+    }
+    return false
   }
 
   /** A project is doing live work   reset its idle/released state. */
@@ -6843,6 +6910,12 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    if (origin === 'user') {
+      const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
+      if (workerDirective) {
+        hiddenContext = [hiddenContext, workerDirective].filter(Boolean).join('\n\n')
+      }
+    }
     // One aggregate selected-model input budget for the turn (A-13). The
     // session-dependent system/behavior/tool layers are not assembled yet, so
     // driverText's hidden orchestration context is capped against an early

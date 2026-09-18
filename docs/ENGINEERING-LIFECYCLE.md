@@ -41,6 +41,10 @@ The interview owns both the active Assignment stage and its `assignment_approval
 
 Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
 
+### Reopening a finished worker
+
+A direct message to a worker thread is work, not a dead end. When a worker that already finished its task starts a new turn from the user, live activity is authoritative: the task returns to `running` (its report and review are cleared), the Assignment returns to `running`, and the turn carries the worker's Assignment API contract again, because that capability is revoked when the Assignment completes. The worker can therefore submit fresh baseline/check evidence and report the task back to the Sr. Engineer exactly as it did the first time, and the coordinator panel, the Assignment studio, and the task row all show the run from the moment it starts. An explicitly `stopped` Assignment is never reopened this way, and a task that is `reported`, `auditing`, or `rework` stays with the coordinator while it reviews.
+
 After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document. Likewise, after a PRD finalizes, the PRD Studio offers a **Next step** menu to Generate Spec.
 
 ### Auto Pilot
