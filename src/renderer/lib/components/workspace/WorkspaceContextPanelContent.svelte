@@ -10,6 +10,8 @@
   import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
   import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
   import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
+  import EmptyState from '$lib/components/ui/EmptyState.svelte'
+  import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import {
     contextSidebarState,
@@ -29,6 +31,9 @@
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
     coordinator: ReturnType<typeof coordinatorDockState.forThread>
+    /** Close the active coordinator tab, used when no coordinator is published
+     *  for it so the panel can never trap the user on a blank body. */
+    onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
   }
@@ -42,6 +47,7 @@
     projectIcons,
     browser,
     coordinator,
+    onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent
   }: Props = $props()
@@ -150,6 +156,22 @@
         {:else}
           <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
         {/if}
+      {:else}
+        <EmptyState
+          icon={Network}
+          title="Coordinator unavailable"
+          description="The coordinator for this thread is not open right now. Close this panel and reopen the coordinator from the rail."
+        >
+          {#snippet action()}
+            <button
+              type="button"
+              class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+              onclick={onDismissCoordinator}
+            >
+              Close panel
+            </button>
+          {/snippet}
+        </EmptyState>
       {/if}
     {:else if activeContextTab.kind === 'memory'}
       {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}

@@ -3085,6 +3085,10 @@
             {projectIcons}
             {browser}
             {coordinator}
+            onDismissCoordinator={() => {
+              const tab = contextSidebarState.sidebarActiveTab
+              if (tab?.kind === 'coordinator') closeContextTab(tab.id)
+            }}
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
           />

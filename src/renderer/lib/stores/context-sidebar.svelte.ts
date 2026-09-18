@@ -48,7 +48,12 @@ const TERMINAL_DOCK_MAX_HEIGHT = 560
 
 class ContextSidebarState {
   private activeProjectId: string | null = $state(null)
+  /** The thread the user actually opened, used for restore and identity reads. */
   private activeThreadId: string | null = $state(null)
+  /** The sidebar row that stands for the open thread: a worker/auditor child
+   *  delegates to its coordinator, so the child opens the parent's tab context
+   *  instead of an empty one. See `activeThreadRowId`. */
+  private activeRowThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
   width = $state(480)
   terminalHeight = $state(320)
@@ -59,7 +64,7 @@ class ContextSidebarState {
 
   private tabContexts = new SidebarTabContexts({
     activeProjectId: () => this.activeProjectId,
-    activeThreadId: () => this.activeThreadId,
+    activeThreadId: () => this.activeRowThreadId ?? this.activeThreadId,
     terminalPlacement: () => this.terminalPlacement,
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
@@ -253,7 +258,16 @@ class ContextSidebarState {
     return this.activeProjectId === projectId ? this.activeThreadId : null
   }
 
-  activateThread(projectId: string, threadId: string, threadTitle?: string): void {
+  /** `rowThreadId` is the sidebar row that represents `threadId`. A worker or
+   *  auditor child passes its coordinator so the child opens the parent's tab
+   *  context, which is where the coordinator panel is docked. It defaults to
+   *  `threadId` for every normal thread. */
+  activateThread(
+    projectId: string,
+    threadId: string,
+    threadTitle?: string,
+    rowThreadId?: string
+  ): void {
     const keepNotificationsVisible = this.notificationsVisible
     const projectChanged = this.activeProjectId !== projectId
     // Capture before `activeProjectId` moves: the native view (if any) belongs
@@ -264,10 +278,12 @@ class ContextSidebarState {
       this.browser.activeTabId ?? this.browser.activeTabs.at(-1)?.id ?? null
     this.activeProjectId = projectId
     this.activeThreadId = threadId
+    this.activeRowThreadId = rowThreadId ?? threadId
+    const contextThreadId = this.activeRowThreadId
     this.tabContexts.ensureProjectContext(projectId)
-    this.tabContexts.ensureContext(projectId, threadId)
-    this.tabContexts.rebindProjectTabs(projectId, threadId)
-    this.tabContexts.ensureActiveThreadPanel(projectId, threadId, threadTitle)
+    this.tabContexts.ensureContext(projectId, contextThreadId)
+    this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
+    this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
     this.browser.visible =
       !keepNotificationsVisible &&
@@ -283,6 +299,7 @@ class ContextSidebarState {
     this.browser.hide()
     this.activeProjectId = null
     this.activeThreadId = null
+    this.activeRowThreadId = null
   }
 
   /**

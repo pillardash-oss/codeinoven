@@ -5,7 +5,7 @@
  */
 import type { Project, Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+import { DEFAULT_SCOPE_BUCKET_ID, activeThreadRowId } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
@@ -181,7 +181,14 @@ class WorkspaceState {
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.sourceProcessCount = 0
-    contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
+    // A worker/auditor child opens the coordinator's sidebar context: its own
+    // row is the Sr. Engineer, and that is where the coordinator panel is docked.
+    contextSidebarState.activateThread(
+      thread.projectId,
+      thread.id,
+      thread.title,
+      activeThreadRowId(thread) ?? thread.id
+    )
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
     // terminal, and action roots follow the thread's scope bucket).
