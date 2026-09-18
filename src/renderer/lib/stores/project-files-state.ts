@@ -46,6 +46,7 @@ export interface ProjectFilesState {
   revealedPath: string | null
   focusRequest: number
   fullscreenRequest: number
+  fullscreenActive: boolean
   selectedPaths: string[]
   selectionAnchor: string | null
   loadingPaths: Record<string, boolean>
@@ -101,6 +102,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     revealedPath: explorer.revealedPath,
     focusRequest: 0,
     fullscreenRequest: 0,
+    fullscreenActive: false,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},

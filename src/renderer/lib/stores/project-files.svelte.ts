@@ -598,7 +598,11 @@ class ProjectFilesWorkspace {
   }
 
   requestFullscreen(projectId: string): void {
-    this.ensureState(projectId).fullscreenRequest += 1
+    this.ensureState(projectId).fullscreenActive = true
+  }
+
+  setFullscreenActive(projectId: string, active: boolean): void {
+    this.ensureState(projectId).fullscreenActive = active
   }
 
   updateDraft(projectId: string, path: string, content: string): void {

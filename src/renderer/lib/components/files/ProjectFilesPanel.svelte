@@ -265,7 +265,7 @@
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
-  let fullscreenOpen = $state(false)
+  let fullscreenOpen = $state(projectState.fullscreenActive)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
   // returned cleanup matters here: this panel is unmounted whenever the sidebar
@@ -274,7 +274,6 @@
   $effect(() =>
     browserVisibility.hideWhile('files-fullscreen-editor', 'fullscreen-surface', fullscreenOpen)
   )
-  let handledFullscreenRequest = $state(0)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({
     canSave: false,
@@ -292,15 +291,15 @@
   let activeCheckpointPaths = $state<string[]>([])
   let lastTurnRequest = 0
 
-  $effect(() => {
-    const request = projectState.fullscreenRequest
-    if (request <= handledFullscreenRequest) return
-    handledFullscreenRequest = request
+  function openFullscreen(): void {
+    projectFilesWorkspace.requestFullscreen(projectId)
     fullscreenOpen = true
-    if (gitState.conflictsMode && !projectState.explorerVisible) {
-      projectFilesWorkspace.toggleExplorer(projectId)
-    }
-  })
+  }
+
+  function closeFullscreen(): void {
+    fullscreenOpen = false
+    projectFilesWorkspace.setFullscreenActive(projectId, false)
+  }
 
   function handleConflictController(next: ConflictResolutionController | null): void {
     conflictController = next
@@ -544,7 +543,7 @@
     try {
       await projectFilesWorkspace.deleteFile(projectId, target)
       deleteTargetPath = null
-      fullscreenOpen = false
+      closeFullscreen()
       toast.success('File moved to Trash')
     } catch (error) {
       reportError(error, 'The file could not be deleted')
@@ -702,7 +701,7 @@
           onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
           onToggleWrap={() => wrapTextState.toggle()}
           onBeautify={beautifyActiveFile}
-          onFullscreen={() => (fullscreenOpen = true)}
+          onFullscreen={openFullscreen}
           onRename={startRename}
           onDelete={() => (deleteTargetPath = activeTab.path)}
           onSave={() => void saveActiveFile()}
@@ -902,7 +901,10 @@
   </div>
 </div>
 
-<Dialog.Root bind:open={fullscreenOpen}>
+<Dialog.Root
+  bind:open={fullscreenOpen}
+  onOpenChange={(open) => (open ? openFullscreen() : closeFullscreen())}
+>
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
     <Dialog.Content
@@ -1054,7 +1056,7 @@
               onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
               onToggleWrap={() => wrapTextState.toggle()}
               onBeautify={beautifyActiveFile}
-              onFullscreen={() => (fullscreenOpen = true)}
+              onFullscreen={openFullscreen}
               onRename={startRename}
               onDelete={() => (deleteTargetPath = activeTab.path)}
               onSave={() => void saveActiveFile()}
