@@ -10,6 +10,12 @@
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    threadHoverPopoverStyle,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS
+  } from '$lib/components/shared/thread-hover-popover-layout'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -276,11 +282,6 @@
     showNotes: () => true,
     showCopyId: () => true
   })
-
-  const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 310
-  const POPOVER_GAP = 8
-  const VIEWPORT_MARGIN = 8
 
   // ─── Status vs Stage ──────────────────────────────────────────────────────
   //
@@ -586,38 +587,21 @@
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
-  function calculatePopoverPosition(
-    anchor: DOMRect,
-    width: number,
-    height: number
-  ): { x: number; y: number } {
-    const availableRight = window.innerWidth - anchor.right - VIEWPORT_MARGIN
-    const availableLeft = anchor.left - VIEWPORT_MARGIN
-    const placeRight = availableRight >= width || availableRight >= availableLeft
-    const preferredX = placeRight ? anchor.right + POPOVER_GAP : anchor.left - POPOVER_GAP - width
-    const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
-    const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN)
-
-    return {
-      x: Math.max(VIEWPORT_MARGIN, Math.min(preferredX, maxX)),
-      y: Math.max(VIEWPORT_MARGIN, Math.min(anchor.top, maxY))
-    }
-  }
-
   async function revealPopover(): Promise<void> {
     if (!rowEl || showMenu || !hovered) return
 
-    popoverPos = calculatePopoverPosition(
+    const size = resolveThreadHoverPopoverSize()
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
-      POPOVER_WIDTH,
-      POPOVER_ESTIMATED_HEIGHT
+      size.width,
+      size.height
     )
     showPopover = true
     await tick()
 
     if (!rowEl || !popoverEl || showMenu || !hovered) return
     const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculatePopoverPosition(
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
       popoverRect.width,
       popoverRect.height
@@ -1064,8 +1048,8 @@
     <Portal>
       <div
         {@attach capturePopoverElement}
-        class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
-        style="left: {popoverPos.x}px; top: {popoverPos.y}px"
+        class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
+        style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
       >
         <ThreadHoverPopover
           {thread}
