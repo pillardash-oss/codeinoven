@@ -257,9 +257,17 @@ export class SidebarTabContexts {
   ): void {
     const context = this.ensureProjectContext(projectId)
     const id = `files:${projectId}:${fileTabId}`
-    const existing = context.tabs.find((tab) => tab.id === id)
-    if (existing) {
+    const existingIndexes = context.tabs.reduce<number[]>((indexes, tab, index) => {
+      if (tab.id === id) indexes.push(index)
+      return indexes
+    }, [])
+    const existingIndex = existingIndexes[0]
+    if (existingIndex !== undefined) {
+      const existing = context.tabs[existingIndex]
       if (existing.kind === 'files') existing.preview = preview
+      if (existingIndexes.length > 1) {
+        context.tabs = context.tabs.filter((tab, index) => tab.id !== id || index === existingIndex)
+      }
       this.focusInProjectContext(context, id)
       return
     }
