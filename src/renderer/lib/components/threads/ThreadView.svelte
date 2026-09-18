@@ -9,6 +9,7 @@
 
   import {
     AudioLines,
+    ArrowLeft,
     ArrowUpRight,
     Brain,
     Check,
@@ -62,6 +63,7 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
@@ -2388,6 +2390,10 @@
   let assignmentAuditThread = $state<Thread | undefined>()
   let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
+  /** The coordinator (Sr. Engineer) that owns the open thread when it is a
+   *  worker or auditor child. Children are hidden from every thread list, so
+   *  this view carries the way back to the parent itself. */
+  let coordinatorParentThread = $state<Thread | null>(null)
   let assignmentBusy = $state(false)
   /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
   let assignmentFormulating = $state(false)
@@ -2488,6 +2494,15 @@
    *  coordinator: identical view, but they never enable engineering mode
    *  themselves, so the composer hides the toolbox and lifecycle actions. */
   let orchestrationChild = $derived(isOrchestrationChildThread(thread))
+  /** The coordinator this view belongs to, when the open thread is a worker or
+   *  auditor child. Null for every normal, user-facing thread. */
+  const coordinatorParentId = $derived(
+    isOrchestrationChildThread(thread) ? (thread.coordinatorThreadId ?? null) : null
+  )
+  /** Label of the coordinator this view belongs to, for the back control. */
+  const coordinatorParentTitle = $derived(
+    coordinatorParentThread ? effectiveThreadTitle(coordinatorParentThread) : 'Sr. Engineer'
+  )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
     settings.assignmentMode !== true &&
@@ -2684,6 +2699,12 @@
     return busy ? 'Sr. Engineer and the auditor are working' : 'The auditor is working'
   })
   let assignmentFinalComplete = $derived(assignment?.auditCycle?.status === 'completed')
+  /** Whether an audit report exists for the Assignment's coordinator. A worker
+   *  reads the plan but not the coordinator's audit report, so its availability
+   *  comes from the recorded cycle report instead. */
+  const assignmentReportAvailable = $derived(
+    auditReport !== null || assignment?.auditCycle?.reportId !== undefined
+  )
   let achievementAutonomous = $derived(
     settings.loopMode === true &&
       spec?.status === 'approved' &&
@@ -6000,6 +6021,14 @@
   async function reconcileReadySpecNow(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
+    // A worker never owns the Assignment: it implements one task of its
+    // coordinator's plan, and the main process keys every Assignment read on
+    // that coordinator. Resolve it there so the child can present the parent's
+    // board instead of an empty one.
+    const assignmentThreadId =
+      thread.assignmentRole === 'worker'
+        ? (thread.coordinatorThreadId ?? workflowThreadId)
+        : workflowThreadId
     const [
       active,
       workflowThread,
@@ -6011,12 +6040,17 @@
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
       invoke('thread:get', projectId, workflowThreadId),
-      invoke('assignment:getActive', projectId, workflowThreadId),
+      invoke('assignment:getActive', projectId, assignmentThreadId),
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
       invoke('prd:getActive', projectId, workflowThreadId)
     ])
+    if (!alive) return
+    coordinatorParentThread = coordinatorParentId
+      ? (projectThreads.find((candidate) => candidate.id === coordinatorParentId) ??
+        (await invoke('thread:get', projectId, coordinatorParentId)))
+      : null
     if (!alive) return
     const staleSpecGeneration =
       active !== null &&
@@ -6080,7 +6114,7 @@
       updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     assignmentVersions = activeAssignment
-      ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
+      ? await invoke('assignment:listVersions', projectId, assignmentThreadId, activeAssignment.id)
       : []
     assignmentCoordinatorThread = projectThreads.find(
       (candidate) => candidate.id === activeAssignment?.coordinatorThreadId
@@ -7516,6 +7550,9 @@
       void openAssignmentTaskThread(task.threadId)
       return
     }
+    // A task with no worker thread yet opens the Assignment document, which
+    // belongs to the coordinator when this view is a worker or auditor child.
+    if (openOwnerStudio('assignment')) return
     assignmentFocusTaskId = task.id
     workspaceState.specAgentSidebarOpen = false
     studioDocument = 'assignment'
@@ -7529,6 +7566,30 @@
         : (assignmentThreads.find((candidate) => candidate.id === threadId) ??
           (await invoke('thread:get', thread.projectId, threadId)))
     if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  /** Leave a worker/auditor view for the coordinator that owns it. The child is
+   *  hidden from every thread list, so this control is the way back. */
+  function openCoordinatorParent(): void {
+    const parent = coordinatorParentThread
+    if (parent) {
+      workspaceState.openThread(parent, project)
+      return
+    }
+    if (coordinatorParentId) void openAssignmentTaskThread(coordinatorParentId)
+  }
+
+  /**
+   * Studio surfaces belong to the thread that owns the work. From a worker or
+   * auditor view the coordinator owns them, so the callback switches to that
+   * thread rather than replacing the child's conversation with a document it
+   * does not own. Returns false when this view already owns the Studio.
+   */
+  function openOwnerStudio(documentKind: 'assignment' | 'audit'): boolean {
+    const owner = coordinatorParentThread
+    if (!owner || owner.id === thread.id) return false
+    workspaceState.openThreadStudio(owner, project, documentKind)
+    return true
   }
 
   async function openStartAfterThread(threadId: string): Promise<void> {
@@ -9860,6 +9921,29 @@
     {@render headerSnippet()}
   {/if}
 
+  {#if coordinatorParentId}
+    <!-- A worker/auditor thread is reachable only from its coordinator, so the
+         child view carries its own way back: the parent is hidden from every
+         thread list while the user is inside the work it delegated. -->
+    <nav
+      class="flex shrink-0 items-center gap-1 border-b bg-surface/60 px-2 py-1.5"
+      aria-label="Assigned work navigation"
+    >
+      <button
+        type="button"
+        class="flex min-h-7 items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Back to {coordinatorParentTitle}"
+        aria-label="Back to {coordinatorParentTitle}"
+        onclick={openCoordinatorParent}
+      >
+        <ArrowLeft size={13} aria-hidden="true" />
+        <span>Sr. Engineer</span>
+      </button>
+      <span class="shrink-0 text-dimmed" aria-hidden="true">/</span>
+      <span class="min-w-0 truncate text-xs text-muted" title={thread.title}>{thread.title}</span>
+    </nav>
+  {/if}
+
   {#if showSpecStudio}
     {#if findNavState.studioFindOpen}
       <FindInSurface
@@ -11836,13 +11920,17 @@
       auditThread={assignmentAuditThread}
       auditState={assignmentAuditState}
       finalComplete={assignmentFinalComplete}
-      reportAvailable={auditReport !== null}
+      reportAvailable={assignmentReportAvailable}
       threads={assignmentThreads}
       selectedThreadId={thread.id}
       coordinatorWorking={busy || delegatedWorkBusy}
-      onOpenAssignment={openAssignmentStudio}
+      onOpenAssignment={() => {
+        if (!openOwnerStudio('assignment')) openAssignmentStudio()
+      }}
       onOpenAuditWork={openAssignmentAuditWork}
-      onViewReport={openAuditStudio}
+      onViewReport={() => {
+        if (!openOwnerStudio('audit')) openAuditStudio()
+      }}
       onOpenThread={(worker) => workspaceState.openThread(worker, project)}
       onOpenTask={openAssignmentTask}
       onResume={resumeAssignmentCoordination}

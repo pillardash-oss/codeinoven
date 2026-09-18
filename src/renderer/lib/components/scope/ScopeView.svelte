@@ -9,7 +9,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
-  import { DEFAULT_THREAD_TITLE, type Thread } from '$shared/types'
+  import { DEFAULT_THREAD_TITLE, activeThreadRowId, type Thread } from '$shared/types'
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeActionsModals from './ScopeActionsModals.svelte'
   import { ScopeActionsController } from './ScopeActionsController.svelte'
@@ -317,7 +317,7 @@
               {bucket}
               actions={scopeActions}
               fill={scopeState.buckets.length === 1}
-              selectedThreadId={workspaceState.selectedThread?.id ?? null}
+              activeThreadId={activeThreadRowId(workspaceState.selectedThread)}
               onToggle={() => toggleBucket(bucket.id)}
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onMoveBucket={moveBucket}

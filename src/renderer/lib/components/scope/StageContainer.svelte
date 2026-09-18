@@ -9,7 +9,7 @@
     stage: ThreadStage
     threads: Thread[]
     collapsed: boolean
-    selectedThreadId: string | null
+    activeThreadId: string | null
     onToggle: () => void
     onOpen: (thread: Thread) => void
     onRename: (thread: Thread, newName: string) => Promise<void>
@@ -25,7 +25,7 @@
     stage,
     threads,
     collapsed,
-    selectedThreadId,
+    activeThreadId,
     onToggle,
     onOpen,
     onRename,
@@ -101,7 +101,7 @@
         <div data-scope-thread-row="true">
           <ThreadRow
             {thread}
-            selected={selectedThreadId === thread.id}
+            selected={activeThreadId === thread.id}
             hideScope
             {onOpen}
             {onRename}

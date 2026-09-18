@@ -202,6 +202,20 @@ export function coordinatorHasActiveDelegates(
   )
 }
 
+/**
+ * The thread whose row stands for the open thread. A worker or auditor child
+ * never appears in the sidebar, so its coordinator (the Sr. Engineer) row
+ * represents it: the parent stays visible and reads as the active row while
+ * the user works inside the child.
+ */
+export function activeThreadRowId(thread: Thread | null | undefined): string | null {
+  if (!thread) return null
+  if (isOrchestrationChildThread(thread) && thread.coordinatorThreadId) {
+    return thread.coordinatorThreadId
+  }
+  return thread.id
+}
+
 export interface CreateThreadInput {
   id?: string
   projectId: string

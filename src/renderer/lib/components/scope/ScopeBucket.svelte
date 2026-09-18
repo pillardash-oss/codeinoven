@@ -23,7 +23,7 @@
     /** Scope-level actions (edit, pin, archive, worktree lifecycle, merge, delete). */
     actions: ScopeActionsController
     fill?: boolean
-    selectedThreadId: string | null
+    activeThreadId: string | null
     onToggle: () => void
     onToggleSlice: (stage: ThreadStage) => void
     onMoveBucket: (draggedId: string, targetId: string, position: 'before' | 'after') => void
@@ -46,7 +46,7 @@
     bucket,
     actions,
     fill = false,
-    selectedThreadId,
+    activeThreadId,
     onToggle,
     onToggleSlice,
     onMoveBucket,
@@ -245,7 +245,7 @@
             {stage}
             threads={scopeState.threadsFor(bucket.id, stage)}
             collapsed={bucket.collapsedSlices.includes(stage)}
-            {selectedThreadId}
+            {activeThreadId}
             onToggle={() => onToggleSlice(stage)}
             {onOpen}
             {onRename}

@@ -60,7 +60,7 @@
     projectIcons: SvelteMap<string, string>
     /** True while the workspace's initial data load is in flight. */
     loading: boolean
-    selectedThreadId: string | null
+    activeThreadId: string | null
     threadsByProject: SvelteMap<string, Thread[]>
     pinnedThreads: Thread[]
     pinnedProjects: Project[]
@@ -120,7 +120,7 @@
     visibleProjects,
     projectIcons,
     loading,
-    selectedThreadId,
+    activeThreadId,
     threadsByProject,
     pinnedThreads,
     pinnedProjects,
@@ -509,7 +509,7 @@
                 {#each scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage) as thread (thread.id)}
                   <ThreadRow
                     {thread}
-                    selected={selectedThreadId === thread.id}
+                    selected={activeThreadId === thread.id}
                     compact
                     hideScope
                     onOpen={onOpenScopedThread}
@@ -557,7 +557,7 @@
             sectionKey="chats"
             label="Pinned Chats"
             threads={pinnedInboxThreads}
-            selectedThreadId={selectedThreadId ?? null}
+            activeThreadId={activeThreadId ?? null}
             getRowIcon={() => null}
             onOpen={onOpenThread}
             {onRename}
@@ -576,7 +576,7 @@
             {#each standaloneThreads.slice(0, 50) as thread (thread.id)}
               <ThreadRow
                 {thread}
-                selected={selectedThreadId === thread.id}
+                selected={activeThreadId === thread.id}
                 onOpen={onOpenThread}
                 {onRename}
                 {onTogglePin}
@@ -608,7 +608,7 @@
               {#each sidebar.threadsSearchResults as result (result.thread.id)}
                 <ThreadSearchResultRow
                   {result}
-                  selected={selectedThreadId === result.thread.id}
+                  selected={activeThreadId === result.thread.id}
                   onOpen={onOpenThread}
                 />
               {/each}
@@ -620,7 +620,7 @@
             sectionKey="threads"
             label="Pinned Threads"
             threads={pinnedTimelineThreads}
-            selectedThreadId={selectedThreadId ?? null}
+            activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}
             {onRename}
@@ -635,7 +635,7 @@
               <ThreadRow
                 {thread}
                 projectIconUrl={getThreadIcon(thread)}
-                selected={selectedThreadId === thread.id}
+                selected={activeThreadId === thread.id}
                 onOpen={onOpenThread}
                 {onRename}
                 {onTogglePin}
@@ -669,7 +669,7 @@
           sectionKey="projects-threads"
           label="Pinned Threads"
           threads={pinnedThreads}
-          selectedThreadId={selectedThreadId ?? null}
+          activeThreadId={activeThreadId ?? null}
           getRowIcon={(t) => {
             const project = projects.find((p) => p.id === t.projectId)
             return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
@@ -796,7 +796,7 @@
                               {#each searchResults as result (result.thread.id)}
                                 <ThreadSearchResultRow
                                   {result}
-                                  selected={selectedThreadId === result.thread.id}
+                                  selected={activeThreadId === result.thread.id}
                                   onOpen={onOpenThread}
                                 />
                               {/each}
@@ -806,7 +806,7 @@
                               {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                                 <ThreadRow
                                   {thread}
-                                  selected={selectedThreadId === thread.id}
+                                  selected={activeThreadId === thread.id}
                                   onOpen={onOpenThread}
                                   {onRename}
                                   {onTogglePin}
@@ -1010,7 +1010,7 @@
                           {#each searchResults as result (result.thread.id)}
                             <ThreadSearchResultRow
                               {result}
-                              selected={selectedThreadId === result.thread.id}
+                              selected={activeThreadId === result.thread.id}
                               onOpen={onOpenThread}
                             />
                           {/each}
@@ -1020,7 +1020,7 @@
                           {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                             <ThreadRow
                               {thread}
-                              selected={selectedThreadId === thread.id}
+                              selected={activeThreadId === thread.id}
                               onOpen={onOpenThread}
                               {onRename}
                               {onTogglePin}

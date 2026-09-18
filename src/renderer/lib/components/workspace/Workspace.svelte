@@ -93,6 +93,7 @@
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
     coordinatorHasActiveDelegates,
+    activeThreadRowId,
     INBOX_PROJECT_ID,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
@@ -2963,7 +2964,7 @@
     {visibleProjects}
     {projectIcons}
     {loading}
-    selectedThreadId={selectedThread?.id ?? null}
+    activeThreadId={activeThreadRowId(selectedThread)}
     {threadsByProject}
     {pinnedThreads}
     {pinnedProjects}

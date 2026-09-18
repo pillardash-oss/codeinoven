@@ -836,6 +836,7 @@
             : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
+    aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
     onclick={() => {
       showPopover = false
