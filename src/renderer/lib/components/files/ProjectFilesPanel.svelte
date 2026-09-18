@@ -451,7 +451,7 @@
   }
 
   function keepFullscreenOpen(): void {
-    projectFilesWorkspace.requestFullscreen(projectId)
+    if (fullscreenOpen) projectFilesWorkspace.requestFullscreen(projectId)
   }
 
   function focusFullscreenFileTab(sidebarId: string): void {
