@@ -1498,7 +1498,7 @@ export class PiDriver extends PersistentCliDriver {
         this.handleExtensionStatus(record, sessionId)
       },
       onExit: (code) => {
-        this.handleRpcExit(code, sessionId)
+        this.handleRpcExit(code, sessionId, client)
       }
     })
     this.rpcClients.set(sessionId, client)
@@ -2172,8 +2172,16 @@ export class PiDriver extends PersistentCliDriver {
     void this.finishTurn(session)
   }
 
-  private handleRpcExit(code: number | null, sessionId: string): void {
+  private handleRpcExit(
+    code: number | null,
+    sessionId: string,
+    exitedClient: PiRpcClient
+  ): void {
     void code
+    // A session can replace its RPC process while the old child is still
+    // delivering its exit event. Never let that stale callback dispose the
+    // replacement client or turn its next request into "Pi process disposed".
+    if (this.rpcClients.get(sessionId) !== exitedClient) return
     // Drop the dead client so the next turn spawns a fresh RPC process and
     // resumes the persisted native transcript instead of failing on a dead
     // pipe (or worse, silently continuing a context-less session).
