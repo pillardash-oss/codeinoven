@@ -2754,7 +2754,11 @@
           : 'Audit coordinator'
     const panel = coordinatorPanel(kind)
     if (!panel) return
-    const dispose = coordinatorDockState.register({
+    // No unmount cleanup: publishing is a prop update for the row, and the
+    // sibling view that takes over on a thread switch republishes. Tearing the
+    // registration down on unmount blanked the sidebar (and rebuilt the whole
+    // board) for the frame or two the entering view needed to hydrate.
+    coordinatorDockState.register({
       projectId: thread.projectId,
       threadId: coordinatorDockThreadId,
       label,
@@ -2769,7 +2773,16 @@
     ) {
       contextSidebarState.openCoordinator(thread.projectId, coordinatorDockThreadId, label)
     }
-    return dispose
+  })
+
+  /** A mount that settles without a coordinator withdraws its row's dock, so a
+   *  panel can never outlive the coordination it belonged to. Runs only after
+   *  the mount settles, which is what lets the entering view of a thread switch
+   *  keep the previous row's panel on screen instead of blanking it. */
+  $effect(() => {
+    if (hasController || !workflowReady) return
+    if (coordinatorKind !== null) return
+    coordinatorDockState.withdraw(thread.projectId, coordinatorDockThreadId)
   })
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
