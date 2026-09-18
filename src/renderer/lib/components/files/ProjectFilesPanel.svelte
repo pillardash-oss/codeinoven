@@ -907,7 +907,7 @@
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
     >
       <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-0 border-b border-border pr-4"
+        class="titlebar-drag flex h-12 shrink-0 items-center gap-0 border-b border-border"
         style={trafficLightInsetStyle()}
       >
         <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-1 overflow-hidden">

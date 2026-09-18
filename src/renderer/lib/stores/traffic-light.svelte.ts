@@ -54,6 +54,6 @@ export const trafficLightState = new TrafficLightState()
 export function trafficLightInsetStyle(): string {
   if (!trafficLightState.present || trafficLightState.side === null) return ''
   return trafficLightState.side === 'left'
-    ? `padding-left: ${trafficLightState.offset}px; padding-right: 0.25rem`
+    ? `padding-left: ${trafficLightState.offset}px; padding-right: 1.25rem`
     : `padding-right: ${trafficLightState.offset}px`
 }
