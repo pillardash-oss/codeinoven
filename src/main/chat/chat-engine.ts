@@ -129,6 +129,7 @@ import { refreshCustomProviderModels } from '../providers/base-url-model-refresh
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
+import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
   ScopeToolExecutor,
@@ -1441,6 +1442,17 @@ export class ChatEngine {
    */
   setScopeToolService(executor: ScopeToolExecutor | null): void {
     this.utilityOrchestration.setScopeToolExecutor(executor)
+  }
+
+  /**
+   * Tell the Assignment engine how to place a worker in a Git scope. The engine
+   * is built before the IPC layer constructs the scope and worktree services, so
+   * the provisioner is installed here rather than passed to its constructor.
+   */
+  setAssignmentWorkerScopeProvisioner(
+    provisioner: AssignmentWorkerScopeProvisioner | null
+  ): void {
+    this.assignmentEngine.setWorkerScopeProvisioner(provisioner)
   }
 
   setPrototypePreviewRegistrar(

@@ -50,6 +50,22 @@ A worker thread decides for itself whether the finished task goes back to the Sr
 
 The setting lives on the thread (`ThreadSettings.reportToCoordinator`) and applies to the whole thread rather than one turn, so it survives navigation and restarts. Because the refusal is enforced in the engine rather than only in the prompt, switching reporting off mid-run still stops that run from reporting. Switching it off is destructive and confirms through the shared `ConfirmDialog`, which states that the Sr. Engineer will not be able to audit the thread; switching it back on restores the hand-off immediately.
 
+### Worker scope
+
+An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.
+
+Each worker task can be pointed somewhere else before sign-off. The task row in the assignment review carries a scope picker next to its model picker, and the choice lives on the task (`AssignmentTask.workerScope`):
+
+- **Inherit (default)** the worker runs in the Assignment's scope. No field is stored, and `workerScopeBucketId` is deliberately not consulted, so a task whose scope the user changed back to inherit follows wherever inherit points now rather than the checkout an earlier choice created.
+- **Dedicated worktree** the worker gets a managed worktree scope of its own, with its own branch and setup, created when the task is dispatched. Signing off an Assignment with a dozen such tasks stays instant because nothing is created up front.
+- **Existing scope** the worker runs in a scope already on the project board, or one created from the picker on the spot.
+
+Provisioning happens in the app rather than the engine. The engine calls an `AssignmentWorkerScopeProvisioner` port, installed on it by the IPC layer once the scope and worktree services exist, and that implementation creates the bucket and then the worktree exactly like an agent-made scope, including rolling the empty bucket back if the worktree never lands. A dedicated scope is named after the worker and its task, uniquified against every existing scope name, because scope names are how a scope is addressed by reference and a duplicate would make every name-based lookup ambiguous.
+
+`AssignmentTask.workerScopeBucketId` records the scope a dispatched worker actually runs in. A retried task passes it back to the provisioner, so a replacement worker reuses the checkout holding the failed attempt's commits instead of leaking a second worktree for the same task. Changing the choice clears it, and the engine refuses both to change a scope once a worker thread exists and to fail a dispatch quietly: if the scope can no longer be created or found, the dispatch fails with `scope_unavailable` and the task stays `ready` rather than starting a worker in the wrong directory. The auditor always inherits the Assignment scope.
+
+Agent-generated task graphs cannot set a worker scope. Only the human choice made on the review surface does, so Autopilot, which has no sign-off, always inherits.
+
 ### Reopening a finished worker
 
 A direct message to a worker thread is work, not a dead end. When a worker that already finished its task starts a new turn from the user, live activity is authoritative: the task returns to `running` (its report and review are cleared), the Assignment returns to `running`, and the turn carries the worker's Assignment API contract again, because that capability is revoked when the Assignment completes. The worker can therefore submit fresh baseline/check evidence and report the task back to the Sr. Engineer exactly as it did the first time, and the coordinator panel, the Assignment studio, and the task row all show the run from the moment it starts. An explicitly `stopped` Assignment is never reopened this way, and a task that is `reported`, `auditing`, or `rework` stays with the coordinator while it reviews. The restored contract follows the thread's reporting setting: with reporting switched off, the turn carries the stand-down instruction instead and the task is never handed back (see _Worker reporting_ above).

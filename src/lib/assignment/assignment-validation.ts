@@ -26,6 +26,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/**
+ * A worker scope names exactly one of the three modes, and only the `scope` mode
+ * carries a bucket ID. Agent-generated content never sets this field, so the
+ * check exists to reject a corrupted persisted plan before it is activated.
+ */
+function isValidWorkerScope(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (value.mode === 'inherit' || value.mode === 'dedicated') return true
+  return value.mode === 'scope' && typeof value.bucketId === 'string' && value.bucketId.trim() !== ''
+}
+
 function generatedModel(value: unknown): AssignmentModelSelection | undefined {
   if (value === undefined) return undefined
   if (!isRecord(value)) throw new Error('Generated assignment model is invalid')
@@ -168,6 +179,13 @@ export function validateAssignment(content: AssignmentPlanContent): AssignmentVa
         code: 'missing_reference',
         path: `tasks.${index}.phaseId`,
         message: `Unknown phase: ${task.phaseId}`
+      })
+    }
+    if (task.workerScope !== undefined && !isValidWorkerScope(task.workerScope)) {
+      issues.push({
+        code: 'invalid_scope',
+        path: `tasks.${index}.workerScope`,
+        message: `Task ${task.id} has an invalid worker scope`
       })
     }
     tasks.set(task.id, task)

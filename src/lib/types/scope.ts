@@ -2,6 +2,24 @@ export const DEFAULT_SCOPE_BUCKET_ID = 'default'
 
 export type ScopeSlice = 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
 
+/**
+ * How a scope is chosen for a unit of work that may run outside the caller's own
+ * scope. Used by the composer's scope picker and by an Assignment worker, which
+ * is why it names no assignment concept.
+ *
+ * - `inherit`   run in whatever scope the caller already works in.
+ * - `dedicated` a managed worktree scope is created for this unit of work, so it
+ *               gets a checkout and branch of its own.
+ * - `scope`     run in a scope that already exists on the project board.
+ *
+ * Only `scope` resolves without touching Git, so the app provisions the other
+ * two rather than the renderer.
+ */
+export type ScopeChoice =
+  | { mode: 'inherit' }
+  | { mode: 'dedicated' }
+  | { mode: 'scope'; bucketId: string }
+
 export interface ScopeBucket {
   id: string
   name: string

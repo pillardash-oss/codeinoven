@@ -7,7 +7,8 @@
     AssignmentModelSelection,
     AssignmentPlan,
     AssignmentPlanContent,
-    ProviderCatalog
+    ProviderCatalog,
+    ScopeChoice
   } from '$shared/types'
 
   interface Props {
@@ -26,6 +27,9 @@
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -52,6 +56,8 @@
     onOpenFullscreen,
     onWorkerModelChange,
     onSeniorModelChange,
+    onTaskScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite
@@ -115,6 +121,8 @@
           onChange={(content) => (draft = content)}
           {onWorkerModelChange}
           {onSeniorModelChange}
+          {onTaskScopeChange}
+          {assignmentScopeBucketId}
           {onToggleFavorite}
           {onReorderFavorite}
         />

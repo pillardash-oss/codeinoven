@@ -28,7 +28,8 @@
     AssignmentModelSelection,
     AssignmentPlan,
     AssignmentPlanContent,
-    ProviderCatalog
+    ProviderCatalog,
+    ScopeChoice
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -72,6 +73,9 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -131,6 +135,8 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onTaskModelChange,
+    onTaskScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite,
@@ -665,6 +671,8 @@
           {onWorkerModelChange}
           {onSeniorModelChange}
           {onTaskModelChange}
+          {onTaskScopeChange}
+          {assignmentScopeBucketId}
           {onToggleFavorite}
           {onReorderFavorite}
         />

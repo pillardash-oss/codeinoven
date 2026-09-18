@@ -23,6 +23,7 @@ import {
   validateAssignmentAnnotationInput,
   validateAssignmentContent,
   validateAssignmentModel,
+  validateAssignmentWorkerScope,
   validateAssignmentProvenance,
   validateAuditAnnotationInput,
   validateBrainstormAnnotationInput,
@@ -171,6 +172,16 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
         safeModel
       )
     }
+  )
+  ipcMain.handle(
+    'assignment:updateUnlinkedWorkerScope',
+    (_, projectId: unknown, coordinatorThreadId: unknown, taskId: unknown, scope: unknown) =>
+      assignmentEngine.updateUnlinkedWorkerScope(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(coordinatorThreadId, 'Coordinator thread ID'),
+        validateEntityId(taskId, 'Assignment task ID'),
+        validateAssignmentWorkerScope(scope, 'Assignment worker scope')
+      )
   )
   ipcMain.handle('assignment:validate', (_, content: unknown) =>
     validateAssignment(validateAssignmentContent(content))

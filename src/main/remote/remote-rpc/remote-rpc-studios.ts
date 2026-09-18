@@ -30,6 +30,7 @@ import type {
   AssignmentPlanContent,
   BrainstormContent,
   EngineeringSpecContent,
+  ScopeChoice,
   SpecContextReference,
   SpecValidationIssue
 } from '../../../lib/types'
@@ -212,6 +213,13 @@ export async function callRemoteStudioRpc(
         requireString(args[1]),
         requireString(args[2]),
         args[3] as AssignmentModelSelection
+      )
+    case 'assignment:updateUnlinkedWorkerScope':
+      return ctx.assignmentEngine.updateUnlinkedWorkerScope(
+        requireString(args[0]),
+        requireString(args[1]),
+        requireString(args[2]),
+        args[3] as ScopeChoice
       )
 
     // ─── Audit studio ───────────────────────────────────────────────────

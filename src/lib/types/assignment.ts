@@ -1,4 +1,5 @@
 import type { AgentModelSelection, ThinkingLevel } from './common'
+import type { ScopeChoice } from './scope'
 import type { Thread } from './thread'
 import type { AssignmentAnnotation } from './spec'
 
@@ -132,6 +133,17 @@ export interface AssignmentTask {
   expectedFiles: string[]
   auditChecklist: string[]
   model?: AssignmentModelSelection
+  /**
+   * Scope chosen for this task's worker before sign-off. Absent means the worker
+   * runs in the Assignment's own scope, which is the Sr. Engineer's.
+   */
+  workerScope?: ScopeChoice
+  /**
+   * The scope this task's worker actually runs in, recorded when the task is
+   * dispatched. A retried task reuses it, so a failed worker is replaced on its
+   * own checkout instead of leaking a second worktree.
+   */
+  workerScopeBucketId?: string
   /** Durable identity of the implementation pass this task belongs to. */
   workKind?: AssignmentTaskWorkKind
   /** One-based post-audit rework cycle; absent for initial implementation. */
@@ -249,6 +261,7 @@ export type AssignmentValidationCode =
   | 'parallel_file_overlap'
   | 'invalid_path'
   | 'invalid_model'
+  | 'invalid_scope'
 
 export interface AssignmentValidationIssue {
   code: AssignmentValidationCode

@@ -1,14 +1,17 @@
 <script lang="ts">
-  import { Info, MessageSquarePlus } from '@lucide/svelte'
+  import { FolderTree, Info, MessageSquarePlus } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import WorkerScopePicker from '../shared/WorkerScopePicker.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import type {
     AssignmentAnnotation,
     AssignmentModelSelection,
     AssignmentPlanContent,
     AssignmentTask,
     ProviderCatalog,
+    ScopeChoice,
     ThinkingLevel
   } from '$shared/types'
 
@@ -33,6 +36,9 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -64,6 +70,8 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onTaskModelChange,
+    onTaskScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite,
@@ -105,6 +113,43 @@
       task.status !== 'completed' &&
       task.status !== 'stopped'
     )
+  }
+
+  function canUpdateTaskScope(task: AssignmentTask): boolean {
+    if (!readOnly) return true
+    return (
+      onTaskScopeChange !== undefined &&
+      task.owner === 'worker' &&
+      !task.threadId &&
+      task.status !== 'completed' &&
+      task.status !== 'stopped'
+    )
+  }
+
+  async function updateTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
+    const task = content.tasks.find((candidate) => candidate.id === taskId)
+    if (!task) return
+    if (readOnly) {
+      if (canUpdateTaskScope(task)) await onTaskScopeChange?.(taskId, scope)
+      return
+    }
+    update({
+      ...content,
+      tasks: content.tasks.map((candidate) =>
+        candidate.id === taskId ? { ...candidate, workerScope: scope } : candidate
+      )
+    })
+  }
+
+  /** Board name for the scope a dispatched worker recorded, when it differs from
+   *  the Assignment's own; undefined means no separate-scope badge is shown. */
+  function workerScopeBadgeName(task: AssignmentTask): string | undefined {
+    if (!task.workerScopeBucketId) return undefined
+    if (task.workerScopeBucketId === assignmentScopeBucketId) return undefined
+    const bucket = scopeState.boards
+      .get(projectId ?? '')
+      ?.buckets.find((candidate) => candidate.id === task.workerScopeBucketId)
+    return bucket?.name ?? 'Own scope'
   }
 
   function taskReworkCycle(task: AssignmentTask): number | undefined {
@@ -483,6 +528,7 @@
         {#each content.tasks.filter((task) => task.phaseId === phase.id) as task (task.id)}
           {@const selectedTaskModel = resolvedTaskModel(task)}
           {@const displayedReworkCycle = taskReworkCycle(task)}
+          {@const workerScopeName = workerScopeBadgeName(task)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -521,6 +567,16 @@
               <span class="rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted">
                 {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
               </span>
+              {#if workerScopeName}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
+                  title={`This worker runs in its own scope: ${workerScopeName}`}
+                  aria-label={`This worker runs in its own scope: ${workerScopeName}`}
+                >
+                  <FolderTree size={10} class="shrink-0 text-warning" />
+                  <span class="min-w-0 truncate">{workerScopeName}</span>
+                </span>
+              {/if}
               {#if displayedReworkCycle}
                 <span
                   class="rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
@@ -556,36 +612,46 @@
               <p class="text-[0.625rem] text-dimmed">
                 Waits for: {task.dependsOn.join(', ') || 'nothing'}
               </p>
-              {#if canUpdateTaskModel(task)}
+              {#if canUpdateTaskModel(task) || (projectId && task.owner === 'worker' && (!readOnly || canUpdateTaskScope(task)))}
                 <div class="flex items-center gap-1.5">
-                  <ModelPicker
-                    {providers}
-                    {projectId}
-                    harnessId={selectedTaskModel.harnessId}
-                    providerId={selectedTaskModel.providerId}
-                    modelId={selectedTaskModel.modelId}
-                    accountId={selectedTaskModel.accountId}
-                    {favoriteModels}
-                    {recentModels}
-                    {onRemoveRecent}
-                    side="top"
-                    variant="action"
-                    label={task.model ? 'Task model' : 'Use phase model'}
-                    onSelect={(providerId, modelId, harnessId, accountId) =>
-                      updateTaskModel(task.id, providerId, modelId, harnessId, accountId)}
-                    {onToggleFavorite}
-                    {onReorderFavorite}
-                    thinkingLevel={selectedTaskModel.thinkingLevel}
-                    onSelectThinking={(level) =>
-                      updateTaskModel(
-                        task.id,
-                        selectedTaskModel.providerId,
-                        selectedTaskModel.modelId,
-                        selectedTaskModel.harnessId,
-                        selectedTaskModel.accountId,
-                        level
-                      )}
-                  />
+                  {#if canUpdateTaskModel(task)}
+                    <ModelPicker
+                      {providers}
+                      {projectId}
+                      harnessId={selectedTaskModel.harnessId}
+                      providerId={selectedTaskModel.providerId}
+                      modelId={selectedTaskModel.modelId}
+                      accountId={selectedTaskModel.accountId}
+                      {favoriteModels}
+                      {recentModels}
+                      {onRemoveRecent}
+                      side="top"
+                      variant="action"
+                      label={task.model ? 'Task model' : 'Use phase model'}
+                      onSelect={(providerId, modelId, harnessId, accountId) =>
+                        updateTaskModel(task.id, providerId, modelId, harnessId, accountId)}
+                      {onToggleFavorite}
+                      {onReorderFavorite}
+                      thinkingLevel={selectedTaskModel.thinkingLevel}
+                      onSelectThinking={(level) =>
+                        updateTaskModel(
+                          task.id,
+                          selectedTaskModel.providerId,
+                          selectedTaskModel.modelId,
+                          selectedTaskModel.harnessId,
+                          selectedTaskModel.accountId,
+                          level
+                        )}
+                    />
+                  {/if}
+                  {#if projectId && task.owner === 'worker' && (!readOnly || canUpdateTaskScope(task))}
+                    <WorkerScopePicker
+                      {projectId}
+                      inheritBucketId={assignmentScopeBucketId}
+                      value={task.workerScope ?? { mode: 'inherit' }}
+                      onSelect={(choice) => void updateTaskScope(task.id, choice)}
+                    />
+                  {/if}
                 </div>
               {/if}
             </div>

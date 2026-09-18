@@ -24,6 +24,7 @@ import type {
   PrdSectionId,
   PrdWorkflowState,
   PromptAttachment,
+  ScopeChoice,
   SpecContextReference,
   SpecDecisionAction,
   SpecSectionId,
@@ -326,6 +327,15 @@ export const invokeEngineeringContract = {
       coordinatorThreadId: string,
       taskId: string,
       model: AssignmentModelSelection
+    ],
+    AssignmentPlan
+  >,
+  'assignment:updateUnlinkedWorkerScope': {} as Contract<
+    [
+      projectId: string,
+      coordinatorThreadId: string,
+      taskId: string,
+      scope: ScopeChoice
     ],
     AssignmentPlan
   >,

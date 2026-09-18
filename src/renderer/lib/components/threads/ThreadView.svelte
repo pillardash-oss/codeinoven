@@ -222,6 +222,7 @@
     AssignmentPlanContent,
     AssignmentTask,
     AssignmentModelSelection,
+    ScopeChoice,
     AuditReport,
     AuditSectionId,
     SpecContextReference,
@@ -6562,6 +6563,34 @@
     }
   }
 
+  /**
+   * The scope an `inherit` worker choice resolves to. Before sign-off the plan
+   * carries no scope yet, so it falls back to the coordinator's own, which is
+   * exactly what the engine freezes at activation.
+   */
+  let assignmentScopeBucketId = $derived(
+    assignment?.scopeBucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+  )
+
+  async function updateAssignmentTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      assignment = await invoke(
+        'assignment:updateUnlinkedWorkerScope',
+        thread.projectId,
+        thread.id,
+        taskId,
+        scope
+      )
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The task scope could not be updated.'
+    } finally {
+      assignmentBusy = false
+    }
+  }
+
   async function approveAssignment(content: AssignmentPlanContent): Promise<void> {
     assignmentBusy = true
     assignmentError = ''
@@ -10287,6 +10316,8 @@
           onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
           onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
+          onTaskScopeChange={updateAssignmentTaskScope}
+          assignmentScopeBucketId={assignmentScopeBucketId}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -11825,6 +11856,8 @@
                   onOpenFullscreen={openAssignmentStudio}
                   onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
                   onSeniorModelChange={updateAssignmentSeniorModel}
+                  onTaskScopeChange={updateAssignmentTaskScope}
+                  assignmentScopeBucketId={assignmentScopeBucketId}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>

@@ -88,7 +88,12 @@ export type IpcChatEngine = Pick<
   | 'abort'
   | 'recordUserFileSave'
 > &
-  Partial<Pick<ChatEngine, 'runVirtualTask' | 'setScopeToolService'>>
+  Partial<
+    Pick<
+      ChatEngine,
+      'runVirtualTask' | 'setScopeToolService' | 'setAssignmentWorkerScopeProvisioner'
+    >
+  >
 
 /**
  * Everything the domain handler modules share. The composition root builds one

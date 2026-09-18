@@ -14,6 +14,7 @@ import type {
   AssignmentTaskReport,
   AssignmentTaskReview,
   AssignmentToolResult,
+  ScopeChoice,
   Thread,
   ThreadSettings
 } from '../types'
@@ -56,6 +57,11 @@ import {
   unblockDependentTasks
 } from './assignment-engine-tasks'
 import { AssignmentWorkerSelection, buildWorkerPrompt } from './assignment-engine-workers'
+import {
+  inheritOnlyWorkerScopes,
+  type AssignmentWorkerScopeProvisioner,
+  type WorkerScopeRequest
+} from './assignment-worker-scope'
 
 export { AssignmentEngineError } from './assignment-engine-error'
 export type { AddAssignmentAnnotationInput } from './assignment-engine-annotations'
@@ -81,6 +87,11 @@ export class AssignmentEngine {
   private readonly workers: AssignmentWorkerSelection
   private readonly annotations: AssignmentAnnotations
   private readonly auditCycle: AssignmentAuditCycleBook
+  /**
+   * Installed by the app once its scope services exist. Until then every worker
+   * inherits the Assignment's scope.
+   */
+  private workerScopes: AssignmentWorkerScopeProvisioner = inheritOnlyWorkerScopes
 
   constructor(
     private readonly storage: StorageEngine,
@@ -95,6 +106,16 @@ export class AssignmentEngine {
     this.workers = new AssignmentWorkerSelection(this.repo, this.threads, storage, randomIndex)
     this.annotations = new AssignmentAnnotations(this.repo, this.artifacts, now, idFactory)
     this.auditCycle = new AssignmentAuditCycleBook(this.repo, this.artifacts, now)
+  }
+
+  /**
+   * Install the app's scope provisioner so a worker task can be given a managed
+   * worktree of its own. Late-bound because the engine is constructed before the
+   * scope worktree service exists, and app-wide because there is one engine.
+   * Passing null restores the inherit-only behaviour.
+   */
+  setWorkerScopeProvisioner(provisioner: AssignmentWorkerScopeProvisioner | null): void {
+    this.workerScopes = provisioner ?? inheritOnlyWorkerScopes
   }
 
   async createDraft(input: CreateAssignmentInput): Promise<AssignmentPlan> {
@@ -547,6 +568,45 @@ export class AssignmentEngine {
     return this.replaceTask(active, { ...task, model: structuredClone(model) }, active.status)
   }
 
+  /**
+   * Choose the Git scope a signed-off worker task's thread will run in, before
+   * that worker has a durable thread of its own. The choice is a request: a
+   * dedicated worktree is created only when the task is dispatched, so signing
+   * off an Assignment with many such tasks stays instant.
+   */
+  async updateUnlinkedWorkerScope(
+    projectId: string,
+    coordinatorThreadId: string,
+    taskId: string,
+    scope: ScopeChoice
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (!['approved', 'running', 'attention'].includes(active.status)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Worker scopes can only be updated on an active signed-off Assignment'
+      )
+    }
+    const task = this.requireTask(active, taskId)
+    if (task.owner !== 'worker') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Only worker tasks have a scope of their own'
+      )
+    }
+    if (task.threadId) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'The worker has already been assigned; its thread owns its scope now'
+      )
+    }
+    const next: AssignmentTask = { ...task, workerScope: structuredClone(scope) }
+    // The recorded scope belongs to the previous choice, so it is dropped
+    // rather than left behind describing a checkout this task no longer uses.
+    delete next.workerScopeBucketId
+    return this.replaceTask(active, next, active.status)
+  }
+
   /** Create or reuse the durable auditor assigned to a completed Assignment. */
   async ensureAuditorThread(
     projectId: string,
@@ -857,6 +917,10 @@ export class AssignmentEngine {
     } else {
       const workerName = await this.workers.workerName(active)
       const settings = await this.workers.workerSettings(active, task, coordinator.settings)
+      // The scope may be a worktree created right here, so it is resolved before
+      // the thread exists: a worker must never start its first turn in the wrong
+      // checkout because its scope arrived late.
+      const scopeBucketId = await this.resolveWorkerScope(active, task, workerName)
       thread = await this.threads.createThread({
         projectId: active.projectId,
         providerId: settings.providerId,
@@ -864,7 +928,7 @@ export class AssignmentEngine {
         titleSource: 'manual',
         settings,
         featureSlug: coordinator.featureSlug,
-        scopeBucketId: active.scopeBucketId,
+        scopeBucketId,
         workingDirectory: coordinator.workingDirectory,
         assignmentId: active.id,
         assignmentRole: 'worker',
@@ -875,6 +939,7 @@ export class AssignmentEngine {
         ...dispatchBase,
         workerName,
         threadId: thread.id,
+        workerScopeBucketId: scopeBucketId,
         status: 'running',
         startedAt: this.now()
       }
@@ -1144,6 +1209,39 @@ export class AssignmentEngine {
 
   workerPrompt(plan: AssignmentPlan, task: AssignmentTask, featureSlug: string): string {
     return buildWorkerPrompt(plan, task, featureSlug)
+  }
+
+  /**
+   * The scope bucket a worker's thread is created in.
+   *
+   * A worker that inherits simply follows the Assignment's own scope, which was
+   * frozen from the Sr. Engineer's at sign-off, and `workerScopeBucketId` is not
+   * consulted: a task whose scope the user changed back to `inherit` must run
+   * where `inherit` points now, not in the checkout an earlier choice created.
+   * Every other choice goes to the app, which validates a named scope and may
+   * create a worktree.
+   */
+  private async resolveWorkerScope(
+    active: AssignmentPlan,
+    task: AssignmentTask,
+    workerName: string
+  ): Promise<string> {
+    const assignmentScopeBucketId = active.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    const choice = task.workerScope
+    if (choice === undefined || choice.mode === 'inherit') return assignmentScopeBucketId
+    const request: WorkerScopeRequest = {
+      projectId: active.projectId,
+      assignmentId: active.id,
+      taskId: task.id,
+      taskTitle: task.title,
+      workerName,
+      assignmentScopeBucketId,
+      choice,
+      ...(task.workerScopeBucketId === undefined
+        ? {}
+        : { existingBucketId: task.workerScopeBucketId })
+    }
+    return this.workerScopes.provisionWorkerScope(request)
   }
 
   private requireActive(projectId: string, coordinatorThreadId: string): AssignmentPlan {

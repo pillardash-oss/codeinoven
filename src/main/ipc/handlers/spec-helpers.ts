@@ -21,6 +21,7 @@ import type {
   EngineeringSpecContent,
   MemoryEntry,
   PrdSectionId,
+  ScopeChoice,
   SpecContextReference,
   SpecSectionId,
   SpecValidationCode,
@@ -96,6 +97,16 @@ function validateAssignmentModel(
   }
 }
 
+function validateAssignmentWorkerScope(value: unknown, label: string): ScopeChoice {
+  if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
+  const mode = requireString(value.mode, `${label} mode`)
+  if (mode === 'inherit' || mode === 'dedicated') return { mode }
+  if (mode === 'scope') {
+    return { mode, bucketId: requireString(value.bucketId, `${label} scope bucket ID`) }
+  }
+  throw new TypeError(`${label} mode is invalid`)
+}
+
 function validateAssignmentContent(value: unknown): AssignmentPlanContent {
   if (!isRecord(value)) throw new TypeError('Assignment content must be an object')
   if (!Array.isArray(value.phases) || !Array.isArray(value.tasks)) {
@@ -144,6 +155,18 @@ function validateAssignmentContent(value: unknown): AssignmentPlanContent {
       ...(task.model === undefined
         ? {}
         : { model: validateAssignmentModel(task.model, `Assignment task ${index} model`) }),
+      // Carried through untouched: the choice is made on the review surface and
+      // must survive the save/approve round trip, exactly like the task model.
+      // `workerScopeBucketId` is not accepted from the renderer at all; only the
+      // engine records where a dispatched worker actually runs.
+      ...(task.workerScope === undefined
+        ? {}
+        : {
+            workerScope: validateAssignmentWorkerScope(
+              task.workerScope,
+              `Assignment task ${index} worker scope`
+            )
+          }),
       status: 'planned'
     }
   })
@@ -649,6 +672,7 @@ function requireTimestamp(value: unknown, label: string): number {
 export {
   validateAssignmentModel,
   validateAssignmentContent,
+  validateAssignmentWorkerScope,
   validateAssignmentProvenance,
   validateSpecContent,
   validateProvenance,

@@ -9,6 +9,8 @@ import { Logger } from '../../system/logger'
 import { openWithService } from '../../system/open-with-service'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
+import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
+import { AssignmentWorkerScopeService } from '../../workspaces/assignment-worker-scope-service'
 import {
   validateBoolean,
   validateBoundedString,
@@ -144,6 +146,19 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     }
   }
 
+  /** A scope change, whoever caused it, invalidates the board in every window. */
+  const broadcastScopeBoardChanged: ScopeToolServiceOptions['onBoardChanged'] = (event) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      sendToRenderer(window.webContents, 'scope:boardChanged', event)
+    }
+  }
+  /** Every worktree run, from any surface, streams into the same docked job panel. */
+  const broadcastWorktreeProgress: ScopeToolServiceOptions['onProgress'] = (event) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      sendToRenderer(window.webContents, 'scope:worktree:progress', event)
+    }
+  }
+
   const scopeToolService = new ScopeToolService(
     scopeWorktreeService,
     scopeManager,
@@ -155,18 +170,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     {
       scopeThreads: scopeThreadLifecycle,
       requestConfirmation: requestScopeConfirmation,
-      /** Agent-made scopes appear on the board without a manual reload. */
-      onBoardChanged: (event) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          sendToRenderer(window.webContents, 'scope:boardChanged', event)
-        }
-      },
-      /** An agent's worktree run streams into the same docked job panel. */
-      onProgress: (event) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          sendToRenderer(window.webContents, 'scope:worktree:progress', event)
-        }
-      },
+      onBoardChanged: broadcastScopeBoardChanged,
+      onProgress: broadcastWorktreeProgress,
       resolveGitToken: async (projectId) => {
         const ref = gitCredentialRef(projectId)
         return (await vault.exists(ref)) ? await vault.resolve(ref) : undefined
@@ -180,6 +185,16 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     }
   )
   chatEngine?.setScopeToolService?.((input, context) => scopeToolService.execute(input, context))
+
+  // An Assignment worker with a worktree scope of its own gets it from here, on
+  // dispatch, so a worker created by the Sr. Engineer is a first-class scope on
+  // the board with its own branch and setup.
+  chatEngine?.setAssignmentWorkerScopeProvisioner?.(
+    new AssignmentWorkerScopeService(scopeWorktreeService, scopeManager, projectManager, {
+      onBoardChanged: broadcastScopeBoardChanged,
+      onProgress: broadcastWorktreeProgress
+    })
+  )
 
   /** Optional trailing thread mount on `projectFiles:*` channels: when the
    *  caller browses a chat's own artifact directory it names the thread so the
