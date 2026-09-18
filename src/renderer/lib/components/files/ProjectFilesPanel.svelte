@@ -907,10 +907,10 @@
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
     >
       <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+        class="titlebar-drag flex h-10 shrink-0 items-center gap-0 border-b border-border pr-3"
         style={trafficLightInsetStyle()}
       >
-        <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+        <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
           <Dialog.Title
             class="min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
@@ -919,7 +919,7 @@
           </Dialog.Title>
           {#if fullscreenFileTabs.length > 1}
             <div
-              class="flex min-w-0 max-w-[65%] items-center gap-0 overflow-x-auto"
+              class="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto"
               role="tablist"
               aria-label="Open files"
             >
@@ -1004,7 +1004,7 @@
         <button
           type="button"
           class={[
-            'titlebar-no-drag flex h-7 w-7 items-center justify-center rounded transition-colors',
+            'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded transition-colors',
             fullscreenExplorerOpen
               ? 'bg-overlay text-primary'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -1017,7 +1017,7 @@
           <FolderTree size={15} />
         </button>
         <Dialog.Close
-          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Minimize fullscreen file viewer"
           title="Minimize fullscreen file viewer"
         >
