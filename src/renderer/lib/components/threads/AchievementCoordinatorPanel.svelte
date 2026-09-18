@@ -1,39 +1,8 @@
 <script lang="ts">
-  import { ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
+  import { ArrowLeft, ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
-
-  interface Props {
-    mode?: 'achievement' | 'audit'
-    specTitle: string
-    specSummary: string
-    auditThread?: Thread
-    auditState?: Thread['auditState']
-    reportAvailable?: boolean
-    /** The achievement loop verified the goal and closed itself; no further work remains. */
-    achievementReached?: boolean
-    selectedThreadId: string
-    auditorSettings: ThreadSettings
-    providers: ProviderCatalog[]
-    projectId?: string | null
-    favoriteModels?: string[]
-    recentModels?: string[]
-    coordinatorWorking: boolean
-    onOpenAudit?: () => void
-    onViewReport?: () => void
-    onOpenThread: (thread: Thread) => void
-    onResume?: () => void
-    onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
-    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
-    onRemoveRecent?: (modelKey: string) => void
-    onReorderFavorite?: (
-      draggedKey: string,
-      targetKey: string,
-      position: 'before' | 'after'
-    ) => void
-  }
+  import type { AchievementCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
 
   let {
     mode = 'achievement',
@@ -57,8 +26,9 @@
     onModelChange,
     onToggleFavorite,
     onRemoveRecent,
-    onReorderFavorite
-  }: Props = $props()
+    onReorderFavorite,
+    onBackToCoordinator
+  }: AchievementCoordinatorPanelProps = $props()
 
   let selectedAuditor = $derived.by(() => {
     const provider =
@@ -286,6 +256,21 @@
       {/if}
     </section>
   </div>
+
+  {#if onBackToCoordinator}
+    <footer class="shrink-0 border-t border-border p-3">
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+        title="Back to the Sr. Engineer thread that owns this coordination"
+        aria-label="Back to the Sr. Engineer thread that owns this coordination"
+        onclick={onBackToCoordinator}
+      >
+        <ArrowLeft size={13} aria-hidden="true" />
+        Back to Sr. Engineer
+      </button>
+    </footer>
+  {/if}
 </div>
 
 <style>

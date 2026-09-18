@@ -1,33 +1,14 @@
 <script lang="ts">
-  import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import { ArrowLeft, ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import {
     isThreadRetryPaused,
-    type AssignmentPlan,
+    type AssignmentCoordinatorPanelProps,
     type AssignmentTask,
     type AssignmentTaskStatus,
     type Thread
   } from '$shared/types'
-
-  interface Props {
-    assignment: AssignmentPlan
-    threads: Thread[]
-    auditThread?: Thread
-    auditState?: Thread['auditState'] | 'failed'
-    finalComplete?: boolean
-    reportAvailable?: boolean
-    selectedThreadId: string
-    coordinatorWorking: boolean
-    onOpenAssignment: () => void
-    onOpenAuditWork?: () => void
-    onViewReport?: () => void
-    onOpenThread: (thread: Thread) => void
-    onOpenTask: (task: AssignmentTask) => void
-    onResume: () => void
-    onStop: () => Promise<void>
-    onResumeAssignment: () => Promise<void>
-  }
 
   let {
     assignment,
@@ -45,8 +26,9 @@
     onOpenTask,
     onResume,
     onStop,
-    onResumeAssignment
-  }: Props = $props()
+    onResumeAssignment,
+    onBackToCoordinator
+  }: AssignmentCoordinatorPanelProps = $props()
 
   let showStopConfirmation = $state(false)
   let stopBusy = $state(false)
@@ -387,6 +369,21 @@
       </div>
     </section>
   </div>
+
+  {#if onBackToCoordinator}
+    <footer class="shrink-0 border-t border-border p-3">
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+        title="Back to the Sr. Engineer thread that owns this Assignment"
+        aria-label="Back to the Sr. Engineer thread that owns this Assignment"
+        onclick={onBackToCoordinator}
+      >
+        <ArrowLeft size={13} aria-hidden="true" />
+        Back to Sr. Engineer
+      </button>
+    </footer>
+  {/if}
 </div>
 
 <Modal

@@ -568,9 +568,11 @@
     contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
   }
 
-  /** The coordinator published by the thread on screen, if it coordinates work. */
+  /** The coordinator published by the thread on screen, if it coordinates work.
+   *  A worker/auditor child publishes under its coordinator's id, so the panel
+   *  stays docked as the user moves between its children. */
   let coordinator = $derived(
-    coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
+    coordinatorDockState.forThread(selectedThread?.projectId, activeThreadRowId(selectedThread))
   )
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration

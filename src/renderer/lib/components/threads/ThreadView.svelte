@@ -9,7 +9,6 @@
 
   import {
     AudioLines,
-    ArrowLeft,
     ArrowUpRight,
     Brain,
     Check,
@@ -63,7 +62,6 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
@@ -81,9 +79,6 @@
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
-  import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
-  import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
-  import IndependentAuditCoordinatorPanel from './IndependentAuditCoordinatorPanel.svelte'
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
@@ -147,7 +142,10 @@
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import {
+    coordinatorDockState,
+    type CoordinatorDockPanel
+  } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
     rendererRecovery,
@@ -2499,10 +2497,6 @@
   const coordinatorParentId = $derived(
     isOrchestrationChildThread(thread) ? (thread.coordinatorThreadId ?? null) : null
   )
-  /** Label of the coordinator this view belongs to, for the back control. */
-  const coordinatorParentTitle = $derived(
-    coordinatorParentThread ? effectiveThreadTitle(coordinatorParentThread) : 'Sr. Engineer'
-  )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
     settings.assignmentMode !== true &&
@@ -2550,6 +2544,12 @@
     pendingIndependentAudit !== null ? pendingIndependentAudit : independentAuditEnabled
   )
   let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
+  /** The Independent Audit coordinator is the board for a thread that audits
+   *  itself, and for the auditor child that thread owns. */
+  const independentAuditPanelActive = $derived.by(() => {
+    if (orchestrationChild) return coordinatorParentThread?.independentAudit === true
+    return independentAuditDisplayEnabled
+  })
   /** The switch only exists once the thread has work and no Engineering mode
    *  is on   a staged (intent-only) Toolbox selection counts as on, so the
    *  two controls can never be lit at the same time before a send commits
@@ -2564,9 +2564,27 @@
           threadMessages.messages(thread.projectId, thread.id).length > 0))
   )
 
+  /** The coordinator row this view publishes under: a worker/auditor child
+   *  publishes under its parent, so moving between children never swaps the
+   *  sidebar tab. */
+  const coordinatorDockThreadId = $derived(coordinatorParentId ?? thread.id)
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
-    if (isAssignmentAuditorThread) return null
+    // A worker/auditor child presents the coordination it belongs to, so it can
+    // show that board and carry the way back to it instead of dead-ending.
+    if (orchestrationChild) {
+      if (assignment && assignment.status !== 'draft') return 'assignment'
+      const parent = coordinatorParentThread
+      if (!parent) return null
+      if (parent.assignmentId !== undefined || parent.assignmentRole === 'coordinator') {
+        return 'assignment'
+      }
+      if (parent.settings?.loopMode === true || parent.achievementRole === 'coordinator') {
+        return 'achievement'
+      }
+      if (parent.independentAudit === true) return 'audit'
+      return null
+    }
     if (assignment && assignment.status !== 'draft') return 'assignment'
     // A staged (not-yet-run) Independent Audit already docks its coordinator:
     // the sidebar appears the moment the switch is turned on, and clicking
@@ -2580,7 +2598,140 @@
   // The coordinator is a sidebar tool, not a floating panel: the thread owns the
   // data and the callbacks, so it publishes the panel as a snippet and the
   // context dock renders it. Only the coordination kind is tracked here, so a
-  // task update never re-registers (and never remounts) the panel.
+  // task update never re-mounts the panel.
+  // The coordinator is a sidebar tool, not a floating panel: the thread owns the
+  // data and the callbacks, so it publishes the panel data and the context dock
+  // renders the matching component. The sidebar picks the component from the
+  // registration, so a task update or a worker/auditor switch updates props
+  // instead of remounting the panel.
+  function coordinatorPanel(
+    kind: 'assignment' | 'achievement' | 'audit'
+  ): CoordinatorDockPanel | null {
+    // Only an orchestration child carries the way back to the Sr. Engineer.
+    const onBackToCoordinator = coordinatorParentId ? openCoordinatorParent : undefined
+    if (kind === 'assignment') {
+      const activeAssignment = assignment
+      if (!activeAssignment) return null
+      return {
+        component: 'assignment',
+        props: {
+          assignment: activeAssignment,
+          threads: assignmentThreads,
+          auditThread: assignmentAuditThread,
+          auditState: assignmentAuditState,
+          finalComplete: assignmentFinalComplete,
+          reportAvailable: assignmentReportAvailable,
+          selectedThreadId: thread.id,
+          coordinatorWorking: busy || delegatedWorkBusy,
+          onOpenAssignment: () => {
+            if (!openOwnerStudio('assignment')) openAssignmentStudio()
+          },
+          onOpenAuditWork: openAssignmentAuditWork,
+          onViewReport: () => {
+            if (!openOwnerStudio('audit')) openAuditStudio()
+          },
+          onOpenThread: (worker) => workspaceState.openThread(worker, project),
+          onOpenTask: openAssignmentTask,
+          onResume: resumeAssignmentCoordination,
+          onStop: stopAssignment,
+          onResumeAssignment: resumeStoppedAssignment,
+          onBackToCoordinator
+        }
+      }
+    }
+    if (kind === 'achievement') {
+      const activeSpec = spec
+      if (!activeSpec) return null
+      return {
+        component: 'achievement',
+        props: {
+          specTitle: thread.title,
+          specSummary: activeSpec.content.resolutionSummary,
+          auditThread: durableAuditThread,
+          auditState,
+          reportAvailable: auditReport !== null,
+          achievementReached: thread.status === 'completed' && (thread.loopIteration ?? 0) > 0,
+          selectedThreadId: thread.id,
+          auditorSettings: auditSettings,
+          providers,
+          projectId: thread.projectId,
+          favoriteModels: rendererRecovery.favoriteModels,
+          recentModels: rendererRecovery.recentModels,
+          onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+          coordinatorWorking: busy || delegatedWorkBusy,
+          onOpenAudit: () => void generateAudit(auditSettings),
+          onViewReport: openAuditStudio,
+          onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+          onResume: resumeAchievementCoordination,
+          onModelChange: changeAuditModel,
+          onToggleFavorite: (providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+          onReorderFavorite: (draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+          onBackToCoordinator
+        }
+      }
+    }
+    if (independentAuditPanelActive) {
+      return {
+        component: 'independent-audit',
+        props: {
+          running: independentAuditRunning,
+          auditThread: durableAuditThread,
+          reportAvailable: auditReport !== null,
+          selectedThreadId: thread.id,
+          auditorSettings: auditSettings,
+          providers,
+          projectId: thread.projectId,
+          favoriteModels: rendererRecovery.favoriteModels,
+          recentModels: rendererRecovery.recentModels,
+          onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+          onOpenAudit: () => void generateIndependentAudit(auditSettings),
+          onViewReport: openAuditStudio,
+          onNewAudit: () => startFreshIndependentAudit(auditSettings),
+          onDeleteThread: deleteAuditorThread,
+          onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+          onModelChange: changeAuditModel,
+          onToggleFavorite: (providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+          onReorderFavorite: (draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+          onBackToCoordinator
+        }
+      }
+    }
+    const auditSpec = spec
+    if (!auditSpec) return null
+    return {
+      component: 'achievement',
+      props: {
+        mode: 'audit',
+        specTitle: thread.title,
+        specSummary: auditSpec.content.resolutionSummary,
+        auditThread: durableAuditThread,
+        auditState,
+        reportAvailable: auditReport !== null,
+        selectedThreadId: thread.id,
+        auditorSettings: auditSettings,
+        providers,
+        projectId: thread.projectId,
+        favoriteModels: rendererRecovery.favoriteModels,
+        recentModels: rendererRecovery.recentModels,
+        onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+        coordinatorWorking: auditBusy,
+        onOpenAudit: () => void generateAudit(auditSettings),
+        onViewReport: openAuditStudio,
+        onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+        onModelChange: changeAuditModel,
+        onToggleFavorite: (providerId, modelId, harnessId) =>
+          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+        onReorderFavorite: (draggedKey, targetKey, position) =>
+          rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+        onBackToCoordinator
+      }
+    }
+  }
+
   $effect(() => {
     const kind = coordinatorKind
     if (!kind) return
@@ -2590,25 +2741,22 @@
         : kind === 'achievement'
           ? 'Achievement coordinator'
           : 'Audit coordinator'
+    const panel = coordinatorPanel(kind)
+    if (!panel) return
     const dispose = coordinatorDockState.register({
       projectId: thread.projectId,
-      threadId: thread.id,
+      threadId: coordinatorDockThreadId,
       label,
       icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
-      panel:
-        kind === 'assignment'
-          ? assignmentCoordinatorPanel
-          : kind === 'achievement'
-            ? achievementCoordinatorPanel
-            : auditCoordinatorPanel
+      panel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
     // closed it before; later runs are no-ops because the tab already exists.
     if (
       coordinatorDockState.autoOpen &&
-      !contextSidebarState.hasCoordinator(thread.projectId, thread.id)
+      !contextSidebarState.hasCoordinator(thread.projectId, coordinatorDockThreadId)
     ) {
-      contextSidebarState.openCoordinator(thread.projectId, thread.id, label)
+      contextSidebarState.openCoordinator(thread.projectId, coordinatorDockThreadId, label)
     }
     return dispose
   })
@@ -2699,6 +2847,11 @@
     return busy ? 'Sr. Engineer and the auditor are working' : 'The auditor is working'
   })
   let assignmentFinalComplete = $derived(assignment?.auditCycle?.status === 'completed')
+  /** The Assignment audit cycle belongs to the coordinator that owns the plan.
+   *  A worker mirrors that plan to render its own view, so without this the
+   *  coordinator's audit offer would cover the worker's conversation and the
+   *  worker could not be chatted with. */
+  let assignmentAuditOwner = $derived(assignment?.coordinatorThreadId === thread.id)
   /** Whether an audit report exists for the Assignment's coordinator. A worker
    *  reads the plan but not the coordinator's audit report, so its availability
    *  comes from the recorded cycle report instead. */
@@ -3138,6 +3291,12 @@
   // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
     if (hasController) return
+    // A new mount must not publish a half-loaded state: doing so cleared the
+    // header's Spec control (and the studio state) on every thread switch, then
+    // restored it once the async reads finished, which read as a flash. Wait
+    // for the mount to settle so moving between a coordinator's workers keeps
+    // the chrome in place.
+    if (!workflowReady) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -3183,13 +3342,10 @@
       }
     }
     return () => {
+      // Keep the shared studio flags: the next ThreadView publishes them once
+      // it is ready, so switching threads does not blink the header control.
+      // Only the per-instance bindings are cleared here.
       workspaceState.toggleSpecStudio = null
-      workspaceState.specStudioAvailable = false
-      workspaceState.specStudioOpen = false
-      workspaceState.specStudioBusy = false
-      workspaceState.specStudioFormulating = false
-      workspaceState.specStudioError = ''
-      workspaceState.specStudioRetryable = false
       workspaceState.specAgentSidebarOpen = false
       workspaceState.specAgentResponses = []
     }
@@ -3264,8 +3420,10 @@
       // holds some of them, so fetch only while it does not   each fetch is a
       // bounded 40-message page and turns that span more than one page keep
       // it fetching until three deduped turn starts exist before the anchor.
+      let pagesWithoutTurnStart = 0
       for (let attempt = 0; attempt < 30; attempt++) {
-        if (turnStartPromptsBefore(messages, mountedStartIndex, 3).length === 3) break
+        const startsBefore = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+        if (startsBefore.length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3290,6 +3448,13 @@
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
         mountedCount += page.messages.length
         await tick()
+        // A prompt-less run (a worker trace, or a thread whose opening prompt
+        // is still hidden) has no turn boundary to align to. Three pages is
+        // the whole chunk one click should mount; stop before over-fetching.
+        if (startsBefore.length === 0) {
+          pagesWithoutTurnStart += 1
+          if (pagesWithoutTurnStart >= 3) break
+        }
       }
       // Turn-align the store's oldest boundary: a raw 40-row page can end
       // mid-turn, cutting that turn's prompt out of the cache entirely   the
@@ -3300,6 +3465,16 @@
         const oldest = messages[0]
         if (!oldest) break
         if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
+        // Nothing to align to when the thread holds no user prompt at all:
+        // keep the three pages already fetched instead of walking the whole
+        // thread looking for a boundary that does not exist.
+        if (
+          !messages.some(
+            (message) => message.role === 'user' && !isActivityOnlyUserMessage(message)
+          )
+        ) {
+          break
+        }
         if (!olderMessagesAvailable) break
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
@@ -3347,6 +3522,11 @@
         return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
       }
       while (target < mountedStartIndex && !isRealPrompt(target)) target += 1
+      // No user prompt exists before the mounted window (a worker thread whose
+      // opening prompt is still hidden, or a trace-only run). There is no turn
+      // boundary to align to, so mount everything that was just loaded instead
+      // of refusing to move the window and leaving the click a no-op.
+      if (target >= mountedStartIndex) target = 0
       if (target < mountedStartIndex) {
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
@@ -7853,7 +8033,11 @@
       return
     }
     coordinatorDockState.setAutoOpen(true)
-    contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+    contextSidebarState.openCoordinator(
+      thread.projectId,
+      coordinatorDockThreadId,
+      'Audit coordinator'
+    )
   }
 
   async function openCoordinatorAuditReport(
@@ -9921,29 +10105,6 @@
     {@render headerSnippet()}
   {/if}
 
-  {#if coordinatorParentId}
-    <!-- A worker/auditor thread is reachable only from its coordinator, so the
-         child view carries its own way back: the parent is hidden from every
-         thread list while the user is inside the work it delegated. -->
-    <nav
-      class="flex shrink-0 items-center gap-1 border-b bg-surface/60 px-2 py-1.5"
-      aria-label="Assigned work navigation"
-    >
-      <button
-        type="button"
-        class="flex min-h-7 items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to {coordinatorParentTitle}"
-        aria-label="Back to {coordinatorParentTitle}"
-        onclick={openCoordinatorParent}
-      >
-        <ArrowLeft size={13} aria-hidden="true" />
-        <span>Sr. Engineer</span>
-      </button>
-      <span class="shrink-0 text-dimmed" aria-hidden="true">/</span>
-      <span class="min-w-0 truncate text-xs text-muted" title={thread.title}>{thread.title}</span>
-    </nav>
-  {/if}
-
   {#if showSpecStudio}
     {#if findNavState.studioFindOpen}
       <FindInSurface
@@ -11481,7 +11642,7 @@
                   />
                 {/if}
               {/key}
-            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous && !failureRetryVisible}
+            {:else if assignmentAuditState === 'running' && assignmentAuditOwner && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 reworkCycle={assignmentReworkCycle}
@@ -11518,7 +11679,7 @@
                 onViewTrace={() => void openDurableAuditWork()}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous && !failureRetryVisible}
+            {:else if assignmentAuditState === 'failed' && assignmentAuditOwner && !busy && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="failed"
                 error={assignmentAuditFailure}
@@ -11541,7 +11702,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+            {:else if assignmentAuditState === 'offered' && assignmentAuditOwner && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -11560,7 +11721,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && assignmentAuditOwner && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditReadyCard
                 report={auditReport}
                 {providers}
@@ -11910,117 +12071,10 @@
 
 <!--
   The coordinator panels are published to the context dock rather than rendered
-  here: they dock into the right sidebar as their own tool, so the thread keeps
-  its full width and the coordinator gets a rail icon like every other panel.
+  here: the thread registers the panel data, the sidebar renders the matching
+  component as its own tool, and the thread keeps its full width with a rail
+  icon like every other panel.
 -->
-{#snippet assignmentCoordinatorPanel()}
-  {#if assignment}
-    <AssignmentCoordinatorPanel
-      {assignment}
-      auditThread={assignmentAuditThread}
-      auditState={assignmentAuditState}
-      finalComplete={assignmentFinalComplete}
-      reportAvailable={assignmentReportAvailable}
-      threads={assignmentThreads}
-      selectedThreadId={thread.id}
-      coordinatorWorking={busy || delegatedWorkBusy}
-      onOpenAssignment={() => {
-        if (!openOwnerStudio('assignment')) openAssignmentStudio()
-      }}
-      onOpenAuditWork={openAssignmentAuditWork}
-      onViewReport={() => {
-        if (!openOwnerStudio('audit')) openAuditStudio()
-      }}
-      onOpenThread={(worker) => workspaceState.openThread(worker, project)}
-      onOpenTask={openAssignmentTask}
-      onResume={resumeAssignmentCoordination}
-      onStop={stopAssignment}
-      onResumeAssignment={resumeStoppedAssignment}
-    />
-  {/if}
-{/snippet}
-
-{#snippet achievementCoordinatorPanel()}
-  {#if spec}
-    <AchievementCoordinatorPanel
-      specTitle={thread.title}
-      specSummary={spec.content.resolutionSummary}
-      auditThread={durableAuditThread}
-      {auditState}
-      reportAvailable={auditReport !== null}
-      achievementReached={thread.status === 'completed' && (thread.loopIteration ?? 0) > 0}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      coordinatorWorking={busy || delegatedWorkBusy}
-      onOpenAudit={() => void generateAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onResume={resumeAchievementCoordination}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {/if}
-{/snippet}
-
-{#snippet auditCoordinatorPanel()}
-  {#if independentAuditDisplayEnabled}
-    <IndependentAuditCoordinatorPanel
-      running={independentAuditRunning}
-      auditThread={durableAuditThread}
-      reportAvailable={auditReport !== null}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      onOpenAudit={() => void generateIndependentAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onNewAudit={() => startFreshIndependentAudit(auditSettings)}
-      onDeleteThread={deleteAuditorThread}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {:else if spec}
-    <AchievementCoordinatorPanel
-      mode="audit"
-      specTitle={thread.title}
-      specSummary={spec.content.resolutionSummary}
-      auditThread={durableAuditThread}
-      {auditState}
-      reportAvailable={auditReport !== null}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      coordinatorWorking={auditBusy}
-      onOpenAudit={() => void generateAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {/if}
-{/snippet}
 
 <ContinueInProjectModal
   open={continueInProjectOpen}

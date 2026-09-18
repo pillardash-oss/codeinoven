@@ -6846,7 +6846,11 @@ export class ChatEngine {
     projectReferences?: PromptProjectReference[],
     origin: 'user' | 'internal' = 'user',
     presentation?: UserMessagePresentation,
-    taskReferences?: PromptAssignmentTaskReference[]
+    taskReferences?: PromptAssignmentTaskReference[],
+    /** Persist this internal prompt as a visible user turn. Used by the
+     *  Assignment worker dispatch so the task that started a worker reads as
+     *  the first user prompt in its conversation. */
+    visiblePrompt = false
   ): Promise<AgentMessage> {
     if (origin === 'user') this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
@@ -7006,7 +7010,8 @@ export class ChatEngine {
       validatedPromptReferences,
       validatedProjectReferences,
       validatedPresentation,
-      origin
+      origin,
+      visiblePrompt
     )
     const publicUserMessage = withoutTransportParts(userMessage)
     const workerRouting = await this.routeTaggedAssignmentWorkers(
@@ -9644,7 +9649,8 @@ export class ChatEngine {
     references: PromptReference[],
     projectReferences: PromptProjectReference[],
     presentation?: UserMessagePresentation,
-    dispatchOrigin: 'user' | 'internal' = 'user'
+    dispatchOrigin: 'user' | 'internal' = 'user',
+    visiblePrompt = false
   ): Promise<AgentMessage> {
     // Attachments enter the thread here, so drop any memoized allowlist and let
     // the next permission request rebuild it from the latest message records.
@@ -9661,7 +9667,7 @@ export class ChatEngine {
       url: attachment.url,
       filename: attachment.filename
     }))
-    const visible = dispatchOrigin === 'user' || presentation !== undefined
+    const visible = dispatchOrigin === 'user' || presentation !== undefined || visiblePrompt
     const userMessage: AgentMessage = {
       id: messageId,
       role: 'user',
@@ -11891,7 +11897,12 @@ export class ChatEngine {
       undefined,
       undefined,
       undefined,
-      'internal'
+      'internal',
+      undefined,
+      undefined,
+      // The task that starts a worker is the first user turn of its thread, not
+      // an invisible orchestration prompt.
+      true
     )
   }
 

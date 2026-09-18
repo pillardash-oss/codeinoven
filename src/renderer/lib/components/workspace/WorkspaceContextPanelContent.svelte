@@ -7,6 +7,9 @@
   import ProjectFilesPanel from '$lib/components/files/ProjectFilesPanel.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import ThreadNotePanel from '$lib/components/threads/ThreadNotePanel.svelte'
+  import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
+  import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
+  import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import {
     contextSidebarState,
@@ -140,7 +143,13 @@
       {/await}
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}
-        {@render coordinator.panel()}
+        {#if coordinator.panel.component === 'assignment'}
+          <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+        {:else if coordinator.panel.component === 'achievement'}
+          <AchievementCoordinatorPanel {...coordinator.panel.props} />
+        {:else}
+          <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+        {/if}
       {/if}
     {:else if activeContextTab.kind === 'memory'}
       {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
