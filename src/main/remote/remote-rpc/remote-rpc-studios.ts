@@ -277,12 +277,22 @@ export async function callRemoteStudioRpc(
       }
       return ctx.threadManager.setAuditState(projectId, threadId, undefined)
     }
-    case 'audit:dismiss':
-      return ctx.threadManager.setAuditState(
-        requireString(args[0]),
-        requireString(args[1]),
-        undefined
-      )
+    case 'audit:dismiss': {
+      const projectId = requireString(args[0])
+      const threadId = requireString(args[1])
+      const assignment = ctx.assignmentEngine.getActive(projectId, threadId)
+      if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'available') {
+        await ctx.assignmentEngine.dismissAuditOffer(projectId, threadId)
+      }
+      return ctx.threadManager.setAuditState(projectId, threadId, undefined)
+    }
+    case 'audit:restoreOffer': {
+      const projectId = requireString(args[0])
+      const threadId = requireString(args[1])
+      const assignment = await ctx.assignmentEngine.restoreAuditOffer(projectId, threadId)
+      await ctx.threadManager.setAuditState(projectId, threadId, 'offered')
+      return assignment
+    }
     case 'audit:returnToOffer': {
       const projectId = requireString(args[0])
       const threadId = requireString(args[1])

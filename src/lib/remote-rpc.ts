@@ -219,6 +219,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'audit:resolveAnnotation',
   'audit:complete',
   'audit:dismiss',
+  'audit:restoreOffer',
   'audit:returnToOffer',
   'brainstorm:getActive',
   'brainstorm:getWorkflow',
@@ -667,6 +668,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'spec:approve': { scope: 'workflow.approve', stepUp: 'always' },
   'audit:complete': { scope: 'workflow.approve', stepUp: 'always' },
   'audit:dismiss': { scope: 'workflow.write', stepUp: 'conditional' },
+  'audit:restoreOffer': { scope: 'workflow.write', stepUp: 'conditional' },
 
   // rollback   default-No, always step-up
   'checkpoint:rollbackPaths': { scope: 'rollback', stepUp: 'always' },

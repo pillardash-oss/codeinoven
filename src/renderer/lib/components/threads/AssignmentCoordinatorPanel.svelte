@@ -4,6 +4,7 @@
   import ThreadRow from './ThreadRow.svelte'
   import {
     isThreadRetryPaused,
+    workerReportsToCoordinator,
     type AssignmentCoordinatorPanelProps,
     type AssignmentTask,
     type AssignmentTaskStatus,
@@ -107,7 +108,11 @@
     return undefined
   }
 
-  function taskTooltip(task: AssignmentTask, linkedWorker: Thread | undefined): string {
+  function taskTooltip(
+    task: AssignmentTask,
+    linkedWorker: Thread | undefined,
+    reportingOff: boolean
+  ): string {
     const worker = workerLabel(task)
     const destination =
       task.owner === 'senior'
@@ -115,7 +120,8 @@
         : task.threadId
           ? `Open ${linkedWorker?.title ?? worker}`
           : 'Open this task in Assignment Studio'
-    return `${task.title} · ${worker} · ${statusLabel(task.status)}. ${destination}`
+    const reporting = reportingOff ? ' · not reporting back' : ''
+    return `${task.title} · ${worker} · ${statusLabel(task.status)}${reporting}. ${destination}`
   }
 
   async function confirmStop(): Promise<void> {
@@ -322,6 +328,8 @@
           {@const active = task.threadId === selectedThreadId}
           {@const reworkCycle = taskReworkCycle(task)}
           {@const taskNumber = taskIndex + 1}
+          {@const reportingOff =
+            linkedWorker !== undefined && !workerReportsToCoordinator(linkedWorker.settings)}
           <button
             type="button"
             class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
@@ -329,8 +337,8 @@
               : ['attention', 'failed', 'stopped'].includes(task.status)
                 ? 'border-danger bg-danger/5'
                 : 'border-transparent'}"
-            title={taskTooltip(task, linkedWorker)}
-            aria-label={taskTooltip(task, linkedWorker)}
+            title={taskTooltip(task, linkedWorker, reportingOff)}
+            aria-label={taskTooltip(task, linkedWorker, reportingOff)}
             aria-current={active ? 'true' : undefined}
             onclick={() => onOpenTask(task)}
           >
@@ -355,6 +363,13 @@
                 <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
                   {workerLabel(task)}
                 </span>
+                {#if reportingOff}
+                  <span
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
+                  >
+                    Not reporting
+                  </span>
+                {/if}
               </span>
             </span>
             <span

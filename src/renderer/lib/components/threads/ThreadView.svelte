@@ -2806,6 +2806,13 @@
   let assignmentAuditFailure = $derived(assignment?.auditCycle?.failure ?? auditError)
   let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
   let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
+  /** The composer's "Implementation finished" prompt is dismissed while the cycle
+   *  stays `available`, so the coordinator panel and the studios keep their audit
+   *  entry. Dismissing reveals the ordinary composer for the Sr. Engineer. */
+  let assignmentAuditOfferDismissed = $derived(
+    assignment?.auditCycle?.status === 'available' &&
+      assignment.auditCycle.offerDismissedAt !== undefined
+  )
   function delegatedThreadWorking(candidate: Thread | undefined): boolean {
     if (!candidate) return false
     if (agentRuns.hasSettled(candidate.projectId, candidate.id)) {
@@ -8056,6 +8063,19 @@
       openAuditStudio()
       return
     }
+    // Nothing to open yet: the offer prompt is the audit entry, so bring a
+    // dismissed offer back before scrolling it into view.
+    if (assignmentAuditOfferDismissed) {
+      const restored = await invoke(
+        'audit:restoreOffer',
+        thread.projectId,
+        auditWorkflowThreadId()
+      ).catch(() => null)
+      if (restored) {
+        assignment = restored
+        auditState = 'offered'
+      }
+    }
     showSpecStudio = false
     await tick()
     scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
@@ -8508,6 +8528,15 @@
         settings = { ...settings, loopMode: false }
         commitSettings(settings)
         await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+      } else if (assignment) {
+        // Dismissing an Assignment offer lands on the plan, so refresh it here
+        // or the composer card would stay up until the next reconcile.
+        const refreshedAssignment = await invoke(
+          'assignment:getActive',
+          thread.projectId,
+          auditWorkflowThreadId()
+        ).catch(() => null)
+        if (refreshedAssignment) assignment = refreshedAssignment
       }
       auditState = undefined
       await reconcileReadySpec()
@@ -11738,7 +11767,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && assignmentAuditOwner && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+            {:else if assignmentAuditState === 'offered' && assignmentAuditOwner && !assignmentAuditOfferDismissed && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}

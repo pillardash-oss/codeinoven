@@ -893,13 +893,26 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
   })
-  ipcMain.handle('audit:dismiss', (_, projectId: unknown, threadId: unknown) =>
-    threadManager.setAuditState(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID'),
-      undefined
-    )
-  )
+  ipcMain.handle('audit:dismiss', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    // An Assignment offer is derived from its audit cycle, not the thread audit
+    // state, so dismissing it must land on the plan too. The cycle stays
+    // `available`, which keeps the audit reachable from the coordinator panel
+    // and the studios while the composer prompt disappears.
+    const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
+    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'available') {
+      await assignmentEngine.dismissAuditOffer(validProjectId, validThreadId)
+    }
+    return threadManager.setAuditState(validProjectId, validThreadId, undefined)
+  })
+  ipcMain.handle('audit:restoreOffer', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const assignment = await assignmentEngine.restoreAuditOffer(validProjectId, validThreadId)
+    await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
+    return assignment
+  })
   ipcMain.handle('audit:beginRework', (_, projectId: unknown, threadId: unknown) =>
     threadManager.setAuditState(
       validateEntityId(projectId, 'Project ID'),

@@ -791,6 +791,16 @@ export class AssignmentEngine {
     return this.auditCycle.makeAvailable(projectId, coordinatorThreadId)
   }
 
+  /** Hide the offered audit prompt without giving the audit up. */
+  async dismissAuditOffer(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    return this.auditCycle.dismissOffer(projectId, coordinatorThreadId)
+  }
+
+  /** Bring a dismissed audit offer back to the composer. */
+  async restoreAuditOffer(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    return this.auditCycle.restoreOffer(projectId, coordinatorThreadId)
+  }
+
   async reopenCompletedTask(
     projectId: string,
     coordinatorThreadId: string,

@@ -185,6 +185,10 @@ export interface AssignmentAuditCycle {
   scopeRepair?: boolean
   statusBeforeStop?: Exclude<AssignmentAuditCycleStatus, 'stopped'>
   availableAt?: number
+  /** When the user dismissed the "Implementation finished" offer. The audit stays
+   *  available from the coordinator panel and studios; only the composer prompt
+   *  is hidden until the user asks for it again. */
+  offerDismissedAt?: number
   startedAt?: number
   failedAt?: number
   failure?: string

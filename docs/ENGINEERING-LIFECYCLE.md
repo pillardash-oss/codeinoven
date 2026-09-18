@@ -50,6 +50,14 @@ A worker thread decides for itself whether the finished task goes back to the Sr
 
 The setting lives on the thread (`ThreadSettings.reportToCoordinator`) and applies to the whole thread rather than one turn, so it survives navigation and restarts. Because the refusal is enforced in the engine rather than only in the prompt, switching reporting off mid-run still stops that run from reporting. Switching it off is destructive and confirms through the shared `ConfirmDialog`, which states that the Sr. Engineer will not be able to audit the thread; switching it back on restores the hand-off immediately.
 
+The coordinator panel marks the state without opening a thread: a task whose worker has reporting off carries an amber **Not reporting** badge next to the worker name in the task row, in the same tooltip and accessible name as the row itself.
+
+### Assignment audit offer
+
+When implementation finishes, the coordinator thread shows the **Implementation finished** offer that starts the independent audit. Cancelling the offer does not end the audit cycle. It hides the composer prompt for that thread and reveals the ordinary composer, so the Sr. Engineer can simply be talked to again, and the worker hand-off loop is untouched.
+
+The cycle stays `available` with `offerDismissedAt` set, so the audit remains reachable from the coordinator panel's **Audit Work** action and from Spec Studio, and asking for it there restores the composer prompt (`audit:restoreOffer`). Starting the audit or making it available again clears the dismissal.
+
 ### Worker scope
 
 An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.

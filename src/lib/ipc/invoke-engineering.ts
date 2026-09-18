@@ -331,12 +331,7 @@ export const invokeEngineeringContract = {
     AssignmentPlan
   >,
   'assignment:updateUnlinkedWorkerScope': {} as Contract<
-    [
-      projectId: string,
-      coordinatorThreadId: string,
-      taskId: string,
-      scope: ScopeChoice
-    ],
+    [projectId: string, coordinatorThreadId: string, taskId: string, scope: ScopeChoice],
     AssignmentPlan
   >,
   'assignment:validate': {} as Contract<
@@ -523,6 +518,7 @@ export const invokeEngineeringContract = {
   >,
   'audit:complete': {} as Contract<[projectId: string, threadId: string], Thread>,
   'audit:dismiss': {} as Contract<[projectId: string, threadId: string], Thread>,
+  'audit:restoreOffer': {} as Contract<[projectId: string, threadId: string], AssignmentPlan>,
   'audit:beginRework': {} as Contract<[projectId: string, threadId: string], Thread>,
   'audit:returnToOffer': {} as Contract<[projectId: string, threadId: string], AssignmentPlan>,
   'audit:openInEditor': {} as Contract<

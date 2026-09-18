@@ -34,6 +34,7 @@ export class AssignmentAuditCycleBook {
     return this.save(active, {
       status: 'running',
       availableAt: active.auditCycle?.availableAt ?? now,
+      offerDismissedAt: undefined,
       startedAt: now,
       failedAt: undefined,
       failure: undefined
@@ -127,6 +128,33 @@ export class AssignmentAuditCycleBook {
     })
   }
 
+  /** Hide the offered audit from the composer without giving it up: the cycle
+   *  stays `available` so the coordinator panel and studios can still start it. */
+  async dismissOffer(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
+    if (active.status !== 'completed' || active.auditCycle?.status !== 'available') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Assignment audit offer cannot be dismissed right now'
+      )
+    }
+    if (active.auditCycle.offerDismissedAt !== undefined) return active
+    return this.save(active, { ...active.auditCycle, offerDismissedAt: this.now() })
+  }
+
+  /** Bring a dismissed offer back, so the composer prompt can start the audit. */
+  async restoreOffer(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
+    if (active.status !== 'completed' || active.auditCycle?.status !== 'available') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Assignment audit offer cannot be restored right now'
+      )
+    }
+    if (active.auditCycle.offerDismissedAt === undefined) return active
+    return this.save(active, { ...active.auditCycle, offerDismissedAt: undefined })
+  }
+
   async makeAvailable(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
     const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
     if (
@@ -145,6 +173,7 @@ export class AssignmentAuditCycleBook {
       ...active.auditCycle,
       status: 'available',
       availableAt: this.now(),
+      offerDismissedAt: undefined,
       startedAt: undefined,
       failedAt: undefined,
       failure: undefined,
