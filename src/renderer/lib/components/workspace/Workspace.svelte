@@ -322,6 +322,7 @@
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
   let prevProjectFileOpenCount = 0
+  let prevToggleContextSidebarCount = 0
   let creatingThread = false
 
   // This view hosts the terminal panel   advertise it to the header.
@@ -402,6 +403,15 @@
     if (current !== prevNewChatCount && workspaceState.consumeNewChatRequest()) {
       prevNewChatCount = current
       startNewChat()
+    }
+  })
+
+  /** React to Cmd/Ctrl+Shift+S → toggle the right (context) sidebar. */
+  $effect(() => {
+    const current = workspaceState.requestToggleContextSidebarCount
+    if (current !== prevToggleContextSidebarCount) {
+      prevToggleContextSidebarCount = current
+      if (workspaceState.consumeToggleContextSidebarRequest()) toggleContextSidebar()
     }
   })
 
@@ -529,6 +539,34 @@
       return
     }
     open()
+  }
+
+  /**
+   * Cmd/Ctrl+Shift+S toggles the whole right sidebar instead of one tool: it
+   * hides whatever is on screen, or brings back the tool the user last had
+   * selected there. Nothing selected yet means there is nothing to bring back,
+   * so the file tree opens when the thread on screen has one and otherwise the
+   * first tool the context rail offers, which is exactly what that rail icon
+   * would do.
+   */
+  function toggleContextSidebar(): void {
+    if (contextSidebarState.toggleLastSelected()) return
+    if (fileTreeAvailable) {
+      void openFiles()
+      return
+    }
+    firstContextTool()?.onSelect()
+  }
+
+  /** The first tool on the context rail that opens a panel in the right sidebar.
+   *  History is a floating flyout rather than a panel, and a terminal docked at
+   *  the bottom has left the sidebar for the dock, so neither answers the
+   *  fallback: toggling the right sidebar must not reveal the bottom dock. */
+  function firstContextTool(): ContextDockItem | undefined {
+    const opensInSidebar = (item: ContextDockItem): boolean =>
+      item.id !== 'history' &&
+      !(item.id === 'terminal' && contextSidebarState.terminalPlacement === 'bottom')
+    return dockGroups.flat().find(opensInSidebar)
   }
 
   /** Quick chats and explains open from inside a thread and live in the sidebar
@@ -706,6 +744,14 @@
   /** Project files and diffs only exist for local projects with a real path. */
   let projectToolsAvailable = $derived(
     Boolean(activeProject?.source === 'local' && activeProject.path)
+  )
+
+  /** Whether the file tree can be opened for the thread on screen: a local
+   *  project with a real path, or an inbox chat's own artifact directory. */
+  let fileTreeAvailable = $derived(
+    Boolean(
+      selectedThread && (selectedThread.projectId === INBOX_PROJECT_ID || projectToolsAvailable)
+    )
   )
 
   /** Whether the message-history jump menu (first item on the context dock) is open. */

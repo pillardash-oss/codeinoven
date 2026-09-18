@@ -363,6 +363,7 @@
     }
     if (
       (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
       event.key.toLowerCase() === 's' &&
       activeTab &&
       activeTab.view !== 'diff' &&

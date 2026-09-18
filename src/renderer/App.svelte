@@ -919,13 +919,28 @@
       handleFind()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+      // Cmd/Ctrl+Shift+S toggles the right sidebar. Which panel it shows is
+      // decided inside Workspace, which owns what the on-screen thread actually
+      // offers (file tree, git, terminal, sources...), so the chord only
+      // forwards the request. Only the workspace views own that sidebar.
+      const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads']
+      if (!rightSidebarViews.includes(activeView)) return
+      e.preventDefault()
+      if (e.repeat) return
+      workspaceState.requestToggleContextSidebar()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
       // On the plain workspace (no studio, no dirty file tab, no edited file
       // opened from the OS) the Cmd/Ctrl+S save chord is otherwise unused, so it
       // folds/unfolds the left sidebar. Anywhere a save binding owns the chord (a
       // Spec/Assignment/Brainstorm studio, a project file tab with unsaved
       // changes, or an edited standalone file) it keeps priority: we return
       // without preventDefault so that handler saves instead of toggling.
+      // Shift is excluded so Cmd/Ctrl+Shift+S reaches the right-sidebar toggle
+      // above, which used to fall through to this branch and fold the left
+      // sidebar instead.
       if (e.repeat) return
       const leftSidebarViews = ['projects', 'chats', 'threads']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))

@@ -142,9 +142,11 @@
 
   /** Cmd/Ctrl+S saves the file the user is looking at. App.svelte owns the same
    *  chord for folding the sidebar, and defers to this handler whenever a
-   *  standalone file has unsaved edits. */
+   *  standalone file has unsaved edits. Shift is excluded, Cmd/Ctrl+Shift+S
+   *  belongs to the right-sidebar toggle alone. */
   function handleSaveShortcut(event: KeyboardEvent): void {
-    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return
+    if (event.key.toLowerCase() !== 's') return
     if (!standaloneFiles.isDirty(path)) return
     event.preventDefault()
     void standaloneFiles.save(path)

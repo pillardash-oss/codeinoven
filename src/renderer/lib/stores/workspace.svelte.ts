@@ -304,6 +304,22 @@ class WorkspaceState {
     return true
   }
 
+  /** Incremented to signal Workspace to toggle its right (context) sidebar. */
+  requestToggleContextSidebarCount = $state(0)
+  private consumedToggleContextSidebarRequestCount = 0
+
+  requestToggleContextSidebar(): void {
+    this.requestToggleContextSidebarCount++
+  }
+
+  consumeToggleContextSidebarRequest(): boolean {
+    if (this.consumedToggleContextSidebarRequestCount === this.requestToggleContextSidebarCount) {
+      return false
+    }
+    this.consumedToggleContextSidebarRequestCount = this.requestToggleContextSidebarCount
+    return true
+  }
+
   /** Cross-project file result that Workspace should reveal in its file sidebar. */
   pendingProjectFileOpen: ProjectFileOpenRequest | null = $state(null)
   requestProjectFileOpenCount = $state(0)

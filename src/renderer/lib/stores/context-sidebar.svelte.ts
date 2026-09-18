@@ -285,38 +285,63 @@ class ContextSidebarState {
     this.activeThreadId = null
   }
 
-  toggle(): void {
-    if (this.browser.visible) {
-      this.browser.hideForFocus()
-      const context = this.tabContexts.activeProjectContext
-      if (context) context.visible = false
-      return
+  /**
+   * Which region last held the sidebar: a context panel, the browser tabs, or
+   * the notifications list. Recorded as the region leaves the screen, so the
+   * toggle shortcut (Cmd/Ctrl+Shift+S) can bring back exactly what the user was
+   * looking at instead of guessing from whatever panel is still remembered.
+   */
+  private lastRegion: 'context' | 'browser' | 'notifications' = 'context'
+
+  /**
+   * Toggle the sidebar region without picking a panel for it: hide whatever is
+   * on screen, otherwise bring back the region the user last selected there.
+   *
+   * Returns false when no region has ever been selected (a fresh thread that
+   * opened nothing yet), so the caller can open a sensible default tool instead
+   * of leaving the shortcut dead.
+   */
+  toggleLastSelected(): boolean {
+    if (this.sidebarVisible) {
+      this.hide()
+      return true
+    }
+    if (this.lastRegion === 'notifications') {
+      // Notifications are hidden right now, so this reveals them again (and
+      // detaches the browser view the same way the header button does).
+      this.toggleNotifications()
+      return true
+    }
+    if (this.lastRegion === 'browser') {
+      const tabId = this.browser.rememberedTabId
+      if (tabId) {
+        this.focus(tabId)
+        return true
+      }
+      // Every browser tab for this project is gone: fall through to the panel.
     }
     const context = this.activeProjectId
       ? this.tabContexts.ensureProjectContext(this.activeProjectId)
       : null
-    if (!context) return
-    context.visible = !context.visible
-  }
-
-  show(): void {
-    const context = this.activeProjectId
-      ? this.tabContexts.ensureProjectContext(this.activeProjectId)
-      : null
-    if (context) context.visible = true
+    if (!context || this.sidebarActiveTab === null) return false
+    context.visible = true
+    return true
   }
 
   hide(): void {
     if (this.notificationsVisible) {
+      this.lastRegion = 'notifications'
       this.notificationsVisible = false
       return
     }
     if (this.browser.visible) {
+      this.lastRegion = 'browser'
       this.browser.hideForFocus()
       const context = this.tabContexts.activeProjectContext
       if (context) context.visible = false
       return
     }
+    this.lastRegion = 'context'
     const context = this.tabContexts.activeProjectContext
     if (context) context.visible = false
   }
