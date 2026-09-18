@@ -27,7 +27,6 @@
     {job}
     storageKey={scopeJobs.storageKeyFor(job.id)}
     onMinimize={() => scopeJobs.minimize(job.id)}
-    onExpand={() => scopeJobs.expand(job.id)}
     onClose={() => scopeJobs.close(job.id)}
   />
 {/each}

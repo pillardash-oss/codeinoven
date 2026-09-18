@@ -746,7 +746,6 @@
   closable={Boolean(result)}
   onMinimize={handleMinimize}
   {onClose}
-  onExpand={handleExpand}
   onPrimaryAction={runShortcutPrimaryAction}
   dragLabel="Drag to move the pull request panel"
   storageKey={effectiveStorageKey}

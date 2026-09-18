@@ -12,11 +12,10 @@
     job: ScopeJob
     storageKey: string
     onMinimize: () => void
-    onExpand: () => void
     onClose: () => void
   }
 
-  let { job, storageKey, onMinimize, onExpand, onClose }: Props = $props()
+  let { job, storageKey, onMinimize, onClose }: Props = $props()
 
   const running = $derived(job.status === 'running')
   const done = $derived(job.status === 'succeeded')
@@ -93,7 +92,6 @@
   minimized={job.minimized}
   closable={!running}
   {onMinimize}
-  {onExpand}
   {onClose}
   {storageKey}
   defaultHeight={420}

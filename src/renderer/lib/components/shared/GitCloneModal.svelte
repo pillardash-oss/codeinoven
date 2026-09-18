@@ -199,7 +199,6 @@
     closable={exitCode !== undefined}
     onMinimize={handleMinimize}
     onClose={handleDockClose}
-    onExpand={handleExpand}
   >
     {#snippet dock()}
       <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked clone task">

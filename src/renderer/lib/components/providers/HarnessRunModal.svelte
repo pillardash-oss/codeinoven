@@ -95,9 +95,11 @@
   }
 
   function footerNote(): string {
+    // A docked panel has no keyboard way back on purpose, so the note points at
+    // the dock chip, the one control that restores it.
     return store.finishedCount === store.runs.length
-      ? 'Tasks keep running while you work   click the dock or press Escape to bring them back.'
-      : 'Tasks keep running while you work   click the dock or press Escape to bring them back, and close once all of them finish.'
+      ? 'Tasks keep running while you work   click the dock to bring them back.'
+      : 'Tasks keep running while you work   click the dock to bring them back, and close once all of them finish.'
   }
 </script>
 
@@ -108,7 +110,6 @@
   closable={store.hasFinished}
   onMinimize={() => store.minimize()}
   onClose={() => store.close()}
-  onExpand={() => store.expandAll()}
   storageKey={PANEL_STORAGE_KEY}
 >
   {#snippet dock()}
