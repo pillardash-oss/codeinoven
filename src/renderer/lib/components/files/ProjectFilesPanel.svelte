@@ -912,70 +912,73 @@
       >
         <div class="titlebar-no-drag flex min-w-0 basis-[65%] items-center gap-2 overflow-hidden">
           <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
-          <div
-            class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-            role="tablist"
-            aria-label="Open files"
-          >
-            {#each fullscreenFileTabs as fileTab (fileTab.id)}
-              {@const fileSession = fileTab.path
-                ? (projectState.sessions[fileTab.path] ?? null)
-                : null}
-              {@const fileDirty = Boolean(
-                fileSession && fileSession.draft !== fileSession.source.content
-              )}
-              <div
-                class={[
-                  'group flex min-w-0 max-w-52 shrink-0 items-center rounded-md',
-                  contextTab?.id === fileTab.id
-                    ? 'bg-elevated text-foreground'
-                    : 'text-muted hover:bg-elevated hover:text-foreground'
-                ]}
-                role="tab"
-                aria-selected={contextTab?.id === fileTab.id}
-              >
-                <button
-                  type="button"
-                  data-active={contextTab?.id === fileTab.id ? 'true' : undefined}
-                  class="flex min-w-0 items-center gap-1.5 py-1.5 pl-2 text-left"
-                  title={fileTab.path ?? fileTab.title}
-                  onclick={() => contextSidebarState.focus(fileTab.id)}
+          {#if fullscreenFileTabs.length > 1}
+            <div
+              class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+              role="tablist"
+              aria-label="Open files"
+            >
+              {#each fullscreenFileTabs as fileTab (fileTab.id)}
+                {@const fileSession = fileTab.path
+                  ? (projectState.sessions[fileTab.path] ?? null)
+                  : null}
+                {@const fileDirty = Boolean(
+                  fileSession && fileSession.draft !== fileSession.source.content
+                )}
+                <div
+                  class={[
+                    'group flex min-w-0 max-w-52 shrink-0 items-center rounded-md',
+                    contextTab?.id === fileTab.id
+                      ? 'bg-elevated text-foreground'
+                      : 'text-muted hover:bg-elevated hover:text-foreground'
+                  ]}
+                  role="tab"
+                  aria-selected={contextTab?.id === fileTab.id}
                 >
-                  <FileTypeIcon path={fileTab.path ?? fileTab.title} size={12} />
-                  <span
-                    class={[
-                      'max-w-40 truncate text-[0.6875rem] font-medium',
-                      fileTab.preview ? 'italic' : ''
-                    ]}>{fileTab.title}</span
-                  >
-                  {#if fileDirty}
-                    <span
-                      class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                      title="Unsaved changes"
-                    ></span>
-                  {/if}
-                </button>
-                {#if fileTab.fileTabId}
                   <button
                     type="button"
-                    class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                    aria-label={`Close ${fileTab.title}`}
-                    title={`Close ${fileTab.title}`}
-                    onclick={() =>
-                      fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
+                    data-active={contextTab?.id === fileTab.id ? 'true' : undefined}
+                    class="flex min-w-0 items-center gap-1.5 py-1.5 pl-2 text-left"
+                    title={fileTab.path ?? fileTab.title}
+                    onclick={() => contextSidebarState.focus(fileTab.id)}
                   >
-                    <X size={11} />
+                    <FileTypeIcon path={fileTab.path ?? fileTab.title} size={12} />
+                    <span
+                      class={[
+                        'max-w-40 truncate text-[0.6875rem] font-medium',
+                        fileTab.preview ? 'italic' : ''
+                      ]}>{fileTab.title}</span
+                    >
+                    {#if fileDirty}
+                      <span
+                        class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                        title="Unsaved changes"
+                      ></span>
+                    {/if}
                   </button>
-                {/if}
-              </div>
-            {/each}
-          </div>
+                  {#if fileTab.fileTabId}
+                    <button
+                      type="button"
+                      class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                      aria-label={`Close ${fileTab.title}`}
+                      title={`Close ${fileTab.title}`}
+                      onclick={() =>
+                        fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
+                    >
+                      <X size={11} />
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <Dialog.Title
+              class="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold text-foreground"
+            >
+              {activeTab?.path ?? 'File'}
+            </Dialog.Title>
+          {/if}
         </div>
-        <Dialog.Title
-          class="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold text-foreground"
-        >
-          {activeTab?.path ?? 'File'}
-        </Dialog.Title>
         <Dialog.Description class="sr-only">
           {activeTab?.view === 'diff' ? 'Fullscreen file diff' : 'Fullscreen file editor'}
         </Dialog.Description>
@@ -1152,29 +1155,29 @@
               {/if}
             {/if}
           </div>
-          {#if fullscreenExplorerOpen && activeTab}
-            <div
-              class="min-h-0"
-              transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
-            >
-              <ProjectFileExplorer
-                {projectId}
-                {projectName}
-                {projectState}
-                onWidthChange={(width, persist) =>
-                  projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
-                selectedPath={activeTab?.path ?? null}
-                {lastTurnPaths}
-                {activeCheckpointPaths}
-                activeCheckpointId={activeTab?.checkpointId ?? null}
-                conflictPaths={conflictedPaths}
-                {conflictsOnly}
-                onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
-                onFileSelect={fullscreenOpenFile}
-              />
-            </div>
-          {/if}
         </div>
+        {#if fullscreenExplorerOpen && activeTab}
+          <div
+            class="min-h-0"
+            transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+          >
+            <ProjectFileExplorer
+              {projectId}
+              {projectName}
+              {projectState}
+              onWidthChange={(width, persist) =>
+                projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+              selectedPath={activeTab?.path ?? null}
+              {lastTurnPaths}
+              {activeCheckpointPaths}
+              activeCheckpointId={activeTab?.checkpointId ?? null}
+              conflictPaths={conflictedPaths}
+              {conflictsOnly}
+              onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
+              onFileSelect={fullscreenOpenFile}
+            />
+          </div>
+        {/if}
       </div></Dialog.Content
     >
   </Dialog.Portal>
