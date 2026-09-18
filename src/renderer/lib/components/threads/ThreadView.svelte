@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { formatDurationMs } from '$lib/format/duration'
   import { mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
@@ -3440,15 +3441,6 @@
   function formatTime(ts: number): string {
     if (!ts) return ''
     return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  }
-
-  function formatDuration(ms: number): string {
-    if (ms < 1000) return '<1s'
-    const total = Math.round(ms / 1000)
-    if (total < 60) return `${total}s`
-    const m = Math.floor(total / 60)
-    const s = total % 60
-    return s > 0 ? `${m}m ${s}s` : `${m}m`
   }
 
   /** For a user message that follows an assistant turn (a steer), return the
@@ -10184,7 +10176,7 @@
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
-                          >{formatDuration(previousTurnAudit.duration)}</span
+                          >{formatDurationMs(previousTurnAudit.duration)}</span
                         >
                         <span>·</span>
                         <span>{formatTime(previousTurnAudit.endTime)}</span>
@@ -10739,11 +10731,11 @@
                               >
                               {#if turnDuration !== null}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                  >· {formatDuration(turnDuration)}</span
+                                  >· {formatDurationMs(turnDuration)}</span
                                 >
                               {:else if msg.completedAt && msg.createdAt}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                  >· {formatDuration(msg.completedAt - msg.createdAt)}</span
+                                  >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
                               {#if messageTokenRate( msg, { finalizedTokenRates, liveTokenRate } ) !== null}

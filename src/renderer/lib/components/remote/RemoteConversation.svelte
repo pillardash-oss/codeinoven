@@ -30,6 +30,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
+  import { formatDurationMs } from '$lib/format/duration'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -651,14 +652,6 @@
           visibleErrorStatus.issue.harnessId)
       : settings.harnessId
   )
-
-  function formatDuration(milliseconds: number): string {
-    const seconds = Math.max(0, Math.round(milliseconds / 1000))
-    if (seconds < 60) return `${seconds}s`
-    const minutes = Math.floor(seconds / 60)
-    const remainder = seconds % 60
-    return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
-  }
 
   let copiedMessageId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
@@ -1348,7 +1341,7 @@
                       {/if}
                       {#if endMessage.completedAt && turnStartTime(index)}
                         <span class="shrink-0 tabular-nums">
-                          · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                          · {formatDurationMs(endMessage.completedAt - (turnStartTime(index) ?? 0))}
                         </span>
                       {/if}
                     </span>

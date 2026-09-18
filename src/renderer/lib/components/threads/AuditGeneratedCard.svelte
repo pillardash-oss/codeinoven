@@ -4,6 +4,7 @@
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { formatDurationMs } from '$lib/format/duration'
   import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -66,19 +67,9 @@
   let reworking = $derived(auditState === 'reworking')
   let elapsed = $derived(
     startedAt !== undefined && finishedAt !== undefined
-      ? formatDuration(Math.max(0, finishedAt - startedAt))
+      ? formatDurationMs(Math.max(0, finishedAt - startedAt))
       : null
   )
-
-  function formatDuration(durationMs: number): string {
-    const totalSeconds = Math.floor(durationMs / 1_000)
-    const hours = Math.floor(totalSeconds / 3_600)
-    const minutes = Math.floor((totalSeconds % 3_600) / 60)
-    const seconds = totalSeconds % 60
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
-    if (minutes > 0) return `${minutes}m ${seconds}s`
-    return `${seconds}s`
-  }
 
   function chooseModel(
     providerId: string,
