@@ -108,11 +108,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
-  import {
-    classifyProviderIssue,
-    isUsageResetWaitIssue,
-    rateLimitWindowFromProviderIssue
-  } from '$shared/provider-issue'
+  import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -297,7 +293,7 @@
     specActionLabel,
     tracePreviewByUserMessage
   } from './thread-message-presentation'
-  import { mergeContextUsage, mergeRateLimitWindows } from './thread-usage-merge'
+  import { mergeContextUsage, providerReportedWindows } from './thread-usage-merge'
   import {
     HISTORY_WINDOW_SIZE,
     mergedUserMessageSummaries,
@@ -1145,12 +1141,6 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
-  const providerIssueRateLimits = $derived.by(() => {
-    const issue = visibleProviderStatus?.issue
-    if (!issue) return []
-    const limit = rateLimitWindowFromProviderIssue(issue)
-    return limit ? [limit] : []
-  })
 
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
@@ -1569,7 +1559,6 @@
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
-      providerIssueRateLimits.length === 0 &&
       latestCredits === undefined &&
       costUsd <= 0
     ) {
@@ -1584,7 +1573,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: mergeRateLimitWindows(latestRateLimits ?? [], providerIssueRateLimits),
+      rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1731,20 +1720,6 @@
         }
       }
     }
-    if (providerIssueRateLimits.length > 0 && visibleProviderStatus) {
-      const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
-      const entry = byHarness[harnessId]
-      if (entry) {
-        entry.rateLimits = mergeRateLimitWindows(entry.rateLimits, providerIssueRateLimits)
-      } else {
-        byHarness[harnessId] = {
-          harnessId,
-          providerId: settings.providerId,
-          costUsd: 0,
-          rateLimits: providerIssueRateLimits
-        }
-      }
-    }
     return Object.values(byHarness).filter(
       (entry) =>
         entry.rateLimits.length > 0 ||
@@ -1771,7 +1746,13 @@
     if (snapshot.harnessId !== settings.harnessId || snapshot.providerId !== settings.providerId) {
       return
     }
-    contextUsageDisplay = snapshot
+    // A snapshot persisted before the synthetic usage-limit bar was retired can
+    // still carry that window; strip it on read so the battery only ever shows
+    // provider-reported quota.
+    contextUsageDisplay = {
+      ...snapshot,
+      rateLimits: providerReportedWindows(snapshot.rateLimits ?? [])
+    }
   }
 
   // Re-evaluate asynchronously: settings may be corrected by loadLocal after the

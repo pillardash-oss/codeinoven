@@ -20451,34 +20451,12 @@ export class ChatEngine {
     if (!driver) return false
     let retryAt = issue.retryAt
     if (retryAt !== undefined) retryAt += RETRY_FIRE_GRACE_MS
-    if (retryAt === undefined && driver.readAccountUsage) {
+    if (retryAt === undefined) {
       // Some harnesses surface a usage reset without attaching it to the error
-      // (e.g. Codex reports windows via account/rateLimits/read)   ask the
-      // driver for the reset window as the retry time. A harness can report
-      // several concurrent windows (e.g. Codex's 5-hour and weekly limits, one
-      // per model), so pick among the windows that actually caused this wait
-      // (fully used) rather than the farthest one overall   otherwise an
-      // unrelated model's fresh weekly/5-hour window can push the retry hours
-      // or days past the real reset the message reported.
-      try {
-        const telemetry = await driver.readAccountUsage(info.projectPath)
-        const futureWindows = (telemetry?.rateLimits ?? []).filter(
-          (limit): limit is typeof limit & { resetsAt: number } =>
-            typeof limit.resetsAt === 'number' &&
-            Number.isFinite(limit.resetsAt) &&
-            limit.resetsAt > Date.now()
-        )
-        const exhaustedResets = futureWindows
-          .filter((limit) => (limit.usedPercent ?? 0) >= 100)
-          .map((limit) => limit.resetsAt)
-        if (exhaustedResets.length > 0) {
-          retryAt = Math.min(...exhaustedResets)
-        } else if (futureWindows.length > 0) {
-          retryAt = Math.max(...futureWindows.map((limit) => limit.resetsAt))
-        }
-      } catch (error) {
-        Logger.dev('Auto-resume retry time derivation unavailable:', error)
-      }
+      // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
+      // its account endpoint)   ask the provider-scoped account telemetry for
+      // the real reset window instead of waiting on the blind fallback cooldown.
+      retryAt = await this.deriveUsageResetRetryAt(info, driver)
     }
     const usageResetWait = isUsageResetWaitIssue(issue)
     if (retryAt === undefined && usageResetWait) {
@@ -20514,6 +20492,55 @@ export class ChatEngine {
       return false
     }
     return true
+  }
+
+  /**
+   * Resolve a usage-reset wait's retry time from the same provider-scoped
+   * account telemetry the usage battery shows: harness-native capture, then
+   * OpenUsage, then a custom provider's usage route. Scoping by the thread's
+   * provider matters for Pi, whose provider-account read is skipped without a
+   * provider id. A harness can report several concurrent windows, so pick
+   * among the windows that actually caused this wait (fully used) rather than
+   * the farthest one overall   otherwise an unrelated model's fresh window can
+   * push the retry hours or days past the real reset.
+   */
+  private async deriveUsageResetRetryAt(
+    info: SessionInfo,
+    driver: HarnessDriver
+  ): Promise<number | undefined> {
+    try {
+      const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+      const harnessId = info.driverId
+      const providerId = thread?.settings?.providerId ?? harnessId
+      const account = await this.accountRegistry.resolveForProvider(
+        harnessId,
+        providerId,
+        info.accountId
+      )
+      const usage = await this.readHarnessAccountUsage({
+        harnessId,
+        providerId,
+        accountId: account.id,
+        accountEnvironment: this.accountRegistry.environment(account),
+        driver,
+        projectPath: info.projectPath
+      })
+      const futureResets = (usage?.rateLimits ?? []).filter(
+        (limit): limit is typeof limit & { resetsAt: number } =>
+          typeof limit.resetsAt === 'number' &&
+          Number.isFinite(limit.resetsAt) &&
+          limit.resetsAt > Date.now()
+      )
+      const exhaustedResets = futureResets
+        .filter((limit) => (limit.usedPercent ?? 0) >= 100)
+        .map((limit) => limit.resetsAt)
+      if (exhaustedResets.length > 0) return Math.min(...exhaustedResets)
+      if (futureResets.length > 0) return Math.max(...futureResets.map((limit) => limit.resetsAt))
+      return undefined
+    } catch (error) {
+      Logger.dev('Auto-resume retry time derivation unavailable:', error)
+      return undefined
+    }
   }
 
   private async handleProviderFailure(

@@ -577,19 +577,11 @@ export function mapAntigravityRecord(
       if (mappedUsage.normalizedUsage) state.normalizedUsage = mappedUsage.normalizedUsage
       const structuredRateLimits = mapAntigravityRateLimits(result)
       const issue = error ? antigravityIssue(error) : undefined
-      const rateLimits =
-        structuredRateLimits.length > 0
-          ? structuredRateLimits
-          : issue?.kind === 'quota'
-            ? [
-                {
-                  id: 'antigravity-quota',
-                  label: 'Antigravity quota',
-                  usedPercent: 100,
-                  ...(issue.retryAt === undefined ? {} : { resetsAt: issue.retryAt })
-                }
-              ]
-            : []
+      // Only provider-reported windows reach the battery. A quota error with no
+      // structured quota telemetry drives the retry card from its `issue`; it
+      // must never invent a fabricated 100%-used window that has no provider
+      // reset time.
+      const rateLimits = structuredRateLimits
       if (usage || rateLimits.length > 0) {
         events.push({
           type: 'usage.updated',

@@ -10,6 +10,21 @@ import type { AgentContextUsage, AgentRateLimitWindow } from '$shared/types'
  */
 
 /**
+ * Window ids used by the retired synthetic usage-limit bar. The generator is
+ * gone, but thread snapshots persisted before its removal still carry the
+ * window, so every read filters it out instead of resurrecting a fabricated
+ * "Reset time unavailable" row in the battery.
+ */
+const LEGACY_SYNTHETIC_WINDOW_ID_PREFIX = 'provider-issue:'
+
+/** Keep only provider-reported quota windows; drop legacy synthetic rows. */
+export function providerReportedWindows(
+  limits: readonly AgentRateLimitWindow[]
+): AgentRateLimitWindow[] {
+  return limits.filter((limit) => !limit.id.startsWith(LEGACY_SYNTHETIC_WINDOW_ID_PREFIX))
+}
+
+/**
  * Layer an incoming context usage report over the previously displayed one.
  * Every field falls back to the previous value when the incoming report omits
  * it, so a partial update can never blank the battery or the quota popover.
@@ -31,7 +46,9 @@ export function mergeContextUsage(
         : previous.contextEstimated === true,
     contextWindow: incoming.contextWindow ?? previous.contextWindow,
     contextPercent: incoming.contextPercent ?? previous.contextPercent,
-    rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,
+    rateLimits: providerReportedWindows(
+      incoming.rateLimits?.length ? incoming.rateLimits : (previous.rateLimits ?? [])
+    ),
     ...(incoming.credits
       ? { credits: incoming.credits }
       : previous.credits
@@ -43,32 +60,4 @@ export function mergeContextUsage(
         ? { bankedResets: previous.bankedResets }
         : {})
   }
-}
-
-/**
- * Overlay authoritative harness-reported rate-limit windows on the windows
- * already reported by message data. A window is matched by its duration when
- * known, otherwise by label; the reported window keeps its own id so the UI
- * keeps treating it as the same row.
- */
-export function mergeRateLimitWindows(
-  reported: readonly AgentRateLimitWindow[],
-  authoritative: readonly AgentRateLimitWindow[]
-): AgentRateLimitWindow[] {
-  const merged = [...reported]
-  for (const incoming of authoritative) {
-    const match = merged.findIndex(
-      (candidate) =>
-        (incoming.windowMinutes !== undefined &&
-          candidate.windowMinutes === incoming.windowMinutes) ||
-        candidate.label.toLowerCase() === incoming.label.toLowerCase()
-    )
-    if (match === -1) {
-      merged.push(incoming)
-    } else {
-      const current = merged[match]
-      if (current) merged[match] = { ...current, ...incoming, id: current.id }
-    }
-  }
-  return merged
 }
