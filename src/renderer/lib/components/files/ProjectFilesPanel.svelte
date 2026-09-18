@@ -12,7 +12,8 @@
     Loader2,
     Minimize2,
     Save,
-    TriangleAlert
+    TriangleAlert,
+    X
   } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -28,6 +29,7 @@
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import type { FilesContextTab } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
@@ -42,6 +44,7 @@
   import FindInBar from './FindInBar.svelte'
   import GoToLine from './GoToLine.svelte'
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
+  import FileTypeIcon from './FileTypeIcon.svelte'
   import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
@@ -555,6 +558,27 @@
     goToLineOpen = false
     projectFilesWorkspace.focusLine(projectId, activeTab.id, line)
   }
+
+  /** Open file tabs for this project, so the fullscreen viewer can show the
+   *  same tab strip as the sidebar instead of only the active file. */
+  let fullscreenFileTabs = $derived(
+    contextSidebarState.tabs.filter(
+      (tab): tab is FilesContextTab =>
+        tab.kind === 'files' && tab.projectId === projectId && tab.fileTabId !== null
+    )
+  )
+
+  function closeFullscreenFileTab(sidebarId: string, fileTabId: string): void {
+    const fileTab = projectState.tabs.find((candidate) => candidate.id === fileTabId)
+    const session = fileTab ? projectState.sessions[fileTab.path] : undefined
+    if (fileTab && session && session.draft !== session.source.content) {
+      contextSidebarState.focus(sidebarId)
+      toast.info('Unsaved changes', { description: 'Save the file before closing its tab.' })
+      return
+    }
+    projectFilesWorkspace.closeTab(projectId, fileTabId)
+    contextSidebarState.close(sidebarId)
+  }
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />
@@ -935,6 +959,61 @@
           <Minimize2 size={14} />
         </Dialog.Close>
       </div>
+      {#if fullscreenFileTabs.length > 1}
+        <div
+          class="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border bg-surface"
+          role="tablist"
+          aria-label="Open files"
+        >
+          {#each fullscreenFileTabs as fileTab (fileTab.id)}
+            {@const fileSession = fileTab.path
+              ? (projectState.sessions[fileTab.path] ?? null)
+              : null}
+            {@const fileDirty = Boolean(
+              fileSession && fileSession.draft !== fileSession.source.content
+            )}
+            <div
+              class={[
+                'group flex min-w-0 max-w-52 shrink-0 items-center border-r border-border',
+                contextTab?.id === fileTab.id
+                  ? 'bg-app text-foreground'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'
+              ]}
+              role="tab"
+              aria-selected={contextTab?.id === fileTab.id}
+            >
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+                title={fileTab.path ?? fileTab.title}
+                onclick={() => contextSidebarState.focus(fileTab.id)}
+              >
+                <FileTypeIcon path={fileTab.path ?? fileTab.title} size={12} />
+                <span
+                  class={['truncate text-[0.6875rem] font-medium', fileTab.preview ? 'italic' : '']}
+                  >{fileTab.title}</span
+                >
+                {#if fileDirty}
+                  <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"
+                  ></span>
+                {/if}
+              </button>
+              {#if fileTab.fileTabId}
+                <button
+                  type="button"
+                  class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  aria-label={`Close ${fileTab.title}`}
+                  title={`Close ${fileTab.title}`}
+                  onclick={() =>
+                    fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
+                >
+                  <X size={11} />
+                </button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if activeTab && !activePathIsConflicted}
         <ProjectFilesPanelToolbar
           {activeTab}

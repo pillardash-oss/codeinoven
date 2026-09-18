@@ -241,7 +241,14 @@ class ProjectFilesWorkspace {
     preferredView: ProjectFileView = 'source',
     focusLine?: number
   ): Promise<void> {
-    if (this.focusOpenFileTab(projectId, path, focusLine)) return
+    if (this.focusOpenFileTab(projectId, path, focusLine)) {
+      // Double-clicking (or otherwise opening in normal mode) a file that is
+      // already open as a preview tab pins it. focusOpenFileTab only focuses,
+      // so without this the preview flag survived and the next single-click
+      // kept replacing the tab instead of opening a new preview beside it.
+      this.pinTab(projectId, `working:${path}`)
+      return
+    }
     await this.openWorkingTab(projectId, path, preferredView, false, focusLine)
   }
 
