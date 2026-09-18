@@ -281,7 +281,7 @@
     dirty: false,
     saving: false
   })
-  let fullscreenExplorerOpen = $state(false)
+  let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
   let deleteTargetPath = $state<string | null>(null)
@@ -297,7 +297,9 @@
     if (request <= handledFullscreenRequest) return
     handledFullscreenRequest = request
     fullscreenOpen = true
-    if (gitState.conflictsMode) fullscreenExplorerOpen = true
+    if (gitState.conflictsMode && !projectState.explorerVisible) {
+      projectFilesWorkspace.toggleExplorer(projectId)
+    }
   })
 
   function handleConflictController(next: ConflictResolutionController | null): void {
@@ -1012,7 +1014,7 @@
           aria-label={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
           aria-pressed={fullscreenExplorerOpen}
           title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
-          onclick={() => (fullscreenExplorerOpen = !fullscreenExplorerOpen)}
+          onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
           <FolderTree size={15} />
         </button>
