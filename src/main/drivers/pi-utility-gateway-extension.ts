@@ -101,9 +101,24 @@ function fail(message: string, marker: 'gatewayInactive'): GatewayFailure {
 }
 
 async function loadHandoff(): Promise<GatewayHandoff> {
-  const handoff = JSON.parse(await readFile(HANDOFF_PATH, 'utf8')) as GatewayHandoff
+  let raw: string
+  try {
+    raw = await readFile(HANDOFF_PATH, 'utf8')
+  } catch (error) {
+    // The file is gone when the app already tore this turn's gateway down (turn
+    // finalization, a mid-turn revoke, a transient session restart), and the
+    // extension cannot re-arm itself: the turn's token lives in the app. Never
+    // let the raw ENOENT reach the model: it reads as a broken file, not a
+    // broken transport, and costs a turn of pointless retries.
+    const reason = error instanceof Error ? error.message : String(error)
+    throw fail(
+      'The CodeInOven utility gateway is not active for this turn: its handoff file is unavailable (' + reason + '). The application must refresh the utility transport before continuing utility work; retrying this tool will not help.',
+      'gatewayInactive'
+    )
+  }
+  const handoff = JSON.parse(raw) as GatewayHandoff
   // An empty handoff is the seed written before the first real endpoint publish,
-  // and a missing file means the previous turn's cleanup already ran   both are
+  // and a missing file means the previous turn's cleanup already ran. Both are
   // the "gateway not active this turn" case, never an opaque crash.
   if (!handoff.url || !handoff.token) {
     throw fail(

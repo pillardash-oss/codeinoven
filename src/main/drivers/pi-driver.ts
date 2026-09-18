@@ -2294,9 +2294,35 @@ export class PiDriver extends PersistentCliDriver {
           ? ({ state: 'idle' } as const)
           : null
     if (!state) return
+    // A settle that lands inside a driver-owned checkpoint is not the turn's
+    // end. Page checkpoints (`compactPageCheckpoint`) and oversized-request
+    // recovery (`compactAndContinue`) abort the in-flight run, compact, and
+    // re-prompt it, so the aborted run settles idle while this driver still
+    // owns the turn, which is exactly the settle `agent_settled` already ignores
+    // through the `compacting` turn state. The engine, however, treats ANY idle
+    // status as the turn's end: it finalized the turn, tore down the turn's
+    // utility gateway (handoff clear + gateway cleanup), and left the resumed
+    // run with dead cio_util_* tools for the rest of the turn. Only a settle the
+    // driver is not going to resume may be reported idle here; the turn's real
+    // idle is this driver's own `session.idle` from `finishTurn`.
+    if (state.state === 'idle' && this.turnIsMidCheckpoint(sessionId)) return
     // `agent_settled` remains the sole finalization trigger (usage stats +
     // session persistence); the idle status here only clears the busy flag.
     this.emit({ type: 'session.status', sessionId, status: state })
+  }
+
+  /**
+   * Whether this session's turn is being held across a checkpoint that resumes
+   * it: a page checkpoint in flight (`compactPageCheckpoint` keeps the logical
+   * turn through an abort + compact + re-prompt), a compaction run
+   * (`compactAndContinue`, manual `/compact`), or the abort/compact window of
+   * either. Tells a checkpoint's intermediate settle apart from the turn's real
+   * end.
+   */
+  private turnIsMidCheckpoint(sessionId: string): boolean {
+    return (
+      this.pageCompactions.has(sessionId) || this.turnStates.get(sessionId)?.compacting === true
+    )
   }
 
   /**
