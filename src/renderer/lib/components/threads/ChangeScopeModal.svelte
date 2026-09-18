@@ -58,6 +58,19 @@
     createModalOpen = true
   }
 
+  /**
+   * Plain Enter in the search field is the keyboard twin of the `+` button:
+   * with no match it opens the create flow seeded with the query, so the whole
+   * "type a new scope and create it" flow is reachable without the mouse.
+   * Enter keeps its input-method meaning while text is being composed (IME),
+   * and does nothing when the query does match an existing scope.
+   */
+  function handleSearchKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.isComposing || !noMatch) return
+    event.preventDefault()
+    openCreateModal()
+  }
+
   /** Apply a freshly created scope from the creation modal to the thread. */
   async function selectCreatedScope(bucketId: string): Promise<void> {
     createModalOpen = false
@@ -82,6 +95,7 @@
       <input
         bind:this={searchInput}
         bind:value={query}
+        onkeydown={handleSearchKeydown}
         type="text"
         inputmode="search"
         class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
@@ -154,7 +168,7 @@
         </button>
       {:else}
         <p class="py-8 text-center text-xs text-dimmed">
-          {noMatch ? 'No scopes match   press + to create one' : 'No scopes found'}
+          {noMatch ? 'No scopes match - press Enter or + to create one' : 'No scopes found'}
         </p>
       {/each}
     </div>
