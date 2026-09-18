@@ -99,7 +99,10 @@ export class AssignmentWorkerSelection {
       ...(selected ?? {}),
       assignmentMode: false,
       loopMode: false,
-      loopAuditor: undefined
+      loopAuditor: undefined,
+      // A new worker always reports. The worker thread's own composer control
+      // owns this setting from then on, so a coordinator default never leaks in.
+      reportToCoordinator: undefined
     }
   }
 }

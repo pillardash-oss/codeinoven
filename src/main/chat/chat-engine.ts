@@ -246,7 +246,8 @@ import type {
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
-  isOrchestrationChildThread
+  isOrchestrationChildThread,
+  workerReportsToCoordinator
 } from '../../lib/types'
 import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents } from './turn-stream'
@@ -458,6 +459,7 @@ import {
 import {
   ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
   ASSIGNMENT_GENERATION_INSTRUCTION,
+  ASSIGNMENT_WORKER_REPORT_DISABLED_INSTRUCTION,
   AUDIT_ALLOWED_TOOLS,
   BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
   BRAINSTORM_DOCUMENT_WRITE_TOOLS,
@@ -5861,27 +5863,56 @@ export class ChatEngine {
     const task = assignment?.content.tasks.find(
       (candidate) => candidate.id === thread.assignmentTaskId
     )
-    if (
-      !assignment ||
-      assignment.status === 'stopped' ||
-      !task ||
-      task.threadId !== thread.id ||
-      !this.workerTaskNeedsReactivation(task)
-    ) {
+    if (!assignment || assignment.status === 'stopped' || !task || task.threadId !== thread.id) {
       return ''
     }
+    // Reporting is switched off for this thread, so the worker must never hand
+    // its task back. That is a standing rule for the thread rather than a
+    // one-off, so every turn carries it   not only the turn that reactivates.
+    if (!workerReportsToCoordinator(thread.settings)) {
+      return ASSIGNMENT_WORKER_REPORT_DISABLED_INSTRUCTION
+    }
+    if (!this.workerTaskNeedsReactivation(task)) return ''
     await this.ensureAssignmentApi()
     if (this.hasWorkerApiCapability(assignment.id, thread.id, task.id)) return ''
-    const workerToken = this.assignmentApiCapability({
-      role: 'worker',
-      assignmentId: assignment.id,
-      threadId: thread.id,
-      taskId: task.id
-    })
     return [
       `Your Assignment task “${task.title}” is active again. Continue within its existing scope and preserve unrelated concurrent work.`,
+      this.workerReportInstruction({
+        assignmentId: assignment.id,
+        threadId: thread.id,
+        taskId: task.id,
+        settings: thread.settings,
+        completion: 'When this update is complete'
+      })
+    ].join('\n\n')
+  }
+
+  /**
+   * The reporting contract every worker prompt carries. A reporting thread gets
+   * the Assignment API contract and the report-task instruction; a thread whose
+   * reporting the user switched off gets the explicit instruction to finish in
+   * the conversation instead, and no capability is minted for it.
+   */
+  private workerReportInstruction(input: {
+    assignmentId: string
+    threadId: string
+    taskId: string
+    settings: ThreadSettings | undefined
+    /** The clause that introduces the report-task call, e.g. `When the work is complete`. */
+    completion: string
+  }): string {
+    if (!workerReportsToCoordinator(input.settings)) {
+      return ASSIGNMENT_WORKER_REPORT_DISABLED_INSTRUCTION
+    }
+    const workerToken = this.assignmentApiCapability({
+      role: 'worker',
+      assignmentId: input.assignmentId,
+      threadId: input.threadId,
+      taskId: input.taskId
+    })
+    return [
       this.assignmentApiInstructions(workerToken, 'worker'),
-      `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When this update is complete, POST report-task with assignmentId ${assignment.id}, taskId ${task.id}, and workerThreadId ${thread.id}.`
+      `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. ${input.completion}, POST report-task with assignmentId ${input.assignmentId}, taskId ${input.taskId}, and workerThreadId ${input.threadId}.`
     ].join('\n\n')
   }
 
@@ -11858,16 +11889,13 @@ export class ChatEngine {
       result.assignment.coordinatorThreadId
     )
     const featureSlug = coordinator?.featureSlug ?? 'feature'
-    const workerToken = this.assignmentApiCapability({
-      role: 'worker',
+    const reportInstruction = this.workerReportInstruction({
       assignmentId: result.assignment.id,
       threadId: result.thread.id,
-      taskId: result.task.id
+      taskId: result.task.id,
+      settings: result.thread.settings,
+      completion: 'When the work is complete'
     })
-    const reportInstruction = [
-      this.assignmentApiInstructions(workerToken, 'worker'),
-      `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When the work is complete, POST report-task with assignmentId ${result.assignment.id}, taskId ${result.task.id}, and workerThreadId ${result.thread.id}.`
-    ].join('\n\n')
     await this.sendPrompt(
       result.assignment.projectId,
       result.thread.id,
@@ -11932,16 +11960,13 @@ export class ChatEngine {
     const { assignment, task, worker } = context
     if (!worker.settings) throw new Error('Worker settings are missing')
     await this.ensureAssignmentApi()
-    const workerToken = this.assignmentApiCapability({
-      role: 'worker',
+    const reportInstruction = this.workerReportInstruction({
       assignmentId: assignment.id,
       threadId: worker.id,
-      taskId: task.id
+      taskId: task.id,
+      settings: worker.settings,
+      completion: 'When this update is complete'
     })
-    const reportInstruction = [
-      this.assignmentApiInstructions(workerToken, 'worker'),
-      `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When this update is complete, POST report-task with assignmentId ${assignment.id}, taskId ${task.id}, and workerThreadId ${worker.id}.`
-    ].join('\n\n')
     await this.sendPrompt(
       worker.projectId,
       worker.id,
@@ -12011,6 +12036,10 @@ export class ChatEngine {
     ) {
       return
     }
+    // A worker whose reporting the user switched off is expected to end its turns
+    // without a report, so there is nothing to hand back here. Attempting one
+    // anyway would be refused by the engine and logged as an error every turn.
+    if (!workerReportsToCoordinator(worker.settings)) return
     const assignment = this.assignmentEngine.getActive(worker.projectId, worker.coordinatorThreadId)
     const task = assignment?.content.tasks.find(
       (candidate) => candidate.id === worker.assignmentTaskId
@@ -22978,7 +23007,15 @@ export class ChatEngine {
       await this.finishCheckpoint(sessionId, info, 'failed', error ?? 'Harness session failed')
       if (retryPaused) return
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      if (thread?.assignmentRole === 'worker' && thread.assignmentId && thread.assignmentTaskId) {
+      if (
+        thread?.assignmentRole === 'worker' &&
+        thread.assignmentId &&
+        thread.assignmentTaskId &&
+        // Reporting off means this thread is not part of the hand-back loop, so a
+        // harness failure must not be reported   the engine would refuse it and
+        // the refusal would surface as recovery noise.
+        workerReportsToCoordinator(thread.settings)
+      ) {
         const report: AssignmentTaskReport = {
           status: 'failed',
           summary: error ?? 'The worker harness session failed.',

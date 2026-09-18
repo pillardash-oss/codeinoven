@@ -66,6 +66,7 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'permissionLevel',
   'assignmentMode',
   'loopMode',
+  'reportToCoordinator',
   'fileSystemMode',
   'loopAuditor',
   'imageDescriptor',
@@ -148,6 +149,12 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   }
   if (input.fileSystemMode !== undefined) {
     settings.fileSystemMode = validateBoolean(input.fileSystemMode, 'File System')
+  }
+  if (input.reportToCoordinator !== undefined) {
+    settings.reportToCoordinator = validateBoolean(
+      input.reportToCoordinator,
+      'Worker report to the Sr. Engineer'
+    )
   }
   if (input.loopAuditor !== undefined) {
     const auditor = assertRecord(input.loopAuditor, 'Achievement auditor')

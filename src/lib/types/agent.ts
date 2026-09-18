@@ -58,6 +58,13 @@ export interface ThreadSettings {
   assignmentMode?: boolean
   /** Enable Achievement's automatic implementation-audit correction cycle. */
   loopMode?: boolean
+  /**
+   * Worker threads only: report the finished task back to the Sr. Engineer so it
+   * can be audited. Absent means reporting is on. Turning it off keeps the
+   * worker in a private iteration loop the user drives, so no report, review, or
+   * audit is ever triggered for the thread.
+   */
+  reportToCoordinator?: boolean
   /** Chat-only: grant the thread file-operation tools. Off by default   plain chats are web-only. */
   fileSystemMode?: boolean
   /** Independent model selected for Achievement audits. */
@@ -78,6 +85,15 @@ export function sanitizeThreadSettings(settings: unknown): Partial<ThreadSetting
   if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return {}
   const { engineeringMode: _legacyEngineeringMode, ...rest } = settings as Record<string, unknown>
   return rest as Partial<ThreadSettings>
+}
+
+/**
+ * Whether a worker thread hands its finished task back to the Sr. Engineer.
+ * Reporting is on unless the user switched it off for that thread, so every
+ * worker prompt, dispatch, steer, and report submission reads this one rule.
+ */
+export function workerReportsToCoordinator(settings: ThreadSettings | undefined): boolean {
+  return settings?.reportToCoordinator !== false
 }
 
 /** Result of the most recent heartbeat ping attempt. */

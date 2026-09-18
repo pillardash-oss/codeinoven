@@ -17,7 +17,7 @@ import type {
   Thread,
   ThreadSettings
 } from '../types'
-import { DEFAULT_SCOPE_BUCKET_ID } from '../types'
+import { DEFAULT_SCOPE_BUCKET_ID, workerReportsToCoordinator } from '../types'
 import { generateId } from '../utils'
 import { validateAssignment } from '../assignment/assignment-validation'
 import { ThreadManager } from './thread-manager'
@@ -921,6 +921,17 @@ export class AssignmentEngine {
           worker.coordinatorThreadId === active.coordinatorThreadId
     if (!validOwner) {
       throw new AssignmentEngineError('unauthorized', 'Task thread metadata does not match')
+    }
+    // Reporting is the only path that advances a worker task to `reported` and
+    // prompts the coordinator's audit. A worker thread whose reporting the user
+    // switched off is a private iteration loop, so its report is refused here
+    // rather than silently ignored   the task must not move and the coordinator
+    // must never be woken.
+    if (task.owner === 'worker' && !workerReportsToCoordinator(worker?.settings)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        `Reporting to the Sr. Engineer is switched off for worker thread ${workerThreadId}. Do not call report-task; finish the work in the conversation and explain the outcome and your verification in your reply.`
+      )
     }
     if (report.status === 'ready_for_audit') {
       await this.artifacts.requireWorkerTestEvidence(active, task)

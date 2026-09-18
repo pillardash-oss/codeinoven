@@ -1072,7 +1072,18 @@
       isNewThread: messages.length === 0 && !busy,
       isWorking: busy,
       onOpenScopeView: () => onOpenScopeView?.(thread),
-      onSwitchProject: (pid: string) => void switchProject(pid)
+      onSwitchProject: (pid: string) => void switchProject(pid),
+      // Only a worker has a coordinator to report to, so only a worker gets the
+      // control. Reporting stays on unless this thread switched it off, which
+      // keeps the worker in a private iteration loop the user drives.
+      report:
+        thread.assignmentRole === 'worker'
+          ? {
+              enabled: settings.reportToCoordinator !== false,
+              onChange: (enabled: boolean) =>
+                updateSettings({ ...settings, reportToCoordinator: enabled })
+            }
+          : undefined
     }
   })
   let errorMessage = $state('')

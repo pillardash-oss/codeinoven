@@ -109,6 +109,17 @@ export const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES: readonly string[] = [
 
 export const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT_LINES.join(' ')
 
+/**
+ * Replaces the report-task contract for a worker thread whose reporting the user
+ * switched off. That thread is a private iteration loop, so the worker finishes
+ * the work in the conversation instead of handing its task back for review.
+ */
+export const ASSIGNMENT_WORKER_REPORT_DISABLED_INSTRUCTION = [
+  'Reporting to the Sr. Engineer is switched off for this thread.',
+  'Do not call report-task and do not hand this task back for review.',
+  'The user is iterating with you directly: complete the work in this conversation, keep unrelated concurrent work intact, and explain the outcome and your verification in your reply.'
+].join(' ')
+
 /** Independent (spec-less) audits judge the thread's own request/output
  *  transcript as the contract, then verify claims against the repository. */
 export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [

@@ -1,4 +1,15 @@
 <script lang="ts" module>
+  /**
+   * Worker threads only: whether the finished task is handed back to the
+   * Sr. Engineer for review, or stays a private iteration loop the user drives.
+   */
+  export interface ComposerWorkerReport {
+    /** False when the worker keeps its work private instead of reporting back. */
+    enabled: boolean
+    /** Applies the choice; the shoe confirms before reporting is switched off. */
+    onChange: (enabled: boolean) => void
+  }
+
   /** Everything the composer/host needs to render the scope shoe. */
   export interface ComposerScopeShoe {
     projectId: string
@@ -14,11 +25,24 @@
     /** Reassigns the thread's project; only honoured before the first message. */
     onSwitchProject?: (projectId: string) => void
     onOpenScopeView?: () => void | Promise<void>
+    /** Worker reporting control; absent on every non-worker thread. */
+    report?: ComposerWorkerReport
   }
 </script>
 
 <script lang="ts">
-  import { ChevronDown, FolderTree, Folder, Globe, GitBranch, Monitor, Search, X } from '@lucide/svelte'
+  import {
+    ChevronDown,
+    ClipboardCheck,
+    ClipboardX,
+    FolderTree,
+    Folder,
+    Globe,
+    GitBranch,
+    Monitor,
+    Search,
+    X
+  } from '@lucide/svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -33,6 +57,7 @@
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import type { ScopeBucket, ScopeEnvironmentMode } from '$shared/types'
 
   interface Props {
@@ -53,6 +78,8 @@
     onSwitchProject?: (projectId: string) => void
     /** Opens the projects/threads scope view for this thread (existing threads). */
     onOpenScopeView?: () => void | Promise<void>
+    /** Worker reporting control; absent on every non-worker thread. */
+    report?: ComposerWorkerReport
   }
 
   let {
@@ -65,7 +92,8 @@
     isWorking = false,
     project,
     onSwitchProject,
-    onOpenScopeView
+    onOpenScopeView,
+    report
   }: Props = $props()
 
   let menuOpen = $state(false)
@@ -74,6 +102,9 @@
   let createModalOpen = $state(false)
   /** Full change-scope modal, opened by right-clicking the scope badge. */
   let changeScopeOpen = $state(false)
+  /** The worker reporting dropdown, and the confirmation that guards turning it off. */
+  let reportMenuOpen = $state(false)
+  let reportConfirmOpen = $state(false)
   let searchInput: HTMLInputElement | undefined = $state(undefined)
 
   /** Ordered board buckets for the project, minus the current scope. */
@@ -153,6 +184,31 @@
   function closeMenu(): void {
     menuOpen = false
     query = ''
+  }
+
+  function toggleReportMenu(): void {
+    reportMenuOpen = !reportMenuOpen
+    if (reportMenuOpen) menuOpen = false
+  }
+
+  /**
+   * Switching reporting off is destructive: it silently changes what the
+   * Sr. Engineer can see, so it confirms first. Switching it back on restores
+   * the hand-off and needs no confirmation.
+   */
+  function selectReport(enabled: boolean): void {
+    reportMenuOpen = false
+    if (!report || enabled === report.enabled) return
+    if (enabled) {
+      report.onChange(true)
+      return
+    }
+    reportConfirmOpen = true
+  }
+
+  function confirmReportOff(): void {
+    reportConfirmOpen = false
+    report?.onChange(false)
   }
 
   /** Git remote origin URL for the project, surfaced on the branch pill. */
@@ -330,9 +386,7 @@
       side="top"
       align="start"
       class="shoe-project flex max-w-48 min-w-0 items-center gap-2 justify-start"
-      ariaLabel={isNewThread
-        ? 'Change the project of this new thread'
-        : `Project: ${project.name}`}
+      ariaLabel={isNewThread ? 'Change the project of this new thread' : `Project: ${project.name}`}
     >
       {#if project.iconUrl}
         <img src={project.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
@@ -374,7 +428,106 @@
       <span class="truncate">{project.branch}</span>
     </span>
   {/if}
+
+  <!-- Worker reporting: green while the worker hands its finished task back to
+       the Sr. Engineer, amber and bold when it keeps the work private. -->
+  {#if report}
+    <div class="relative min-w-0 shrink">
+      <button
+        type="button"
+        class="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] whitespace-nowrap transition-colors hover:bg-elevated {report.enabled
+          ? 'text-success'
+          : 'font-bold text-warning'}"
+        aria-haspopup="menu"
+        aria-expanded={reportMenuOpen}
+        title={report.enabled
+          ? 'Reporting is on   this worker reports to the Sr. Engineer when its task is done'
+          : 'Reporting is off   this worker will not report to the Sr. Engineer when its task is done'}
+        aria-label={report.enabled
+          ? 'Worker reporting: on. This worker reports to the Sr. Engineer when its task is done'
+          : 'Worker reporting: off. This worker will not report to the Sr. Engineer'}
+        onclick={toggleReportMenu}
+      >
+        {#if report.enabled}
+          <ClipboardCheck size={10} class="shrink-0" />
+        {:else}
+          <ClipboardX size={10} strokeWidth={2.75} class="shrink-0" />
+        {/if}
+        <span class="shoe-report-label min-w-0 truncate"
+          >{report.enabled ? 'Reporting' : 'Not reporting'}</span
+        >
+      </button>
+
+      {#if reportMenuOpen}
+        <button
+          class="fixed inset-0 z-30 cursor-default"
+          aria-label="Close worker reporting menu"
+          onclick={() => (reportMenuOpen = false)}
+        ></button>
+        <div
+          class="absolute bottom-full right-0 z-40 mb-1.5 w-60 rounded-xl border bg-surface p-1.5 shadow-lg"
+          role="menu"
+          aria-label="Worker reporting"
+        >
+          <p
+            class="px-2.5 pt-1 pb-0.5 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
+          >
+            Worker reports their work
+          </p>
+          <p class="px-2.5 pb-1.5 text-[0.625rem] leading-snug text-muted">
+            Report to the Sr. Engineer when the task is done so it can audit the thread.
+          </p>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
+              ? 'font-medium text-success'
+              : 'text-muted'}"
+            title="Report to the Sr. Engineer when the task is done"
+            aria-label="Report to the Sr. Engineer when the task is done"
+            role="menuitemradio"
+            aria-checked={report.enabled}
+            onclick={() => selectReport(true)}
+          >
+            <ClipboardCheck size={12} class="shrink-0 text-success" />
+            Report
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-elevated {report.enabled
+              ? 'text-muted'
+              : 'font-bold text-warning'}"
+            title="Never report to the Sr. Engineer, so no review or audit is triggered"
+            aria-label="Never report to the Sr. Engineer"
+            role="menuitemradio"
+            aria-checked={!report.enabled}
+            onclick={() => selectReport(false)}
+          >
+            <ClipboardX size={12} strokeWidth={2.75} class="shrink-0 text-warning" />
+            Don't report
+          </button>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>
+
+<ConfirmDialog
+  open={reportConfirmOpen}
+  title="Stop reporting to the Sr. Engineer?"
+  confirmLabel="Turn off report"
+  cancelLabel="Cancel"
+  onCancel={() => (reportConfirmOpen = false)}
+  onConfirm={confirmReportOff}
+>
+  <p>
+    This worker will not report to the Sr. Engineer that it is done, so the Sr. Engineer will not
+    audit the thread to confirm it is aligned with the Assignment.
+  </p>
+  <p>
+    The task stays with you instead: keep iterating on this thread and turn reporting back on when
+    you want the Sr. Engineer to review and audit the finished work.
+  </p>
+</ConfirmDialog>
 
 {#if createModalOpen}
   <ScopeCreateModal
@@ -390,6 +543,13 @@
      a very wide right sidebar), give the truncating stages room in order  
      project name first, then location, connection label, and finally only the
      icons remain. */
+
+  /* The reporting pill reserves the width of its widest label so flipping the
+     switch never shifts the row, and truncates once the shoe runs out of room. */
+  .shoe-report-label {
+    min-width: 4.5rem;
+  }
+
   @container (max-width: 400px) {
     .shoe-project {
       max-width: 8rem;
@@ -397,6 +557,11 @@
 
     .shoe-identity :global(.shoe-identity-location) {
       display: none;
+    }
+
+    .shoe-report-label {
+      min-width: 0;
+      max-width: 3.5rem;
     }
   }
 
@@ -406,6 +571,10 @@
     }
 
     .shoe-identity {
+      display: none;
+    }
+
+    .shoe-report-label {
       display: none;
     }
   }
