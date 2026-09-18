@@ -910,11 +910,16 @@
         class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
         style={trafficLightInsetStyle()}
       >
-        <div class="titlebar-no-drag flex min-w-0 basis-[65%] items-center gap-2 overflow-hidden">
+        <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
+          <Dialog.Title
+            class="min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
+          >
+            {activeTab?.path ?? 'File'}
+          </Dialog.Title>
           {#if fullscreenFileTabs.length > 1}
             <div
-              class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+              class="flex min-w-0 max-w-[65%] items-center gap-0 overflow-x-auto"
               role="tablist"
               aria-label="Open files"
             >
@@ -971,12 +976,6 @@
                 </div>
               {/each}
             </div>
-          {:else}
-            <Dialog.Title
-              class="min-w-0 flex-1 truncate text-[0.6875rem] font-semibold text-foreground"
-            >
-              {activeTab?.path ?? 'File'}
-            </Dialog.Title>
           {/if}
         </div>
         <Dialog.Description class="sr-only">
