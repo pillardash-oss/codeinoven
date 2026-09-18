@@ -6,7 +6,8 @@
    */
   import { onMount } from 'svelte'
   import { Popover } from 'bits-ui'
-  import { Folder, FolderTree } from '@lucide/svelte'
+  import { FolderTree } from '@lucide/svelte'
+  import ScopeBadge from './ScopeBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import ScopePickerMenu from './ScopePickerMenu.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
@@ -41,15 +42,24 @@
         : undefined
   )
 
+  /** A `dedicated` worktree does not exist until the task is dispatched, so the
+   *  badge names the pending scope and seeds its colour from that label, the same
+   *  way the shared menu colours a target it cannot resolve. */
   let triggerLabel = $derived(
     value.mode === 'dedicated'
-      ? 'Own worktree'
+      ? 'New worktree'
       : value.mode === 'scope'
         ? (selectedBucket?.name ?? 'Chosen scope')
         : (inheritBucket?.name ?? "Sr. Engineer's scope")
   )
 
   let showWorktree = $derived(selectedBucket?.root.kind === 'worktree')
+
+  /** `warning` marks a real managed worktree, matching the composer shoe and the
+   *  shared menu; a plain project root keeps the neutral tone. */
+  let worktreeTone = $derived(
+    value.mode === 'dedicated' || showWorktree ? 'text-warning' : 'text-dimmed'
+  )
 
   function handleSelect(choice: ScopeChoice): void {
     onSelect(choice)
@@ -68,17 +78,19 @@
 <div class="flex min-w-0">
   <Popover.Root bind:open>
     <Popover.Trigger
-      class="flex min-w-0 items-center gap-1 rounded-lg border bg-elevated px-2 py-1 text-[0.625rem] font-semibold text-muted transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-40"
+      class="flex min-w-0 cursor-pointer items-center gap-1 rounded-md transition-opacity hover:opacity-85 disabled:cursor-default disabled:opacity-40"
       aria-label={`Worker scope: ${triggerLabel}`}
       title={`Worker scope: ${triggerLabel}`}
       {disabled}
     >
-      {#if showWorktree}
-        <FolderTree size={11} class="shrink-0 text-warning" />
+      <span class="flex shrink-0 items-center" aria-hidden="true">
+        <FolderTree size={12} class={worktreeTone} />
+      </span>
+      {#if selectedBucket}
+        <ScopeBadge bucket={selectedBucket} size="sm" />
       {:else}
-        <Folder size={11} class="shrink-0" />
+        <ScopeBadge name={triggerLabel} size="sm" />
       {/if}
-      <span class="min-w-0 truncate">{triggerLabel}</span>
     </Popover.Trigger>
 
     <Popover.Portal>
