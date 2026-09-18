@@ -88,6 +88,12 @@
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
 <dl class="space-y-1.5 text-[0.6875rem]">
+  <div class="flex gap-2">
+    <dt class="w-16 shrink-0 text-dimmed">ID</dt>
+    <dd class="min-w-0 select-all break-all font-mono text-muted" title={thread.id}>
+      {thread.id}
+    </dd>
+  </div>
   {#if scopeBucket}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
@@ -110,7 +116,7 @@
       <dd class="min-w-0 break-words text-muted">{project.name}</dd>
     </div>
     <div class="flex gap-2">
-      <dt class="w-16 shrink-0 text-dimmed">Repository</dt>
+      <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
       <dd class="min-w-0 break-words text-muted" title={remoteOriginUrl ?? project.path}>
         {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : ' '}
       </dd>
