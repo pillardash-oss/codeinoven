@@ -1051,6 +1051,31 @@ export function toRankingCandidate(row: ModelRankingSnapshotRow): RankingGradeCa
   }
 }
 
+/**
+ * The visible instruction text of one persisted user record, for ranking.
+ *
+ * A user dispatch carries either typed text (with attachments) or a workflow
+ * card: `persistOutboundMessage` stores the card in place of the text it
+ * displayed, exactly as the transcript renders it, so the card's action and
+ * body ARE the instruction the user gave ("Implement spec" plus the notes they
+ * added). Without this, a card-bearing implementation turn would be queued for
+ * grading with an empty prompt.
+ */
+export function userInstructionText(message: AgentMessage): string {
+  const text = message.parts
+    .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim()
+  if (text) return text
+  const presentation = message.parts.find(
+    (part): part is Extract<AgentPart, { type: 'user-presentation' }> =>
+      part.type === 'user-presentation'
+  )?.presentation
+  if (!presentation) return ''
+  return [presentation.action, presentation.body].filter(Boolean).join('\n\n').trim()
+}
+
 export function preserveMirrorReasoningStamps(
   mirror: AgentMessage[],
   incoming: AgentMessage[]

@@ -560,6 +560,7 @@ import {
   specRepairInstruction,
   toRankingCandidate,
   turnStreamPath,
+  userInstructionText,
   validateAssignmentAuditExecutionEvidence,
   validatePromptReferences,
   validateQuestionAnswers,
@@ -7768,6 +7769,7 @@ export class ChatEngine {
       const activeSession = this.sessionRegistry.get(sessionId)
       if (activeSession) {
         activeSession.activeTurnUserMessageId = messageId
+        activeSession.activeTurnOrigin = origin
         activeSession.estimatedContextUsed = composition.totalTokens
       }
       this.markSessionWorking(sessionId)
@@ -21112,14 +21114,7 @@ export class ChatEngine {
         !contractContinuationRequired &&
         !contractBlocked
       ) {
-        await this.openRankingSnapshot(
-          thread,
-          info.threadId,
-          merged,
-          parentTurnId,
-          turnAssistant,
-          awaitingUser
-        )
+        await this.openRankingSnapshot(info, thread, merged, turnAssistant, awaitingUser)
       }
       // Snapshot this turn's harness usage into the dedicated analytics table.
       // Runs on every turn end (success or failure) and is ledger-guarded, so
@@ -21640,6 +21635,7 @@ export class ChatEngine {
         )
       if (!interviewWaiting) {
         info.activeTurnUserMessageId = undefined
+        info.activeTurnOrigin = undefined
         info.estimatedContextUsed = undefined
         if (!turnUtilitiesCleaned)
           await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
@@ -22450,59 +22446,97 @@ export class ChatEngine {
   }
 
   /**
-   * Capture or extend the ranking window for a completed, error-free turn
-   * that answered a visible user message. One snapshot per conversation: the
-   * first substantive exchange opens a `first_shot` window; every completed
-   * later exchange upgrades it to `multi_shot`, appends its prompt as judge
-   * context, and slides the inactivity deadline. The window stays open until
-   * the conversation closes   thread deletion or the inactivity deadline  
-   * and is graded exactly once at that point. Greeting-only first prompts
-   * never enter the queue, so they never consume judge tokens.
+   * Capture or extend the ranking window for a completed, error-free turn that
+   * answered a real instruction.
    *
-   * A shot is counted per visible user prompt, never per provider turn. The
-   * parent turn is resolved as the last user-origin message   invisible
-   * continuations are persisted as hidden `orchestrator` messages, so a nudge,
-   * a Mermaid repair, an incomplete-turn recovery, or a resumed retry all
-   * resolve to the same prompt and refresh the window instead of registering
-   * as a follow-up shot (see `registerCompletedExchange`).
+   * Ranking answers one question: how well does a model perform when it is
+   * instructed to do actual work? Only an implementation turn on a real project
+   * qualifies, so every other surface returns early:
    *
-   * Document-generating workflows (brainstorm, PRD) and audit-report threads
-   * are excluded, as are internal orchestration turns.
+   * - Standalone Chats live in the Inbox project and Temporary side chats are
+   *   ephemeral sessions that never reach this path. Neither has a repository to
+   *   implement anything in.
+   * - Brainstorm, PRD, specification-authoring, and Assignment or Achievement
+   *   turns write a document or delegate work instead of implementing it.
+   * - A turn the app drove itself never becomes a shot and never rewrites the
+   *   prompt a shot grades. A resolved question card, a spec-contract
+   *   continuation, an incomplete-turn recovery, and an audit rework all
+   *   continue an instruction the user already gave, so they may only refresh
+   *   that shot's answer.
+   *
+   * One snapshot per conversation: the first graded instruction opens a
+   * `first_shot` window; a later instruction on the same thread upgrades it to
+   * `multi_shot` and appends its prompt as judge context. The window stays open
+   * until the conversation closes   thread deletion or the inactivity deadline
+   *   and is graded exactly once at that point. Greeting-only first prompts
+   *   never enter the queue, so they never consume judge tokens.
+   *
+   * A shot is counted per user instruction, never per provider turn, and the
+   * instruction is the turn's own dispatch record rather than the newest
+   * user-origin row in the mirror: a question card persisted mid-turn is
+   * visible but is not a new instruction (see `registerCompletedExchange`).
    */
   private async openRankingSnapshot(
+    info: SessionInfo,
     thread: Thread | null,
-    threadId: string,
     mirror: AgentMessage[],
-    parentTurnId: string,
     turnAssistant: AgentMessage,
     awaitingUser: boolean
   ): Promise<void> {
     if (awaitingUser) return
     if (!thread?.settings) return
-    const projectId = thread.projectId
-    const parentMessage = mirror.find((message) => message.id === parentTurnId)
-    if (parentMessage?.origin !== 'user') return
+    const projectId = info.projectId
+    const threadId = info.threadId
+    // Standalone Chats run in the Inbox project: there is no repository and no
+    // work of the user's to rank.
+    if (projectId === INBOX_PROJECT_ID) return
+    // Assignment and Achievement threads orchestrate: the model there delegates,
+    // audits, and reports instead of implementing.
+    if (
+      isOrchestrationChildThread(thread) ||
+      thread.assignmentRole === 'coordinator' ||
+      thread.achievementRole === 'coordinator'
+    ) {
+      return
+    }
+    // A planning turn authors a Brainstorm, PRD, specification, or Assignment
+    // decomposition   documents, not implementations. The mark is set at
+    // dispatch by the same branch that selects the planning prompt.
+    if (this.planningSessions.has(info.sessionId)) return
     if (!turnAssistant.modelId && !thread.settings.modelId) return
-    // Audit-report generation and document-drafting workflows are excluded from ranking.
-    if (thread.achievementRole === 'auditor') return
     const brainstormStage = this.brainstormEngine.getWorkflowState(projectId, threadId)?.stage
     if (brainstormStage === 'drafting') return
     const prdStage = this.prdEngine.getWorkflowState(projectId, threadId)?.stage
     if (prdStage === 'drafting' || prdStage === 'brainstorming') return
+    // Whether the user wrote this turn's instruction cannot be read back from
+    // the persisted record: `persistOutboundMessage` stores every prompt that
+    // carries a presentation as a visible user message, so an audit rework or a
+    // question resume the app composed looks exactly like a card the user
+    // clicked. The dispatch origin is recorded on the session instead.
+    const userDriven = info.activeTurnOrigin === 'user'
+    const dispatch = info.activeTurnUserMessageId
+      ? mirror.find((message) => message.id === info.activeTurnUserMessageId)
+      : undefined
     const endedAt = turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now()
-    const parentText = textForMessage(parentMessage)
     const assistantText = textForMessage(turnAssistant).slice(0, 6_000)
     const open = this.rankingSnapshotRepo.openForThread(threadId)
     if (open) {
       // Later exchange on the still-open window. A prompt this window already
       // answers is a repeat (invisible continuation or resumed retry) and
       // refreshes the final answer instead of upgrading to multi_shot. If the
-      // drain had already claimed the row, it is reset to pending and the
-      // stale judge result is discarded by its delete guard.
+      // drain had already claimed the row, it is reset to pending and the stale
+      // judge result is discarded by its delete guard. An app-driven turn
+      // repeats the window's own anchor, so it can only ever refresh an answer.
+      const promptId = userDriven && dispatch ? dispatch.id : open.anchor_message_id
+      // A window with no recorded anchor (a row from before the anchor column
+      // existed) cannot be refreshed without inventing one, so it is left to
+      // close on its inactivity deadline.
+      if (!promptId) return
+      const promptText = userDriven && dispatch ? userInstructionText(dispatch).slice(0, 6_000) : ''
       this.rankingSnapshotRepo.registerCompletedExchange(
         open.id,
-        parentMessage.id,
-        parentText.slice(0, 6_000),
+        promptId,
+        promptText,
         assistantText,
         endedAt,
         endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS)
@@ -22510,6 +22544,10 @@ export class ChatEngine {
       this.scheduleRankingDrain()
       return
     }
+    // No window is open, so an app-driven turn has no instruction of its own to
+    // grade.
+    if (!userDriven || !dispatch) return
+    const parentText = userInstructionText(dispatch)
     if (isGreetingOnly(parentText)) return
     const { costUsd, costStatus } = assistantTurnCostAccounting(turnAssistant)
     // Await the durable insert so the drain timer is armed against a settled
@@ -22523,12 +22561,12 @@ export class ChatEngine {
       providerId: turnAssistant.providerId ?? thread.settings.providerId ?? '',
       modelId: turnAssistant.modelId ?? thread.settings.modelId ?? '',
       thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? '',
-      startedAt: parentMessage.createdAt ?? endedAt,
+      startedAt: dispatch.createdAt ?? endedAt,
       endedAt,
       dueAtMs: endedAt + ChatEngine.spreadDeadline(ChatEngine.RANKING_INACTIVITY_CLOSE_MS),
       userMessageText: parentText.slice(0, 6_000),
       assistantOutputText: assistantText,
-      anchorMessageId: parentMessage.id,
+      anchorMessageId: dispatch.id,
       costUsd,
       costStatus
     })
@@ -23329,6 +23367,7 @@ export class ChatEngine {
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
+      activeTurnOrigin: existing?.activeTurnOrigin,
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       hasReportedTokenUsage: existing?.hasReportedTokenUsage,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,

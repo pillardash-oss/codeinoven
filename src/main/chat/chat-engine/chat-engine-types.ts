@@ -89,6 +89,18 @@ export interface SessionInfo {
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
+  /**
+   * Who dispatched the active turn: `'user'` when the user typed it (or clicked
+   * a workflow card that carries their notes), `'internal'` when the app
+   * composed the prompt itself (a spec-contract continuation, an
+   * incomplete-turn recovery, an audit rework, a question resume).
+   *
+   * The persisted record cannot answer this: a prompt that carries a
+   * presentation is stored with the user role and origin so the transcript
+   * reads naturally, whatever dispatched it. Model-ranking capture is the
+   * consumer.
+   */
+  activeTurnOrigin?: 'user' | 'internal'
   /** Last bound turn id for this session. Stream events emitted while
    *  `activeTurnId` is unbound (pre-registration setup, post-checkpoint
    *  teardown, silent continues) still carry this id so the durable trace log

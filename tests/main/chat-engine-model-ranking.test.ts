@@ -17,6 +17,7 @@ import { ModelRankingRepo } from '../../src/main/database/repositories/model-ran
 import { ModelRankingSnapshotRepo } from '../../src/main/database/repositories/model-ranking-snapshot-repo'
 import type { OpenRankingSnapshotInput } from '../../src/main/database/repositories/model-ranking-snapshot-repo'
 import type { AgentMessage, Thread } from '../../src/lib/types'
+import type { SessionInfo } from '../../src/main/chat/chat-engine/chat-engine-types'
 import type { GradeTurnOptions } from '../../src/main/drivers/driver.interface'
 
 const temporaryDatabases: Database[] = []
@@ -146,23 +147,24 @@ async function capture(
 ): Promise<void> {
   const openRankingSnapshot = privateOf<
     (
+      info: SessionInfo,
       thread: Thread,
-      threadId: string,
       mirror: AgentMessage[],
-      parentTurnId: string,
       turnAssistant: AgentMessage,
       awaitingUser: boolean
     ) => Promise<void>
   >(engine, 'openRankingSnapshot')
-  await openRankingSnapshot.call(
-    engine,
-    fakeThread(),
-    't1',
-    [user, assistant],
-    user.id,
-    assistant,
-    false
-  )
+  const info = {
+    sessionId: 's1',
+    projectId: 'p1',
+    threadId: 't1',
+    projectPath: '/p',
+    permissionLevel: 'auto_review',
+    driverId: 'pi',
+    activeTurnUserMessageId: user.id,
+    activeTurnOrigin: 'user'
+  } satisfies SessionInfo
+  await openRankingSnapshot.call(engine, info, fakeThread(), [user, assistant], assistant, false)
   // The worker-offloaded insert settles on the next tick.
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
