@@ -117,6 +117,13 @@ class ProjectFilesWorkspace {
     return this.explorer.loadDirectory(projectId, directory, force, options)
   }
 
+  /** Whether the cached listings describe the mount the tree should now render.
+   *  A mounted file tree reads this to warn that it is still showing another
+   *  scope's root after the open thread moved to a different worktree. */
+  listingsMatchMount(projectId: string): boolean {
+    return this.explorer.listingsMatchMount(projectId)
+  }
+
   toggleDirectory(projectId: string, directory: string): Promise<void> {
     return this.explorer.toggleDirectory(projectId, directory)
   }

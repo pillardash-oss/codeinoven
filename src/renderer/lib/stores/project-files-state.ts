@@ -52,6 +52,10 @@ export interface ProjectFilesState {
   sessions: Record<string, ProjectFileSession>
   /** Scope bucket the cached listings were read from. */
   activeScope: string
+  /** Mount the entries currently held in `entriesByDirectory` were read for,
+   *  or `null` while nothing is loaded. Used to tell a mounted file tree that
+   *  it is still showing another scope's root after a thread switch. */
+  listingMountKey: string | null
   /** Inbox thread whose `chats-artifacts/<threadId>` directory this project's
    *  file tree is mounted on; `null` for real projects and threadless views. */
   chatThreadId: string | null
@@ -102,6 +106,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     loadingPaths: {},
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
+    listingMountKey: null,
     chatThreadId: null,
     lastTurnOnly: false,
     previewReloadTokens: {},

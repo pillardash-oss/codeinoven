@@ -5,7 +5,7 @@
  * higher-level operations built on top.
  */
 
-import { realpathSync, statSync } from 'node:fs'
+import { realpathSync, statSync, type Stats } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { INBOX_PROJECT_ID } from '../../../lib/types'
@@ -124,22 +124,42 @@ export class ProjectFilesRootResolver {
     throw new Error(`A file or directory named "${name}" already exists`)
   }
 
+  /**
+   * Resolve one existing entry inside the root.
+   *
+   * Resolution is strict by default: every segment must be a real filesystem
+   * entry, so a symlink in any position is rejected. Mutating callers
+   * (`renameEntry`, `resolveForTrash`, paste/move) and untrusted prompt
+   * references rely on that: resolving through a link would rename or trash the
+   * link's target, or vouch for a path the tree never showed.
+   *
+   * `followSymlinks` opts a metadata-only caller into the same policy
+   * `resolveExistingPath` applies: the entry may be (or pass through) a symlink,
+   * the target decides the returned `kind`, and the realpath containment check
+   * below stays the safety gate, so a link resolving outside the root still
+   * fails.
+   */
   async resolveExistingEntry(
     root: string,
-    relativePath: string
+    relativePath: string,
+    options: { followSymlinks?: boolean } = {}
   ): Promise<{ absolutePath: string; kind: ProjectFileEntry['kind'] }> {
     const segments = validateRelativePath(relativePath, false)
+    const followSymlinks = options.followSymlinks === true
     let current = root
     for (const segment of segments) {
       current = resolve(current, segment)
       if (!isWithinRoot(root, current)) {
         throw new Error('Project file path escapes the project root')
       }
-      const metadata = await lstat(current)
-      if (metadata.isSymbolicLink()) {
+      // Strict mode rejects a symlink in any position, so its callers always
+      // act on the entry itself rather than on whatever a link points at.
+      if (!followSymlinks && (await lstat(current)).isSymbolicLink()) {
         throw new Error('Symbolic links are not available in the sidebar')
       }
     }
+    if (followSymlinks) return await this.resolveFollowedEntry(root, segments, relativePath)
+
     const metadata = await lstat(current)
     const kind = metadata.isDirectory() ? 'directory' : metadata.isFile() ? 'file' : null
     if (!kind) throw new Error('Project path is not a regular file or directory')
@@ -148,6 +168,71 @@ export class ProjectFilesRootResolver {
       throw new Error('Project file path escapes the project root')
     }
     return { absolutePath: canonical, kind }
+  }
+
+  /**
+   * Follow one already-validated relative entry to its canonical target, the
+   * way `resolveExistingPath` does. `stat` follows the link so the target picks
+   * the returned `kind`, and the realpath containment check is the safety gate.
+   * Failures name the link when the entry (or an ancestor) is one, so a broken
+   * or escaping link never surfaces as a raw `ENOENT`/`EINVAL` from `realpath`.
+   */
+  private async resolveFollowedEntry(
+    root: string,
+    segments: string[],
+    relativePath: string
+  ): Promise<{ absolutePath: string; kind: ProjectFileEntry['kind'] }> {
+    const current = segments.reduce((parent, segment) => resolve(parent, segment), root)
+    let metadata: Stats
+    try {
+      metadata = await stat(current)
+    } catch (error) {
+      if (await this.hasBrokenSymbolicLinkSegment(root, segments)) {
+        throw new Error(`Project symbolic link is broken: ${relativePath}`, { cause: error })
+      }
+      if (isMissingPathError(error)) {
+        throw new Error(`Project path does not exist: ${relativePath}`, { cause: error })
+      }
+      throw error
+    }
+    const kind = metadata.isDirectory() ? 'directory' : metadata.isFile() ? 'file' : null
+    if (!kind) throw new Error('Project path is not a regular file or directory')
+    let canonical: string
+    try {
+      canonical = await realpath(current)
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        throw new Error(`Project path no longer resolves to an entry: ${relativePath}`, {
+          cause: error
+        })
+      }
+      throw new Error(`Project path could not be resolved: ${relativePath}`, { cause: error })
+    }
+    if (!isWithinRoot(root, canonical)) {
+      throw new Error(`Project symbolic link resolves outside the project root: ${relativePath}`)
+    }
+    return { absolutePath: canonical, kind }
+  }
+
+  /** Whether any path segment is a symlink whose own target cannot be resolved
+   *  (a broken link, or a link cycle). Checked without following the entry's
+   *  full path, only to explain why a followed entry failed to resolve. */
+  private async hasBrokenSymbolicLinkSegment(root: string, segments: string[]): Promise<boolean> {
+    let current = root
+    for (const segment of segments) {
+      current = resolve(current, segment)
+      try {
+        if (!(await lstat(current)).isSymbolicLink()) continue
+      } catch {
+        return false
+      }
+      try {
+        await stat(current)
+      } catch {
+        return true
+      }
+    }
+    return false
   }
 
   async resolveExistingPath(

@@ -243,8 +243,9 @@ export class ProjectFilesService {
 
   /**
    * Resolve untrusted prompt references against their project root and return
-   * canonical display metadata. Existing path resolution rejects traversal,
-   * absolute paths, symlinks, and non-regular filesystem entries.
+   * canonical display metadata. This deliberately keeps strict entry resolution:
+   * traversal, absolute paths, symlinks, and non-regular filesystem entries are
+   * rejected, so a reference can only name an entry the tree itself shows.
    */
   async validatePromptReferences(
     projectId: string,
@@ -508,7 +509,12 @@ export class ProjectFilesService {
     threadId?: string
   ): Promise<ProjectFileInfo> {
     const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
-    const entry = await this.roots.resolveExistingEntry(root, relativePath)
+    // Metadata intentionally follows symlinks, matching what `listDirectory`
+    // shows and what the read path opens: a linked file or directory is an
+    // entry the user can click, so copy-path/reveal/details must work on it.
+    const entry = await this.roots.resolveExistingEntry(root, relativePath, {
+      followSymlinks: true
+    })
     const metadata = await lstat(entry.absolutePath)
     return {
       name: basename(relativePath),

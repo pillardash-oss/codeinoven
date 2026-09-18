@@ -75,6 +75,16 @@ export class ProjectFilesExplorer {
     this.pendingRestores.add(projectId)
   }
 
+  /** Whether the cached listings describe the mount the tree should now
+   *  render. `true` while nothing is loaded yet   an empty tree is not stale,
+   *  the panel is simply reading. A mounted tree that survives a thread switch
+   *  uses this to warn that it still shows another scope's root. */
+  listingsMatchMount(projectId: string): boolean {
+    const state = this.host.existingState(projectId)
+    if (!state || state.listingMountKey === null) return true
+    return state.listingMountKey === this.host.mountKeyFor(projectId)
+  }
+
   async loadDirectory(
     projectId: string,
     directory: string,
@@ -88,6 +98,9 @@ export class ProjectFilesExplorer {
     const mountKey = this.host.mountKeyFor(projectId)
     if (state.activeScope !== mountKey) {
       state.activeScope = mountKey
+      // The held entries belonged to the previous mount and are being dropped,
+      // so nothing is renderable until the new root answers.
+      state.listingMountKey = null
       state.entriesByDirectory = {}
       state.loadingDirectories = {}
       state.directoryErrors = {}
@@ -113,6 +126,7 @@ export class ProjectFilesExplorer {
           this.host.scopeFor(projectId),
           this.host.threadArg(projectId)
         )
+        state.listingMountKey = mountKey
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
         // the revealed/selected path is loaded, never the whole saved set of

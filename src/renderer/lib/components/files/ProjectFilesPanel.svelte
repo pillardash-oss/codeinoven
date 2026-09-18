@@ -18,6 +18,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -84,6 +85,19 @@
   }
   prepareProjectFilesState()
   let projectState = $derived(projectFilesWorkspace.getState(projectId))
+  /** Read the tree for the mount the open thread belongs to. Only remounting
+   *  (closing and reopening the panel) runs this, so a thread switch alone never
+   *  swaps the tree out from under the user: it raises the stale-scope notice
+   *  instead, and the toggle the notice asks for is what lands the new root. */
+  $effect(() => {
+    if (!projectState.explorerVisible) return
+    void projectFilesWorkspace.loadDirectory(projectId, '')
+  })
+  /** This panel is project-scoped: it survives a thread switch, so after the
+   *  open thread moves to another worktree its listings still describe the
+   *  previous scope root. The notice below makes that visible instead of
+   *  silently showing another checkout's files. */
+  let scopeStale = $derived(!projectFilesWorkspace.listingsMatchMount(projectId))
   let activeTab = $derived(
     contextTab?.fileTabId
       ? (projectState.tabs.find((tab) => tab.id === contextTab?.fileTabId) ?? null)
@@ -569,6 +583,7 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col bg-app">
+  <StalePanelNotice stale={scopeStale} />
   <div class="flex min-h-0 flex-1">
     <section
       class="relative flex min-h-0 min-w-0 flex-1 flex-col"
