@@ -1449,9 +1449,7 @@ export class ChatEngine {
    * is built before the IPC layer constructs the scope and worktree services, so
    * the provisioner is installed here rather than passed to its constructor.
    */
-  setAssignmentWorkerScopeProvisioner(
-    provisioner: AssignmentWorkerScopeProvisioner | null
-  ): void {
+  setAssignmentWorkerScopeProvisioner(provisioner: AssignmentWorkerScopeProvisioner | null): void {
     this.assignmentEngine.setWorkerScopeProvisioner(provisioner)
   }
 
