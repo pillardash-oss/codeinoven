@@ -109,6 +109,213 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   }
 ]
 
+/**
+ * The operation catalog for the app-owned Android target capability (`cio:adb`).
+ *
+ * Tool names are the operation names the service dispatches on, so the catalog
+ * and the dispatch table are the same list. Node text is omitted by default
+ * everywhere text can appear: the tree is user data, and the largest context
+ * cost in this workflow.
+ */
+const ADB_SELECTOR_SCHEMA = {
+  type: 'object',
+  description: 'Node predicate. At least one field is required.',
+  properties: {
+    resourceId: {
+      type: 'string',
+      description: 'Android resource id, with or without the package prefix.'
+    },
+    contentDesc: {
+      type: 'string',
+      description: 'Exact accessibility label, which is where a React or Svelte aria-label lands.'
+    },
+    text: { type: 'string', description: 'Exact node text.' },
+    textContains: { type: 'string', description: 'Case-insensitive substring of node text.' },
+    className: {
+      type: 'string',
+      description: 'Full class name, or the short form such as EditText or Button.'
+    },
+    editable: { type: 'boolean' },
+    clickable: { type: 'boolean' },
+    focused: { type: 'boolean' },
+    packageName: { type: 'string' }
+  },
+  additionalProperties: false
+} as const
+
+const ADB_TEXT_MODE_SCHEMA = {
+  type: 'string',
+  enum: ['omit', 'length', 'include'],
+  description:
+    'How much node text to return. "omit" is the default; use "include" only when the text itself is the point.'
+} as const
+
+export const ADB_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'targets',
+    description:
+      'List attached Android phones and emulators with serial, state, model, sdk, size, density and whether a lease is held. Start here.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'claim',
+    description:
+      'Take the exclusive lease on one target so no other session drives it while you work. Omit serial when exactly one target is attached.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serial: { type: 'string' },
+        ttlMinutes: {
+          type: 'number',
+          description: 'Hold length in minutes, 1 to 240. Default 15, refreshed by every operation.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'release',
+    description: 'Drop the lease this session holds, so another session can use the target.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'status',
+    description:
+      'Screen state, foreground package and activity, keyboard visibility, size and density for the leased target. Run it before trusting any coordinate.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'dump',
+    description:
+      'Read the accessibility view tree. Reports native windows on top, retries while the tree is still filling in, and never uses compressed mode. Interactive nodes only by default, so it does not flood context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: ADB_TEXT_MODE_SCHEMA,
+        detail: {
+          type: 'string',
+          enum: ['interactive', 'full'],
+          description: 'full includes bare layout containers.'
+        },
+        limit: { type: 'number', description: 'Node cap. Default 120, maximum 400.' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'find',
+    description:
+      'Locate nodes by resource id, aria label, text or class, and return their bounds and tap centre.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: ADB_SELECTOR_SCHEMA,
+        text: ADB_TEXT_MODE_SCHEMA,
+        limit: { type: 'number', description: 'Match cap. Default 10, maximum 50.' }
+      },
+      required: ['selector'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'tap',
+    description:
+      'Tap a located node by selector, or explicit x and y coordinates. Taps a node centre, never a guessed pixel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: ADB_SELECTOR_SCHEMA,
+        x: { type: 'number' },
+        y: { type: 'number' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'type',
+    description:
+      'Type printable ASCII into the focused field, then read it back. Spaces are handled for you. Non-ASCII is refused and reported rather than silently dropped.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        clearFirst: { type: 'boolean', description: 'Backspace the field empty first.' },
+        verify: { type: 'boolean', description: 'Read the field back and compare. Default true.' }
+      },
+      required: ['text'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'key',
+    description: 'Press one key by name, such as BACK, HOME, ENTER or TAB, or by numeric keycode.',
+    inputSchema: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'start',
+    description:
+      'Launch a package by its launcher activity, an explicit component, or a deep link URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        package: { type: 'string' },
+        component: { type: 'string' },
+        url: { type: 'string' },
+        waitForSelector: ADB_SELECTOR_SCHEMA,
+        timeoutMs: { type: 'number' },
+        pollMs: { type: 'number' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'screenshot',
+    description:
+      'Capture the screen as an image, downscaled by default. Use this when you need to know what is on screen rather than which nodes exist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxWidth: {
+          type: 'number',
+          description: 'Downscale width in pixels. Default 720; pass 0 for the raw capture.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'wait_for',
+    description:
+      'Poll the tree until a selector is present or absent. Use it instead of sleeping, and never chain two taps without a read between them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: ADB_SELECTOR_SCHEMA,
+        state: { type: 'string', enum: ['present', 'absent'] },
+        timeoutMs: { type: 'number', description: 'Default 10000, maximum 120000.' },
+        pollMs: { type: 'number', description: 'Default 700.' }
+      },
+      required: ['selector'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'reconnect',
+    description:
+      'Recover a target that stopped answering: re-check the list, reconnect the transport, check the USB bus, then re-check.',
+    inputSchema: {
+      type: 'object',
+      properties: { serial: { type: 'string' } },
+      additionalProperties: false
+    }
+  }
+]
+
 export function gatewayUtility(
   request: GatewayTurnContext,
   scriptPath: string,

@@ -19,6 +19,11 @@ import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
 import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import {
+  ADB_CAPABILITY_DOCS,
+  ADB_CAPABILITY_NAME,
+  ADB_CAPABILITY_SUMMARY
+} from '../../lib/adb-tool'
+import {
   SCOPE_CAPABILITY_DOCS,
   SCOPE_CAPABILITY_NAME,
   SCOPE_CAPABILITY_SUMMARY
@@ -29,11 +34,17 @@ import type { StorageEngine } from '../storage/storage-engine'
 // from `lib/agent-behavior`   never pulls this main-process service (and its
 // `fs`-importing `utils` dependency) into client bundles.
 import {
+  APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_SCOPE_UTILITY_ID
 } from '../../lib/utility-ids'
-export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID, APP_SCOPE_UTILITY_ID }
+export {
+  APP_ADB_UTILITY_ID,
+  APP_BROWSER_UTILITY_ID,
+  APP_CUA_DRIVER_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID
+}
 
 const REGISTRY_PATH = 'utilities/registry.json'
 const REGISTRY_VERSION = 1
@@ -217,6 +228,30 @@ export class UtilityRegistryService {
             harnessId: ALL_HARNESSES_BINDING_ID,
             strategy: 'native' as const,
             nativeCapability: 'scope'
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        // On demand rather than always active: a session that never touches a
+        // phone must not carry thirteen operation schemas, and the user asked
+        // for driving a target to be an explicit opt-in per thread.
+        id: APP_ADB_UTILITY_ID,
+        kind: 'skill',
+        name: ADB_CAPABILITY_NAME,
+        description: ADB_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: ADB_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native' as const,
+            nativeCapability: 'adb'
           }
         ],
         appOwned: true,

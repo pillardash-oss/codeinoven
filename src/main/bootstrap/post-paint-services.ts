@@ -31,6 +31,7 @@ import { ModelPricingService } from '../providers/model-pricing-service'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
+import { AdbService } from '../adb/adb-service'
 import { BrowserService } from '../browser/browser-service'
 import type { BootstrapState } from './bootstrap-state'
 import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
@@ -234,6 +235,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       service.executeUtility(operation, input, browserContext)
     )
   }
+  // Android target control is a plain service with no window or database
+  // dependency, so it is registered on every boot rather than only when a
+  // window exists. The capability stays out of every turn's context until a
+  // thread searches for it and activates it.
+  const adbService = new AdbService()
+  state.chatEngine.setAdbTargetService((operation, input, adbContext) =>
+    adbService.execute(operation, input, adbContext)
+  )
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)

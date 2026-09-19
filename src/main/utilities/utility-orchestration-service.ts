@@ -12,6 +12,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
+import { APP_ADB_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -66,6 +67,7 @@ import {
   utilitySearchScore
 } from './utility-orchestration/utility-search'
 import {
+  ADB_UTILITY_TOOLS,
   BROWSER_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   RETRIEVE_MCP_HOST_ROUTE,
@@ -177,6 +179,17 @@ export type BrowserUtilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Runs one gateway invocation of the app-owned Android target capability for the
+ * turn that made it. The chat engine supplies it because it owns the service
+ * instance and the thread identity the lease is keyed on.
+ */
+export type AdbUtilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
  * Runs one gateway invocation of the app-owned scope and worktree capability
  * for the turn that made it. The chat engine supplies it because it owns the
  * thread's scope, project root and permission tier.
@@ -276,6 +289,7 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private adbExecutor: AdbUtilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -337,6 +351,16 @@ export class UtilityOrchestrationService {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:adb` capability. Android
+   * target control is an ordinary app-owned utility rather than a listed tool:
+   * most turns never touch a phone, and a turn that does not must not carry
+   * thirteen operation schemas in its context.
+   */
+  setAdbExecutor(executor: AdbUtilityExecutor | null): void {
+    this.adbExecutor = executor
   }
 
   /**
@@ -1161,6 +1185,11 @@ export class UtilityOrchestrationService {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
     }
+    if (resolved.utility.id === APP_ADB_UTILITY_ID) {
+      if (!this.adbExecutor)
+        throw new Error('Android target control is unavailable in this session')
+      return { tools: ADB_UTILITY_TOOLS }
+    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
@@ -1283,6 +1312,16 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.id === APP_ADB_UTILITY_ID) {
+      const executor = this.adbExecutor
+      if (!executor) throw new Error('Android target control is unavailable in this session')
+      // Audited without the serial or any screen content: which operations a turn
+      // ran against a phone is the durable fact, the phone's contents are user data.
+      await this.audit(state, 'adb.tool', { operation })
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId
