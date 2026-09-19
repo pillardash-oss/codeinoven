@@ -606,6 +606,32 @@ export class AssignmentEngine {
     return this.replaceTask(active, next, active.status)
   }
 
+  /**
+   * Choose the Git scope a signed-off Assignment's not-yet-dispatched workers will
+   * run in. It is the level above the phase and the task, so it moves every worker
+   * that has no choice of its own, and it is a request: a dedicated worktree is
+   * created when a task is dispatched, never here.
+   */
+  async updateWorkerScope(
+    projectId: string,
+    coordinatorThreadId: string,
+    scope: ScopeChoice
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (!['approved', 'running', 'attention'].includes(active.status)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'The Assignment worker scope can only be updated on an active signed-off Assignment'
+      )
+    }
+    const updated: AssignmentPlan = {
+      ...active,
+      content: { ...active.content, workerScope: structuredClone(scope) },
+      updatedAt: this.now()
+    }
+    return this.persistPlan(updated, active.version)
+  }
+
   /** Create or reuse the durable auditor assigned to a completed Assignment. */
   async ensureAuditorThread(
     projectId: string,
@@ -1221,13 +1247,16 @@ export class AssignmentEngine {
   /**
    * The scope bucket a worker's thread is created in.
    *
-   * A worker that inherits simply follows its phase's scope, which in turn
-   * follows the Assignment's own scope, frozen from the Sr. Engineer's at
-   * sign-off. `workerScopeBucketId` is not consulted for `inherit`: a task whose
-   * scope the user changed back to `inherit` must run where `inherit` points now,
-   * not in the checkout an earlier choice created.
-   * Every other choice goes to the app, which validates a named scope and may
-   * create a worktree.
+   * The cascade has three levels and the narrowest explicit choice wins: the
+   * task, then its phase, then the Assignment's own worker scope. `inherit` is not
+   * a choice of its own, it defers to the level above, which is exactly what its
+   * picker row shows, so only a level with no choice at all falls back to the
+   * Assignment's own scope, which is the Sr. Engineer's, frozen at sign-off.
+   * `workerScopeBucketId` is never consulted here: a task whose scope the user
+   * changed back to `inherit` must run where `inherit` points now, not in the
+   * checkout an earlier choice created.
+   * Every non-inherit choice goes to the app, which validates a named scope and
+   * may create a worktree.
    */
   private async resolveWorkerScope(
     active: AssignmentPlan,
@@ -1236,8 +1265,11 @@ export class AssignmentEngine {
   ): Promise<string> {
     const assignmentScopeBucketId = active.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     const phase = active.content.phases.find((candidate) => candidate.id === task.phaseId)
-    const choice = task.workerScope ?? phase?.workerScope
-    if (choice === undefined || choice.mode === 'inherit') return assignmentScopeBucketId
+    const choice = [task.workerScope, phase?.workerScope, active.content.workerScope].find(
+      (candidate): candidate is ScopeChoice =>
+        candidate !== undefined && candidate.mode !== 'inherit'
+    )
+    if (choice === undefined) return assignmentScopeBucketId
     const request: WorkerScopeRequest = {
       projectId: active.projectId,
       assignmentId: active.id,

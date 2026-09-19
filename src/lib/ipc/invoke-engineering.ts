@@ -334,6 +334,10 @@ export const invokeEngineeringContract = {
     [projectId: string, coordinatorThreadId: string, taskId: string, scope: ScopeChoice],
     AssignmentPlan
   >,
+  'assignment:updateWorkerScope': {} as Contract<
+    [projectId: string, coordinatorThreadId: string, scope: ScopeChoice],
+    AssignmentPlan
+  >,
   'assignment:validate': {} as Contract<
     [content: AssignmentPlanContent],
     AssignmentValidationResult

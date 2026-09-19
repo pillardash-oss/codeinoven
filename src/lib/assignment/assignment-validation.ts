@@ -34,7 +34,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isValidWorkerScope(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (value.mode === 'inherit' || value.mode === 'dedicated') return true
-  return value.mode === 'scope' && typeof value.bucketId === 'string' && value.bucketId.trim() !== ''
+  return (
+    value.mode === 'scope' && typeof value.bucketId === 'string' && value.bucketId.trim() !== ''
+  )
 }
 
 function generatedModel(value: unknown): AssignmentModelSelection | undefined {
@@ -140,6 +142,13 @@ export function validateAssignment(content: AssignmentPlanContent): AssignmentVa
   if (content.tasks.length === 0) {
     issues.push({ code: 'required', path: 'tasks', message: 'At least one task is required' })
   }
+  if (content.workerScope !== undefined && !isValidWorkerScope(content.workerScope)) {
+    issues.push({
+      code: 'invalid_scope',
+      path: 'workerScope',
+      message: 'The Assignment worker scope is invalid'
+    })
+  }
 
   for (const [index, phase] of content.phases.entries()) {
     if (!phase.id.trim() || !phase.title.trim()) {
@@ -154,6 +163,13 @@ export function validateAssignment(content: AssignmentPlanContent): AssignmentVa
         code: 'duplicate_id',
         path: `phases.${index}.id`,
         message: `Duplicate phase ID: ${phase.id}`
+      })
+    }
+    if (phase.workerScope !== undefined && !isValidWorkerScope(phase.workerScope)) {
+      issues.push({
+        code: 'invalid_scope',
+        path: `phases.${index}.workerScope`,
+        message: `Phase ${phase.id} has an invalid worker scope`
       })
     }
     phases.add(phase.id)

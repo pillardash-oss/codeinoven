@@ -183,6 +183,15 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
         validateAssignmentWorkerScope(scope, 'Assignment worker scope')
       )
   )
+  ipcMain.handle(
+    'assignment:updateWorkerScope',
+    (_, projectId: unknown, coordinatorThreadId: unknown, scope: unknown) =>
+      assignmentEngine.updateWorkerScope(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(coordinatorThreadId, 'Coordinator thread ID'),
+        validateAssignmentWorkerScope(scope, 'Assignment worker scope')
+      )
+  )
   ipcMain.handle('assignment:validate', (_, content: unknown) =>
     validateAssignment(validateAssignmentContent(content))
   )

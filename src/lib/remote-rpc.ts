@@ -211,6 +211,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'assignment:resolveAnnotation',
   'assignment:updateUnlinkedWorkerModel',
   'assignment:updateUnlinkedWorkerScope',
+  'assignment:updateWorkerScope',
   'audit:getActive',
   'audit:listVersions',
   'audit:save',
@@ -650,6 +651,11 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
     requiresStepUp: true
   },
   'assignment:updateUnlinkedWorkerScope': {
+    scope: 'workflow.write',
+    stepUp: 'conditional',
+    requiresStepUp: true
+  },
+  'assignment:updateWorkerScope': {
     scope: 'workflow.write',
     stepUp: 'conditional',
     requiresStepUp: true

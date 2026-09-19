@@ -37,6 +37,14 @@
       selection: AssignmentModelSelection
     ) => void | Promise<void>
     onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /**
+     * The Assignment-wide worker scope before sign-off. It is the level above the
+     * phase and the task, so it moves every worker that has no choice of its own.
+     */
+    onWorkerScopeChange?: (scope: ScopeChoice) => void | Promise<void>
+    /** False while an Assignment can no longer accept a worker scope change
+     *  (completed or stopped), so the control stops offering one. */
+    workerScopeEditable?: boolean
     /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
     assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
@@ -71,6 +79,8 @@
     onSeniorModelChange,
     onTaskModelChange,
     onTaskScopeChange,
+    onWorkerScopeChange,
+    workerScopeEditable = true,
     assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
@@ -105,10 +115,48 @@
   }
 
   /**
-   * The scope a task's `inherit` resolves to, which is its phase's choice when
-   * the phase set one and the Assignment's own scope otherwise. The task picker
-   * shows this instead of assuming the Assignment's scope, so the cascade a phase
-   * pick applies stays visible and a task never claims a scope it will not run in.
+   * The scope a level's `inherit` resolves to, which is the next level up: the
+   * phase for a task, the Assignment for a phase, the Sr. Engineer's own scope
+   * for the Assignment. A level that picked a worktree or a named scope shows
+   * that as the inherited target instead, so the cascade stays visible and a
+   * lower level never claims a scope it will not run in.
+   */
+  function inheritTarget(
+    choice: ScopeChoice | undefined,
+    hint: string
+  ): {
+    bucketId: string | undefined
+    fallbackName: string
+    hint: string
+  } {
+    if (choice === undefined || choice.mode === 'inherit') {
+      return {
+        bucketId: assignmentScopeBucketId,
+        fallbackName: "Sr. Engineer's scope",
+        hint
+      }
+    }
+    if (choice.mode === 'dedicated') {
+      return { bucketId: undefined, fallbackName: 'New worktree', hint }
+    }
+    return { bucketId: choice.bucketId, fallbackName: 'Chosen scope', hint }
+  }
+
+  /** Where the Assignment-wide choice points, which every phase inherits. */
+  function assignmentInheritScope(): {
+    bucketId: string | undefined
+    fallbackName: string
+    hint: string
+  } {
+    return inheritTarget(
+      content.workerScope,
+      content.workerScope === undefined ? 'Inherited' : 'Assignment'
+    )
+  }
+
+  /**
+   * The scope a task's `inherit` resolves to: its phase's choice when the phase
+   * set one, the Assignment's own worker scope otherwise.
    */
   function taskInheritScope(task: AssignmentTask): {
     bucketId: string | undefined
@@ -116,17 +164,13 @@
     hint: string
   } {
     const phaseScope = content.phases.find((phase) => phase.id === task.phaseId)?.workerScope
-    if (phaseScope?.mode === 'scope') {
-      return { bucketId: phaseScope.bucketId, fallbackName: 'Phase scope', hint: 'From phase' }
+    if (phaseScope !== undefined && phaseScope.mode !== 'inherit') {
+      return inheritTarget(phaseScope, 'From phase')
     }
-    if (phaseScope?.mode === 'dedicated') {
-      return { bucketId: undefined, fallbackName: 'New worktree', hint: 'From phase' }
-    }
-    return {
-      bucketId: assignmentScopeBucketId,
-      fallbackName: "Sr. Engineer's scope",
-      hint: 'Inherited'
-    }
+    return inheritTarget(
+      content.workerScope,
+      content.workerScope === undefined ? 'Inherited' : 'Assignment'
+    )
   }
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
@@ -180,6 +224,28 @@
         candidate.id === taskId ? { ...candidate, workerScope: scope } : candidate
       )
     })
+  }
+
+  /**
+   * Whether the Assignment-wide worker scope can change here: freely while the
+   * content is being edited, and on a signed-off Assignment only while its own
+   * status still accepts one and the caller can persist it.
+   */
+  let canUpdateWorkerScope = $derived(
+    !readOnly || (workerScopeEditable && onWorkerScopeChange !== undefined)
+  )
+
+  /**
+   * Choose the Assignment-wide worker scope. Before sign-off it is part of the
+   * content the caller persists; on a signed-off Assignment it is a live update,
+   * and the app enforces when one is still allowed.
+   */
+  async function updateWorkerScope(scope: ScopeChoice): Promise<void> {
+    if (readOnly) {
+      await onWorkerScopeChange?.(scope)
+      return
+    }
+    update({ ...content, workerScope: scope })
   }
 
   /** Board name for the scope a dispatched worker recorded, when it differs from
@@ -450,6 +516,26 @@
       ariaLabel="Assignment TL;DR"
       onChange={(value) => update({ ...content, summary: value })}
     />
+    <div
+      class="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-elevated/50 px-3 py-2"
+    >
+      <div class="min-w-0">
+        <p class="text-xs font-semibold text-foreground">Workers run in</p>
+        <p class="text-[0.6875rem] leading-4 text-muted">
+          Every worker with no scope of its own follows this. A phase or a task can still override
+          it.
+        </p>
+      </div>
+      {#if projectId}
+        <WorkerScopePicker
+          {projectId}
+          inheritBucketId={assignmentScopeBucketId}
+          value={content.workerScope ?? { mode: 'inherit' }}
+          disabled={!canUpdateWorkerScope}
+          onSelect={(choice) => void updateWorkerScope(choice)}
+        />
+      {/if}
+    </div>
     {@render AnnotationBubbles('overview')}
   </section>
 
@@ -481,6 +567,7 @@
 
   {#each content.phases as phase (phase.id)}
     {@const selectedPhaseModel = phaseModel(phase.id)}
+    {@const phaseInherit = assignmentInheritScope()}
     <section
       id={`assignment-section-${phase.id}`}
       data-assignment-section={`phase:${phase.id}`}
@@ -564,7 +651,9 @@
             {#if projectId}
               <WorkerScopePicker
                 {projectId}
-                inheritBucketId={assignmentScopeBucketId}
+                inheritBucketId={phaseInherit.bucketId}
+                inheritFallbackName={phaseInherit.fallbackName}
+                inheritHint={phaseInherit.hint}
                 value={phase.workerScope ?? { mode: 'inherit' }}
                 onSelect={(choice) => updatePhaseScope(phase.id, choice)}
               />

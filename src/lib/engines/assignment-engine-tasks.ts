@@ -227,6 +227,9 @@ export function deriveReworkCycle(auditRework: boolean, currentCycle: number | u
  * Merge a proposed rework content with the durable execution state of the
  * current content. Scope repair keeps every existing task's live state while
  * adopting the proposal's task definitions.
+ *
+ * Worker scope is the user's, not the model's: the proposal never chooses where
+ * workers run, so every level already chosen survives the new draft.
  */
 export function buildReworkAmendedContent(
   current: AssignmentPlanContent,
@@ -234,13 +237,28 @@ export function buildReworkAmendedContent(
   scopeRepair: boolean
 ): AssignmentPlanContent {
   const currentTasks = new Map(current.tasks.map((task) => [task.id, task]))
+  const currentPhases = new Map(current.phases.map((phase) => [phase.id, phase]))
   return {
     ...structuredClone(proposed),
+    ...(proposed.workerScope === undefined && current.workerScope !== undefined
+      ? { workerScope: structuredClone(current.workerScope) }
+      : {}),
+    phases: proposed.phases.map((phase) => {
+      const currentScope = currentPhases.get(phase.id)?.workerScope
+      return currentScope !== undefined && phase.workerScope === undefined
+        ? { ...structuredClone(phase), workerScope: structuredClone(currentScope) }
+        : structuredClone(phase)
+    }),
     tasks: proposed.tasks.map((task) => {
       const currentTask = currentTasks.get(task.id)
-      if (!scopeRepair || !currentTask) return structuredClone(task)
+      const currentScope = currentTask?.workerScope
+      const keepScope = <T extends AssignmentTask>(candidate: T): T =>
+        currentScope !== undefined && candidate.workerScope === undefined
+          ? { ...candidate, workerScope: structuredClone(currentScope) }
+          : candidate
+      if (!scopeRepair || !currentTask) return keepScope(structuredClone(task))
       if (currentTask.status === 'completed') return structuredClone(currentTask)
-      return {
+      return keepScope({
         ...structuredClone(task),
         status: currentTask.status,
         ...(currentTask.workKind ? { workKind: currentTask.workKind } : {}),
@@ -254,7 +272,7 @@ export function buildReworkAmendedContent(
         ...(currentTask.review ? { review: structuredClone(currentTask.review) } : {}),
         ...(currentTask.startedAt ? { startedAt: currentTask.startedAt } : {}),
         ...(currentTask.completedAt ? { completedAt: currentTask.completedAt } : {})
-      }
+      })
     })
   }
 }

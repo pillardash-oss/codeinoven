@@ -28,6 +28,8 @@
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment-wide worker scope, the level above a phase and a task. */
+    onWorkerScopeChange?: (scope: ScopeChoice) => void | Promise<void>
     /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
     assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
@@ -57,6 +59,7 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onTaskScopeChange,
+    onWorkerScopeChange,
     assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
@@ -122,6 +125,7 @@
           {onWorkerModelChange}
           {onSeniorModelChange}
           {onTaskScopeChange}
+          {onWorkerScopeChange}
           {assignmentScopeBucketId}
           {onToggleFavorite}
           {onReorderFavorite}

@@ -169,6 +169,14 @@ export interface AssignmentTask {
 export interface AssignmentPlanContent {
   title: string
   summary: string
+  /**
+   * Scope chosen for every worker of this Assignment before sign-off, the level
+   * above the phase and the task: a phase `workerScope` overrides it for that
+   * phase and everything after, and a task `workerScope` overrides both. Absent
+   * means every worker inherits the Assignment's own scope, which is the
+   * Sr. Engineer's, frozen at sign-off.
+   */
+  workerScope?: ScopeChoice
   phases: AssignmentPhase[]
   tasks: AssignmentTask[]
 }

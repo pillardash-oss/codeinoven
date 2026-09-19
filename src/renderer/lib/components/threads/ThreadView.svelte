@@ -6584,6 +6584,24 @@
     }
   }
 
+  /**
+   * Move every worker of a signed-off Assignment that has no scope of its own.
+   * The choice is a request: a dedicated worktree is created at dispatch, so this
+   * stays instant however many tasks the Assignment carries.
+   */
+  async function updateAssignmentWorkerScope(scope: ScopeChoice): Promise<void> {
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      assignment = await invoke('assignment:updateWorkerScope', thread.projectId, thread.id, scope)
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The worker scope could not be updated.'
+    } finally {
+      assignmentBusy = false
+    }
+  }
+
   async function approveAssignment(content: AssignmentPlanContent): Promise<void> {
     assignmentBusy = true
     assignmentError = ''
@@ -10333,6 +10351,7 @@
           onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
           onTaskScopeChange={updateAssignmentTaskScope}
+          onWorkerScopeChange={updateAssignmentWorkerScope}
           {assignmentScopeBucketId}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -11873,6 +11892,7 @@
                   onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
                   onSeniorModelChange={updateAssignmentSeniorModel}
                   onTaskScopeChange={updateAssignmentTaskScope}
+                  onWorkerScopeChange={updateAssignmentWorkerScope}
                   {assignmentScopeBucketId}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}

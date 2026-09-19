@@ -183,6 +183,14 @@ function validateAssignmentContent(value: unknown): AssignmentPlanContent {
   return {
     title: requireString(value.title, 'Assignment title'),
     summary: requireString(value.summary, 'Assignment summary'),
+    // Carried through untouched, exactly like a phase or task scope: the
+    // Assignment-wide worker scope is chosen on the review surface and must
+    // survive the save/approve round trip.
+    ...(value.workerScope === undefined
+      ? {}
+      : {
+          workerScope: validateAssignmentWorkerScope(value.workerScope, 'Assignment worker scope')
+        }),
     phases,
     tasks
   }

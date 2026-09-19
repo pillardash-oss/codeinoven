@@ -221,6 +221,12 @@ export async function callRemoteStudioRpc(
         requireString(args[2]),
         args[3] as ScopeChoice
       )
+    case 'assignment:updateWorkerScope':
+      return ctx.assignmentEngine.updateWorkerScope(
+        requireString(args[0]),
+        requireString(args[1]),
+        args[2] as ScopeChoice
+      )
 
     // ─── Audit studio ───────────────────────────────────────────────────
     case 'audit:getActive':
