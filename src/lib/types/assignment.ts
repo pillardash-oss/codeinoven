@@ -102,7 +102,7 @@ export interface AssignmentPhase {
   defaultModel?: AssignmentModelSelection
   /**
    * Scope chosen for this phase's workers before sign-off, mirroring the phase
-   * model: a change cascade from its own phase down the list. Absent means the
+   * model: a change cascades from its own phase down the list. Absent means the
    * phase uses the Assignment's own scope, and a task `workerScope` overrides it.
    */
   workerScope?: ScopeChoice
