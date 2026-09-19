@@ -41,6 +41,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
     coordinatorHasActiveDelegates,
+    coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isThreadWorking,
@@ -322,8 +323,15 @@
     rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
 
-  /** Orchestration worker/auditor threads stay silent: never presented as unread. */
-  let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+  /** Orchestration worker/auditor threads stay silent: never presented as unread.
+   *  A coordinator row, though, stays unread while any of its non-reporting
+   *  workers is unread: it clears only once the coordinator itself and all of
+   *  its workers are read. Reporting workers hold nothing open, since their
+   *  progress shows through the Assignment lifecycle instead. */
+  let effectiveRead = $derived(
+    isOrchestrationChildThread(thread) ||
+      (thread.read && !coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))
+  )
 
   /** A finished temporary (side) chat on this thread is still unread   the
    *  parent thread's own `read` flag never changes for side chats, so the

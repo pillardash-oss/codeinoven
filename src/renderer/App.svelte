@@ -58,6 +58,7 @@
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isThreadWorking,
+    threadTracksReadStatus,
     type AppConfig,
     type AppConfigPatch,
     type Project,
@@ -692,9 +693,11 @@
     }
 
     workspaceState.openThread(thread, project)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
+    if (threadTracksReadStatus(thread)) {
+      const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+      scopeState.updateThread(updated)
+      workspaceState.updateThread(updated)
+    }
 
     if (temporaryChatId) {
       // A temporary (side) chat notification: opening the parent thread alone

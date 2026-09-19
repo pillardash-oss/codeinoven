@@ -9,7 +9,12 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
-  import { DEFAULT_THREAD_TITLE, activeThreadRowId, type Thread } from '$shared/types'
+  import {
+    DEFAULT_THREAD_TITLE,
+    activeThreadRowId,
+    threadTracksReadStatus,
+    type Thread
+  } from '$shared/types'
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeActionsModals from './ScopeActionsModals.svelte'
   import { ScopeActionsController } from './ScopeActionsController.svelte'
@@ -105,12 +110,14 @@
     scopeState.showSidebarForThread(thread)
     navigateToScopedThreads?.()
     workspaceState.openThread(thread, project)
-    try {
-      const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-      scopeState.updateThread(updated)
-      workspaceState.updateThread(updated)
-    } catch (error) {
-      actionError = errorMessage(error, 'The thread could not be opened.')
+    if (threadTracksReadStatus(thread)) {
+      try {
+        const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+        scopeState.updateThread(updated)
+        workspaceState.updateThread(updated)
+      } catch (error) {
+        actionError = errorMessage(error, 'The thread could not be opened.')
+      }
     }
   }
 

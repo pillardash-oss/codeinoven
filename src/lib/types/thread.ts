@@ -1,5 +1,6 @@
 import type { ScopeSlice } from './scope'
 import type { ThreadSettings } from './agent'
+import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
@@ -169,6 +170,42 @@ export function isThreadBusy(thread: Thread): boolean {
 /** True when the provider is paused until an automatic retry deadline. */
 export function isThreadRetryPaused(thread: Thread): boolean {
   return isThreadRetryPausedStatus(thread.status)
+}
+
+/**
+ * Whether a thread participates in read/unread tracking. Every regular thread
+ * does. Among orchestration children only a worker whose reporting the user
+ * switched off does: a reporting worker hands its finished task back to the
+ * Sr. Engineer, so the Assignment lifecycle (reported, auditing, rework) is its
+ * indicator and it never carries a read state. Auditors are silent the same
+ * way. The coordinator panel chip and the aggregated coordinator row read a
+ * non-reporting worker's read state from here.
+ */
+export function threadTracksReadStatus(thread: Thread): boolean {
+  if (!isOrchestrationChildThread(thread)) return true
+  return thread.assignmentRole === 'worker' && !workerReportsToCoordinator(thread.settings)
+}
+
+/**
+ * Whether the coordinator row must still read as unread because one of its
+ * workers has not been read yet. Only non-reporting workers hold the dot open:
+ * a reporting worker's progress is visible through the Assignment lifecycle
+ * instead. The row clears only once the coordinator itself and every one of
+ * its non-reporting workers is read.
+ */
+export function coordinatorHasUnreadWorkers(
+  coordinator: Thread,
+  threads: readonly Thread[]
+): boolean {
+  if (coordinator.assignmentId === undefined && coordinator.assignmentRole !== 'coordinator') {
+    return false
+  }
+  return threads.some(
+    (candidate) =>
+      candidate.coordinatorThreadId === coordinator.id &&
+      threadTracksReadStatus(candidate) &&
+      !candidate.read
+  )
 }
 
 /**

@@ -98,7 +98,8 @@
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    threadTracksReadStatus
   } from '$shared/types'
   import type {
     AgentPart,
@@ -1423,7 +1424,7 @@
         // snapshot is applied to every sidebar store here so the badge can
         // never linger on a stale unread state when the backend's own
         // broadcast is missed.
-        if (!updated.read && document.hasFocus()) {
+        if (!updated.read && document.hasFocus() && threadTracksReadStatus(updated)) {
           requestThreadRead(updated.projectId, updated.id)
         }
       }
@@ -1468,9 +1469,12 @@
     const thread = selectedThread
     if (!thread || thread.id === readSettledThreadId) return
     readSettledThreadId = thread.id
-    // Orchestration children settle too: the coordinator panel shows their
-    // status chip, so an opened or selected worker must not stay unread.
-    if (thread.read || !document.hasFocus()) return
+    // Only a thread that tracks read status settles here: a regular thread, or
+    // a worker whose reporting the user switched off (the coordinator panel
+    // shows its status chip, so an opened or selected non-reporting worker must
+    // not stay unread). Reporting workers and auditors carry no read state:
+    // the Assignment lifecycle is their indicator.
+    if (thread.read || !threadTracksReadStatus(thread) || !document.hasFocus()) return
     markThreadReadAfterPaint(thread)
   })
 
@@ -1483,7 +1487,7 @@
   $effect(() => {
     const onWindowFocus = (): void => {
       const selected = workspaceState.selectedThread
-      if (!selected || selected.read) return
+      if (!selected || selected.read || !threadTracksReadStatus(selected)) return
       requestThreadRead(selected.projectId, selected.id)
     }
     window.addEventListener('focus', onWindowFocus)
@@ -2791,7 +2795,7 @@
   function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
-    markThreadReadAfterPaint(thread)
+    if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread.id)
   }
