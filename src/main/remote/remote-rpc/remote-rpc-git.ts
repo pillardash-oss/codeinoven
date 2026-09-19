@@ -100,6 +100,16 @@ export async function callRemoteGitRpc(
         await resolveRemoteProjectPath(ctx, requireString(args[0])),
         requireString(args[1])
       )
+    case 'git:removeCommitChanges':
+      return ctx.gitService.removeCommitChanges(
+        await resolveRemoteProjectPath(
+          ctx,
+          requireString(args[0]),
+          args[3] === undefined ? undefined : requireString(args[3])
+        ),
+        requireString(args[1]),
+        requireStringArray(args[2], 'Git paths')
+      )
     case 'git:init':
       return ctx.gitService.initialize(await resolveRemoteProjectPath(ctx, requireString(args[0])))
     case 'git:branches':

@@ -13,15 +13,18 @@
     abortConfirmOpen: boolean
     acceptConflictsSide: GitConflictSide | null
     commitInfoTarget: GitCommitInfo | null
+    removeCommitChangesConfirm: { hash: string; paths: string[] } | null
     conflictState: 'merge' | 'rebase' | 'none'
     conflictedCount: number
     commitInfoOnRemote: boolean
+    removeCommitOnRemote: boolean
     commitInfoUrl: string | null
     onConfirmStashDrop: () => void
     onConfirmDiscard: () => void
     onConfirmRestoreWorktree: () => void
     onConfirmAbortConflict: () => void
     onConfirmAcceptAllConflicts: () => void
+    onConfirmRemoveCommitChanges: () => void
     onCopyCommitHash: (commit: GitCommitInfo) => void
     onOpenCommitInBrowser: (url: string) => void
   }
@@ -33,15 +36,18 @@
     abortConfirmOpen = $bindable(),
     acceptConflictsSide = $bindable(),
     commitInfoTarget = $bindable(),
+    removeCommitChangesConfirm = $bindable(),
     conflictState,
     conflictedCount,
     commitInfoOnRemote,
+    removeCommitOnRemote,
     commitInfoUrl,
     onConfirmStashDrop,
     onConfirmDiscard,
     onConfirmRestoreWorktree,
     onConfirmAbortConflict,
     onConfirmAcceptAllConflicts,
+    onConfirmRemoveCommitChanges,
     onCopyCommitHash,
     onOpenCommitInBrowser
   }: Props = $props()
@@ -148,6 +154,57 @@
             onclick={onConfirmRestoreWorktree}
           >
             Restore file
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}
+
+{#if removeCommitChangesConfirm}
+  {@const removal = removeCommitChangesConfirm}
+  <AlertDialog.Root open onOpenChange={() => (removeCommitChangesConfirm = null)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Remove from commit?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          The selected
+          {removal.paths.length === 1 ? 'file change leaves' : 'file changes leave'}
+          <strong class="font-medium text-foreground">{removal.hash.slice(0, 7)}</strong>, so the
+          commit is rewritten and looks like it never touched
+          {removal.paths.length === 1 ? 'that file' : 'those files'}. Commits after it are replayed
+          and get new hashes. A file still in the working tree keeps its content and shows up as an
+          unstaged change. This cannot be undone.
+        </AlertDialog.Description>
+        {#if removal.paths.length > 1}
+          <div
+            class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
+          >
+            {#each removal.paths as path (path)}
+              <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
+            {/each}
+          </div>
+        {/if}
+        {#if removeCommitOnRemote}
+          <p class="mt-3 text-xs leading-5 text-warning">
+            This commit is already on the remote, so the branch needs a force push afterwards.
+          </p>
+        {/if}
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+            onclick={onConfirmRemoveCommitChanges}
+          >
+            Remove from commit
           </AlertDialog.Action>
         </div>
       </AlertDialog.Content>

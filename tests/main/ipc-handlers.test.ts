@@ -628,6 +628,7 @@ describe('git IPC', () => {
     expect(handlers.has('git:status')).toBe(true)
     expect(handlers.has('git:reset')).toBe(true)
     expect(handlers.has('git:amend')).toBe(true)
+    expect(handlers.has('git:removeCommitChanges')).toBe(true)
     expect(handlers.has('git:checkout')).toBe(true)
   })
 

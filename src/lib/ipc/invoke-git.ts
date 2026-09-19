@@ -173,6 +173,10 @@ export const invokeGitContract = {
     [projectId: string, message: string, scopeBucketId?: string],
     GitStatus
   >,
+  'git:removeCommitChanges': {} as Contract<
+    [projectId: string, hash: string, paths: string[], scopeBucketId?: string],
+    GitStatus
+  >,
   'git:reset': {} as Contract<
     [
       projectId: string,

@@ -49,6 +49,8 @@
     restoreFromSource: (source: string, path: string, target: GitRestoreTarget) => void
     toggleCommitDiff: (change: GitFileChange) => void
     toggleCommitDir: (path: string) => void
+    /** Take the given files of the open commit out of it (confirmed by the panel). */
+    requestRemoveCommitChanges: (paths: string[]) => void
   }
 
   let {
@@ -85,8 +87,18 @@
     routeConflictResolution,
     restoreFromSource,
     toggleCommitDiff,
-    toggleCommitDir
+    toggleCommitDir,
+    requestRemoveCommitChanges
   }: Props = $props()
+
+  /**
+   * Whether every file of the open commit is selected. The commit's own header
+   * carries the select-all switch, so its state has to be known outside the
+   * rows that own the individual selection.
+   */
+  const commitAllSelected = $derived(
+    commitDiffChanges.length > 0 && commitDiffChanges.every((file) => selectedPaths[file.path])
+  )
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -120,9 +132,13 @@
         loadingDiff={loadingCommitDiffFile[change.path] ?? false}
         error={commitDiffErrors[change.path] ?? null}
         expanded={commitExpanded[change.path] ?? false}
+        selected={Boolean(selectedPaths[change.path])}
+        selectable
         readonly
         onToggleDiff={() => toggleCommitDiff(change)}
         onToggleStage={() => {}}
+        onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+        onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
       />
     </div>
   {/each}
@@ -149,6 +165,27 @@
     {:else}
       <div class="overflow-hidden rounded-lg border border-border bg-surface">
         <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+          <span
+            class="shrink-0"
+            role="presentation"
+            onclick={(event: MouseEvent) => {
+              event.stopPropagation()
+              event.preventDefault()
+            }}
+            onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+          >
+            <Switch
+              checked={commitAllSelected}
+              onchange={() => toggleSectionSelection(commitDiffChanges)}
+              title={commitAllSelected
+                ? `Deselect all ${commitDiffChanges.length} files in this commit`
+                : `Select all ${commitDiffChanges.length} files in this commit`}
+              aria-label={commitAllSelected
+                ? `Deselect all ${commitDiffChanges.length} files in this commit`
+                : `Select all ${commitDiffChanges.length} files in this commit`}
+              activeClass="border-primary bg-primary"
+            />
+          </span>
           <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
             Changed files
           </span>
@@ -166,9 +203,13 @@
               loadingDiff={loadingCommitDiffFile[change.path] ?? false}
               error={commitDiffErrors[change.path] ?? null}
               expanded={commitExpanded[change.path] ?? false}
+              selected={Boolean(selectedPaths[change.path])}
+              selectable
               readonly
               onToggleDiff={() => toggleCommitDiff(change)}
               onToggleStage={() => {}}
+              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+              onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
               onRestore={(path, target) =>
                 restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}
             />

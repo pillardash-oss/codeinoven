@@ -1,10 +1,23 @@
 <script lang="ts">
-  import type { GitDiff, GitFileChange, GitRestoreTarget, TurnCheckpointFileDiff } from '$shared/types'
+  import type {
+    GitDiff,
+    GitFileChange,
+    GitRestoreTarget,
+    TurnCheckpointFileDiff
+  } from '$shared/types'
   import { Check } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import { ChevronDown, ChevronRight, GitMerge, Loader2, Minus, Plus } from '@lucide/svelte'
+  import {
+    ChevronDown,
+    ChevronRight,
+    FileMinus,
+    GitMerge,
+    Loader2,
+    Minus,
+    Plus
+  } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -24,6 +37,11 @@
     onDiscard?: (path: string) => void
     /** Restore this file's content from the commit or stash being viewed. */
     onRestore?: (path: string, target: GitRestoreTarget) => void
+    /**
+     * Take this file's change out of the commit being viewed. Destructive to
+     * history, so the panel confirms it before it runs.
+     */
+    onRemoveFromCommit?: (path: string) => void
     /** Opens the dedicated conflict-resolution panel for a conflicted file. */
     onResolveConflict?: (path: string) => void
     readonly?: boolean
@@ -47,6 +65,7 @@
     onIgnore,
     onDiscard,
     onRestore,
+    onRemoveFromCommit,
     onResolveConflict,
     readonly = false,
     displayPath
@@ -58,7 +77,8 @@
       onIgnore !== undefined ||
       onDiscard !== undefined ||
       onResolveConflict !== undefined ||
-      onRestore !== undefined
+      onRestore !== undefined ||
+      onRemoveFromCommit !== undefined
   )
 
   const letter = $derived(
@@ -289,22 +309,33 @@
                 Open
               </ContextMenu.Item>
             {/if}
-            {#if onRestore}
+            {#if onRestore || onRemoveFromCommit}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
-              <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => onRestore?.(change.path, 'staged')}
-              >
-                <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
-                Restore to index
-              </ContextMenu.Item>
-              <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => onRestore?.(change.path, 'worktree')}
-              >
-                <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
-                Restore to index + working tree
-              </ContextMenu.Item>
+              {#if onRestore}
+                <ContextMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => onRestore?.(change.path, 'staged')}
+                >
+                  <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
+                  Restore to index
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => onRestore?.(change.path, 'worktree')}
+                >
+                  <span class="inline-block w-3 text-center text-[0.625rem]">↩</span>
+                  Restore to index + working tree
+                </ContextMenu.Item>
+              {/if}
+              {#if onRemoveFromCommit}
+                <ContextMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+                  onSelect={() => onRemoveFromCommit?.(change.path)}
+                >
+                  <FileMinus size={12} class="shrink-0" />
+                  Remove from commit…
+                </ContextMenu.Item>
+              {/if}
             {/if}
             {#if onIgnore || onDiscard}
               <ContextMenu.Separator class="my-1 h-px bg-border" />

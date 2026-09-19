@@ -862,4 +862,25 @@ export class GitLocalOperations {
       this.access.markBusy('delete-commit', false)
     }
   }
+
+  /**
+   * Take the given paths' changes out of one commit and leave them in the
+   * working tree instead. The commit is rewritten, so the caller reloads
+   * history and drops its stale copy of that commit   this only owns the
+   * mutation and the status that follows it.
+   */
+  async removeCommitChanges(projectId: string, hash: string, paths: string[]): Promise<void> {
+    this.access.markBusy('remove-commit-changes', true)
+    this.error = null
+    try {
+      this.status = await invoke(
+        'git:removeCommitChanges',
+        ...this.access.scopedGitArgs(projectId, hash, paths)
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The commit could not be rewritten')
+    } finally {
+      this.access.markBusy('remove-commit-changes', false)
+    }
+  }
 }

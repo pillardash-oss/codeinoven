@@ -88,6 +88,7 @@ import {
   parseCommitRefs,
   worktreeBranchPaths
 } from './git/git-service-status'
+import { removeCommitPathChanges } from './git/git-service-commit-rewrite'
 
 // Git read commands opportunistically refresh the index, which takes
 // `.git/index.lock`. This service shares the repository with agent git CLIs,
@@ -1000,6 +1001,29 @@ export class GitService {
       await this.wrapError(projectPath, 'mutation', async () => {
         const cleanMessage = message.replace(/\r\n/gu, '\n')
         await this.client(directory).raw(['commit', '--amend', '-m', cleanMessage])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Take the given paths' changes out of one commit. The commit is rewritten so
+   * it holds each path at its parent's version, every commit after it is
+   * replayed with new hashes, and the working tree is left exactly as it was,
+   * so a file that is still on disk keeps its content and its change shows up
+   * as an ordinary unstaged one (untracked when the commit had added the file).
+   */
+  async removeCommitChanges(
+    projectPath: string,
+    hash: string,
+    paths: string[]
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safeHash = assertTreeIsh(hash)
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await removeCommitPathChanges({ directory, target: safeHash, paths: safePaths })
       })
       return this.readStatus(directory)
     })

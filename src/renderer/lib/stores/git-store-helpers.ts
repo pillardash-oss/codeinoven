@@ -12,6 +12,7 @@ export type GitOperation =
   | 'amend'
   | 'reset'
   | 'delete-commit'
+  | 'remove-commit-changes'
   | 'init'
   | 'checkout'
   | 'fetch'

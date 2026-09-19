@@ -1002,6 +1002,10 @@ export class GitState {
     return this.local.deleteCommit(projectId, target)
   }
 
+  removeCommitChanges(projectId: string, hash: string, paths: string[]): Promise<void> {
+    return this.local.removeCommitChanges(projectId, hash, paths)
+  }
+
   // Pull request operations, delegated to the online mutation service.
   createPullRequest(
     projectId: string,

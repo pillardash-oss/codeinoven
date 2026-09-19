@@ -55,6 +55,7 @@
     Download,
     ExternalLink,
     FileDiff,
+    FileMinus,
     FolderGit2,
     GitBranch,
     GitCommit,
@@ -236,6 +237,11 @@
   let selectedCommit = $state<GitCommitInfo | null>(savedView.selectedCommit)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
+  /**
+   * The commit and paths waiting on the rewrite confirmation: taking a file's
+   * change out of a commit moves the branch, so it is asked for first.
+   */
+  let removeCommitChangesConfirm = $state<{ hash: string; paths: string[] } | null>(null)
   /** Commit whose full record is open in the info dialog. */
   let commitInfoTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
@@ -407,10 +413,20 @@
   /** Local commits not yet on the upstream remote, oldest-first-among-them   matches history order. */
   const unpushedCount = $derived(status?.upstream ? Math.max(0, status.ahead) : 0)
 
-  const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
+  const busy = $derived(
+    gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset', 'remove-commit-changes'])
+  )
   const commitBusy = $derived(gitState.isBusy(['commit', 'amend']))
   const batchBusy = $derived(
-    gitState.isBusy(['stage', 'unstage', 'commit', 'stash', 'ignore', 'discard'])
+    gitState.isBusy([
+      'stage',
+      'unstage',
+      'commit',
+      'stash',
+      'ignore',
+      'discard',
+      'remove-commit-changes'
+    ])
   )
   const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
 
@@ -927,6 +943,8 @@
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
     selectedCommit = commit
     activeTab = 'changes'
+    // The selection belongs to the commit that was open, never to the next one.
+    clearSelection()
     loadingCommitDiff = true
     commitDiffChanges = await gitState.getCommitDiff(projectId, commit.hash)
     commitDiffs = {}
@@ -966,6 +984,7 @@
 
   function clearSelectedCommit(): void {
     selectedCommit = null
+    clearSelection()
     commitDiffChanges = []
     commitDiffs = {}
     commitExpanded = {}
@@ -1065,6 +1084,27 @@
       void reloadHistory()
       void refreshStatus()
     }
+  }
+
+  /** Take files out of the commit the panel has open. Destructive, so asked first. */
+  function requestRemoveCommitChanges(paths: string[]): void {
+    const commit = selectedCommit
+    if (!commit || paths.length === 0) return
+    removeCommitChangesConfirm = { hash: commit.hash, paths }
+  }
+
+  async function confirmRemoveCommitChanges(): Promise<void> {
+    const pending = removeCommitChangesConfirm
+    if (!pending) return
+    removeCommitChangesConfirm = null
+    await gitState.removeCommitChanges(projectId, pending.hash, pending.paths)
+    if (gitState.error) return
+    // The commit that was open carries a new hash now, so its diff describes a
+    // commit that no longer exists: leave the rewritten history in History
+    // rather than an inspector pinned to a hash that is gone.
+    clearSelectedCommit()
+    void reloadHistory()
+    void refreshStatus()
   }
 
   async function copyCommitHash(commit: GitCommitInfo): Promise<void> {
@@ -1360,6 +1400,20 @@
       ? `https://github.com/${encodeURIComponent(githubIdentity.owner)}/${encodeURIComponent(githubIdentity.repo)}/commit/${commitInfoTarget.hash}`
       : null
   )
+  /**
+   * Whether the commit waiting to be rewritten is already upstream. Rewriting it
+   * moves the branch, so an upstream copy means the next push has to force, and
+   * the confirmation says so before the user commits to it.
+   */
+  const removeCommitOnRemote = $derived.by(() => {
+    const target = removeCommitChangesConfirm
+    if (!target) return false
+    const commit = commitHistory.find((entry) => entry.hash === target.hash)
+    if (!commit) return false
+    if (commit.refs.some((ref) => remoteTrackingRefs.has(ref.name))) return true
+    if (!status?.upstream) return false
+    return commitHistory.findIndex((entry) => entry.hash === target.hash) >= unpushedCount
+  })
   /**
    * The open deployment's state, read from the same store record the detail body
    * renders, so the action row and the page below it cannot disagree.
@@ -2796,6 +2850,45 @@
         <span class="shrink-0">{relativeTime(commit.date)}</span>
       </div>
     </div>
+    <!--
+      The files of the open commit are selectable, so the row that reports a
+      working-tree selection also reports this one. It talks about the commit
+      instead of the working tree, which is why it lives here rather than beside
+      Stage all.
+    -->
+    {#if selectedPathList.length > 0}
+      <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
+        {selectedPathList.length} selected
+      </span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={batchBusy}
+          aria-label={`Actions for the ${selectedPathList.length} selected files`}
+          title={`Actions for the ${selectedPathList.length} selected files`}
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+          >
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestRemoveCommitChanges(selectedPathList)}
+            >
+              <FileMinus size={12} class="shrink-0" />
+              Remove from commit…
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    {/if}
   {:else if activeTab === 'stashes' && selectedStash !== null}
     {@const stash = selectedStash}
     <button
@@ -3327,6 +3420,7 @@
           {restoreFromSource}
           {toggleCommitDiff}
           {toggleCommitDir}
+          {requestRemoveCommitChanges}
         />
       {:else if activeTab === 'history'}
         <GitGraphView
@@ -3542,15 +3636,18 @@
   bind:abortConfirmOpen
   bind:acceptConflictsSide
   bind:commitInfoTarget
+  bind:removeCommitChangesConfirm
   {conflictState}
   conflictedCount={conflicted.length}
   {commitInfoOnRemote}
+  {removeCommitOnRemote}
   {commitInfoUrl}
   onConfirmStashDrop={() => void confirmStashDrop()}
   onConfirmDiscard={() => void confirmDiscard()}
   onConfirmRestoreWorktree={() => void confirmRestoreWorktree()}
   onConfirmAbortConflict={() => void confirmAbortConflict()}
   onConfirmAcceptAllConflicts={() => void confirmAcceptAllConflicts()}
+  onConfirmRemoveCommitChanges={() => void confirmRemoveCommitChanges()}
   onCopyCommitHash={(commit) => void copyCommitHash(commit)}
   onOpenCommitInBrowser={(url) => void openInBrowser(url)}
 />

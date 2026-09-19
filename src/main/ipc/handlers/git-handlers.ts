@@ -425,6 +425,20 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       )
   )
   ipcMain.handle(
+    'git:removeCommitChanges',
+    async (_, projectId: unknown, hash: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.removeCommitChanges(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRevision(hash),
+        validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
     'git:reset',
     async (_, projectId: unknown, mode: unknown, target?: unknown, scopeBucketId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
