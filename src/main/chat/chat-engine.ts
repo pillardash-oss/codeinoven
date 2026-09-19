@@ -37,6 +37,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { appendPartDelta } from '../../lib/agent-part-merge'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
@@ -19593,11 +19594,9 @@ export class ChatEngine {
     }
     if (event.type === 'message.part.delta') {
       const partId = `${event.sessionId}:${event.partId}`
-      turn.parts = turn.parts.map((part) => {
-        if (part.id !== partId || event.field !== 'text') return part
-        if (part.type !== 'text' && part.type !== 'reasoning') return part
-        return { ...part, text: `${part.text}${event.delta}` }
-      })
+      turn.parts = turn.parts.map((part) =>
+        part.id === partId ? appendPartDelta(part, event.field, event.delta) : part
+      )
       this.broadcast({
         type: 'brainstorm.trace',
         sessionId: event.sessionId,

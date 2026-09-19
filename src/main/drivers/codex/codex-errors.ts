@@ -16,6 +16,7 @@ export function isCodexRetryRecoveryActivity(method: string): boolean {
     method === 'item/agentMessage/delta' ||
     method === 'item/reasoning/textDelta' ||
     method === 'item/reasoning/summaryTextDelta' ||
+    method === 'item/reasoning/summaryPartAdded' ||
     method === 'item/started' ||
     method === 'item/completed' ||
     method === 'turn/plan/updated'

@@ -2,7 +2,7 @@
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
-  import { mergeStreamedPart } from '$shared/agent-part-merge'
+  import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -2315,11 +2315,10 @@
             )
       return
     }
-    if (!specGenerationTraceActive || update.field !== 'text') return
-    specGenerationTraceParts = specGenerationTraceParts.map((part) => {
-      if (part.id !== update.partId || part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
+    if (!specGenerationTraceActive) return
+    specGenerationTraceParts = specGenerationTraceParts.map((part) =>
+      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
+    )
   }
 
   /** Live trace of the isolated Assignment draft offshoot   mirrors the spec
@@ -2353,11 +2352,10 @@
             )
       return
     }
-    if (!assignmentGenerationTraceActive || update.field !== 'text') return
-    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) => {
-      if (part.id !== update.partId || part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
+    if (!assignmentGenerationTraceActive) return
+    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) =>
+      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
+    )
   }
 
   let brainstormError = $state('')

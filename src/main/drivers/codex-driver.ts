@@ -88,6 +88,7 @@ import { mapCodexRateLimits, mapCodexUsage } from './codex/codex-usage'
 import {
   appServerRequestId,
   notificationThreadId,
+  numberValue,
   recordValue,
   stringValue
 } from './codex/codex-values'
@@ -987,8 +988,19 @@ export class CodexDriver extends PersistentCliDriver {
       this.emitAppServerDelta(active, params, 'text')
       return
     }
-    if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
+    if (method === 'item/reasoning/textDelta') {
       this.emitAppServerDelta(active, params, 'reasoning')
+      return
+    }
+    if (method === 'item/reasoning/summaryTextDelta') {
+      // The summary is a separate channel from the reasoning body. Appending it
+      // into `text` rendered the same sentences twice in the thinking block
+      // (body plus "Thinking summary"), so it streams into `summary` instead.
+      this.emitAppServerDelta(active, params, 'reasoning', 'summary')
+      return
+    }
+    if (method === 'item/reasoning/summaryPartAdded') {
+      this.emitReasoningSummarySeparator(active, params)
       return
     }
     if (method === 'item/started' || method === 'item/completed') {
@@ -1369,7 +1381,8 @@ export class CodexDriver extends PersistentCliDriver {
   private emitAppServerDelta(
     active: CodexAppServerTurn,
     params: Record<string, unknown>,
-    kind: 'text' | 'reasoning'
+    kind: 'text' | 'reasoning',
+    field: 'text' | 'summary' = 'text'
   ): void {
     const itemId = stringValue(params['itemId'])
     const delta = stringValue(params['delta'])
@@ -1380,8 +1393,38 @@ export class CodexDriver extends PersistentCliDriver {
       sessionId: active.session.id,
       messageId,
       partId: `${messageId}:${kind}`,
-      field: 'text',
+      field,
       delta
+    }
+    this.applyEventToSession(active.session, event)
+    this.emit(event)
+  }
+
+  /**
+   * Separate the summary parts Codex streams for one reasoning item.
+   *
+   * Codex announces a new summary part with `item/reasoning/summaryPartAdded`
+   * instead of delimiting its delta stream. Without a separator between parts
+   * the streamed summary ran together (`**First****Second**`), so the live text
+   * never matched the completed item's newline-joined summary. Emit the same
+   * newline the snapshot uses, and only between parts: the first part opens the
+   * summary and needs no leading break.
+   */
+  private emitReasoningSummarySeparator(
+    active: CodexAppServerTurn,
+    params: Record<string, unknown>
+  ): void {
+    const itemId = stringValue(params['itemId'])
+    const summaryIndex = numberValue(params['summaryIndex'])
+    if (!itemId || !summaryIndex) return
+    const messageId = `${active.session.id}:${itemId}`
+    const event: AgentEvent = {
+      type: 'message.part.delta',
+      sessionId: active.session.id,
+      messageId,
+      partId: `${messageId}:reasoning`,
+      field: 'summary',
+      delta: '\n'
     }
     this.applyEventToSession(active.session, event)
     this.emit(event)

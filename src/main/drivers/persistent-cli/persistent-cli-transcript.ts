@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage, SessionAgentEvent, ThinkingLevel } from '../../../lib/types'
+import { appendPartDelta } from '../../../lib/agent-part-merge'
 import { estimateTokenCostUsd } from '../../providers/pricing'
 import {
   isPermissionToolName,
@@ -98,9 +99,10 @@ export function foldEventIntoMessages(messages: AgentMessage[], event: AgentEven
   }
   if (event.type === 'message.part.delta') {
     const message = messages.findLast((candidate) => candidate.id === event.messageId)
-    const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
-    if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
-      part.text += event.delta
+    const index = message?.parts.findLastIndex((candidate) => candidate.id === event.partId) ?? -1
+    const part = index === -1 ? undefined : message?.parts[index]
+    if (message && part && index !== -1) {
+      message.parts[index] = appendPartDelta(part, event.field, event.delta)
     }
     return
   }

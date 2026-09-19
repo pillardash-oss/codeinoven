@@ -1,4 +1,4 @@
-import { mergeStreamedPart } from '$shared/agent-part-merge'
+import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
 import type {
   AgentMessage,
   AgentPart,
@@ -112,19 +112,20 @@ export function applyStreamedDelta(
   field: string,
   delta: string
 ): AgentMessage[] {
-  if (field !== 'text') return messages
   return messages.map((message) => {
     if (message.id !== messageId) return message
-    return {
-      ...message,
-      parts: message.parts.map((part) => {
-        if (part.id !== partId) return part
-        if (part.type === 'text' || part.type === 'reasoning') {
-          return { ...part, text: part.text + delta }
-        }
-        return part
-      })
-    }
+    let touched = false
+    const parts = message.parts.map((part) => {
+      if (part.id !== partId) return part
+      const updated = appendPartDelta(part, field, delta)
+      if (updated === part) return part
+      touched = true
+      return updated
+    })
+    // Tool-argument deltas carry fields this fold does not own; leaving the
+    // message identity untouched keeps the sub-agent view from re-rendering
+    // its whole transcript for a delta that changed nothing.
+    return touched ? { ...message, parts } : message
   })
 }
 

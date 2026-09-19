@@ -1,4 +1,4 @@
-import { mergeStreamedPart } from '$shared/agent-part-merge'
+import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageText, threadKey } from './thread-messages-merge'
@@ -70,13 +70,15 @@ export class ThreadMessagesEvents {
     const entry = this.cache.entry(projectId, threadId)
     const msg = entry.messages.findLast((message) => message.id === messageId)
     if (!msg) return
-    const part = msg.parts.findLast((candidate) => candidate.id === partId)
-    if (!part) return
-    if (field === 'text' && (part.type === 'text' || part.type === 'reasoning')) {
-      part.text += delta
-      entry.messages = [...entry.messages]
-      this.cache.notifyStreaming(projectId, threadId)
-    }
+    const partIndex = msg.parts.findLastIndex((candidate) => candidate.id === partId)
+    if (partIndex === -1) return
+    const updated = appendPartDelta(msg.parts[partIndex], field, delta)
+    // A delta for a field this fold does not own (tool arguments, for one)
+    // leaves the part untouched; skip the re-render entirely.
+    if (updated === msg.parts[partIndex]) return
+    msg.parts[partIndex] = updated
+    entry.messages = [...entry.messages]
+    this.cache.notifyStreaming(projectId, threadId)
   }
 
   /** Mark a message as completed and stamp reasoning end times. */
@@ -241,12 +243,9 @@ export class ThreadMessagesEvents {
       this.cache.mergePage(projectId, threadId, [{ ...message, parts }])
       return
     }
-    if (update.field !== 'text') return
-    const parts = message.parts.map((part) => {
-      if (part.id !== update.partId) return part
-      if (part.type !== 'text' && part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
+    const parts = message.parts.map((part) =>
+      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
+    )
     this.cache.mergePage(projectId, threadId, [{ ...message, parts }])
   }
 
