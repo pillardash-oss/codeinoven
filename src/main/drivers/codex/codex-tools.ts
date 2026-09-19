@@ -11,7 +11,55 @@ export const CODEX_DEFAULT_QUESTION_CONFIG = 'tools.experimental_request_user_in
 export const CODEX_ASYNC_QUESTION_METHOD = 'item/tool/requestUserInputAsync'
 export const CODEX_DYNAMIC_QUESTION_METHOD = 'item/tool/call:cio_ask_user'
 export const CODEX_QUESTION_TOOL_NAME = 'cio_ask_user'
-export const CODEX_QUESTION_TOOL = {
+
+interface CodexQuestionOptionSchema {
+  type: 'object'
+  additionalProperties: false
+  properties: {
+    label: { type: 'string'; minLength: number }
+    description: { type: 'string'; minLength: number }
+  }
+  required: ['label', 'description']
+}
+
+interface CodexQuestionItemSchema {
+  type: 'object'
+  additionalProperties: false
+  properties: {
+    question: { type: 'string'; minLength: number }
+    header: { type: 'string'; minLength: number; maxLength: number }
+    options: {
+      type: 'array'
+      minItems: number
+      maxItems: number
+      items: CodexQuestionOptionSchema
+    }
+    multiple: { type: 'boolean' }
+  }
+  required: ['question', 'header', 'options']
+}
+
+interface CodexQuestionToolSchema {
+  type: 'object'
+  additionalProperties: false
+  properties: {
+    questions: {
+      type: 'array'
+      minItems: number
+      maxItems: number
+      items: CodexQuestionItemSchema
+    }
+  }
+  required: ['questions']
+}
+
+export interface CodexQuestionToolSpec {
+  name: typeof CODEX_QUESTION_TOOL_NAME
+  description: string
+  inputSchema: CodexQuestionToolSchema
+}
+
+export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
   name: CODEX_QUESTION_TOOL_NAME,
   description:
     'Ask the user one to three structured questions in CodeInOven and wait for their answers. Use this instead of writing a question or choices as assistant text.',
@@ -51,7 +99,29 @@ export const CODEX_QUESTION_TOOL = {
     },
     required: ['questions']
   }
-} as const
+}
+
+/** Build the Codex question tool with the app-configured maximum questions one
+ *  call may carry (General settings, Threads section) baked into the schema and
+ *  description. */
+export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
+  const base = CODEX_QUESTION_TOOL
+  return {
+    name: base.name,
+    description: `Ask the user one to ${maxQuestions} structured questions in CodeInOven and wait for their answers. Use this instead of writing a question or choices as assistant text.`,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        questions: {
+          ...base.inputSchema.properties['questions'],
+          maxItems: maxQuestions
+        }
+      },
+      required: base.inputSchema.required
+    }
+  }
+}
 export const CODEX_QUESTION_INSTRUCTION =
   'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 

@@ -77,7 +77,6 @@ import { piCoreToolsHeaderSource } from './pi/tools/core-tools-header'
 import { piCoreToolsInteractiveSource } from './pi/tools/core-tools-interactive'
 import { piCoreToolsSubagentSource } from './pi/tools/core-tools-subagents'
 import { piCoreToolsEventsSource } from './pi/tools/core-tools-events'
-
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
@@ -86,11 +85,12 @@ export const CIO_QUESTION_MARKER = 'cio-question:'
  * Compose the generated Pi core-tools extension module from its grouped
  * fragments. The fragments are concatenated in order with no separator, so the
  * emitted source is byte-for-byte identical to the original single template.
+ * `questionCap` feeds the app-configured cio_ask_user question cap.
  */
-export function piCoreToolsExtension(): string {
+export function piCoreToolsExtension(options: { questionCap: number }): string {
   return [
     piCoreToolsHeaderSource(),
-    piCoreToolsInteractiveSource(),
+    piCoreToolsInteractiveSource(options.questionCap),
     piCoreToolsSubagentSource(),
     piCoreToolsEventsSource()
   ].join('')

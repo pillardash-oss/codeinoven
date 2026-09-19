@@ -59,11 +59,11 @@ import {
   CODEX_ASYNC_QUESTION_METHOD,
   CODEX_DEFAULT_QUESTION_CONFIG,
   CODEX_DYNAMIC_QUESTION_METHOD,
-  CODEX_QUESTION_TOOL,
   CODEX_QUESTION_TOOL_NAME,
   codexApprovalPolicy,
   codexEffort,
   codexQuestionIds,
+  codexQuestionTool,
   codexSandboxPolicy,
   isCodexAsyncQuestion,
   isCodexDynamicQuestion,
@@ -352,7 +352,7 @@ export class CodexDriver extends PersistentCliDriver {
 
     try {
       const dynamicTools = [
-        CODEX_QUESTION_TOOL,
+        codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
         ...(this.utilityEndpoints.has(session.id)
           ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
               name,

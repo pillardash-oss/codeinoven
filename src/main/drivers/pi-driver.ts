@@ -2876,6 +2876,7 @@ export class PiDriver extends PersistentCliDriver {
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     if (existing) return existing
     try {
+      const questionCap = (await this.storage.getConfig()).agentQuestionCap
       const directory = cioCoreToolsDirectory(sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
@@ -2901,6 +2902,7 @@ export class PiDriver extends PersistentCliDriver {
           // tools would only bloat the model request and invite spurious
           // tool calls. Status/usage/compaction stay for every session.
           oneShot: this.isTitleSession(sessionId),
+          questionCap,
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),

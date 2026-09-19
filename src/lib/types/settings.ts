@@ -174,6 +174,8 @@ export interface AppConfig {
   threadLimit: number
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
+  /** Maximum questions one structured agent question card can carry (cio_ask_user). */
+  agentQuestionCap: number
   keybindings: Record<string, string>
   /** How slash commands are handled: in-app actions or forwarded to the harness. */
   slashCommandMode: SlashCommandMode
@@ -244,6 +246,7 @@ export type AppConfigPatch = Partial<
     | 'onboardingCompleted'
     | 'threadLimit'
     | 'questionTimeoutMs'
+    | 'agentQuestionCap'
     | 'slashCommandMode'
     | 'preferredEditor'
     | 'memory'

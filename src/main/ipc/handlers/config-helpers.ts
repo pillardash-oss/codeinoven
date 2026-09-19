@@ -70,6 +70,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'onboardingCompleted',
   'threadLimit',
   'questionTimeoutMs',
+  'agentQuestionCap',
   'slashCommandMode',
   'preferredEditor',
   'memory',
@@ -301,6 +302,18 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       )
     }
     patch.questionTimeoutMs = value.questionTimeoutMs
+  }
+
+  if ('agentQuestionCap' in value) {
+    if (
+      typeof value.agentQuestionCap !== 'number' ||
+      !Number.isInteger(value.agentQuestionCap) ||
+      value.agentQuestionCap < 1 ||
+      value.agentQuestionCap > 10
+    ) {
+      throw new TypeError('Agent question cap must be an integer between 1 and 10')
+    }
+    patch.agentQuestionCap = value.agentQuestionCap
   }
 
   if ('maxDiffLines' in value) {

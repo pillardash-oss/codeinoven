@@ -51,6 +51,9 @@ export interface CioCoreToolsExtensionOptions {
    *  and skips the permission gate entirely, so the model request carries
    *  only pi's own built-ins plus the status/usage/compaction plumbing. */
   oneShot?: boolean
+  /** App-configured maximum questions one cio_ask_user call may carry
+   *  (General settings, Threads section). */
+  questionCap: number
   /** Absolute path of the per-session utility-gateway handoff file. */
   gatewayHandoffPath: string
   /** Absolute path of the per-session system-prompt handoff file. */
@@ -177,7 +180,7 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
-    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
+    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension({ questionCap: options.questionCap }) },
     { factory: '__cioCompactionExtension', source: piCompactionExtension() }
   ]
   const parsed = sources.map((entry) => {

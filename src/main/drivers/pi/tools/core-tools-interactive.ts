@@ -4,6 +4,9 @@
  * The returned text is one fragment of the generated core-tools extension
  * source; pi-core-tools-extension.ts concatenates every fragment in order so
  * the emitted module is byte-for-byte identical to the original single string.
+ *
+ * `questionCap` is the app-configured maximum number of questions one
+ * cio_ask_user call may carry (General settings, Threads section).
  */
 import {
   CIO_ASK_USER_TOOL_NAME,
@@ -11,16 +14,16 @@ import {
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../../../lib/core-tools'
 
-export function piCoreToolsInteractiveSource(): string {
+export function piCoreToolsInteractiveSource(questionCap: number): string {
   return `  pi.registerTool({
     name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
     description:
-      'Ask the user one to three structured questions and wait for their answers. Each question offers two or more described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
+      'Ask the user one to ${questionCap} structured questions and wait for their answers. Each question offers two or more described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
     promptSnippet: 'Ask structured questions with described choices and wait for answers',
     promptGuidelines: [
       'Use ${CIO_ASK_USER_TOOL_NAME} when a decision, preference, or clarification from the user is needed before continuing.',
-      'Ask one to three short questions at a time. Put the recommended option first and add (Recommended) to its label.',
+      'Ask one to ${questionCap} short questions at a time. Put the recommended option first and add (Recommended) to its label.',
       'Keep option labels short. Put context and tradeoffs in each option description, not in the question text.',
       'Custom answers are always available; do not add an Other option.'
     ],
@@ -48,7 +51,7 @@ export function piCoreToolsInteractiveSource(): string {
             Type.Boolean({ description: 'Allow more than one option to be selected.' })
           )
         }),
-        { description: 'Questions to ask, in order.', minItems: 1, maxItems: 3 }
+        { description: 'Questions to ask, in order.', minItems: 1, maxItems: ${questionCap} }
       )
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
