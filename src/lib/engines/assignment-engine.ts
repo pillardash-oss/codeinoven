@@ -1195,6 +1195,13 @@ export class AssignmentEngine {
       (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
     )
     if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
+    // A worker whose reporting the user switched off is a private iteration loop:
+    // its turns never hand back, so they must never move the Assignment lifecycle
+    // either. Without this the task flips to `running` on every turn and stays
+    // there, since no report will ever arrive to settle it. The coordinator panel
+    // shows the worker thread's own live status instead.
+    const worker = await this.threads.getThread(active.projectId, workerThreadId)
+    if (!workerReportsToCoordinator(worker?.settings)) return active
     if (
       task.status === 'running' &&
       active.status === 'running' &&

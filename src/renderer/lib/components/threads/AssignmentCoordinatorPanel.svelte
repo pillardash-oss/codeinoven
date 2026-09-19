@@ -2,6 +2,8 @@
   import { ArrowLeft, ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
+  import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import {
     isThreadRetryPaused,
     workerReportsToCoordinator,
@@ -120,8 +122,16 @@
         : task.threadId
           ? `Open ${linkedWorker?.title ?? worker}`
           : 'Open this task in Assignment Studio'
+    // A non-reporting worker never hands its task back, so the Assignment
+    // lifecycle is frozen where the user switched reporting off. The row shows
+    // the worker thread's own live status instead, and the accessible name has
+    // to match what is on screen.
+    const liveStatus =
+      reportingOff && linkedWorker
+        ? statusBadgeForThread(linkedWorker, isThreadLiveWorking(linkedWorker))?.label
+        : undefined
     const reporting = reportingOff ? ' · not reporting back' : ''
-    return `${task.title} · ${worker} · ${statusLabel(task.status)}${reporting}. ${destination}`
+    return `${task.title} · ${worker} · ${liveStatus ?? statusLabel(task.status)}${reporting}. ${destination}`
   }
 
   async function confirmStop(): Promise<void> {
@@ -370,15 +380,22 @@
                     Not reporting
                   </span>
                 {/if}
+                {#if reportingOff && linkedWorker}
+                  <!-- The Assignment lifecycle is frozen while reporting is off, so the
+                       worker thread's own live status is the only truthful one. -->
+                  <ThreadStatusChip thread={linkedWorker} size="md" />
+                {/if}
               </span>
             </span>
-            <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
-                task.status
-              )}"
-            >
-              {statusLabel(task.status)}
-            </span>
+            {#if !(reportingOff && linkedWorker)}
+              <span
+                class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
+                  task.status
+                )}"
+              >
+                {statusLabel(task.status)}
+              </span>
+            {/if}
           </button>
         {/each}
       </div>

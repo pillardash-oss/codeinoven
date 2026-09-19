@@ -52,6 +52,8 @@ The setting lives on the thread (`ThreadSettings.reportToCoordinator`) and appli
 
 The coordinator panel marks the state without opening a thread: a task whose worker has reporting off carries an amber **Not reporting** badge next to the worker name in the task row, in the same tooltip and accessible name as the row itself.
 
+Because such a worker never hands its task back, the Assignment lifecycle is frozen for it. A live worker turn no longer flips the task to `running`: `AssignmentEngine.markWorkerSteered` returns the plan untouched when the worker's reporting is off, so the task stays wherever the user left it instead of sitting on `running` forever with no report coming to settle it. The row shows the worker thread's own live status next to the badge instead, using the same indicator, colour, and wording as the thread row (Working, Waiting to retry, Needs approval, Spec ready, Needs attention, Done, Done · unread, New), and the frozen lifecycle pill is hidden for that row because it can no longer advance.
+
 ### Assignment audit offer
 
 When implementation finishes, the coordinator thread shows the **Implementation finished** offer that starts the independent audit. Cancelling the offer does not end the audit cycle. It hides the composer prompt for that thread and reveals the ordinary composer, so the Sr. Engineer can simply be talked to again, and the worker hand-off loop is untouched.
