@@ -9,7 +9,12 @@ import type {
   CliLineParseContext,
   CliLineParseResult
 } from '../persistent-cli/persistent-cli-types'
-import { mapClineNormalizedUsage, mapClineUsage } from './cline-usage'
+import {
+  clineModelContextWindow,
+  mapClineNormalizedUsage,
+  mapClineStepUsage,
+  mapClineUsage
+} from './cline-usage'
 import {
   numberValue,
   record,
@@ -28,6 +33,13 @@ export interface ClineTurnState {
   questionRequestIds: Set<string>
   /** Set when the driver deliberately stops the process at a question boundary. */
   expectsProcessStop?: boolean
+  /**
+   * Prompt tokens of the run's most recent iteration: the real occupancy of
+   * the model context at that point. Cline's `run_result.usage` sums every
+   * iteration of the run, so it is a billed-token total that no occupancy
+   * reading may be derived from.
+   */
+  contextUsed?: number
 }
 
 function clineMessage(state: ClineTurnState): AgentMessage {
@@ -150,6 +162,49 @@ function mapClineContentEvent(
   return { events: [] }
 }
 
+function aggregateContextUsed(value: unknown): number | undefined {
+  const usage = record(value)
+  if (!usage) return undefined
+  const input = numberValue(usage['inputTokens'])
+  if (input === undefined) return undefined
+  return (
+    input +
+    (numberValue(usage['cacheReadTokens']) ?? 0) +
+    (numberValue(usage['cacheWriteTokens']) ?? 0)
+  )
+}
+
+/**
+ * Promote one iteration's `usage` event into live telemetry.
+ *
+ * This is the only usage Cline reports before a run ends, so without it a long
+ * turn exposes no tokens, no cost and no context occupancy until `run_result`.
+ * The event's deltas describe the iteration the provider just billed, which is
+ * exactly the current context occupancy.
+ */
+function mapClineUsageEvent(
+  event: Record<string, unknown>,
+  context: CliLineParseContext,
+  state: ClineTurnState
+): CliLineParseResult {
+  const step = mapClineStepUsage(event)
+  if (!step) return { events: [] }
+  state.contextUsed = step.contextUsed
+  return {
+    events: [
+      {
+        type: 'usage.updated',
+        sessionId: context.sessionId,
+        messageId: state.messageId,
+        tokens: step.tokens,
+        normalizedUsage: step.normalizedUsage,
+        contextUsed: step.contextUsed,
+        ...(step.cost === undefined ? {} : { cost: step.cost })
+      }
+    ]
+  }
+}
+
 export function mapCurrentClineRecord(
   entry: Record<string, unknown>,
   context: CliLineParseContext,
@@ -200,6 +255,9 @@ export function mapCurrentClineRecord(
     if (eventType === 'content_start' || eventType === 'content_end') {
       return mapClineContentEvent(event, context, state, eventType === 'content_end')
     }
+    if (eventType === 'usage') {
+      return mapClineUsageEvent(event, context, state)
+    }
     if (eventType === 'iteration_end') {
       return {
         messages: [{ ...clineMessage(state), completedAt: timestampValue(entry['ts']) }],
@@ -230,14 +288,31 @@ export function mapCurrentClineRecord(
     const usage = mapClineUsage(entry['usage'])
     const normalizedUsage = mapClineNormalizedUsage(entry['usage'])
     const cost = numberValue(record(entry['usage'])?.['totalCost'])
+    // Occupancy is the last iteration's prompt, never the run aggregate: a run
+    // that made several requests reports their sum, which exceeds the window.
+    // A run that never streamed a `usage` event can still be judged from the
+    // aggregate when it made a single request, where both numbers are the same.
+    const iterations = numberValue(entry['iterations'])
+    const contextUsed =
+      state.contextUsed ??
+      (iterations === undefined || iterations <= 1
+        ? aggregateContextUsed(entry['usage'])
+        : undefined)
+    const contextWindow = clineModelContextWindow(model)
     const message: AgentMessage = {
       ...clineMessage(state),
       completedAt: timestampValue(entry['ts']),
       modelId: stringValue(model?.['id']),
-      providerId: stringValue(model?.['provider']),
+      // Cline reports the provider that BILLED the run, which for its free
+      // models is `cline-pass` even when the turn was dispatched as `cline`.
+      // A message is attributed to the provider and model the app ran, so the
+      // turn's provenance stamps it (like every other persistent-CLI driver)
+      // and the meter, ledger and pricing all key on the app's own selection.
       ...(usage ? { tokens: usage } : {}),
       ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(cost !== undefined ? { cost } : {}),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed }),
       ...(failed ? { error: finalText || 'Cline turn failed' } : {})
     }
     const events: SessionAgentEvent[] = []
@@ -252,11 +327,13 @@ export function mapCurrentClineRecord(
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId: state.messageId,
-      // Cline reports its whole run once, at the end, so this is the only
-      // token-bearing event it emits. It has to be carried here or the turn's
-      // tokens/second rate would have nothing to divide by.
+      // The run's billed token total. Per-iteration `usage` events already
+      // streamed live readings; this is what the turn's cost and tokens/second
+      // rate are finally accounted from.
       ...(usage ? { tokens: usage } : {}),
       ...(normalizedUsage ? { normalizedUsage } : {}),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed }),
       ...(failed ? { error: finalText || 'Cline turn failed' } : {})
     })
     return {

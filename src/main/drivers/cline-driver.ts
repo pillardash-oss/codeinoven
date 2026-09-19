@@ -38,14 +38,17 @@ import {
   CLINE_PASS_PROVIDER_ID,
   CLINE_THINKING_LEVELS,
   CLINE_THINKING_PRESETS,
+  applyClineObservedContextWindows,
   clineFreeModelIds,
   cloneCatalogs,
   fetchClineCatalog,
   filterClineCatalogForAccount,
   hasClinePassSubscription,
   isClineAvailable,
+  observeClineContextWindow,
   refreshClineCatalogOnce
 } from './cline/cline-models'
+import { clineModelContextWindow } from './cline/cline-usage'
 import { mapClineRecord, mapCurrentClineRecord } from './cline/cline-stream-fold'
 import type { ClineTurnState } from './cline/cline-stream-fold'
 import { record, stringValue, utilityKey } from './cline/cline-values'
@@ -67,7 +70,9 @@ export class ClineDriver extends PersistentCliDriver {
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
-    contextUsage: false,
+    // Emits per-iteration token, cost and context-occupancy telemetry, and
+    // reports the model context window it resolved on every run result.
+    contextUsage: true,
     compaction: false,
     subagents: false,
     nativeUtilities: ['web_search', 'web_fetch']
@@ -141,7 +146,7 @@ export class ClineDriver extends PersistentCliDriver {
     // Do not pay a network round-trip for Cline's remote catalog when the
     // harness is not installed   return the static fallback instead.
     if (!(await isClineAvailable())) {
-      return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
+      return applyClineObservedContextWindows(appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG)))
     }
     // The chat engine already gives slow driver probes a background enrichment
     // path. Await Cline's live feed here so that enrichment persists the real
@@ -151,7 +156,9 @@ export class ClineDriver extends PersistentCliDriver {
       hasClinePassSubscription()
     ])
     const discovered = remote.length > 0 ? remote : cloneCatalogs(CLINE_FALLBACK_CATALOG)
-    return appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
+    return applyClineObservedContextWindows(
+      appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
+    )
   }
 
   /** Cheapest available free/pass models, shared by title and grading runs. */
@@ -568,11 +575,38 @@ export class ClineDriver extends PersistentCliDriver {
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     const state = this.turnStates.get(context.sessionId)
-    if (entry && state) {
-      const current = mapCurrentClineRecord(entry, context, state)
-      if (current) return current
+    if (entry) {
+      if (stringValue(entry['type']) === 'run_result') {
+        this.learnModelContextWindow(context.sessionId, entry)
+      }
+      if (state) {
+        const current = mapCurrentClineRecord(entry, context, state)
+        if (current) return current
+      }
     }
     return mapClineRecord(value, context)
+  }
+
+  /**
+   * Learn the context window Cline resolved for the model it just ran.
+   *
+   * Cline's catalog publishes no window, so this run result is the app's only
+   * source for one. A newly learned value changes the denominator of the
+   * occupancy meter and the budget a history recap is truncated against, for
+   * every project, so it is worth asking the engine to re-list the catalogs.
+   */
+  private learnModelContextWindow(sessionId: string, entry: Record<string, unknown>): void {
+    const model = record(entry['model'])
+    const modelId = stringValue(model?.['id'])
+    const contextWindow = clineModelContextWindow(model)
+    if (!modelId || contextWindow === undefined) return
+    if (!observeClineContextWindow(modelId, contextWindow)) return
+    Logger.dev('Cline reported a model context window the catalog did not have', {
+      sessionId,
+      modelId,
+      contextWindow
+    })
+    this.emit({ type: 'catalog.updated', harnessId: this.id })
   }
 
   /**

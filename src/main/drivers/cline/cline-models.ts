@@ -153,6 +153,51 @@ export function uniqueModels(models: ProviderModel[]): ProviderModel[] {
   return [...new Map(models.map((model) => [model.id, model])).values()]
 }
 
+/**
+ * Context windows Cline itself reported for the models it ran.
+ *
+ * Cline's catalog endpoint publishes no window, so without this the app has no
+ * denominator for Cline's occupancy meter, the history-recap budget falls back
+ * to the generic default, and a model with a much larger window is truncated
+ * as if it were small. Cline reports the window it resolved on every run
+ * result, so the driver learns it there and the next catalog refresh publishes
+ * it. A learned value lives for the process lifetime: the first turn on a
+ * model teaches the app, and every later turn on that model   in any thread
+ * reads it.
+ */
+const clineObservedContextWindows = new Map<string, number>()
+
+/**
+ * Record the context window Cline resolved for a model. Returns true when the
+ * value is new or changed, so the caller only republishes the catalogs for a
+ * window the app did not already know.
+ */
+export function observeClineContextWindow(modelId: string, contextWindow: number): boolean {
+  const id = modelId.trim()
+  if (!id || !Number.isFinite(contextWindow) || contextWindow <= 0) return false
+  if (clineObservedContextWindows.get(id) === contextWindow) return false
+  clineObservedContextWindows.set(id, contextWindow)
+  return true
+}
+
+/**
+ * Publish learned context windows on Cline's model catalogs.
+ *
+ * Only a model that declares no window of its own is filled in, so an explicit
+ * catalog or user-declared window is never overridden by an observation.
+ */
+export function applyClineObservedContextWindows(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+  if (clineObservedContextWindows.size === 0) return catalogs
+  return catalogs.map((catalog) => ({
+    ...catalog,
+    models: catalog.models.map((model) => {
+      if (model.contextWindow !== undefined) return model
+      const observed = clineObservedContextWindows.get(model.id)
+      return observed === undefined ? model : { ...model, contextWindow: observed }
+    })
+  }))
+}
+
 function mapRemoteClineCatalog(value: unknown): ProviderCatalog[] {
   const payload = record(value)
   if (!payload) return []
