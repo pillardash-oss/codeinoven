@@ -478,10 +478,15 @@
 {/if}
 
 <style>
-  /* The shoe card is the container: as the conversation screen shrinks (e.g.
-     a very wide right sidebar), give the truncating stages room in order  
-     project name first, then location, connection label, and finally only the
-     icons remain. */
+  /* The chat composer is the query container (`.chat-composer` sets
+     `container-type: inline-size`): as it shrinks (e.g. a very wide right
+     sidebar), give the truncating stages room in order   project name first,
+     then location, connection label, and finally only the icons remain.
+
+     The project and identity classes below are handed to ProjectSwitch and
+     ProjectIdentity as props, so those elements belong to the child components
+     and only `:global(...)` reaches them from here. `shoe-report-label` is this
+     component's own markup and stays scoped. */
 
   /* The reporting pill reserves the width of its widest label so flipping the
      switch never shifts the row, and truncates once the shoe runs out of room. */
@@ -490,11 +495,11 @@
   }
 
   @container (max-width: 400px) {
-    .shoe-project {
+    :global(.shoe-project) {
       max-width: 8rem;
     }
 
-    .shoe-identity :global(.shoe-identity-location) {
+    :global(.shoe-identity .shoe-identity-location) {
       display: none;
     }
 
@@ -505,11 +510,11 @@
   }
 
   @container (max-width: 320px) {
-    .shoe-project {
+    :global(.shoe-project) {
       max-width: 1.25rem;
     }
 
-    .shoe-identity {
+    :global(.shoe-identity) {
       display: none;
     }
 
