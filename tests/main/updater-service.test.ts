@@ -60,6 +60,7 @@ function defaultConfig(): AppConfig {
     onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,
+    agentQuestionCap: 3,
     keybindings: {},
     slashCommandMode: 'app',
     preferredEditor: 'system',
