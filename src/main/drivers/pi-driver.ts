@@ -2172,11 +2172,7 @@ export class PiDriver extends PersistentCliDriver {
     void this.finishTurn(session)
   }
 
-  private handleRpcExit(
-    code: number | null,
-    sessionId: string,
-    exitedClient: PiRpcClient
-  ): void {
+  private handleRpcExit(code: number | null, sessionId: string, exitedClient: PiRpcClient): void {
     void code
     // A session can replace its RPC process while the old child is still
     // delivering its exit event. Never let that stale callback dispose the
