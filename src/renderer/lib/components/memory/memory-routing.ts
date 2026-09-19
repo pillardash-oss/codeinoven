@@ -8,23 +8,100 @@ export interface MemoryLocation {
 }
 
 /**
- * Scopes a memory panel manages for one load/save run.
+ * Which memory surface a panel is, which decides both the scopes it offers and
+ * the files it owns.
  *
- * A 'projects' run loads the root file plus every per-project and per-thread
- * file, so it manages `global`/`projects` (root), `project`, and `thread`
- * scopes. A 'chats' run loads the root global entries plus the chat file and
- * chat-thread files, so it manages `global` (root), `chat`, and `thread`.
- * Scopes a run does not manage are preserved as-is when a save rewrites a
- * shared destination file (e.g. a chats save must never drop `projects`-
- * scoped root entries it never loaded).
+ * - `settings` is the global memory page: it owns `global` (both), `projects`
+ *   (all projects), and `chat` (all chats), which live in the root file and the
+ *   inbox project file.
+ * - `sidebar-projects` is a project conversation's memory sidebar: it owns the
+ *   projects-wide `projects` scope (shown to the user as "Global"), the
+ *   `project` scope, and the `thread` scope. Truly cross-audience `global`
+ *   memory is settings-only and is preserved untouched by a sidebar save.
+ * - `sidebar-chats` is a chat conversation's memory sidebar: it owns the
+ *   `chat` scope (shown as "Global") and the `thread` scope.
+ */
+export type MemoryPanelSurface = 'settings' | 'sidebar-projects' | 'sidebar-chats'
+
+/** One selectable scope, with the pickers it needs on the surface offering it. */
+export interface MemoryScopeOption {
+  value: MemoryScope
+  label: string
+  /** The entry stores a chosen project on itself. */
+  needsProject: boolean
+  /** The entry stores a chosen thread on itself. */
+  needsThread: boolean
+}
+
+/**
+ * The scope choices per surface. Labels are surface-specific on purpose: a
+ * project sidebar calls the projects-wide scope "Global" because that is what
+ * it means to a single conversation, while the settings page names the three
+ * audiences plainly so a user knows where a memory applies.
+ */
+export const MEMORY_SCOPE_OPTIONS = {
+  settings: [
+    { value: 'projects', label: 'Projects', needsProject: false, needsThread: false },
+    { value: 'chat', label: 'Chats', needsProject: false, needsThread: false },
+    { value: 'global', label: 'Both', needsProject: false, needsThread: false }
+  ],
+  'sidebar-projects': [
+    { value: 'projects', label: 'Global', needsProject: false, needsThread: false },
+    { value: 'project', label: 'Specific project', needsProject: true, needsThread: false },
+    { value: 'thread', label: 'Thread', needsProject: true, needsThread: true }
+  ],
+  'sidebar-chats': [
+    { value: 'chat', label: 'Global', needsProject: false, needsThread: false },
+    { value: 'thread', label: 'Thread', needsProject: false, needsThread: true }
+  ]
+} as const satisfies Record<MemoryPanelSurface, readonly MemoryScopeOption[]>
+
+/**
+ * Scopes a memory panel manages for one load/save run. Scopes a run does not
+ * manage are preserved as-is when a save rewrites a shared destination file
+ * (e.g. a project sidebar save must never drop the root `global` entries it
+ * never loaded).
  */
 export const MEMORY_MANAGED_SCOPES = {
-  projects: ['global', 'projects', 'project', 'thread'],
-  chats: ['global', 'chat', 'thread']
-} as const satisfies Record<'projects' | 'chats', readonly MemoryScope[]>
+  settings: ['global', 'projects', 'chat'],
+  'sidebar-projects': ['projects', 'project', 'thread'],
+  'sidebar-chats': ['chat', 'thread']
+} as const satisfies Record<MemoryPanelSurface, readonly MemoryScope[]>
 
-export function managedScopesFor(kind: 'projects' | 'chats'): readonly MemoryScope[] {
-  return MEMORY_MANAGED_SCOPES[kind]
+export function managedScopesFor(surface: MemoryPanelSurface): readonly MemoryScope[] {
+  return MEMORY_MANAGED_SCOPES[surface]
+}
+
+/** The scope a newly created memory starts in on each surface. */
+export function defaultScopeForSurface(surface: MemoryPanelSurface): MemoryScope {
+  return MEMORY_SCOPE_OPTIONS[surface][0]?.value ?? 'projects'
+}
+
+/**
+ * The ids an entry keeps when its scope changes, and the ones it must drop.
+ *
+ * A `project`/`thread` scope seeds from the entry's own pending choice first and
+ * the panel's context second, so switching scope inside a conversation lands on
+ * the project (or thread) the user is already in instead of an empty picker.
+ */
+export function scopeIdsForChange(
+  scope: MemoryScope,
+  current: MemoryLocation = {},
+  context: MemoryLocation = {}
+): MemoryLocation {
+  switch (scope) {
+    case 'global':
+    case 'projects':
+    case 'chat':
+      return { projectId: undefined, threadId: undefined }
+    case 'project':
+      return { projectId: current.projectId ?? context.projectId, threadId: undefined }
+    case 'thread':
+      return {
+        projectId: current.projectId ?? context.projectId,
+        threadId: current.threadId ?? context.threadId
+      }
+  }
 }
 
 export function memoryLocationKey(location: MemoryLocation): string {

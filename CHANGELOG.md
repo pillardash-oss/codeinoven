@@ -5,7 +5,30 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- The agent can now collect secrets without ever seeing them. A new
+  `cio_ask_secret` **gateway** tool (the utility gateway every harness already
+  reaches, not a per-harness tool) asks for one or more values by title and
+  description; the app renders a password card with an in-field reveal toggle and
+  a "Secrets are not sent to the agent" note and stores each value in the
+  encrypted vault. A value bound to a capability by `utility_id` is stored
+  exactly as the Utilities page stores it, so an MCP that needs a key can be
+  finished in one turn. A plain value is re-exposed to the thread each turn as an
+  OS environment variable (`CIO_<ID>_<TITLE_SLUG>`, or the exact name the target
+  expects) and as an owner-only `0600` file the agent interpolates with
+  `"$(cat secret_path)"`, so CLI work needs no plaintext in chat. Neither the
+  tool result nor any MCP transport ever carries the value: the model receives
+  only `Secret set, you may proceed.` and the names.
+
 ### Changed
+
+- A capability installed without explicit harness targeting now applies to every harness,
+  present and future. A missing `harnessBindings` used to normalize to an empty list, which
+  `resolve` reads as "no harness", so the setup contract had to make the agent enumerate
+  harnesses. It now stores a single `{"harnessId":"*"}` binding and the contract treats the
+  field as optional, so a global install reaches every harness and a harness added later
+  resolves it with no reinstall.
 
 - Replaced the 1–5 per-turn feedback ledger with a 0–10 conversation-grading
   model-ranking system. Rankings are keyed by harness + provider + model +

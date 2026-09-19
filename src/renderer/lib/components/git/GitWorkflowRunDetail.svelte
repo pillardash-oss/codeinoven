@@ -2,6 +2,7 @@
   import { Bot, CircleX, ExternalLink, Loader2, Terminal } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { formatDurationSeconds } from '$lib/format/duration'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
   import GitJobLogView from './GitJobLogView.svelte'
@@ -141,8 +142,7 @@
     if (!Number.isFinite(started)) return ''
     if (completed !== null && Number.isFinite(completed)) {
       const seconds = Math.max(0, Math.floor((completed - started) / 1000))
-      if (seconds < 60) return `${seconds}s`
-      return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+      return formatDurationSeconds(seconds)
     }
     return 'running'
   }
@@ -275,6 +275,7 @@
                             type="button"
                             class="mt-1.5 flex h-6 cursor-pointer items-center gap-1 text-[0.5625rem] font-medium text-foreground hover:text-primary"
                             title="Follow this running job on GitHub"
+                            data-external-url={job.url}
                             onclick={() => void openInBrowser(job.url)}
                           >
                             <ExternalLink size={10} />

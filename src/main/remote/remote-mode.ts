@@ -12,8 +12,6 @@ import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
-import { createHash, randomBytes } from 'node:crypto'
-import { createServer, type Server, type ServerResponse } from 'node:http'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { SecretVault } from '../storage/secret-vault'
@@ -25,17 +23,12 @@ import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import type {
   AccountAuthProvider,
-  AccountProfile,
   AccountProfileState,
   AccountProfileSyncPayload,
   AccountSignInStart,
-  MemoryEntry,
-  MemoryTombstone,
-  SyncedDeviceProject,
-  SyncedDeviceUsage
+  MemoryEntry
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
-import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
 import {
   PAIRING_TTL_MS,
   loadOrCreatePeerSecret,
@@ -44,37 +37,28 @@ import {
 } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
-import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
+import type { AccountProfileRepo } from '../database/repositories/account-profile-repo'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
 import { readRemoteModeState, writeRemoteModeState } from './remote-state'
+import { RemoteAccountSession } from './remote-mode/remote-mode-account'
+import { createLanDeviceAuthenticator } from './remote-mode/remote-mode-gateway-auth'
 import {
-  mergeTombstones,
-  readMemorySyncState,
-  tombstonesForDeletions,
-  writeMemorySyncState
-} from './memory-sync-state'
-import { isHarnessScopedModelKey } from '../../lib/model-keys'
-
-declare global {
-  /** Public remote-service origin injected by the Electron production build. */
-  const __CODEINOVEN_REMOTE_API_ORIGIN__: string | undefined
-  /** Public account sign-in origin injected by the Electron production build. */
-  const __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: string | undefined
-}
-
-/** Gateway device-authentication callback shape (see RemoteGateway options). */
-type GatewayAuthHandler = (input: {
-  nonce: string
-  signature?: string
-  transcript?: string
-  bootstrap?: string
-  signingPublicJwk?: JsonWebKey
-  agreementPublicJwk?: JsonWebKey
-  authVersion?: number
-  deviceId: string
-  deviceName: string
-  transport: 'lan' | 'relay'
-}) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
+  ACCOUNT_CONFIG_PATH,
+  CLOUD_CONFIG_PATH,
+  CLOUD_ENROLLMENT_RETRY_INITIAL_MS,
+  CLOUD_ENROLLMENT_RETRY_MAX_MS,
+  CLOUD_REQUEST_TIMEOUT_MS,
+  CloudRequestCancelledError,
+  cloudResponseIsTerminal,
+  cloudRetryAfterMs,
+  enrollmentFailureMessage,
+  fetchWithDeadline,
+  parseEnrollmentResponse,
+  resolveAccountAuthOrigin,
+  resolveCloudApiOrigin,
+  type AccountSessionConfig,
+  type CloudAccessConfig
+} from './remote-mode/remote-mode-cloud-protocol'
 
 export interface RemoteModeOptions {
   lanPort: number
@@ -105,32 +89,6 @@ export interface RemoteModeOptions {
 
 export const DEFAULT_LAN_PORT = 4455
 const REMOTE_SUSPENSION_GRACE_MS = 5 * 60 * 1_000
-const CLOUD_CONFIG_PATH = 'remote/cloud-access.json'
-const ACCOUNT_CONFIG_PATH = 'account/session.json'
-
-interface CloudAccessConfig {
-  apiOrigin: string
-  desktopId: string
-  enrollmentId: string
-  tokenRef: string
-  profileTokenRef?: string
-  enrollmentExpiresAt: number
-}
-
-interface AccountSessionConfig {
-  apiOrigin: string
-  profileTokenRef: string
-  expiresAt?: number
-}
-
-interface EnrollmentResponse {
-  enrollmentId: string
-  desktopId: string
-  deviceToken: string | null
-  profileToken: string
-  code: string
-  expiresAt: number
-}
 
 /** Read a positive integer env var, falling back to `fallback`. */
 export function remoteEnvInt(name: string, fallback: number): number {
@@ -140,368 +98,9 @@ export function remoteEnvInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-const CLOUD_REQUEST_TIMEOUT_MS = 15_000
-const CLOUD_ENROLLMENT_RETRY_INITIAL_MS = 5_000
-const CLOUD_ENROLLMENT_RETRY_MAX_MS = 5 * 60_000
-const ACCOUNT_TOKEN_REFRESH_LEAD_MS = 7 * 24 * 60 * 60_000
-const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
-const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
-const ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS = 30_000
-const ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS = 5 * 60_000
-// Every renderer surface that shows the account (sidebar, settings, remote
-// client view) calls accountProfile() on mount. The cached profile always
-// answers instantly; this bounds how often a mount is additionally allowed to
-// revalidate over the network, so opening/switching between those views does
-// not each spend a Convex round trip. The periodic scheduleAccountProfileSync
-// timer already keeps the cache fresh in the background regardless.
-const ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000
-
-function cloudResponseIsTerminal(status: number): boolean {
-  return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
-}
-
-function cloudRetryAfterMs(response: Response): number | null {
-  const retryAfter = response.headers.get('retry-after')
-  if (!retryAfter) return null
-  const seconds = Number(retryAfter)
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000
-  const retryAt = Date.parse(retryAfter)
-  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null
-}
-
-class CloudRequestCancelledError extends Error {
-  constructor() {
-    super('Cloud request cancelled')
-    this.name = 'CloudRequestCancelledError'
-  }
-}
-
-class CloudRequestTimeoutError extends Error {
-  constructor() {
-    super('Cloud service request timed out')
-    this.name = 'CloudRequestTimeoutError'
-  }
-}
-
-/** Cancellation and deadline timeouts are expected while offline or during teardown. */
-function isExpectedCloudFailure(error: unknown): boolean {
-  return error instanceof CloudRequestCancelledError || error instanceof CloudRequestTimeoutError
-}
-
-/**
- * Fetch with an application-level deadline and external cancellation. The
- * request aborts when the timeout elapses or the owning controller shuts the
- * cloud access down (remote mode disabled / app dispose), so stale polls can
- * never outlive a config change.
- */
-async function fetchWithDeadline(
-  url: string | URL,
-  init: RequestInit,
-  timeoutMs: number,
-  externalSignal?: AbortSignal | null
-): Promise<Response> {
-  const controller = new AbortController()
-  const onExternalAbort = (): void => controller.abort()
-  externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, timeoutMs)
-  try {
-    return await fetch(url, { ...init, signal: controller.signal })
-  } catch (error) {
-    if (externalSignal?.aborted) throw new CloudRequestCancelledError()
-    if (timedOut) throw new CloudRequestTimeoutError()
-    throw error
-  } finally {
-    clearTimeout(timer)
-    externalSignal?.removeEventListener('abort', onExternalAbort)
-  }
-}
-
 /** Resolve the shared peer auth secret for the gateway, if configured. */
 export function remotePeerSecret(): string | null {
   return process.env['PEER_SECRET_AUTH'] ?? process.env['VITE_PEER_SECRET_AUTH'] ?? null
-}
-
-function resolveCloudApiOrigin(): string | null {
-  const baked =
-    typeof __CODEINOVEN_REMOTE_API_ORIGIN__ === 'string'
-      ? __CODEINOVEN_REMOTE_API_ORIGIN__
-      : undefined
-  const value = (process.env['REMOTE_API_ORIGIN'] ?? baked ?? '').trim()
-  if (!value) return null
-  try {
-    const url = new URL(value)
-    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
-    if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) return null
-    url.pathname = '/'
-    url.search = ''
-    url.hash = ''
-    return url.toString()
-  } catch {
-    return null
-  }
-}
-
-function resolveAccountAuthOrigin(): string | null {
-  const baked =
-    typeof __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__ === 'string'
-      ? __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__
-      : undefined
-  const value = (process.env['ACCOUNT_AUTH_ORIGIN'] ?? baked ?? '').trim()
-  if (!value) return null
-  try {
-    const url = new URL(value)
-    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
-    if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) return null
-    url.pathname = '/'
-    url.search = ''
-    url.hash = ''
-    return url.toString()
-  } catch {
-    return null
-  }
-}
-
-function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  if (
-    typeof record['enrollmentId'] !== 'string' ||
-    typeof record['desktopId'] !== 'string' ||
-    (record['deviceToken'] !== null && typeof record['deviceToken'] !== 'string') ||
-    typeof record['profileToken'] !== 'string' ||
-    typeof record['code'] !== 'string' ||
-    typeof record['expiresAt'] !== 'number'
-  ) {
-    return null
-  }
-  return {
-    enrollmentId: record['enrollmentId'],
-    desktopId: record['desktopId'],
-    deviceToken: record['deviceToken'] as string | null,
-    profileToken: record['profileToken'],
-    code: record['code'],
-    expiresAt: record['expiresAt']
-  }
-}
-
-async function enrollmentFailureMessage(response: Response): Promise<string> {
-  let reason = ''
-  try {
-    const payload: unknown = await response.json()
-    if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
-      const error = (payload as Record<string, unknown>)['error']
-      if (typeof error === 'string') reason = error
-    }
-  } catch {
-    // The status code still provides a safe, actionable fallback.
-  }
-  if (response.status === 401 || reason === 'unauthorized') {
-    return 'The remote service could not verify your signed-in account'
-  }
-  if (response.status === 403 || reason === 'enrollment-conflict') {
-    return 'This desktop enrollment belongs to a different account'
-  }
-  if (response.status === 429 || reason === 'rate-limited') {
-    return 'Too many pairing attempts. Wait a moment and try again'
-  }
-  if (response.status >= 500) return 'The remote pairing service is unavailable'
-  return `The remote service rejected pairing (HTTP ${response.status})`
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
-}
-
-function parseSyncedDeviceProject(value: unknown): SyncedDeviceProject | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const row = value as Record<string, unknown>
-  const messageCount = finiteNumber(row['messageCount'])
-  const costUsd = finiteNumber(row['costUsd'])
-  const tokens = finiteNumber(row['tokens'])
-  const durationMs = finiteNumber(row['durationMs'])
-  const threadCount = finiteNumber(row['threadCount'])
-  if (
-    typeof row['id'] !== 'string' ||
-    typeof row['name'] !== 'string' ||
-    messageCount === null ||
-    costUsd === null ||
-    tokens === null ||
-    durationMs === null ||
-    threadCount === null
-  ) {
-    return null
-  }
-  return {
-    id: row['id'],
-    name: row['name'],
-    messageCount,
-    costUsd,
-    tokens,
-    durationMs,
-    threadCount
-  }
-}
-
-function parseSyncedDeviceUsage(value: unknown): SyncedDeviceUsage | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  const messageCount = finiteNumber(record['messageCount'])
-  const costUsd = finiteNumber(record['costUsd'])
-  const tokens = finiteNumber(record['tokens'])
-  const durationMs = finiteNumber(record['durationMs'])
-  const activeDays = finiteNumber(record['activeDays'])
-  const updatedAt = finiteNumber(record['updatedAt'])
-  if (
-    typeof record['deviceId'] !== 'string' ||
-    typeof record['deviceLabel'] !== 'string' ||
-    typeof record['platform'] !== 'string' ||
-    messageCount === null ||
-    costUsd === null ||
-    tokens === null ||
-    durationMs === null ||
-    activeDays === null ||
-    updatedAt === null ||
-    !Array.isArray(record['projects'])
-  ) {
-    return null
-  }
-  const projects: SyncedDeviceProject[] = []
-  for (const item of record['projects'].slice(0, 10)) {
-    const project = parseSyncedDeviceProject(item)
-    if (!project) return null
-    projects.push(project)
-  }
-  return {
-    deviceId: record['deviceId'],
-    deviceLabel: record['deviceLabel'],
-    platform: record['platform'],
-    messageCount,
-    costUsd,
-    tokens,
-    durationMs,
-    activeDays,
-    projects,
-    updatedAt
-  }
-}
-
-function parseUsageByDevice(value: unknown): Record<string, SyncedDeviceUsage> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const byDevice: Record<string, SyncedDeviceUsage> = {}
-  for (const [deviceId, raw] of Object.entries(value as Record<string, unknown>)) {
-    const usage = parseSyncedDeviceUsage(raw)
-    if (!usage || usage.deviceId !== deviceId) return null
-    byDevice[deviceId] = usage
-  }
-  return byDevice
-}
-
-function parseMemoryTombstones(value: unknown): MemoryTombstone[] | null {
-  if (!Array.isArray(value)) return null
-  const tombstones: MemoryTombstone[] = []
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
-    const tombstone = item as Record<string, unknown>
-    if (typeof tombstone['id'] !== 'string' || typeof tombstone['deletedAt'] !== 'number') {
-      return null
-    }
-    tombstones.push({ id: tombstone['id'], deletedAt: tombstone['deletedAt'] })
-  }
-  return tombstones
-}
-
-function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
-  if (!Array.isArray(value)) return null
-  const entries: MemoryEntry[] = []
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
-    const entry = item as Record<string, unknown>
-    const categories: MemoryEntry['category'][] = [
-      'behavioral',
-      'project-rule',
-      'identity',
-      'preference',
-      'models'
-    ]
-    const priorities: MemoryEntry['priority'][] = ['critical', 'high', 'medium', 'low']
-    const sources: MemoryEntry['source'][] = ['manual', 'auto-detected']
-    if (
-      typeof entry['id'] !== 'string' ||
-      typeof entry['label'] !== 'string' ||
-      typeof entry['content'] !== 'string' ||
-      typeof entry['enabled'] !== 'boolean' ||
-      typeof entry['updatedAt'] !== 'number' ||
-      (entry['createdAt'] !== undefined && typeof entry['createdAt'] !== 'number') ||
-      !categories.includes(entry['category'] as MemoryEntry['category']) ||
-      !priorities.includes(entry['priority'] as MemoryEntry['priority']) ||
-      entry['scope'] !== 'global' ||
-      !sources.includes(entry['source'] as MemoryEntry['source']) ||
-      typeof entry['frequency'] !== 'number' ||
-      typeof entry['lastReinforced'] !== 'number' ||
-      (entry['category'] === 'models' &&
-        (!Array.isArray(entry['modelKeys']) ||
-          entry['modelKeys'].length === 0 ||
-          entry['modelKeys'].some(
-            (key) => typeof key !== 'string' || !isHarnessScopedModelKey(key)
-          )))
-    ) {
-      return null
-    }
-    entries.push({
-      id: entry['id'],
-      label: entry['label'],
-      content: entry['content'],
-      enabled: entry['enabled'],
-      // Older synced payloads predate createdAt; fall back to updatedAt.
-      createdAt: typeof entry['createdAt'] === 'number' ? entry['createdAt'] : entry['updatedAt'],
-      updatedAt: entry['updatedAt'],
-      category: entry['category'] as MemoryEntry['category'],
-      priority: entry['priority'] as MemoryEntry['priority'],
-      scope: 'global',
-      source: entry['source'] as MemoryEntry['source'],
-      frequency: entry['frequency'],
-      lastReinforced: entry['lastReinforced'],
-      ...(Array.isArray(entry['modelKeys']) ? { modelKeys: entry['modelKeys'] as string[] } : {})
-    })
-  }
-  return entries
-}
-
-function parseAccountProfile(value: unknown): AccountProfile | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const wrapper = value as Record<string, unknown>
-  const raw = wrapper['profile']
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
-  const profile = raw as Record<string, unknown>
-  const usageByDevice = parseUsageByDevice(profile['usageByDevice'] ?? {})
-  const globalMemories = parseGlobalMemories(profile['globalMemories'])
-  const globalMemoryTombstones = parseMemoryTombstones(profile['globalMemoryTombstones'] ?? [])
-  if (
-    typeof profile['id'] !== 'string' ||
-    typeof profile['email'] !== 'string' ||
-    typeof profile['displayName'] !== 'string' ||
-    (profile['image'] !== null && typeof profile['image'] !== 'string') ||
-    typeof profile['updatedAt'] !== 'number' ||
-    !usageByDevice ||
-    !globalMemories ||
-    !globalMemoryTombstones
-  ) {
-    return null
-  }
-  return {
-    id: profile['id'],
-    email: profile['email'],
-    displayName: profile['displayName'],
-    image: profile['image'],
-    usageByDevice,
-    globalMemories,
-    globalMemoryTombstones,
-    updatedAt: profile['updatedAt']
-  }
 }
 
 export class RemoteModeController {
@@ -517,25 +116,13 @@ export class RemoteModeController {
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage/storage-engine').StorageEngine | null
   private readonly credentials: DeviceCredentialService | null
-  private readonly accountProfileRepo: AccountProfileRepo | null
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
-  private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
   private readonly canOwnTransport: () => boolean
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
   private readonly accountAuthOrigin: string | null = resolveAccountAuthOrigin()
   private readonly vault: SecretVault | null
-  private accountConfig: AccountSessionConfig | null = null
-  private accountSignInServer: Server | null = null
-  private accountSignInTimeout: ReturnType<typeof setTimeout> | null = null
-  private accountTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
-  private accountTokenRefreshPromise: Promise<AccountSessionConfig> | null = null
-  /** Bumped on sign-out so in-flight profile refreshes never re-broadcast stale state. */
-  private accountProfileGeneration = 0
-  private accountProfileRefreshPromise: Promise<void> | null = null
-  private accountProfileRefreshFailureCount = 0
-  private accountProfileRefreshRetryAt = 0
-  private accountProfileRefreshedAt = 0
+  private readonly account: RemoteAccountSession
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudEventSendQueue: Promise<void> = Promise.resolve()
@@ -572,11 +159,21 @@ export class RemoteModeController {
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
     this.credentials = options.credentials ?? null
-    this.accountProfileRepo = options.accountProfileRepo ?? null
     this.vault = this.storage ? new SecretVault(this.storage) : null
+    this.account = new RemoteAccountSession({
+      storage: this.storage,
+      vault: this.vault,
+      accountProfileRepo: options.accountProfileRepo ?? null,
+      cloudApiOrigin: this.cloudApiOrigin,
+      accountAuthOrigin: this.accountAuthOrigin,
+      loadAccountProfileData: options.loadAccountProfileData,
+      applyGlobalMemories: options.applyGlobalMemories,
+      getCloudConfig: () => this.cloudConfig,
+      getAbortSignal: () => this.cloudAbortController?.signal,
+      isEnrollmentPending: () => this.cloudStatus.state === 'enrollment-pending'
+    })
     this.onSessionActiveChange = options.onSessionActiveChange
     this.loadAccountProfileData = options.loadAccountProfileData
-    this.applyGlobalMemories = options.applyGlobalMemories
     this.canOwnTransport = options.canOwnTransport ?? (() => true)
     this.cloudStatus = {
       configured: this.cloudApiOrigin !== null,
@@ -1025,83 +622,6 @@ export class RemoteModeController {
     return this.rpc?.listAuditEvents(limit) ?? []
   }
 
-  /**
-   * Gateway device-authentication handler. Phones authenticate by proving
-   * possession of their signing key (ECDSA over the challenge transcript);
-   * first-time enrollment additionally presents a single-use pairing
-   * bootstrap and the device's public keys. The shared secret is never a
-   * durable authority: on the LAN-exposed listener it only authorizes the
-   * one-shot enrollment; every session still requires device proof.
-   */
-  private makeAuthenticateDevice(): GatewayAuthHandler {
-    return async ({
-      nonce,
-      signature,
-      bootstrap,
-      signingPublicJwk,
-      agreementPublicJwk,
-      authVersion,
-      deviceId,
-      deviceName
-    }) => {
-      const credentials = this.credentials
-      if (signature && credentials) {
-        // The canonical LAN transcript is recomputed server-side from the
-        // desktop-issued challenge nonce plus the identity/bootstraps   never
-        // taken from the peer   so a captured proof cannot be replayed.
-        if (bootstrap && signingPublicJwk && agreementPublicJwk) {
-          const transcript = handshakeTranscript({ nonce, bootstrap, context: 'lan' })
-          // First-time enrollment: the single-use pairing bootstrap from the QR
-          // authorizes exactly one enrollment; the signature proves the device
-          // owns the signing key it is submitting.
-          const outcome = await credentials.enrollDevice({
-            bootstrapValue: bootstrap,
-            name: deviceName,
-            signingPublicJwk,
-            agreementPublicJwk,
-            signingProof: signature,
-            proofTranscript: transcript,
-            transport: 'lan'
-          })
-          if (!outcome.ok || !outcome.device) return { accepted: false }
-          // enrollDevice atomically consumes the one-time bootstrap. Keep the
-          // granted transport key stable so account-backed LAN and relay
-          // reconnects can continue decrypting their existing cloud grant.
-          // An explicit "Create new code" action rotates it before re-enrollment.
-          return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
-        }
-        if (deviceId && typeof authVersion === 'number') {
-          const transcript = handshakeTranscript({ nonce, deviceId, authVersion, context: 'lan' })
-          const result = await credentials.authenticateDevice({
-            deviceId,
-            authVersion,
-            transcript,
-            signature,
-            transport: 'lan'
-          })
-          if (!result.ok || !result.device) return { accepted: false }
-          return { accepted: true, device: this.toDeviceInfo(result.device, true) }
-        }
-        credentials.audit({
-          decision: 'auth_failed',
-          reasonCode: 'malformed',
-          deviceId: deviceId || null,
-          deviceName: deviceName || null,
-          transport: 'lan'
-        })
-        return { accepted: false }
-      }
-      credentials?.audit({
-        decision: 'auth_failed',
-        reasonCode: 'denied_by_default',
-        deviceId: deviceId || null,
-        deviceName: deviceName || null,
-        transport: 'lan'
-      })
-      return { accepted: false }
-    }
-  }
-
   /** Forward live desktop events to every connected phone peer. */
   private installEventForwarder(): void {
     setRemoteEventForwarder((channel, payload) => {
@@ -1120,9 +640,7 @@ export class RemoteModeController {
    * device-awake blocker. Closing the app must leave nothing alive.
    */
   async dispose(): Promise<void> {
-    this.closeAccountSignInListener()
-    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
-    this.accountTokenRefreshTimer = null
+    this.account.dispose()
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
@@ -1207,510 +725,18 @@ export class RemoteModeController {
     ipcMain.handle('remote:resetCloudEnrollment', (): Promise<RemoteModeStatus> => {
       return this.resetCloudEnrollment()
     })
-    ipcMain.handle('account:getProfile', (): Promise<AccountProfileState> => this.accountProfile())
+    ipcMain.handle('account:getProfile', (): Promise<AccountProfileState> =>
+      this.account.accountProfile()
+    )
     ipcMain.handle(
       'account:beginSignIn',
       (_event: IpcMainInvokeEvent, provider: AccountAuthProvider): Promise<AccountSignInStart> =>
-        this.beginAccountSignIn(provider)
+        this.account.beginAccountSignIn(provider)
     )
     ipcMain.handle('account:syncProfile', (): Promise<AccountProfileState> =>
-      this.syncAccountProfile()
+      this.account.syncAccountProfile()
     )
-    ipcMain.handle('account:signOut', (): Promise<void> => this.signOutAccount())
-  }
-
-  private async accountRequest(init?: RequestInit): Promise<Response | null> {
-    if (!this.vault) return null
-    const accountConfig =
-      this.accountConfig ??
-      (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
-      null
-    this.accountConfig = accountConfig
-    const freshAccountConfig = accountConfig
-      ? await this.ensureFreshAccountToken(accountConfig)
-      : null
-    const cloudConfig =
-      this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
-    const tokenRef = freshAccountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
-    if (!tokenRef) return null
-    let token: string | null
-    try {
-      token = await this.vault.resolve(tokenRef)
-    } catch (error) {
-      if (error instanceof Error && error.message === 'Credential not found') {
-        token = null
-      } else {
-        throw error
-      }
-    }
-    if (token === null) return null
-    const apiOrigin = freshAccountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
-    return fetchWithDeadline(
-      new URL('/v1/profile', apiOrigin),
-      {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-          ...init?.headers
-        }
-      },
-      CLOUD_REQUEST_TIMEOUT_MS,
-      this.cloudAbortController?.signal
-    )
-  }
-
-  private async loadProfileImage(profile: AccountProfile): Promise<AccountProfile> {
-    if (!profile.image || profile.image.startsWith('data:')) return profile
-    try {
-      const url = new URL(profile.image)
-      if (url.protocol !== 'https:') return { ...profile, image: null }
-      const response = await fetchWithDeadline(url, {}, 5_000)
-      const contentType = response.headers.get('content-type') ?? ''
-      const contentLength = Number(response.headers.get('content-length') ?? 0)
-      const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
-      if (!response.ok || !allowedTypes.has(contentType) || contentLength > 2 * 1_024 * 1_024) {
-        return { ...profile, image: null }
-      }
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      if (bytes.byteLength > 2 * 1_024 * 1_024) return { ...profile, image: null }
-      return {
-        ...profile,
-        image: `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`
-      }
-    } catch {
-      return { ...profile, image: null }
-    }
-  }
-
-  /**
-   * Current account profile, served from the SQLite cache first so a restart
-   * (or an offline window) never loses the signed-in identity. When a cached
-   * profile exists the live fetch runs in the background and broadcasts a fresh
-   * copy via `account:profileChanged` when it lands.
-   */
-  async accountProfile(): Promise<AccountProfileState> {
-    const cached = await this.readCachedAccountProfile()
-    if (cached) {
-      void this.refreshAccountProfileInBackground()
-      return { status: 'signed-in', profile: cached }
-    }
-    try {
-      return await this.fetchAccountProfile()
-    } catch (error) {
-      if (!isExpectedCloudFailure(error)) {
-        Logger.dev('Account profile could not be fetched:', error)
-      }
-      return {
-        status:
-          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
-            ? 'pending'
-            : 'signed-out',
-        profile: null
-      }
-    }
-  }
-
-  private async fetchAccountProfile(): Promise<AccountProfileState> {
-    const response = await this.accountRequest()
-    if (!response || response.status === 401) {
-      return {
-        status:
-          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
-            ? 'pending'
-            : 'signed-out',
-        profile: null
-      }
-    }
-    if (!response.ok) throw new Error('Account profile is unavailable')
-    const profile = parseAccountProfile(await response.json())
-    if (!profile) throw new Error('Account profile response is invalid')
-    const withImage = await this.loadProfileImage(profile)
-    await this.cacheAccountProfile(withImage)
-    return { status: 'signed-in', profile: withImage }
-  }
-
-  /**
-   * Revalidate a cached profile from the network without disturbing the state
-   * already served. Network failures are deliberately swallowed   the cached
-   * signed-in identity stays until a successful fetch or an explicit sign-out.
-   */
-  private refreshAccountProfileInBackground(): Promise<void> {
-    if (this.accountProfileRefreshPromise) return this.accountProfileRefreshPromise
-    if (Date.now() < this.accountProfileRefreshRetryAt) return Promise.resolve()
-    if (Date.now() - this.accountProfileRefreshedAt < ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS) {
-      return Promise.resolve()
-    }
-    this.accountProfileRefreshPromise = this.runAccountProfileRefresh().finally(() => {
-      this.accountProfileRefreshPromise = null
-    })
-    return this.accountProfileRefreshPromise
-  }
-
-  private async runAccountProfileRefresh(): Promise<void> {
-    const generation = this.accountProfileGeneration
-    this.accountProfileRefreshedAt = Date.now()
-    try {
-      const state = await this.fetchAccountProfile()
-      if (generation !== this.accountProfileGeneration) return
-      // A background probe must never drop a cached identity   only a successful
-      // fetch (or an explicit sign-out) changes what the user sees.
-      if (state.status !== 'signed-in') {
-        Logger.dev('Account profile revalidation is not signed in; keeping the cached profile')
-        this.deferAccountProfileRefresh()
-        return
-      }
-      this.accountProfileRefreshFailureCount = 0
-      this.accountProfileRefreshRetryAt = 0
-      this.broadcastAccountProfile(state)
-    } catch (error) {
-      if (generation !== this.accountProfileGeneration) return
-      const retryDelay = this.deferAccountProfileRefresh()
-      // Cancellation (cloud teardown/enrollment resets the shared abort
-      // controller) and timeouts are expected while offline, so keep the log
-      // quiet while the bounded retry delay is active.
-      if (!isExpectedCloudFailure(error)) {
-        Logger.dev(
-          `Account profile refresh deferred for ${Math.ceil(retryDelay / 1_000)}s; keeping the cached profile:`,
-          error
-        )
-      }
-    }
-  }
-
-  private deferAccountProfileRefresh(): number {
-    const exponent = Math.min(this.accountProfileRefreshFailureCount, 4)
-    const retryDelay = Math.min(
-      ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS * 2 ** exponent,
-      ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS
-    )
-    this.accountProfileRefreshFailureCount += 1
-    this.accountProfileRefreshRetryAt = Date.now() + retryDelay
-    return retryDelay
-  }
-
-  private async readCachedAccountProfile(): Promise<AccountProfile | null> {
-    try {
-      return this.accountProfileRepo?.load() ?? null
-    } catch (error) {
-      Logger.dev('Could not read the cached account profile:', error)
-      return null
-    }
-  }
-
-  private async cacheAccountProfile(profile: AccountProfile): Promise<void> {
-    try {
-      this.accountProfileRepo?.save(profile)
-    } catch (error) {
-      Logger.dev('Could not cache the account profile:', error)
-    }
-  }
-
-  private async clearCachedAccountProfile(): Promise<void> {
-    try {
-      this.accountProfileRepo?.clear()
-    } catch (error) {
-      Logger.dev('Could not clear the cached account profile:', error)
-    }
-  }
-
-  /**
-   * Explicit account sign-out: revoke the persisted session token, remove the
-   * session config, and delete the cached profile (the only thing that removes
-   * the cached identity). Remote-device enrollment is independent and untouched.
-   */
-  async signOutAccount(): Promise<void> {
-    this.accountProfileGeneration++
-    this.accountProfileRefreshFailureCount = 0
-    this.accountProfileRefreshRetryAt = 0
-    this.accountProfileRefreshedAt = 0
-    const config =
-      this.accountConfig ??
-      (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
-      null
-    if (config?.profileTokenRef && this.vault) {
-      await this.vault.remove(config.profileTokenRef).catch(() => undefined)
-    }
-    if (this.storage) {
-      await this.storage.remove(ACCOUNT_CONFIG_PATH).catch(() => undefined)
-    }
-    this.accountConfig = null
-    await this.clearCachedAccountProfile()
-    this.broadcastAccountProfile({ status: 'signed-out', profile: null })
-  }
-
-  async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
-    if (provider !== 'google' && provider !== 'apple') throw new Error('Invalid account provider')
-    if (!this.cloudApiOrigin) throw new Error('REMOTE_API_ORIGIN is not configured')
-    if (!this.accountAuthOrigin) throw new Error('ACCOUNT_AUTH_ORIGIN is not configured')
-    if (!this.storage || !this.vault || !this.vault.isAvailable()) {
-      throw new Error('Secure desktop storage is unavailable')
-    }
-
-    this.closeAccountSignInListener()
-    const state = randomBytes(32).toString('base64url')
-    const codeVerifier = randomBytes(48).toString('base64url')
-    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
-    const callback = await this.listenForAccountCallback(state, codeVerifier)
-    const url = new URL('/desktop/sign-in', this.accountAuthOrigin)
-    url.search = new URLSearchParams({
-      provider,
-      redirect_uri: callback,
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256'
-    }).toString()
-    return { url: url.toString() }
-  }
-
-  private closeAccountSignInListener(): void {
-    if (this.accountSignInTimeout) clearTimeout(this.accountSignInTimeout)
-    this.accountSignInTimeout = null
-    this.accountSignInServer?.close()
-    this.accountSignInServer = null
-  }
-
-  private failAccountSignIn(message: string): void {
-    this.closeAccountSignInListener()
-    this.broadcastAccountProfile({ status: 'error', profile: null, message })
-  }
-
-  private accountCallbackResponse(response: ServerResponse, status: number, message: string): void {
-    response.writeHead(status, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'"
-    })
-    response.end(
-      `<!doctype html><meta charset="utf-8"><title>CodeInOven sign-in</title><style>body{font:16px system-ui;margin:48px;color:#081825}main{max-width:560px}p{line-height:1.6}</style><main><h1>${status === 200 ? 'Sign-in complete' : 'Sign-in failed'}</h1><p>${message}</p></main>`
-    )
-  }
-
-  private async listenForAccountCallback(state: string, codeVerifier: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const server = createServer((request, response) => {
-        void (async () => {
-          let terminalCallback = false
-          try {
-            const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1')
-            if (request.method !== 'GET' || requestUrl.pathname !== '/account/callback') {
-              this.accountCallbackResponse(response, 404, 'This callback is not valid.')
-              return
-            }
-            terminalCallback = true
-            const callbackState = requestUrl.searchParams.get('state')
-            const code = requestUrl.searchParams.get('code')
-            if (callbackState !== state || !code) {
-              this.broadcastAccountProfile({
-                status: 'error',
-                profile: null,
-                message: 'The browser callback could not be verified. Start sign-in again.'
-              })
-              this.accountCallbackResponse(
-                response,
-                400,
-                'The sign-in response could not be verified.'
-              )
-              return
-            }
-            const callbackUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/account/callback`
-            const exchange = await fetchWithDeadline(
-              new URL('/v1/desktop-auth/exchange', this.cloudApiOrigin!),
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, codeVerifier, redirectUri: callbackUrl })
-              },
-              CLOUD_REQUEST_TIMEOUT_MS
-            )
-            const payload = (await exchange.json()) as Record<string, unknown>
-            const profileToken = payload['profileToken']
-            const expiresAt = payload['expiresAt']
-            if (
-              !exchange.ok ||
-              typeof profileToken !== 'string' ||
-              profileToken.length === 0 ||
-              typeof expiresAt !== 'number' ||
-              !Number.isFinite(expiresAt)
-            ) {
-              throw new Error('Account credential exchange failed')
-            }
-            const profileTokenRef = await this.vault!.save(
-              profileToken,
-              this.accountConfig?.profileTokenRef
-            )
-            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef, expiresAt }
-            await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
-            this.scheduleAccountTokenRefresh(expiresAt)
-            this.accountProfileGeneration++
-            this.accountProfileRefreshFailureCount = 0
-            this.accountProfileRefreshRetryAt = 0
-            const profile = await this.syncAccountProfile()
-            this.accountProfileRefreshedAt = Date.now()
-            this.broadcastAccountProfile(profile)
-            this.accountCallbackResponse(
-              response,
-              200,
-              'Your account is connected. You can close this tab and return to CodeInOven.'
-            )
-          } catch (error) {
-            Logger.error('Desktop account sign-in callback failed:', error)
-            this.broadcastAccountProfile({
-              status: 'error',
-              profile: null,
-              message: 'The browser returned to CodeInOven, but the account could not be connected.'
-            })
-            this.accountCallbackResponse(
-              response,
-              500,
-              'CodeInOven could not finish connecting your account. Return to the app and try again.'
-            )
-          } finally {
-            if (terminalCallback) this.closeAccountSignInListener()
-          }
-        })()
-      })
-      server.once('error', (error) => {
-        this.failAccountSignIn('CodeInOven could not open a local callback port. Try again.')
-        reject(error)
-      })
-      server.listen(0, '127.0.0.1', () => {
-        this.accountSignInServer = server
-        const address = server.address()
-        if (!address || typeof address === 'string') {
-          this.closeAccountSignInListener()
-          reject(new Error('Desktop sign-in callback listener is unavailable'))
-          return
-        }
-        this.accountSignInTimeout = setTimeout(
-          () =>
-            this.failAccountSignIn('Sign-in timed out. Start again to open a new secure callback.'),
-          5 * 60 * 1_000
-        )
-        this.broadcastAccountProfile({ status: 'pending', profile: null })
-        resolve(`http://127.0.0.1:${address.port}/account/callback`)
-      })
-    })
-  }
-
-  private scheduleAccountTokenRefresh(expiresAt: number): void {
-    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
-    const delay = Math.min(
-      ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS,
-      Math.max(60_000, expiresAt - Date.now() - ACCOUNT_TOKEN_REFRESH_LEAD_MS)
-    )
-    this.accountTokenRefreshTimer = setTimeout(() => {
-      this.accountTokenRefreshTimer = null
-      const config = this.accountConfig
-      if (!config) return
-      void this.ensureFreshAccountToken(config).catch((error) => {
-        Logger.dev('Account token refresh unavailable:', error)
-      })
-    }, delay)
-  }
-
-  private async ensureFreshAccountToken(
-    config: AccountSessionConfig
-  ): Promise<AccountSessionConfig> {
-    if (!config.expiresAt || config.expiresAt - Date.now() > ACCOUNT_TOKEN_REFRESH_LEAD_MS) {
-      if (config.expiresAt) this.scheduleAccountTokenRefresh(config.expiresAt)
-      return config
-    }
-    if (this.accountTokenRefreshPromise) return this.accountTokenRefreshPromise
-    this.accountTokenRefreshPromise = (async () => {
-      try {
-        if (!this.vault || !this.storage) return config
-        const currentToken = await this.vault.resolve(config.profileTokenRef)
-        const response = await fetchWithDeadline(
-          new URL('/v1/desktop-auth/refresh', config.apiOrigin),
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${currentToken}` }
-          },
-          CLOUD_REQUEST_TIMEOUT_MS
-        )
-        const payload = (await response.json()) as Record<string, unknown>
-        const profileToken = payload['profileToken']
-        const expiresAt = payload['expiresAt']
-        if (
-          !response.ok ||
-          typeof profileToken !== 'string' ||
-          !profileToken ||
-          typeof expiresAt !== 'number' ||
-          !Number.isFinite(expiresAt)
-        ) {
-          throw new Error('Account token refresh failed')
-        }
-        const profileTokenRef = await this.vault.save(profileToken, config.profileTokenRef)
-        const refreshed = { ...config, profileTokenRef, expiresAt }
-        this.accountConfig = refreshed
-        await this.storage.write(ACCOUNT_CONFIG_PATH, refreshed)
-        this.scheduleAccountTokenRefresh(expiresAt)
-        return refreshed
-      } catch (error) {
-        this.accountTokenRefreshTimer = setTimeout(() => {
-          this.accountTokenRefreshTimer = null
-          void this.ensureFreshAccountToken(config).catch(() => undefined)
-        }, ACCOUNT_TOKEN_REFRESH_RETRY_MS)
-        if (!config.expiresAt || config.expiresAt > Date.now()) {
-          Logger.dev('Account token refresh deferred; current token remains valid:', error)
-          return config
-        }
-        throw error
-      } finally {
-        this.accountTokenRefreshPromise = null
-      }
-    })()
-    return this.accountTokenRefreshPromise
-  }
-
-  private broadcastAccountProfile(state: AccountProfileState): void {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) sendToRenderer(window.webContents, 'account:profileChanged', state)
-    }
-  }
-
-  async syncAccountProfile(): Promise<AccountProfileState> {
-    if (!this.loadAccountProfileData) return this.accountProfile()
-    const cached = await this.readCachedAccountProfile()
-    try {
-      const local = await this.loadAccountProfileData()
-      const now = Date.now()
-      const syncState = await readMemorySyncState(this.storage)
-      const localIds = local.globalMemories.map((entry) => entry.id)
-      // Entries that were part of the last synced snapshot but are gone locally
-      // now were deleted   record a tombstone so the deletion sticks server-side.
-      const newTombstones = syncState
-        ? tombstonesForDeletions(syncState.lastSnapshotIds, localIds, now)
-        : []
-      const tombstones = mergeTombstones(
-        [...(syncState?.tombstones ?? []), ...local.globalMemoryTombstones, ...newTombstones],
-        now
-      )
-      const response = await this.accountRequest({
-        method: 'PUT',
-        body: JSON.stringify({
-          ...local,
-          globalMemoryTombstones: tombstones
-        })
-      })
-      if (!response || response.status === 401) return { status: 'signed-out', profile: null }
-      if (!response.ok) throw new Error('Account profile sync failed')
-      const profile = parseAccountProfile(await response.json())
-      if (!profile) throw new Error('Account profile response is invalid')
-      await this.applyGlobalMemories?.(profile.globalMemories)
-      await writeMemorySyncState(this.storage, {
-        lastSnapshotIds: profile.globalMemories.map((entry) => entry.id),
-        tombstones: profile.globalMemoryTombstones,
-        updatedAt: now
-      })
-      const withImage = await this.loadProfileImage(profile)
-      await this.cacheAccountProfile(withImage)
-      return { status: 'signed-in', profile: withImage }
-    } catch (error) {
-      if (cached) return { status: 'signed-in', profile: cached }
-      throw error
-    }
+    ipcMain.handle('account:signOut', (): Promise<void> => this.account.signOutAccount())
   }
 
   private scheduleAccountProfileSync(delayMs: number): void {
@@ -1720,7 +746,8 @@ export class RemoteModeController {
     this.cloudProfileSyncTimer = setTimeout(() => {
       this.cloudProfileSyncTimer = null
       if (generation !== this.cloudPollGeneration) return
-      void this.syncAccountProfile()
+      void this.account
+        .syncAccountProfile()
         .catch((error) => Logger.dev('Account profile background sync unavailable:', error))
         .finally(() => {
           if (generation === this.cloudPollGeneration) {
@@ -1744,9 +771,9 @@ export class RemoteModeController {
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
     const storedAccountConfig =
-      this.accountConfig ?? (await this.storage.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH))
+      this.account.config ?? (await this.storage.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH))
     const accountConfig = storedAccountConfig
-      ? await this.ensureFreshAccountToken(storedAccountConfig)
+      ? await this.account.ensureFreshAccountToken(storedAccountConfig)
       : null
     const accountToken = accountConfig
       ? await this.vault.resolve(accountConfig.profileTokenRef)
@@ -1812,12 +839,11 @@ export class RemoteModeController {
       payload.profileToken,
       previous?.profileTokenRef ?? accountConfig?.profileTokenRef
     )
-    this.accountConfig = {
+    await this.account.adoptConfig({
       apiOrigin: this.cloudApiOrigin,
       profileTokenRef,
       expiresAt: accountConfig?.expiresAt
-    }
-    await this.storage.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
+    })
     this.cloudConfig = {
       apiOrigin: this.cloudApiOrigin,
       desktopId: payload.desktopId,
@@ -2253,7 +1279,10 @@ export class RemoteModeController {
         onWorkspaceActiveChange: (deviceId, active) => {
           this.updateWorkspaceActivity(deviceId, active)
         },
-        authenticateDevice: this.makeAuthenticateDevice(),
+        authenticateDevice: createLanDeviceAuthenticator({
+          credentials: this.credentials,
+          toDeviceInfo: (device, connected) => this.toDeviceInfo(device, connected)
+        }),
         onRpc: this.rpc
           ? async (channel, args, device) => {
               const rpc = this.rpc

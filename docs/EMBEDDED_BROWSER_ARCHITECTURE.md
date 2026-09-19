@@ -105,7 +105,22 @@ If cookie migration remains a hard requirement after the browser workspace prove
 
 - Start with one live tab. Cap live tabs (recommended initial cap: 3); overflow tabs are serialized as URL/title and recreated on selection.
 - Destroy closed tab `webContents` immediately. Do not merely hide them indefinitely.
-- Stop page audio and present a visible indicator; default autoplay off for remote content.
+- Stop page audio and present a visible indicator; default autoplay off for remote content. The indicator is implemented on the tab strip: a tab that is audible
+  shows a speaker in place of its favicon, clicking it mutes that tab through
+  `browser:setMuted`, and `BrowserPageState` carries `audible`/`muted` so the
+  state is always main's answer rather than the renderer's assumption.
+- A tab that holds a live microphone, camera or screen capture shows a recording
+  indicator. Electron exposes no capture state for a `WebContentsView` and this
+  design forbids a preload, so `browser/browser-service/browser-capture.ts`
+  injects a track-counting `getUserMedia`/`getDisplayMedia` observer into each
+  frame's own world over the same `executeJavaScript` boundary the labeled-dialog
+  shim uses. The observer counts tracks only: it reads no stream, no media and no
+  page data, and it gives page script no way to reach privileged APIs.
+- Downloads are visible in the browser toolbar, not only in a menu: the button
+  carries the active-download count and opens the list in normal layout flow.
+  The page is a native view composited above the DOM, so the list takes layout
+  space and resizes the view instead of floating over it, and each finished
+  download can be revealed in the operating system's file manager.
 - Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
 - Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
 - Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.

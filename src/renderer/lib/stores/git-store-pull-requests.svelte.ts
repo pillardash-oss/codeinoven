@@ -1,0 +1,432 @@
+import { invoke } from '$lib/ipc.svelte'
+import type {
+  PrAgentReport,
+  PrListQuery,
+  PrState,
+  PullRequestBundle,
+  PullRequestFile,
+  PullRequestPage,
+  RepositoryMentionUser
+} from '$shared/types'
+import {
+  MENTION_USERS_RETRY_MS,
+  MENTION_USERS_TTL_MS,
+  PR_CACHE_TTL_MS,
+  PR_ERROR_COOLDOWN_MS,
+  PR_PRELOAD_RETRY_MS,
+  errorMessage,
+  prBundleKey,
+  prPageKey,
+  type GitOperation
+} from './git-store-helpers'
+
+/**
+ * Cached PR listings and detail bundles.
+ *
+ * The sidebar tab is mounted and unmounted every time the user switches tabs,
+ * so without a store-level cache every visit would re-fetch and re-show a
+ * spinner. Cached data renders immediately and is revalidated in the
+ * background when it is older than `PR_CACHE_TTL_MS`.
+ *
+ * Cache-first is only half of it. `pr:bundle` is seven GitHub calls the user
+ * pays for on every cold open, so the list also warms the entry under the
+ * pointer before it is clicked. A warm-up is the same request the click would
+ * have made, sharing one in-flight promise, and it stays invisible: no busy
+ * state, no error banner, and no failure cooldown. See `preloadPullRequestBundle`.
+ */
+export class GitPullRequestCache {
+  pages: Record<string, { page: PullRequestPage; fetchedAt: number }> = $state({})
+  bundles: Record<string, PullRequestBundle> = $state({})
+  agentReports: Record<string, PrAgentReport> = $state({})
+
+  /**
+   * @-mention candidates per `owner/repo`, keyed so two repositories never share
+   * a list. `mentionUsersInFlight` is deliberately not reactive: it only
+   * de-duplicates concurrent requests and nothing renders from it.
+   */
+  mentionUsers: Record<string, { users: RepositoryMentionUser[]; fetchedAt: number }> = $state({})
+  /**
+   * In-flight requests and recent failures, keyed the same way. Plain records
+   * rather than Maps because nothing renders from them: they only de-duplicate
+   * concurrent lookups and back off a failed one, so making them reactive would
+   * cost work to publish state no view reads.
+   */
+  private mentionUsersInFlight: Record<string, Promise<RepositoryMentionUser[]>> = {}
+  private mentionUsersFailedAt: Record<string, number> = {}
+
+  /** Epoch ms of the last failure per PR cache key. Deliberately plain (not
+   *  `$state`) - it only gates fetching, and making it reactive would feed the
+   *  very effects that triggered the request.
+   */
+  private failures: Record<string, number> = {}
+
+  /** One request per page key, preventing duplicate IPC calls from concurrent mounts/effects. */
+  private pageRequests: Record<string, Promise<void> | undefined> = {}
+
+  /**
+   * One `pr:bundle` request per key, so a hover warm-up and the click that
+   * follows it are one round trip rather than two racing ones.
+   */
+  private bundleRequests: Record<string, Promise<PullRequestBundle> | undefined> = {}
+
+  /**
+   * Warm-ups that failed, per key. Plain rather than `$state` because nothing
+   * renders from it: it only stops a pointer parked on a broken row from
+   * re-requesting on every pass. Kept apart from `failures` on purpose, which
+   * gates the load the user actually asked for.
+   */
+  private preloadFailures: Record<string, number> = {}
+
+  constructor(
+    private readonly markBusy: (operation: GitOperation, busy: boolean) => void,
+    private readonly setError: (message: string | null) => void
+  ) {}
+
+  /** True while a key is inside its post-failure cooldown. */
+  private coolingDown(key: string): boolean {
+    const failedAt = this.failures[key]
+    if (failedAt === undefined) return false
+    if (Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return true
+    delete this.failures[key]
+    return false
+  }
+
+  private markFailure(key: string): void {
+    this.failures[key] = Date.now()
+  }
+
+  /** True while a recent warm-up for this key failed, so hover backs off it. */
+  private preloadCoolingDown(key: string): boolean {
+    const failedAt = this.preloadFailures[key]
+    if (failedAt === undefined) return false
+    if (Date.now() - failedAt < PR_PRELOAD_RETRY_MS) return true
+    delete this.preloadFailures[key]
+    return false
+  }
+
+  /** Keep list/detail caches coherent after a PR lifecycle mutation. */
+  updateDraftState(owner: string, repo: string, pullNumber: number, draft: boolean): void {
+    const pagePrefix = `${owner}/${repo}:`
+    this.pages = Object.fromEntries(
+      Object.entries(this.pages).map(([key, cached]) => [
+        key,
+        key.startsWith(pagePrefix)
+          ? {
+              ...cached,
+              page: {
+                ...cached.page,
+                items: cached.page.items.map((item) =>
+                  item.number === pullNumber ? { ...item, draft } : item
+                )
+              }
+            }
+          : cached
+      ])
+    )
+    const bundleKey = prBundleKey(owner, repo, pullNumber)
+    const bundle = this.bundles[bundleKey]
+    if (bundle) {
+      this.bundles = {
+        ...this.bundles,
+        [bundleKey]: { ...bundle, detail: { ...bundle.detail, draft } }
+      }
+    }
+  }
+
+  /**
+   * Load a page of pull requests, serving cache first.
+   *
+   * Returns immediately when fresh cache exists; otherwise fetches. Pass
+   * `force` for the explicit refresh button.
+   *
+   * The provider pages by cursor, so page N is only reachable through page N-1's
+   * cursor. Walking from the first page fills in whichever earlier pages are
+   * missing; on the usual Previous/Next path the walk stops at the first
+   * iteration because the page before is already cached.
+   */
+  async ensurePullRequestPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number,
+    query: PrListQuery,
+    force = false
+  ): Promise<void> {
+    for (let index = 1; index <= page; index += 1) {
+      const key = prPageKey(owner, repo, state, query.filter, query.sort, index)
+      const cached = this.pages[key]
+      if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) continue
+      if (!force && this.coolingDown(key)) return
+      // A pagination cursor is the only way into a later page, and the provider
+      // hands one out only while the listing has more. Absent one, this page
+      // does not exist and asking for it would return the first page's rows.
+      const cursor = index > 1 ? this.cursorBefore(owner, repo, state, query, index) : null
+      if (index > 1 && !cursor) return
+      await this.requestPage(projectId, owner, repo, state, index, query, cursor, key, false)
+      // A failed page leaves nothing for the next iteration to continue from.
+      if (!this.pages[key]) return
+    }
+  }
+
+  /**
+   * Warm the page behind Next, so pressing it renders from cache.
+   *
+   * Deliberately not `ensurePullRequestPage(page + 1)`: that walks every page
+   * up to the target, so a hover on a listing whose earlier pages had aged out
+   * would re-fetch all of them in sequence. Page N+1 needs one thing from page
+   * N, which is its cursor, and nothing else.
+   */
+  async preloadPullRequestNextPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number,
+    query: PrListQuery
+  ): Promise<void> {
+    if (!projectId || !owner || !repo) return
+    // No cached page means nothing to continue from yet: the load that fills it
+    // pulls this one in behind it, so there is nothing to warm.
+    const cursor =
+      this.pages[prPageKey(owner, repo, state, query.filter, query.sort, page)]?.page.nextCursor ??
+      null
+    if (!cursor) return
+    const key = prPageKey(owner, repo, state, query.filter, query.sort, page + 1)
+    const cached = this.pages[key]
+    if (cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    if (this.coolingDown(key) || this.preloadCoolingDown(key)) return
+    await this.requestPage(projectId, owner, repo, state, page + 1, query, cursor, key, true)
+  }
+
+  /** One `pr:page` request per key, shared by the load and the hover warm-up. */
+  private async requestPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number,
+    query: PrListQuery,
+    cursor: string | null,
+    key: string,
+    silent: boolean
+  ): Promise<void> {
+    const existing = this.pageRequests[key]
+    if (existing) {
+      await existing
+      return
+    }
+    const request = this.loadPullRequestPage(
+      projectId,
+      owner,
+      repo,
+      state,
+      page,
+      query,
+      cursor,
+      key,
+      silent
+    )
+    this.pageRequests[key] = request
+    try {
+      await request
+    } finally {
+      if (this.pageRequests[key] === request) delete this.pageRequests[key]
+    }
+  }
+
+  /** The cursor that opens a page: the one the page before it reported. */
+  private cursorBefore(
+    owner: string,
+    repo: string,
+    state: PrState,
+    query: PrListQuery,
+    page: number
+  ): string | null {
+    const previous = this.pages[prPageKey(owner, repo, state, query.filter, query.sort, page - 1)]
+    return previous?.page.nextCursor ?? null
+  }
+
+  private async loadPullRequestPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number,
+    query: PrListQuery,
+    cursor: string | null,
+    key: string,
+    silent: boolean
+  ): Promise<void> {
+    if (!silent) this.markBusy('pr-list', true)
+    try {
+      const result = await invoke('pr:page', projectId, owner, repo, state, page, {
+        filter: query.filter,
+        sort: query.sort,
+        cursor
+      })
+      this.pages = { ...this.pages, [key]: { page: result, fetchedAt: Date.now() } }
+      delete this.failures[key]
+      delete this.preloadFailures[key]
+    } catch (reason) {
+      if (silent) {
+        this.preloadFailures[key] = Date.now()
+      } else {
+        this.markFailure(key)
+        this.setError(errorMessage(reason, 'Pull requests could not be loaded'))
+      }
+    } finally {
+      if (!silent) this.markBusy('pr-list', false)
+    }
+  }
+
+  /** Load everything a PR detail view needs, serving cache first. */
+  async ensurePullRequestBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    force = false
+  ): Promise<void> {
+    if (!projectId) return
+    const key = prBundleKey(owner, repo, pullNumber)
+    const cached = this.bundles[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    if (!force && this.coolingDown(key)) return
+    this.markBusy('pr-detail', true)
+    try {
+      // A warm-up already in flight is this load's own request, so awaiting it
+      // here is what turns hover-then-click into one round trip instead of two.
+      await this.requestBundle(projectId, owner, repo, pullNumber, key)
+    } catch (reason) {
+      this.markFailure(key)
+      this.setError(errorMessage(reason, 'Pull request could not be loaded'))
+    } finally {
+      this.markBusy('pr-detail', false)
+    }
+  }
+
+  /**
+   * Warm one pull request's detail bundle so the click that opens it renders
+   * from cache, the way the skill marketplace warms a skill the pointer rests
+   * on.
+   *
+   * A warm-up is invisible by design. It moves no busy state (the panel's
+   * spinner belongs to the load the user asked for, not to a fetch they may
+   * never open), it posts no error banner, and its failure is filed under its
+   * own brief clock rather than the cooldown `ensurePullRequestBundle` reads.
+   * That last part matters: a hover that failed must leave the click behind it
+   * free to make its own attempt and report its own error.
+   */
+  async preloadPullRequestBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<void> {
+    if (!projectId || !owner || !repo || pullNumber <= 0) return
+    const key = prBundleKey(owner, repo, pullNumber)
+    // Already warm, or already being fetched by the load this warm-up would
+    // duplicate.
+    if (this.bundles[key] || this.bundleRequests[key]) return
+    if (this.coolingDown(key) || this.preloadCoolingDown(key)) return
+    try {
+      await this.requestBundle(projectId, owner, repo, pullNumber, key)
+    } catch {
+      this.preloadFailures[key] = Date.now()
+    }
+  }
+
+  /** The single place `pr:bundle` is called: one request per key, cache on success. */
+  private requestBundle(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    key: string
+  ): Promise<PullRequestBundle> {
+    const existing = this.bundleRequests[key]
+    if (existing) return existing
+    const request = invoke('pr:bundle', projectId, owner, repo, pullNumber)
+      .then((bundle) => {
+        this.bundles = { ...this.bundles, [key]: bundle }
+        delete this.failures[key]
+        delete this.preloadFailures[key]
+        return bundle
+      })
+      .finally(() => {
+        if (this.bundleRequests[key] === request) delete this.bundleRequests[key]
+      })
+    this.bundleRequests[key] = request
+    return request
+  }
+
+  /**
+   * Repository accounts that can be @-mentioned in a PR conversation.
+   *
+   * Called only when the user types `@`, and cache-first so a typed query does
+   * not re-fetch per keystroke. Concurrent callers share one in-flight request
+   * rather than racing, and a failure resolves to the stale cache (or an empty
+   * list) so autocomplete degrades to the on-screen participants instead of
+   * surfacing an error: the token may legitimately lack the permission this
+   * needs, and a mention menu is not worth an error banner.
+   */
+  async mentionUsersFor(
+    projectId: string,
+    owner: string,
+    repo: string
+  ): Promise<RepositoryMentionUser[]> {
+    if (!projectId || !owner || !repo) return []
+    const key = `${owner}/${repo}`
+    const cached = this.mentionUsers[key]
+    if (cached && Date.now() - cached.fetchedAt < MENTION_USERS_TTL_MS) return cached.users
+    const failedAt = this.mentionUsersFailedAt[key]
+    if (!cached && failedAt !== undefined && Date.now() - failedAt < MENTION_USERS_RETRY_MS) {
+      return []
+    }
+    const inFlight = this.mentionUsersInFlight[key]
+    if (inFlight) return inFlight
+    const request = invoke('pr:mentionUsers', projectId, owner, repo)
+      .then((users) => {
+        this.mentionUsers = { ...this.mentionUsers, [key]: { users, fetchedAt: Date.now() } }
+        delete this.mentionUsersFailedAt[key]
+        return users
+      })
+      .catch(() => {
+        this.mentionUsersFailedAt[key] = Date.now()
+        return cached?.users ?? []
+      })
+      .finally(() => {
+        delete this.mentionUsersInFlight[key]
+      })
+    this.mentionUsersInFlight[key] = request
+    return request
+  }
+
+  /** Files and patches for one commit inside a PR. */
+  async getCommitFiles(
+    projectId: string,
+    owner: string,
+    repo: string,
+    sha: string
+  ): Promise<PullRequestFile[]> {
+    try {
+      return await invoke('pr:commitFiles', projectId, owner, repo, sha)
+    } catch (reason) {
+      this.setError(errorMessage(reason, 'Commit files could not be loaded'))
+      return []
+    }
+  }
+
+  /** Read the agent's review report for a PR, if it has written one. */
+  async loadAgentReport(projectId: string, pullNumber: number): Promise<PrAgentReport | null> {
+    if (!projectId) return null
+    try {
+      const report = await invoke('pr:agentReport', projectId, pullNumber)
+      this.agentReports = { ...this.agentReports, [String(pullNumber)]: report }
+      return report
+    } catch {
+      return null
+    }
+  }
+}

@@ -144,7 +144,8 @@
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
     if (e.key === 'Escape' && !confirmCloseOpen) requestClose()
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && editableText) {
+    // Shift is excluded so Cmd/Ctrl+Shift+S stays the right-sidebar toggle.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's' && editableText) {
       e.preventDefault()
       void saveText()
     }

@@ -3,6 +3,7 @@ import type {
   PromptAttachment,
   PromptProjectReference
 } from '$shared/types'
+import { uuidv7 } from '$shared/id'
 import { parseModelKey } from '$lib/model-keys'
 import { setDraftLabelCookie } from './draft-label'
 import {
@@ -24,6 +25,7 @@ import {
   recoveryDraftKey,
   removeRendererRecoveryState,
   type ComposerDraftEntry,
+  type QueuedMessageEntryInput,
   type MainView,
   type QueuedMessageEntry,
   type QueuedResponseReference,
@@ -37,6 +39,7 @@ export type {
   ComposerDraftEntry,
   MainView,
   QueuedMessageEntry,
+  QueuedMessageEntryInput,
   RecoveryStorage,
   RendererRecoverySnapshot,
   SelectedThreadReference,
@@ -526,7 +529,7 @@ export class RendererRecoveryStore {
 
   /** Queue a message behind any others already waiting for an idle agent
    *  (first in, first out — the oldest queued message sends first). */
-  setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
+  setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntryInput): void {
     const hasContext =
       entry.text.length > 0 ||
       entry.attachments.length > 0 ||
@@ -548,12 +551,17 @@ export class RendererRecoveryStore {
     const queue = this.queuedMessages[key]
     if (queue && queue[queue.length - 1] === entry) return
 
+    const existingIds = (queue ?? []).map((queuedEntry) => queuedEntry.id)
+    let id = entry.id && entry.id.length > 0 ? entry.id : uuidv7()
+    while (existingIds.includes(id)) id = uuidv7()
+
     const next = { ...this.queuedMessages }
     if (!queue && Object.keys(next).length >= MAX_RECOVERY_DRAFTS) {
       const oldestKey = Object.keys(next)[0]
       if (oldestKey) delete next[oldestKey]
     }
     const persistedEntry: QueuedMessageEntry = {
+      id,
       text: entry.text,
       attachments: entry.attachments,
       promptContext: entry.promptContext,
@@ -570,7 +578,7 @@ export class RendererRecoveryStore {
 
   /** Rewrite the oldest queued message in place (e.g. editing its "starts
    *  after" dependencies). No-op when the thread has no queued message. */
-  updateQueuedHead(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
+  updateQueuedHead(projectId: string, threadId: string, entry: QueuedMessageEntryInput): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
     const key = recoveryDraftKey(projectId, threadId)
     const queue = this.queuedMessages[key]
@@ -578,6 +586,7 @@ export class RendererRecoveryStore {
     const next = { ...this.queuedMessages }
     next[key] = [
       {
+        id: entry.id && entry.id.length > 0 ? entry.id : queue[0].id,
         text: entry.text,
         attachments: entry.attachments,
         promptContext: entry.promptContext,

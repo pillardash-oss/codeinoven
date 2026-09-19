@@ -3,19 +3,13 @@
   import ScopeJobPanel from './ScopeJobPanel.svelte'
   import DockRow from '$lib/components/ui/DockRow.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { scopeJobStageLabel, scopeJobs, type ScopeJob } from '$lib/stores/scope-jobs.svelte'
+  import { scopeJobStatusLabel, scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { APP_SLUG } from '$shared/brand'
 
   const minimized = $derived(scopeJobs.jobs.filter((job) => job.minimized))
 
   /** One placement for the whole unified row, remembered across restarts. */
   const DOCK_STORAGE_KEY = `${APP_SLUG}.worktreeDock.v1`
-
-  /** Short state text beside the scope name in the dock chip. */
-  function chipState(job: ScopeJob): string {
-    if (job.status === 'running') return scopeJobStageLabel(job.stage.stage)
-    return job.status === 'succeeded' ? 'Ready' : 'Failed'
-  }
 
   function projectName(projectId: string): string {
     return scopeState.projectRecords.find((project) => project.id === projectId)?.name ?? ''
@@ -24,15 +18,15 @@
 
 <!--
   Global worktree dock   mirrors `PrDockHost` and `HarnessRunModal`. Mounted at
-  the app root so a create/adopt run keeps streaming its stages whatever thread,
-  project or view the user moves to while git and the setup commands work.
+  the app root so a create, adopt or remove run keeps reporting its stages
+  whatever thread, project or view the user moves to while git, the setup
+  commands and the removal work.
 -->
 {#each scopeJobs.jobs as job (job.id)}
   <ScopeJobPanel
     {job}
     storageKey={scopeJobs.storageKeyFor(job.id)}
     onMinimize={() => scopeJobs.minimize(job.id)}
-    onExpand={() => scopeJobs.expand(job.id)}
     onClose={() => scopeJobs.close(job.id)}
   />
 {/each}
@@ -53,7 +47,7 @@
         <button
           type="button"
           class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={`${project ? `${project}: ` : ''}${job.title}, ${chipState(job)}`}
+          title={`${project ? `${project}: ` : ''}${job.title}, ${scopeJobStatusLabel(job)}`}
           aria-label={`Show the worktree run for ${job.title}`}
           onclick={() => scopeJobs.expand(job.id)}
         >
@@ -76,7 +70,7 @@
               {job.title}
             </span>
             <span class="max-w-40 truncate text-[0.5625rem] leading-tight text-muted">
-              {chipState(job)}
+              {scopeJobStatusLabel(job)}
             </span>
           </span>
         </button>

@@ -3,56 +3,48 @@
     Bot,
     Check,
     ChevronDown,
-    ChevronRight,
     CircleDot,
     CircleSlash,
     ExternalLink,
-    FileDiff,
-    GitCommitHorizontal,
     Loader2,
     Maximize2,
     MessageSquare,
     Merge,
-    MessagesSquare,
-    MoreHorizontal,
     RefreshCw,
-    Rocket,
     RotateCcw,
-    Send,
-    ShieldCheck,
     ThumbsUp,
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
-  import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { relativeTime } from '$lib/format/relative-time'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import { githubDisplayLogin } from '$lib/format/github-login'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   // The `@query` detection is shared with the chat composer rather than
   // re-implemented here: it already knows to stay silent inside code spans and
   // quoted passages, which a second copy would have to relearn.
   import { composerMentionQuery } from '../chats/composer-mentions'
   import PrMentionMenu from './PrMentionMenu.svelte'
-  import GitJobLogView from './GitJobLogView.svelte'
-  import RerunRunMenu from './RerunRunMenu.svelte'
   // The identity row is one component now, shared with the Git panel's own
   // action row, so this file no longer draws the state and check pills; only
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
-  import PrAvatar from './PrAvatar.svelte'
-  import PrCommentActionsMenu from './PrCommentActionsMenu.svelte'
-  import { copyText } from '$lib/copy-text'
+  import BotBadge from './BotBadge.svelte'
+  import GitPullRequestDetailConversation from './GitPullRequestDetailConversation.svelte'
+  import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
+  import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
+  import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
+  import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
   import {
-    githubAbuseReportUrl,
-    githubBlockUserUrl,
-    githubNewIssueUrl
-  } from '$lib/github-references'
+    buildConversation,
+    conversationQuoteBlock,
+    type ConversationEntry
+  } from './git-pull-request-detail-format'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -62,14 +54,9 @@
     participantMentionUsers
   } from './pr-mentions'
   import type {
-    GitHubDeploymentJobLog,
     PrAgentReport,
-    PrCommentKind,
     PrMergeMethod,
-    PrMinimizeReason,
     PrReviewEvent,
-    PullRequestCheck,
-    PullRequestFile,
     PullRequestSummary,
     RepositoryMentionUser
   } from '$shared/types'
@@ -208,23 +195,7 @@
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
-  /** The conversation row whose body is being rewritten in place, if any. */
-  let editingKey = $state<string | null>(null)
-  let editBody = $state('')
-  /** The row a Delete confirmation is open for, or null. */
-  let deletingEntry = $state<ConversationEntry | null>(null)
-  /** The Delete confirmation's panel, for owning its initial focus. */
-  let deletePanel = $state<HTMLDivElement | null>(null)
-  let expandedCommit = $state<string | null>(null)
-  let commitFiles = $state<Record<string, PullRequestFile[]>>({})
-  let loadingCommit = $state<string | null>(null)
-  let expandedFile = $state<string | null>(null)
   let agentReport = $state<PrAgentReport | null>(null)
-  /** Which check's log is open, keyed the way the checks list is keyed. */
-  let expandedCheck = $state<string | null>(null)
-  let checkLogs = $state<Record<string, GitHubDeploymentJobLog>>({})
-  let checkLogErrors = $state<Record<string, string>>({})
-  let loadingCheckLogs = $state<Record<string, boolean>>({})
 
   const number = $derived(summary.number)
   /**
@@ -254,18 +225,6 @@
   const checks = $derived(bundle?.checks ?? null)
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
-  const savingComment = $derived(gitState.isBusy('pr-comment-edit'))
-  const removingComment = $derived(gitState.isBusy('pr-comment-delete'))
-  const hidingComment = $derived(gitState.isBusy('pr-comment-hide'))
-  /** Any per-comment action in flight, so one row's menu cannot double-fire. */
-  const commentActionBusy = $derived(
-    savingComment || removingComment || hidingComment || gitState.isBusy('pr-update')
-  )
-  /**
-   * The repository this conversation was authored in, for GitHub reference
-   * linkification inside a comment body (`#150`, `@login`).
-   */
-  const repository = $derived({ owner: identity.owner, repo: identity.repo })
   const reviewing = $derived(gitState.isBusy('pr-review'))
   /**
    * True while the merge is actively running OR while the detail view is still
@@ -297,88 +256,10 @@
 
   /**
    * Conversation as one chronological stream: the PR description, issue
-   * comments, submitted reviews, and inline code comments   the same context
+   * comments, submitted reviews, and inline code comments, the same context
    * GitHub shows, so a merge decision never needs the browser.
-   *
-   * Each entry also carries everything the per-comment actions need: the
-   * provider's own permalink, the id and collection a mutation addresses, the
-   * GraphQL node id hiding needs, and the author's declared picture. Assembling
-   * that here means the menu and the row read one shape instead of each of them
-   * reaching back into the bundle and guessing which provider field applies.
    */
-  const conversation = $derived.by(() => {
-    if (!bundle) return []
-    const entries: ConversationEntry[] = []
-    if (bundle.detail.body.trim()) {
-      entries.push({
-        key: 'body',
-        author: bundle.detail.authorLogin,
-        avatarUrl: bundle.detail.authorAvatarUrl ?? null,
-        isBot: bundle.detail.authorIsBot === true,
-        at: bundle.detail.createdAt,
-        updatedAt: null,
-        body: bundle.detail.body,
-        kind: 'description',
-        url: summary.url,
-        commentId: null,
-        commentKind: 'issue',
-        nodeId: null
-      })
-    }
-    for (const comment of bundle.comments) {
-      entries.push({
-        key: `c${comment.id}`,
-        author: comment.authorLogin,
-        avatarUrl: comment.authorAvatarUrl,
-        isBot: comment.authorIsBot,
-        at: comment.createdAt,
-        updatedAt: comment.updatedAt,
-        body: comment.body,
-        kind: 'comment',
-        url: comment.url,
-        commentId: comment.id,
-        commentKind: 'issue',
-        nodeId: comment.nodeId
-      })
-    }
-    for (const review of bundle.reviews) {
-      entries.push({
-        key: `r${review.id}`,
-        author: review.authorLogin,
-        avatarUrl: review.authorAvatarUrl,
-        isBot: review.authorIsBot,
-        at: review.submittedAt,
-        updatedAt: null,
-        body: review.body,
-        kind: 'review',
-        meta: review.state.replace(/_/gu, ' ').toLowerCase(),
-        url: review.url,
-        commentId: null,
-        commentKind: 'issue',
-        nodeId: review.nodeId
-      })
-    }
-    for (const comment of bundle.reviewComments) {
-      entries.push({
-        key: `rc${comment.id}`,
-        author: comment.authorLogin,
-        avatarUrl: comment.authorAvatarUrl,
-        isBot: comment.authorIsBot,
-        at: comment.createdAt,
-        updatedAt: comment.updatedAt,
-        body: comment.body,
-        kind: 'inline',
-        meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
-        url: comment.url,
-        commentId: comment.id,
-        commentKind: 'review',
-        nodeId: comment.nodeId
-      })
-    }
-    return entries
-      .filter((entry) => entry.body.trim() || entry.kind === 'review')
-      .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
-  })
+  const conversation = $derived(buildConversation(bundle))
 
   /**
    * The active view is one of these. In the full screen reader they become a
@@ -391,274 +272,10 @@
       count: prViewCount(view.id, bundle, (agentReport?.content ?? '').trim().length > 0)
     }))
   )
-  type EntryKind = 'description' | 'comment' | 'review' | 'inline'
-
-  /**
-   * One row of the conversation, with everything its actions need already
-   * resolved from whichever provider shape it came from.
-   */
-  interface ConversationEntry {
-    key: string
-    author: string
-    /** The author's picture as the provider declared it, preferred over the login. */
-    avatarUrl: string | null
-    /** True for app accounts, which GitHub labels with a `Bot` badge. */
-    isBot: boolean
-    at: string
-    /** Last edit time, or null when the entry has never been edited. */
-    updatedAt: string | null
-    body: string
-    kind: EntryKind
-    meta?: string
-    /** Permalink GitHub itself uses for this exact entry. */
-    url: string
-    /**
-     * Provider id of the comment, or null for the description.
-     *
-     * The description is not a comment: it is a field on the pull request, so it
-     * is edited through the pull request update instead of a comment endpoint, and
-     * GitHub offers no delete or hide for it at all. Null is what a row reads to
-     * know which of the two it is, rather than a flag that could disagree.
-     */
-    commentId: number | null
-    /** Which collection `commentId` lives in. Meaningless when it is null. */
-    commentKind: PrCommentKind
-    /** GraphQL id, the only handle GitHub's minimise mutation accepts. */
-    nodeId: string | null
-  }
-
-  /**
-   * Whether the viewer may rewrite this entry.
-   *
-   * GitHub gives a comment body to its author and the description to the pull
-   * request's author, and nothing else. A submitted review is never editable, so
-   * it stays excluded however the logins compare.
-   */
-  function canEditEntry(entry: ConversationEntry): boolean {
-    if (entry.kind === 'review') return false
-    return entry.commentId === null
-      ? gitState.githubViewerLogin === summary.authorLogin
-      : gitState.githubViewerLogin === entry.author
-  }
-
-  /** GitHub allows deleting a comment you wrote, and never a description. */
-  function canDeleteEntry(entry: ConversationEntry): boolean {
-    return entry.commentId !== null && gitState.githubViewerLogin === entry.author
-  }
-
-  /** Hiding needs a node id, which a description does not expose here. */
-  function canHideEntry(entry: ConversationEntry): boolean {
-    return entry.nodeId !== null
-  }
-
-  /** The quote-reply block GitHub builds from a comment's body. */
-  function quoteBlockFor(entry: ConversationEntry): string {
-    const quoted = entry.body
-      .trim()
-      .split('\n')
-      .map((line) => `> ${line}`)
-      .join('\n')
-    return `> **@${entry.author}** wrote:\n>\n${quoted}\n\n`
-  }
-
-  function openEntryOnGitHub(entry: ConversationEntry): void {
-    if (entry.url) void openInBrowser(entry.url)
-  }
-
-  async function copyEntryLink(entry: ConversationEntry): Promise<void> {
-    if (!entry.url) return
-    await copyText(entry.url)
-    notice = 'Comment link copied'
-  }
-
-  async function copyEntryMarkdown(entry: ConversationEntry): Promise<void> {
-    await copyText(entry.body.trim())
-    notice = 'Comment Markdown copied'
-  }
-
-  /**
-   * Quote a comment into the composer, the way GitHub's own action does.
-   *
-   * The composer is a disclosure in the dock, so it has to be opened first, and
-   * the editor only exists after the next tick   which is also what lets the caret
-   * land at the end of the inserted quote instead of nowhere.
-   */
-  async function quoteEntry(entry: ConversationEntry): Promise<void> {
-    tab = 'conversation'
-    composerOpen = true
-    const block = quoteBlockFor(entry)
-    commentBody = commentBody.trim() ? `${commentBody.trim()}\n\n${block}` : block
-    await tick()
-    commentEditor?.focusAtBookmark(null)
-  }
-
-  /**
-   * GitHub's "Reference in new issue" carries the comment into a new issue. There
-   * is no issue composer in this app, so the reference is copied as markdown and
-   * the repository's new-issue page opens with the same text prefilled: the same
-   * result, with the writing still happening where issues are written.
-   */
-  async function referenceInNewIssue(entry: ConversationEntry): Promise<void> {
-    const reference = `${entry.body.trim()}\n\n_Originally posted by @${entry.author} in ${entry.url}_`
-    await copyText(reference)
-    await openInBrowser(githubNewIssueUrl(identity.owner, identity.repo, reference))
-    notice = 'Reference copied, new issue opened on GitHub'
-  }
-
-  function startEdit(entry: ConversationEntry): void {
-    editingKey = entry.key
-    editBody = entry.body
-    notice = ''
-  }
-
-  function cancelEdit(): void {
-    editingKey = null
-    editBody = ''
-  }
-
-  async function saveEdit(entry: ConversationEntry): Promise<void> {
-    const body = editBody.trim()
-    if (!body || body === entry.body.trim()) {
-      cancelEdit()
-      return
-    }
-    const saved =
-      entry.commentId === null
-        ? (await gitState.updatePullRequest(
-            projectId,
-            identity.owner,
-            identity.repo,
-            number,
-            undefined,
-            body
-          )) !== null
-        : await gitState.editPrComment(
-            projectId,
-            identity.owner,
-            identity.repo,
-            number,
-            entry.commentKind,
-            entry.commentId,
-            body
-          )
-    if (!saved) return
-    cancelEdit()
-    notice = entry.commentId === null ? 'Description saved' : 'Comment saved'
-    await refresh()
-  }
-
-  /**
-   * Own the confirmation's initial focus instead of bits-ui's default of focusing
-   * the panel itself. There is no field to fill, so focus lands on the primary
-   * action, which is what a modal without an input is supposed to do.
-   */
-  function focusDeleteDialog(event: Event): void {
-    event.preventDefault()
-    if (!deletePanel) return
-    findPanelPrimaryAction(deletePanel)?.focus({ preventScroll: true })
-  }
-
-  async function deleteEntry(entry: ConversationEntry): Promise<void> {
-    if (entry.commentId === null) return
-    const commentId = entry.commentId
-    deletingEntry = null
-    const deleted = await gitState.deletePrComment(
-      projectId,
-      identity.owner,
-      identity.repo,
-      number,
-      entry.commentKind,
-      commentId
-    )
-    if (!deleted) return
-    notice = 'Comment deleted'
-    await refresh()
-  }
-
-  async function hideEntry(entry: ConversationEntry, reason: PrMinimizeReason): Promise<void> {
-    if (!entry.nodeId) return
-    const hidden = await gitState.minimizePrComment(
-      projectId,
-      identity.owner,
-      identity.repo,
-      number,
-      entry.nodeId,
-      reason
-    )
-    if (!hidden) return
-    notice = 'Comment hidden'
-    await refresh()
-  }
-
-  /**
-   * The two abuse actions leave the app on purpose: the account's OAuth scope is
-   * `repo`, and blocking an account needs `user`, so github.com is the only place
-   * either can actually be carried out.
-   *
-   * The report form asks which content is being reported, so the comment's link is
-   * copied first: the user pastes it there instead of hunting for it again.
-   */
-  async function reportEntry(entry: ConversationEntry): Promise<void> {
-    if (entry.url) await copyText(entry.url)
-    await openInBrowser(githubAbuseReportUrl())
-    notice = entry.url
-      ? 'Comment link copied, GitHub abuse report form opened'
-      : 'Opened the GitHub abuse report form'
-  }
-
-  async function blockAuthor(entry: ConversationEntry): Promise<void> {
-    await openInBrowser(githubBlockUserUrl(entry.author))
-    notice = `Opened GitHub's blocked-accounts settings for @${entry.author}`
-  }
-
-  /** Human label for a conversation entry's badge. */
-  function kindLabel(kind: EntryKind, meta?: string): string {
-    if (kind === 'description') return 'description'
-    if (kind === 'inline') return 'inline review'
-    if (kind === 'review') return meta ?? 'review'
-    return 'comment'
-  }
-
-  /** Badge colour   approvals and change requests read at a glance. */
-  function kindClass(kind: EntryKind, meta?: string): string {
-    if (kind === 'review' && meta === 'approved') return 'bg-success/10 text-success'
-    if (kind === 'review' && meta === 'changes requested') return 'bg-warning/10 text-warning'
-    if (kind === 'description') return 'bg-primary/10 text-primary'
-    return 'bg-elevated text-dimmed'
-  }
-
-  /** Matching left edge on the card so the stream scans vertically. */
-  function accentClass(kind: EntryKind, meta?: string): string {
-    if (kind === 'review' && meta === 'approved') return 'border-l-2 border-l-success'
-    if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
-    if (kind === 'description') return 'border-l-2 border-l-primary'
-    return ''
-  }
 
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
     agentReport = await gitState.loadAgentReport(projectId, number)
-    // The per-comment actions have to know whether a row is the viewer's own:
-    // GitHub offers Edit and Delete only to an author, and blocking only on
-    // somebody else. Asked once, and only while the login is still unknown, so a
-    // reader that opens after the panel already probed costs nothing.
-    if (gitState.githubViewerLogin === null) void gitState.githubAuthStatus()
-  }
-
-  async function toggleCommit(sha: string): Promise<void> {
-    if (expandedCommit === sha) {
-      expandedCommit = null
-      return
-    }
-    expandedCommit = sha
-    if (commitFiles[sha]) return
-    loadingCommit = sha
-    try {
-      const files = await gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)
-      commitFiles = { ...commitFiles, [sha]: files }
-    } finally {
-      loadingCommit = null
-    }
   }
 
   async function postComment(): Promise<void> {
@@ -678,6 +295,22 @@
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * Quote a comment into the composer, the way GitHub's own action does.
+   *
+   * The composer is a disclosure in the dock, so it has to be opened first, and
+   * the editor only exists after the next tick, which is also what lets the caret
+   * land at the end of the inserted quote instead of nowhere.
+   */
+  async function quoteEntry(entry: ConversationEntry): Promise<void> {
+    tab = 'conversation'
+    composerOpen = true
+    const block = conversationQuoteBlock(entry)
+    commentBody = commentBody.trim() ? `${commentBody.trim()}\n\n${block}` : block
+    await tick()
+    commentEditor?.focusAtBookmark(null)
   }
 
   /**
@@ -912,116 +545,10 @@
     }
   }
 
-  function checkIcon(check: PullRequestCheck): typeof Check {
-    if (check.status !== 'completed') return CircleDot
-    if (check.conclusion === 'success') return Check
-    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CircleSlash
-    return X
-  }
-
-  function checkClass(check: PullRequestCheck): string {
-    if (check.status !== 'completed') return 'text-warning'
-    if (check.conclusion === 'success') return 'text-success'
-    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return 'text-dimmed'
-    return 'text-danger'
-  }
-
-  /**
-   * A check that finished without succeeding, which is the only kind a re-run
-   * can help. Shares its branch shape with `checkClass`, which paints the same
-   * set red, but answers a different question: "can a re-run fix this?"
-   */
-  function checkFailed(check: PullRequestCheck): boolean {
-    if (check.status !== 'completed') return false
-    return (
-      check.conclusion !== 'success' &&
-      check.conclusion !== 'skipped' &&
-      check.conclusion !== 'neutral'
-    )
-  }
-
-  /** Stable key for one check row, shared by the list key and the log cache. */
-  function checkKey(check: PullRequestCheck): string {
-    return check.name + (check.url ?? '')
-  }
-
-  /** Human wording for a check's progress, so `in_progress` is not shown raw. */
-  function checkStateLabel(check: PullRequestCheck): string {
-    if (check.status !== 'completed') return check.status.replace('_', ' ')
-    return check.conclusion ?? 'done'
-  }
-
-  /**
-   * The job behind a check. Actions names the job in the check's `details_url`,
-   * which is exact even for one leg of a matrix run; when the provider only gives
-   * the run, the job is matched by name so the wrong leg's log is never shown.
-   */
-  async function resolveCheckJobId(check: PullRequestCheck): Promise<number | null> {
-    if (check.jobId !== null) return check.jobId
-    if (check.workflowRunId === null) return null
-    const run = await gitState
-      .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
-      .catch(() => null)
-    return run?.jobs.find((job) => job.name === check.name)?.id ?? null
-  }
-
-  /** Name the two failures a reader can actually act on, then quote the rest. */
-  function checkLogMessage(reason: unknown): string {
-    const text = reason instanceof Error ? reason.message : ''
-    if (/HTTP 404/u.test(text)) return 'This job has not published a log yet.'
-    if (/HTTP (401|403)/u.test(text)) return 'Your GitHub access cannot read this job log.'
-    return text || 'The log could not be loaded.'
-  }
-
-  async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
-    const key = checkKey(check)
-    if (expandedCheck === key) {
-      expandedCheck = null
-      return
-    }
-    expandedCheck = key
-    if (checkLogs[key] || loadingCheckLogs[key]) return
-    loadingCheckLogs = { ...loadingCheckLogs, [key]: true }
-    checkLogErrors = { ...checkLogErrors, [key]: '' }
-    try {
-      const jobId = await resolveCheckJobId(check)
-      if (jobId === null) {
-        checkLogErrors = {
-          ...checkLogErrors,
-          [key]: 'This check does not name a job, so its log has to be read on GitHub.'
-        }
-        return
-      }
-      const log = await gitState.ensureDeploymentJobLog(
-        projectId,
-        identity.owner,
-        identity.repo,
-        jobId
-      )
-      if (log) checkLogs = { ...checkLogs, [key]: log }
-    } catch (reason) {
-      checkLogErrors = { ...checkLogErrors, [key]: checkLogMessage(reason) }
-    } finally {
-      loadingCheckLogs = { ...loadingCheckLogs, [key]: false }
-    }
-  }
-
-  /** Colorize a unified patch the way the rest of the app renders diffs. */
-  function patchLineClass(line: string): string {
-    if (line.startsWith('@@')) return 'text-primary'
-    if (line.startsWith('+')) return 'bg-success/10 text-success'
-    if (line.startsWith('-')) return 'bg-danger/10 text-danger'
-    return 'text-muted'
-  }
-
   $effect(() => {
     const owner = identity.owner
     const repo = identity.repo
     void gitState.ensurePullRequestBundle(projectId, owner, repo, number)
-    // The mount path never goes through `refresh`, so the viewer login is asked
-    // for here too. Otherwise the first comment a user opens in a fresh session
-    // would offer no Edit or Delete on their own text.
-    if (gitState.githubViewerLogin === null) void gitState.githubAuthStatus()
   })
 
   // Seed the merge method from the configured default (squash by default).
@@ -1040,48 +567,6 @@
     })
   })
 </script>
-
-{#snippet emptyState(Icon: typeof Bot, text: string)}
-  <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <Icon size={18} class="text-dimmed" />
-    <p class="text-[0.6875rem] leading-relaxed text-dimmed">{text}</p>
-  </div>
-{/snippet}
-
-{#snippet fileList(files: PullRequestFile[], keyPrefix: string)}
-  {#each files as file (file.path)}
-    {@const fileKey = `${keyPrefix}:${file.path}`}
-    <div class="border-b border-border/50">
-      <button
-        type="button"
-        class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
-        onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
-      >
-        <FileDiff size={12} class="shrink-0 text-dimmed" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
-          {file.path}
-        </span>
-        <span class="shrink-0 text-[0.5625rem] tabular-nums">
-          <span class="text-success">+{file.additions}</span>
-          <span class="text-danger">−{file.deletions}</span>
-        </span>
-      </button>
-      {#if expandedFile === fileKey}
-        {#if file.patch}
-          <pre
-            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[0.5625rem] leading-relaxed"><!--
-         -->{#each file.patch.split('\n') as line, index (index)}<span
-                class="block {patchLineClass(line)}">{line || ' '}</span
-              >{/each}</pre>
-        {:else}
-          <p class="px-3 py-2 text-[0.625rem] text-dimmed">
-            No inline diff for this file (binary or too large).
-          </p>
-        {/if}
-      {/if}
-    </div>
-  {/each}
-{/snippet}
 
 {#snippet panelHead()}
   <!-- Header -->
@@ -1129,6 +614,7 @@
           class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Open pull request on GitHub"
           aria-label="Open pull request on GitHub"
+          data-external-url={summary.url}
           onclick={() => void openInBrowser(summary.url)}
         >
           <ExternalLink size={13} />
@@ -1158,7 +644,14 @@
     >
       <span class="font-mono">{summary.headRef}</span>
       <span class="font-mono">→ {summary.baseRef}</span>
-      <span class="shrink-0">· {summary.authorLogin}</span>
+      <span class="shrink-0">· {githubDisplayLogin(summary.authorLogin)}</span>
+      <!--
+        The name above lost its `[bot]` suffix, so this badge is what says the
+        account is an App. Without it a bot's pull request reads as a person's.
+      -->
+      {#if summary.authorIsBot}
+        <BotBadge />
+      {/if}
       <span class="shrink-0">· {relativeTime(summary.updatedAt)}</span>
       {#if detail}
         <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
@@ -1383,371 +876,50 @@
         Loading pull request…
       </div>
     {:else if tab === 'conversation'}
-      {#if conversation.length === 0}
-        {@render emptyState(MessagesSquare, 'Nothing has been said yet.')}
-      {:else}
-        <div class="flex flex-col gap-2 p-2">
-          {#each conversation as entry (entry.key)}
-            <article
-              class="overflow-hidden rounded-lg border border-border bg-surface {accentClass(
-                entry.kind,
-                entry.meta
-              )}"
-            >
-              <header
-                class="flex items-start gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
-              >
-                <PrAvatar login={entry.author} avatarUrl={entry.avatarUrl} size="md" />
-                <div class="min-w-0 flex-1">
-                  <div class="flex min-w-0 items-center gap-1.5">
-                    <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                      >{entry.author}</span
-                    >
-                    {#if entry.isBot}
-                      <!--
-                        GitHub's own badge for an app account. It is what tells a
-                        reader that the next paragraph was written by a bot and not
-                        by a colleague, which the login alone (`name[bot]`) only
-                        hints at.
-                      -->
-                      <span
-                        class="shrink-0 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted"
-                        title="This account is an App, not a person"
-                      >
-                        Bot
-                      </span>
-                    {/if}
-                    <span
-                      class="shrink-0 rounded px-1.5 py-px text-[0.5625rem] font-medium {kindClass(
-                        entry.kind,
-                        entry.meta
-                      )}"
-                    >
-                      {kindLabel(entry.kind, entry.meta)}
-                    </span>
-                  </div>
-                  <p class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
-                    <button
-                      type="button"
-                      class="cursor-pointer hover:text-foreground hover:underline"
-                      title="Open this comment on GitHub"
-                      aria-label="Open {entry.author}'s comment on GitHub"
-                      onclick={() => openEntryOnGitHub(entry)}
-                    >
-                      {relativeTime(entry.at)}
-                    </button>
-                    {#if entry.updatedAt && entry.updatedAt !== entry.at}
-                      <!--
-                        GitHub marks an edited comment here rather than only
-                        changing the timestamp, so a reader can tell that what they
-                        are looking at is not what was first posted.
-                      -->
-                      <span title="Edited {relativeTime(entry.updatedAt)}">· edited</span>
-                    {/if}
-                  </p>
-                </div>
-                {#if editingKey !== entry.key}
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
-                      aria-label="Actions for {entry.author}'s comment"
-                      title="Comment actions"
-                    >
-                      <MoreHorizontal size={13} />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        class="z-50 min-w-52 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                        side="bottom"
-                        align="end"
-                        sideOffset={4}
-                        collisionPadding={8}
-                      >
-                        <PrCommentActionsMenu
-                          author={entry.author}
-                          viewerLogin={gitState.githubViewerLogin}
-                          canEdit={canEditEntry(entry)}
-                          canDelete={canDeleteEntry(entry)}
-                          canHide={canHideEntry(entry)}
-                          busy={commentActionBusy}
-                          onCopyLink={() => void copyEntryLink(entry)}
-                          onCopyMarkdown={() => void copyEntryMarkdown(entry)}
-                          onQuote={() => void quoteEntry(entry)}
-                          onReferenceInNewIssue={() => void referenceInNewIssue(entry)}
-                          onEdit={() => startEdit(entry)}
-                          onDelete={() => (deletingEntry = entry)}
-                          onHide={(reason) => void hideEntry(entry, reason)}
-                          onReport={() => void reportEntry(entry)}
-                          onBlock={() => void blockAuthor(entry)}
-                        />
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
-                {/if}
-              </header>
-              {#if entry.kind === 'inline' && entry.meta}
-                <p
-                  class="truncate border-b border-border/40 bg-elevated/20 px-2.5 py-1 font-mono text-[0.5625rem] text-dimmed"
-                >
-                  {entry.meta}
-                </p>
-              {/if}
-              {#if editingKey === entry.key}
-                <!--
-                  Edit swaps the rendered body for the same composer the panel
-                  posts with, so an edit looks and behaves like writing rather than
-                  like a second, plainer textarea.
-                -->
-                <div class="p-2">
-                  <RichMarkdownEditor
-                    class="max-h-72 overflow-y-auto rounded-lg border border-border bg-elevated px-2.5 py-2"
-                    bind:value={editBody}
-                    placeholder="Edit this comment…"
-                    ariaLabel="Edit comment"
-                    autofocus
-                  />
-                  <div class="mt-1.5 flex items-center justify-end gap-1.5">
-                    <button
-                      type="button"
-                      class="h-7 cursor-pointer rounded-lg border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
-                      title="Discard this edit"
-                      onclick={cancelEdit}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
-                      title="Save this comment"
-                      disabled={!editBody.trim() || savingComment}
-                      onclick={() => void saveEdit(entry)}
-                    >
-                      {#if savingComment}
-                        <Loader2 size={12} class="animate-spin" />
-                        Saving…
-                      {:else}
-                        <Check size={12} />
-                        Save
-                      {/if}
-                    </button>
-                  </div>
-                </div>
-              {:else if entry.body.trim()}
-                <div class="px-2.5 py-2">
-                  <!-- GitHub's dialect includes HTML, so PR prose needs it to
-                       read correctly; the sanitizer still strips anything
-                       executable. Agent-authored text elsewhere keeps it off, and
-                       `repository` is what turns #150 and @login into links the way
-                       github.com does. -->
-                  <MarkdownView
-                    text={entry.body}
-                    class="text-[0.6875rem] leading-relaxed"
-                    allowHtml
-                    {repository}
-                  />
-                </div>
-              {/if}
-            </article>
-          {/each}
-        </div>
-      {/if}
+      <GitPullRequestDetailConversation
+        entries={conversation}
+        {projectId}
+        {identity}
+        {number}
+        authorLogin={summary.authorLogin}
+        onQuote={(entry) => void quoteEntry(entry)}
+        onNotice={(message) => (notice = message)}
+        onRefresh={refresh}
+      />
     {:else if tab === 'commits'}
-      {#if !bundle || bundle.commits.length === 0}
-        {@render emptyState(GitCommitHorizontal, 'No commits on this branch.')}
-      {:else}
-        {#each bundle.commits as commit (commit.sha)}
-          <div class="border-b border-border/50">
-            <button
-              type="button"
-              class="flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
-              title="Show the files changed in {commit.shortSha}"
-              onclick={() => void toggleCommit(commit.sha)}
-            >
-              <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[0.6875rem] text-foreground">{commit.message}</p>
-                <p class="truncate text-[0.5625rem] text-dimmed">
-                  <span class="font-mono">{commit.shortSha}</span>
-                  · {commit.authorName} · {relativeTime(commit.date)}
-                </p>
-              </div>
-              {#if loadingCommit === commit.sha}
-                <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
-              {/if}
-            </button>
-            {#if expandedCommit === commit.sha}
-              {@const files = commitFiles[commit.sha] ?? []}
-              {#if files.length === 0 && loadingCommit !== commit.sha}
-                <p class="px-3 py-2 text-[0.625rem] text-dimmed">No files in this commit.</p>
-              {:else}
-                <div class="border-t border-border/50 bg-elevated/20">
-                  {@render fileList(files, commit.sha)}
-                </div>
-              {/if}
-            {/if}
-          </div>
-        {/each}
-      {/if}
+      <GitPullRequestDetailChanges
+        mode="commits"
+        commits={bundle?.commits ?? []}
+        files={bundle?.files ?? []}
+        loadCommitFiles={(sha) =>
+          gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)}
+      />
     {:else if tab === 'files'}
-      {#if !bundle || bundle.files.length === 0}
-        {@render emptyState(FileDiff, 'No changed files.')}
-      {:else}
-        {@render fileList(bundle.files, 'pr')}
-      {/if}
+      <GitPullRequestDetailChanges
+        mode="files"
+        commits={bundle?.commits ?? []}
+        files={bundle?.files ?? []}
+        loadCommitFiles={(sha) =>
+          gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)}
+      />
     {:else if tab === 'checks'}
-      {#if !checks || checks.checks.length === 0}
-        {@render emptyState(ShieldCheck, 'No checks have reported on this branch.')}
-      {:else}
-        {#each checks.checks as check (checkKey(check))}
-          {@const Icon = checkIcon(check)}
-          {@const key = checkKey(check)}
-          {@const runId = check.workflowRunId}
-          {@const isOpen = expandedCheck === key}
-          <div class="border-b border-border/50">
-            <!--
-              The whole row is the log toggle: a check's result is only half the
-              story, and the reason to open the tab is to read why it failed.
-            -->
-            <div class="flex items-center gap-2 px-3 py-1.5">
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                title={isOpen ? `Hide the ${check.name} log` : `Show the ${check.name} log`}
-                aria-expanded={isOpen}
-                onclick={() => void toggleCheckLog(check)}
-              >
-                <ChevronRight
-                  size={11}
-                  class="shrink-0 text-dimmed transition-transform {isOpen ? 'rotate-90' : ''}"
-                />
-                <Icon size={12} class="shrink-0 {checkClass(check)}" />
-                <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-foreground">
-                  {check.name}
-                </span>
-                <span class="shrink-0 text-[0.5625rem] text-dimmed">
-                  {checkStateLabel(check)}
-                </span>
-              </button>
-              {#if checkFailed(check) && runId !== null}
-                <!--
-                  A failing check is a job with a problem, so the re-run lives on
-                  its row. GitHub only re-runs a whole run, which is why the menu
-                  offers "all jobs" beside "failed jobs only".
-                -->
-                <RerunRunMenu
-                  {projectId}
-                  {identity}
-                  {runId}
-                  runStatus="completed"
-                  hasFailedJobs
-                  compact
-                  onRerun={() => void refresh()}
-                />
-              {/if}
-              {#if check.url}
-                <button
-                  type="button"
-                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Open {check.name} externally"
-                  aria-label="Open {check.name} externally"
-                  onclick={() => void openInBrowser(check.url ?? '')}
-                >
-                  <ExternalLink size={12} />
-                </button>
-              {/if}
-            </div>
-            {#if isOpen}
-              <div class="border-t border-border/50 bg-elevated/20">
-                <!--
-                  No `failedSteps` here on purpose: a check is named after its job, and
-                  the log's sections are named after steps, so there is nothing to match.
-                  The view marks the step GitHub flagged with an error in the log itself.
-                -->
-                <GitJobLogView
-                  log={checkLogs[key] ?? null}
-                  loading={loadingCheckLogs[key] === true}
-                  error={checkLogErrors[key] ?? ''}
-                  class="px-3 py-2"
-                />
-                {#if runId !== null}
-                  <div class="border-t border-border/40 px-3 py-1.5">
-                    <button
-                      type="button"
-                      class="flex h-6 min-w-0 cursor-pointer items-center gap-1 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
-                      title="Open this workflow run in the Deployments tab to inspect every job and step"
-                      onclick={() => onOpenWorkflowRun(runId)}
-                    >
-                      <Rocket size={11} class="shrink-0" />
-                      <span class="min-w-0 truncate">Open the full run in Deployments</span>
-                    </button>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {/each}
-      {/if}
-    {:else if agentReport?.content.trim()}
-      <div class="px-3 py-2">
-        <div class="mb-2 flex items-center gap-2">
-          <p class="flex-1 truncate text-[0.5625rem] text-dimmed">
-            {agentReport.path} · {relativeTime(agentReport.updatedAt)}
-          </p>
-          {#if agentReport.threadId}
-            <button
-              type="button"
-              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Open the thread that produced this review"
-              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-            >
-              <Bot size={12} />
-              Open thread
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-            title="Post this report as a comment on the pull request"
-            disabled={posting}
-            onclick={() => void postAgentReport()}
-          >
-            <Send size={12} />
-            Post to PR
-          </button>
-        </div>
-        <MarkdownView text={agentReport.content} class="text-[0.6875rem] leading-relaxed" />
-      </div>
+      <GitPullRequestDetailChecks
+        {projectId}
+        {identity}
+        {checks}
+        {onOpenWorkflowRun}
+        onRefresh={refresh}
+      />
     {:else}
-      <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
-        <Bot size={18} class="text-dimmed" />
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
-          worktree and writes its findings to <span class="font-mono"
-            >.cio/git/pr/{number}/review.md</span
-          >. The report shows up here when it lands.
-        </p>
-        <div class="flex items-center gap-2">
-          {#if agentReport?.threadId}
-            <button
-              type="button"
-              class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-              title="Open the review thread already running for this pull request"
-              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-            >
-              <Bot size={12} class="shrink-0" />
-              <span class="min-w-0 truncate">Open review thread</span>
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() => onAgentReview(summary)}
-          >
-            <Bot size={12} class="shrink-0" />
-            <span class="min-w-0 truncate">Start agent review</span>
-          </button>
-        </div>
-      </div>
+      <GitPullRequestDetailAgentReport
+        {number}
+        {summary}
+        {agentReport}
+        {posting}
+        {onOpenThread}
+        {onAgentReview}
+        onPostReport={() => void postAgentReport()}
+      />
     {/if}
   </div>
 {/snippet}
@@ -2014,184 +1186,18 @@
   </div>
 {/if}
 
-<AlertDialog.Root
-  open={deletingEntry !== null}
-  onOpenChange={(value) => (deletingEntry = value ? deletingEntry : null)}
->
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      bind:ref={deletePanel}
-      onOpenAutoFocus={focusDeleteDialog}
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Delete this comment?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Your comment by
-        <strong class="text-foreground">{deletingEntry?.author ?? ''}</strong>
-        will be removed from pull request #{number}. This runs on GitHub and cannot be undone from
-        here.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2" data-modal-footer>
-        <AlertDialog.Cancel
-          data-modal-dismiss
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          data-modal-primary
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={() => deletingEntry && void deleteEntry(deletingEntry)}
-        >
-          Delete
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<AlertDialog.Root open={mergeConfirm} onOpenChange={(value) => (mergeConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Merge pull request #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        <strong class="text-foreground">{summary.title}</strong> will be merged into
-        <strong class="text-foreground">{summary.baseRef}</strong> using the
-        <strong class="text-foreground">{method}</strong> method.
-        {#if checks?.state === 'failure'}
-          Checks are currently <strong class="text-danger">failing</strong> on this branch.
-        {/if}
-        This runs on GitHub and cannot be undone from here.
-      </AlertDialog.Description>
-
-      {#if method === 'rebase'}
-        <p
-          class="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed"
-        >
-          Rebase preserves the original commits, so there's no custom commit message to add.
-        </p>
-      {:else}
-        <div class="mt-3 space-y-2">
-          <div>
-            <label
-              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-title-{mergeFieldSuffix}"
-            >
-              Commit title
-            </label>
-            <input
-              id="merge-commit-title-{mergeFieldSuffix}"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-              placeholder={method === 'merge'
-                ? `Merge pull request #${number} from ${summary.headRef}`
-                : 'Title of the squashed commit'}
-              bind:value={commitTitle}
-            />
-          </div>
-          <div>
-            <label
-              class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-              for="merge-commit-message-{mergeFieldSuffix}"
-            >
-              Commit message
-            </label>
-            <textarea
-              id="merge-commit-message-{mergeFieldSuffix}"
-              class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-              placeholder={method === 'merge'
-                ? 'Describe the merge (optional)'
-                : 'Commit message for the squashed changes'}
-              bind:value={commitMessage}></textarea>
-          </div>
-        </div>
-      {/if}
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          onclick={() => void merge()}
-        >
-          Merge
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<AlertDialog.Root open={resolveConfirm} onOpenChange={(value) => (resolveConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Resolve conflicts for PR #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        This checks out the <strong class="text-foreground">{summary.headRef}</strong> branch
-        locally as <code class="font-mono">pr-{number}</code>, merges
-        <strong class="text-foreground">{summary.baseRef}</strong> into it, and switches the Git panel
-        to the changes tab. You'll resolve each conflicted file in your editor, then commit and push to
-        update the pull request.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-warning px-3 text-xs font-medium text-on-primary hover:bg-warning/90"
-          onclick={() => {
-            resolveConfirm = false
-            onResolveLocally?.(summary)
-          }}
-        >
-          Resolve locally
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<AlertDialog.Root open={closeConfirm} onOpenChange={(value) => (closeConfirm = value)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-90 bg-black/40" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-90 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Close pull request #{number}?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        <strong class="text-foreground">{summary.title}</strong> will be closed without merging. You can
-        reopen it later from this view.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:bg-danger/90"
-          onclick={() => void closePullRequest()}
-        >
-          Close
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<GitPullRequestDetailMergeDialogs
+  {number}
+  {summary}
+  {method}
+  checksFailure={checks?.state === 'failure'}
+  {mergeFieldSuffix}
+  bind:mergeOpen={mergeConfirm}
+  bind:closeOpen={closeConfirm}
+  bind:resolveOpen={resolveConfirm}
+  bind:commitTitle
+  bind:commitMessage
+  onMerge={() => void merge()}
+  onResolveLocally={() => onResolveLocally?.(summary)}
+  onClosePullRequest={() => void closePullRequest()}
+/>

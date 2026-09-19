@@ -4,7 +4,6 @@ import type {
   AccountActivityDay,
   AccountUsageBreakdown,
   AccountUsageSummary,
-  AgentMessage,
   AgentTokenUsage,
   HarnessModelUsage,
   HarnessUsage,
@@ -16,6 +15,7 @@ import type {
   LocalProfileUsageHour,
   SyncedDeviceProject,
   ThinkingLevel,
+  UsageBearingMessage,
   UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
   UsageEvent
@@ -100,7 +100,15 @@ interface LocalUsageHourRow extends UsageAggregateRow {
  * parent agent turn.
  */
 const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search_nudge'] as const
-const PROFILE_MODEL_FEATURES = "'main','audit','assignment'"
+
+/**
+ * Features counted as model work in the profile, daily and hourly totals.
+ * `subagent` and `ephemeral` belong here: both are real model calls with their
+ * own recorded tokens, and neither is a subset of a parent turn's numbers (a
+ * nested worker session and a disposable session are billed separately), so
+ * counting them cannot double count anything.
+ */
+const PROFILE_MODEL_FEATURES = "'main','audit','assignment','subagent','ephemeral'"
 
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
@@ -195,10 +203,10 @@ function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
 }
 
 /** Sum of step-finish cost parts on an assistant message, mirroring the renderer. */
-function messageCost(message: AgentMessage): number | null {
+function messageCost(message: UsageBearingMessage): number | null {
   let stepCost = 0
   let hasStepCost = false
-  for (const part of message.parts) {
+  for (const part of message.parts ?? []) {
     if (part.type === 'step-finish' && typeof part.cost === 'number') {
       stepCost += part.cost
       hasStepCost = true
@@ -231,8 +239,8 @@ export class HarnessUsageRepo {
           success, retry_cause, duration_ms, created_at
         ) VALUES(
           ?,?,?,
-          (SELECT project_id FROM threads WHERE id = ?),
-          (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?),
+          COALESCE(?, (SELECT project_id FROM threads WHERE id = ?)),
+          COALESCE((SELECT name FROM projects WHERE id = ?), (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?)),
           ?,?,?,
           ?,?,?,?,?,?,
           ?,
@@ -243,7 +251,9 @@ export class HarnessUsageRepo {
         event.id,
         event.threadId,
         event.parentTurnId,
+        event.projectId ?? null,
         event.threadId,
+        event.projectId ?? null,
         event.threadId,
         event.featureCallId,
         event.attempt,
@@ -955,7 +965,7 @@ export class HarnessUsageRepo {
   async accumulateTurn(
     projectId: string,
     threadId: string,
-    messages: AgentMessage[]
+    messages: readonly UsageBearingMessage[]
   ): Promise<{ ok: boolean; error?: string }> {
     const candidateIds = [
       ...new Set(

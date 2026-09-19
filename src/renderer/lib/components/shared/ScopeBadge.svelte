@@ -4,15 +4,21 @@
   import type { ScopeBucket } from '$shared/types'
 
   interface Props {
-    bucket: ScopeBucket
+    /** Scope on the board. Omit it together with `name` only for a scope that
+     *  does not exist yet, such as a worker worktree created at dispatch. */
+    bucket?: ScopeBucket
+    /** Label for a scope that is not on the board yet; also seeds its colour. */
+    name?: string
     size?: 'sm' | 'xs'
   }
 
-  let { bucket, size = 'xs' }: Props = $props()
+  let { bucket, name, size = 'xs' }: Props = $props()
 
+  let label = $derived(bucket?.name ?? name ?? 'Scope')
   /** Scopes are identified by colour only   no icons. The deterministic picked
-   *  colour is the fallback when no explicit bucket colour is persisted. */
-  let color = $derived(bucket.color ?? pickColorForSeed(bucket.id))
+   *  colour is the fallback when no explicit bucket colour is persisted, and the
+   *  only colour source for a scope that is not on the board yet. */
+  let color = $derived(bucket?.color ?? pickColorForSeed(bucket?.id ?? label))
   /** Washed-out tint of the scope colour. */
   let wash = $derived(`color-mix(in srgb, ${color} 16%, var(--color-raised))`)
 </script>
@@ -24,7 +30,7 @@
     : 'px-2.5 py-1 text-xs'}"
   style:background-color={wash}
 >
-  {#if bucket.pinned}
+  {#if bucket?.pinned}
     <span
       class="shrink-0 text-accent"
       role="img"
@@ -34,5 +40,5 @@
       <Pin size={size === 'xs' ? 9 : 11} />
     </span>
   {/if}
-  <span class="min-w-0 max-w-40 truncate">{bucket.name}</span>
+  <span class="min-w-0 max-w-40 truncate">{label}</span>
 </code>

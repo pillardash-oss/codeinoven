@@ -1,72 +1,46 @@
-import { app, BrowserWindow, dialog, nativeTheme, screen, session, shell } from 'electron'
-import { dirname, isAbsolute, join } from 'path'
-import { existsSync, mkdirSync, renameSync } from 'fs'
+import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { dirname, join } from 'path'
+import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { Database } from './database/database'
-import { ThreadRepo } from './database/repositories/thread-repo'
-import { ProjectRepo } from './database/repositories/project-repo'
-import { AccountProfileRepo } from './database/repositories/account-profile-repo'
-import { loadDeviceIdentity } from './account/device-identity'
-import { readMemorySyncState } from './remote/memory-sync-state'
 import { StorageEngine } from './storage/storage-engine'
-import { CheckpointManager } from './storage/checkpoint-manager'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
-import {
-  installFilePreviewProtocol,
-  registerFilePreviewScheme
-} from './editor/file-preview-protocol'
+import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
-import {
-  setNotificationService,
-  setPowerWakeService,
-  broadcastThreadUpdate
-} from './chat/thread-events'
-import { flushDraftWrites } from './chat/draft-commit-gate'
+import { setNotificationService } from './chat/thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
 } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
-import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
+import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
-import {
-  handleFatalStartupFailure,
-  installProcessCrashDiagnostics
-} from './system/lifecycle-diagnostics'
-import type { ChatEngine } from './chat/chat-engine'
-import type { GatewaySupervisorService } from './gateway/gateway-supervisor-service'
-import type { HarnessManifestService } from './agents/harness-manifest-service'
-import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
-import type { UpdaterService } from './notifications/updater-service'
-import type { PowerWakeService } from './system/power-wake-service'
-import type { RetrySchedulerService } from './system/retry-scheduler-service'
-import type { HeartbeatSchedulerService } from './system/heartbeat-scheduler-service'
-import { ModelPricingService } from './providers/model-pricing-service'
+import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
-import type { PtyService } from './system/pty-service'
-import type { ProviderConnectionService } from './providers/provider-connection'
-import type { HarnessUpdateService } from './agents/harness-update-service'
-import type { HarnessAutoUpdateService } from './agents/harness-auto-update-service'
-import type { HarnessInstallService } from './agents/harness-install-service'
-import type { NotificationService } from './notifications/notification-service'
-import type { RemoteModeController } from './remote/remote-mode'
-import type { DeviceCredentialService } from './remote/device-credential-service'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
-import { openWithService, parseOpenedPathArguments } from './system/open-with-service'
-import { BrowserService } from './browser/browser-service'
-import { ensureDir, getConfigRoot } from '../lib/utils'
-import { chatThreadArtifactDirectory } from '../lib/project-artifacts'
-import type { SpeechService } from './speech/speech-service'
+import { createBootstrapState } from './bootstrap/bootstrap-state'
+import { configureLinuxElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
+import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
+import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
+import { armQuitFailsafe, requestCloseConfirmation } from './bootstrap/quit-lifecycle'
+import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
+import { bootPostPaintServices } from './bootstrap/post-paint-services'
+import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
+import { handleFatalStartup } from './bootstrap/fatal-startup'
+import {
+  installAppFilePreviewProtocol,
+  installRendererSessionGuards
+} from './bootstrap/session-guards'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_DEV_REMOTE_MODE__: boolean
@@ -75,30 +49,6 @@ declare const __CODEINOVEN_APP_VERSION__: string
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
-
-/**
- * Electron otherwise derives Linux `userData` from the product name and creates
- * `~/.config/CodeInOven` alongside CodeInOven's canonical Pillardash config
- * root. Redirect Chromium before `ready` and move the legacy directory on the
- * first upgraded launch so cookies, local storage, caches, the remote pairing
- * secret, and the owned-process journal are preserved instead of orphaned.
- */
-function configureLinuxElectronDataRoot(): void {
-  if (process.platform !== 'linux') return
-
-  const legacyRoot = app.getPath('userData')
-  const managedRoot = join(getConfigRoot(), 'electron')
-  mkdirSync(dirname(managedRoot), { recursive: true })
-
-  if (legacyRoot !== managedRoot && existsSync(legacyRoot) && !existsSync(managedRoot)) {
-    renameSync(legacyRoot, managedRoot)
-  } else {
-    mkdirSync(managedRoot, { recursive: true })
-  }
-
-  app.setPath('userData', managedRoot)
-  app.setPath('sessionData', managedRoot)
-}
 
 configureLinuxElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
@@ -124,7 +74,7 @@ function registerSignalHandlers(): void {
     process.on(signal, () => {
       Logger.info(`Received ${signal}   shutting down`)
       // OS-level signals always force the quit   no confirmation gate.
-      quitConfirmed = true
+      state.quitConfirmed = true
       app.quit()
     })
   }
@@ -145,157 +95,9 @@ startupTelemetry.mark('process:entry')
 // background operation must never kill the app on the user's behalf.
 installProcessCrashDiagnostics()
 
-let mainWindow: BrowserWindow | null = null
-let splashWindow: BrowserWindow | null = null
-let browserService: BrowserService | null = null
-let gatewaySupervisor: GatewaySupervisorService | null = null
-let quitCleanupStarted = false
-let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
+const state = createBootstrapState()
 
-/**
- * OS "Open in CodeInOven" hand-off.
- *
- * Folders and files the user opens from Finder/Explorer, drops on the Dock or
- * taskbar icon, or passes on the command line are queued by the open-with
- * service and drained by the renderer. A launch that carries paths takes the
- * single-instance lock so a second "Open in CodeInOven" reuses the window that
- * already answered one instead of stacking another app instance; an ordinary
- * launch never requests the lock, so multiple windows remain available exactly
- * as before.
- */
-const launchedPaths = parseOpenedPathArguments(process.argv)
-const handlesOpenedPaths = launchedPaths.length > 0 && app.requestSingleInstanceLock()
-if (handlesOpenedPaths) {
-  app.on('second-instance', (_event, argv) => {
-    void relayOpenedPaths(parseOpenedPathArguments(argv))
-  })
-} else if (launchedPaths.length > 0) {
-  // Another process already owns the open-with lock; Electron forwards this
-  // argv to it as `second-instance`. Exit before any window or service starts.
-  app.exit(0)
-}
-if (handlesOpenedPaths) void openWithService.ingest(launchedPaths)
-
-/**
- * macOS delivers "Open with" and Dock drops as an Apple Event rather than an
- * argument. The listener must exist before `ready` so queued events are not
- * dropped, and it must accept the event so the file is not opened by the
- * default handler instead.
- */
-app.on('open-file', (event, path) => {
-  event.preventDefault()
-  void relayOpenedPaths([path])
-})
-
-/** Queue OS-supplied paths; the ingest listener hands them to the window. */
-async function relayOpenedPaths(rawPaths: readonly string[]): Promise<void> {
-  if (rawPaths.length === 0) return
-  await openWithService.ingest(rawPaths)
-}
-
-/**
- * Push queued paths to the renderer. Paths that arrive before the renderer
- * mounted (a launch, or a macOS `open-file` during startup) stay queued: the
- * renderer drains them itself through `openWith:consumePending`, which keeps
- * delivery deterministic without guessing whether its listeners are installed.
- */
-function flushOpenedPathsToRenderer(): void {
-  if (quitCleanupStarted) return
-  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
-  if (!window || window.webContents.isLoadingMainFrame()) return
-  const paths = openWithService.consumePending()
-  if (paths.length === 0) return
-  if (window.isMinimized()) window.restore()
-  if (!window.isVisible()) window.show()
-  window.focus()
-  sendToRenderer(window.webContents, 'openWith:paths', paths)
-}
-
-openWithService.onPaths(() => flushOpenedPathsToRenderer())
-
-/**
- * Close-confirmation gate. When the user closes the window (traffic-light
- * button) or quits (Cmd+Q / Dock) while threads are still working, the close
- * is intercepted and the renderer is asked to confirm. `quitConfirmed`
- * records that the user approved the forced close so the subsequent
- * close/quit passes straight through.
- */
-let quitConfirmed = false
-
-/**
- * Hard failsafe for the quit lifecycle. The close-confirmation flow round-trips
- * through the renderer, so a wedged renderer could otherwise hold quit hostage
- * indefinitely. This timer guarantees the process converges on exit: if the
- * pipeline has not completed within 15 seconds of the user asking to quit, the
- * process force-exits. Re-arming on every before-quit keeps it correct across
- * repeated close attempts.
- */
-function armQuitFailsafe(): void {
-  if (shutdownFailsafe) clearTimeout(shutdownFailsafe)
-  shutdownFailsafe = setTimeout(() => {
-    Logger.error('Quit failsafe fired   forcing exit')
-    app.exit(0)
-  }, 15_000)
-}
-
-/** Projects that still have threads being worked on, most active first. */
-function getActiveThreadProjects(): CloseConfirmationProject[] {
-  try {
-    const threadRepo = new ThreadRepo(database)
-    const projectRepo = new ProjectRepo(database)
-    const active = threadRepo.listActive()
-    if (active.length === 0) return []
-    const byProject = new Map<string, CloseConfirmationProject>()
-    for (const thread of active) {
-      let entry = byProject.get(thread.projectId)
-      if (!entry) {
-        const project = projectRepo.get(thread.projectId)
-        entry = {
-          projectId: thread.projectId,
-          projectName: project?.name ?? thread.projectId,
-          threadCount: 0,
-          threads: []
-        }
-        byProject.set(thread.projectId, entry)
-      }
-      entry.threadCount++
-      entry.threads.push({
-        threadId: thread.id,
-        title: thread.title,
-        status: thread.status
-      })
-    }
-    return [...byProject.values()].sort((a, b) => b.threadCount - a.threadCount)
-  } catch (error) {
-    Logger.error('Could not query active threads for close confirmation', error)
-    return []
-  }
-}
-
-/**
- * Decide whether a close/quit can proceed. With nothing working (or no window
- * to ask) the quit continues immediately; otherwise the renderer is prompted
- * and the quit pauses until `app:confirmClose` arrives.
- *
- * The renderer is always asked   it owns the unsaved-file editor state, which
- * also gates the close. It replies through `app:confirmClose` immediately when
- * nothing is pending, or shows the confirmation modal otherwise.
- */
-function requestCloseConfirmation(): void {
-  if (quitCleanupStarted || quitConfirmed) return
-  const window = mainWindow
-  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
-    quitConfirmed = true
-    app.quit()
-    return
-  }
-  // When another live instance can keep a project's threads running, working
-  // threads don't need to gate this instance's close   a surviving instance can
-  // continue them. The renderer still owns the unsaved-file gate, which is
-  // reported separately, so closing never silently drops unsaved editor state.
-  const working = instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects()
-  sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
-}
+installOpenWithHandling(state)
 
 ipcMain.handle('app:confirmClose', async () => {
   // The user approved the forced close while threads are working. When another
@@ -303,10 +105,10 @@ ipcMain.handle('app:confirmClose', async () => {
   // walks away without SIGTERM'ing the shared harness processes. Otherwise
   // terminate every still-streaming harness connection so no agent keeps
   // working after the app exits, then proceed.
-  quitConfirmed = true
+  state.quitConfirmed = true
   try {
-    if (chatEngine && !instanceRegistry.hasOtherLiveInstance()) {
-      await chatEngine.terminateActiveConnections()
+    if (state.chatEngine && !instanceRegistry.hasOtherLiveInstance()) {
+      await state.chatEngine.terminateActiveConnections()
     }
   } catch (error) {
     Logger.error('Could not terminate active harness connections on close', error)
@@ -316,17 +118,12 @@ ipcMain.handle('app:confirmClose', async () => {
 
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
 ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
-  terminalFocused = focused === true
+  state.terminalFocused = focused === true
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
-let rendererReadyReported = false
-let packagedSmokeProofStarted = false
-let startupTelemetryReported = false
-let featuresReady = false
-let resolveFeaturesReady: (() => void) | null = null
 const featuresReadyPromise = new Promise<void>((resolve) => {
-  resolveFeaturesReady = resolve
+  state.resolveFeaturesReady = resolve
 })
 
 /**
@@ -336,7 +133,7 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
  * converge on one atomic proof and one clean shutdown.
  */
 function markWorkspaceReadyIfInteractive(): void {
-  if (!rendererReadyReported || !featuresReady) return
+  if (!state.rendererReadyReported || !state.featuresReady) return
   startupTelemetry.mark('workspace:ready')
   void completeStartupIfReady()
 }
@@ -351,14 +148,14 @@ async function completeStartupIfReady(): Promise<void> {
     return
   }
 
-  if (!startupTelemetryReported) {
-    startupTelemetryReported = true
+  if (!state.startupTelemetryReported) {
+    state.startupTelemetryReported = true
     startupTelemetry.stopEventLoopMonitor()
     startupTelemetry.report()
   }
 
-  if (!output || packagedSmokeProofStarted) return
-  packagedSmokeProofStarted = true
+  if (!output || state.packagedSmokeProofStarted) return
+  state.packagedSmokeProofStarted = true
   try {
     await writePackagedSmokeProof(output, startupTelemetry.snapshot())
     setImmediate(() => app.quit())
@@ -370,7 +167,9 @@ async function completeStartupIfReady(): Promise<void> {
 
 /** Sticky readiness query: unlike an event subscription, callers that mount
  * after post-paint registration still observe feature availability. */
-ipcMain.handle('app:waitForFeatures', () => (featuresReady ? undefined : featuresReadyPromise))
+ipcMain.handle('app:waitForFeatures', () =>
+  state.featuresReady ? undefined : featuresReadyPromise
+)
 
 /**
  * The renderer reports when its initial hydration is done (visible projects,
@@ -380,47 +179,13 @@ ipcMain.handle('app:waitForFeatures', () => (featuresReady ? undefined : feature
  * never re-record phases or re-emit the report.
  */
 ipcMain.handle('app:rendererReady', async () => {
-  if (rendererReadyReported) return
-  rendererReadyReported = true
+  if (state.rendererReadyReported) return
+  state.rendererReadyReported = true
   startupTelemetry.mark('renderer:hydrated')
   markWorkspaceReadyIfInteractive()
   await completeStartupIfReady()
 })
 
-/**
- * Whether a terminal in the renderer currently holds focus. While true, the
- * shell owns keys that would otherwise be app shortcuts: Ctrl+W is left to
- * the shell's delete-word binding, and Cmd/Ctrl+T opens a new terminal tab.
- */
-let terminalFocused = false
-
-/**
- * Whether the shortcut closes the active surface. macOS only treats Cmd+W as
- * close (Ctrl+W must never close anything there); other platforms use Ctrl+W.
- */
-function isCloseShortcut(input: Electron.Input): boolean {
-  return (
-    input.type === 'keyDown' &&
-    !input.isAutoRepeat &&
-    (process.platform === 'darwin' ? input.meta : input.control) &&
-    !input.alt &&
-    input.key.toLowerCase() === 'w'
-  )
-}
-
-/**
- * Whether the shortcut opens a new terminal tab while a terminal is focused.
- * macOS uses Cmd+T; other platforms use Ctrl+T.
- */
-function isNewTerminalShortcut(input: Electron.Input): boolean {
-  return (
-    input.type === 'keyDown' &&
-    !input.isAutoRepeat &&
-    (process.platform === 'darwin' ? input.meta : input.control) &&
-    !input.alt &&
-    input.key.toLowerCase() === 't'
-  )
-}
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
 const restorePersistedRemoteModeInDev = isProduction || __CODEINOVEN_DEV_REMOTE_MODE__
 
@@ -439,51 +204,6 @@ const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
 const database = new Database()
 
-/**
- * Optional services constructed after the primary window paints (see
- * `bootOptionalServices`). Module evaluation only declares the bindings so the
- * heavy service graph (chat engine, PTY, harness, remote mode, …) never blocks
- * the splash or the first window. Every consumer guards for `null`.
- */
-let chatEngine: ChatEngine | null = null
-let ptyService: PtyService | null = null
-let providerConnection: ProviderConnectionService | null = null
-let harnessUpdateService: HarnessUpdateService | null = null
-let harnessAutoUpdateService: HarnessAutoUpdateService | null = null
-let harnessInstallService: HarnessInstallService | null = null
-let harnessManifestService: HarnessManifestService | null = null
-let computerUsePipService: ComputerUsePipService | null = null
-let notificationService: NotificationService | null = null
-let updaterService: UpdaterService | null = null
-let powerWakeService: PowerWakeService | null = null
-let retryScheduler: RetrySchedulerService | null = null
-let heartbeatScheduler: HeartbeatSchedulerService | null = null
-let remoteCredentials: DeviceCredentialService | null = null
-let remoteMode: RemoteModeController | null = null
-let stopRemoteOwnershipListener: (() => void) | null = null
-let remoteOwnershipPromise: Promise<void> | null = null
-let remoteOwnershipReconcilePending = false
-let modelPricingService: ModelPricingService | null = null
-let speechService: SpeechService | null = null
-let unregisterSpeechIpc: (() => void) | null = null
-let prototypePreviewService:
-  import('./prototypes/prototype-preview-service').PrototypePreviewService | null = null
-/** Loopback static servers behind the file tree's "Open in browser" action. */
-let directoryPreviewService:
-  import('./preview/directory-preview-service').DirectoryPreviewService | null = null
-/**
- * Resolved lazily so the `appfile://` preview protocol can be installed before
- * the main window loads (its renderer requests previews as soon as it hydrates).
- * Populated in {@link bootPostPaintServices} once the file service exists.
- */
-let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
-/**
- * Privileged scoped-path resolver, handed over by the IPC layer once the
- * post-paint service graph exists. The `appfile://` protocol needs it to serve
- * standalone (OS-opened) file previews with the same authorization privileged
- * IPC uses; project-relative previews keep resolving through the file service.
- */
-let appfileScopedPathResolver: ((value: unknown) => Promise<string>) | null = null
 const threadCreation = new ThreadCreationCoordinator()
 const threadDeletion = new ThreadDeletionCoordinator()
 
@@ -513,624 +233,6 @@ function getPreloadPath(): string {
     if (existsSync(candidate)) return candidate
   }
   return join(dir, 'index.js')
-}
-
-/**
- * Frameless splash shown as soon as Electron permits a window   the app `ready`
- * event (a window simply cannot exist before that in Electron). Shown
- * immediately rather than gated on `ready-to-show`; the matching
- * `backgroundColor` means the Obsidian surface paints the instant the window
- * exists, then the logo/spinner layer on top. Closed once the main window
- * paints.
- */
-type SplashVisualOutcome = 'ready' | 'closed' | 'load-failed' | 'timeout'
-
-const SPLASH_VISUAL_TIMEOUT_MS = 5_000
-
-function waitForSplashVisual(splash: BrowserWindow): Promise<SplashVisualOutcome> {
-  return new Promise((resolveVisual) => {
-    let settled = false
-    const finish = (outcome: SplashVisualOutcome): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      resolveVisual(outcome)
-    }
-    const timeout = setTimeout(() => finish('timeout'), SPLASH_VISUAL_TIMEOUT_MS)
-    splash.once('ready-to-show', () => finish('ready'))
-    splash.once('closed', () => finish('closed'))
-    splash.webContents.once('did-fail-load', () => finish('load-failed'))
-  })
-}
-
-function createSplashWindow(): {
-  splash: BrowserWindow
-  visualReady: Promise<SplashVisualOutcome>
-} {
-  const width = 420
-  const height = 320
-  const displayBounds = screen.getPrimaryDisplay().bounds
-  const splash = new BrowserWindow({
-    width,
-    height,
-    x: Math.round(displayBounds.x + (displayBounds.width - width) / 2),
-    y: Math.round(displayBounds.y + (displayBounds.height - height) / 2),
-    frame: false,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    show: true,
-    backgroundColor: '#000000',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      devTools: false
-    }
-  })
-  splashWindow = splash
-  const visualReady = waitForSplashVisual(splash)
-
-  const applicationVersion = __CODEINOVEN_APP_VERSION__
-  const loading =
-    !isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']
-      ? (() => {
-          const splashUrl = new URL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
-          splashUrl.searchParams.set('version', applicationVersion)
-          return splash.loadURL(splashUrl.toString())
-        })()
-      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'), {
-          query: { version: applicationVersion }
-        })
-  // `did-fail-load` resolves the visual barrier as `load-failed`; consume the
-  // matching navigation rejection so it cannot become an unhandled promise.
-  void loading.catch(() => undefined)
-
-  splash.once('closed', () => {
-    if (splashWindow === splash) splashWindow = null
-  })
-  return { splash, visualReady }
-}
-
-function closeSplash(): void {
-  if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.close()
-  }
-  splashWindow = null
-}
-
-/**
- * Construct and register the optional service graph after the primary window
- * has painted. Dynamic imports keep the heavy modules (PTY, harness services,
- * provider connection, remote mode, notifications, …) out of the
- * module-evaluation path so first paint is never blocked by their construction.
- * Hydration IPC (config/project/bounded-thread/scope reads plus `app:*`) is
- * registered before navigation. Feature IPC, chat, provider catalog, file
- * preview, and optional services are registered here after first paint.
- */
-async function bootPostPaintServices(): Promise<void> {
-  if (updaterService) return
-  const [
-    { registerIpcHandlers },
-    { ProjectManager },
-    { ProjectFilesService },
-    { ChatEngine },
-    { ScopeManager },
-    { ScopeRootResolver, scopeRootProvider },
-    { ScopeWorktreeService },
-    { HarnessManifestService },
-    { ComputerUsePipService },
-    { UpdaterService },
-    { PowerWakeService },
-    { RetrySchedulerService },
-    { HeartbeatSchedulerService },
-    { SpeechService },
-    { registerSpeechIpc },
-    { PrototypePreviewService },
-    { DirectoryPreviewService }
-  ] = await Promise.all([
-    import('./ipc/ipc-handlers'),
-    import('../lib/engines/project-manager'),
-    import('./editor/project-files-service'),
-    import('./chat/chat-engine'),
-    import('../lib/engines/scope-manager'),
-    import('./workspaces/scope-root-resolver'),
-    import('./git/scope-worktree-service'),
-    import('./agents/harness-manifest-service'),
-    import('./utilities/computer-use-pip-service'),
-    import('./notifications/updater-service'),
-    import('./system/power-wake-service'),
-    import('./system/retry-scheduler-service'),
-    import('./system/heartbeat-scheduler-service'),
-    import('./speech/speech-service'),
-    import('./ipc/speech-ipc'),
-    import('./prototypes/prototype-preview-service'),
-    import('./preview/directory-preview-service')
-  ])
-
-  const projectManager = new ProjectManager(database)
-  const scopeManager = new ScopeManager(database)
-  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
-  const scopeRootResolver = new ScopeRootResolver(
-    projectManager,
-    scopeManager,
-    scopeWorktreeService
-  )
-  const projectFilesService = new ProjectFilesService(
-    projectManager,
-    scopeRootProvider(scopeRootResolver),
-    {
-      // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
-      // directory; resolution creates it on demand so an empty thread still has
-      // a browsable root.
-      resolve: async (threadId: string) => {
-        const root = storage.resolve(chatThreadArtifactDirectory(threadId))
-        await ensureDir(root)
-        return root
-      }
-    }
-  )
-  appfileProjectFiles = projectFilesService
-  computerUsePipService = new ComputerUsePipService(storage)
-  harnessManifestService = new HarnessManifestService(storage)
-  modelPricingService = new ModelPricingService(storage)
-  chatEngine = new ChatEngine(
-    storage,
-    database,
-    computerUsePipService,
-    harnessManifestService,
-    threadCreation,
-    join(app.getPath('userData'), 'owned-processes.json'),
-    scopeRootProvider(scopeRootResolver),
-    modelPricingService
-  )
-  // Grade any ranking snapshots whose persisted close deadline elapsed while
-  // the app was closed (non-fatal: a failed sweep leaves rows queued for the
-  // next launch).
-  void chatEngine
-    .recoverPendingRankingGrades()
-    .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
-  // Merge the app-managed lean opencode agents into the machine-wide global
-  // config. Idempotent, additive-only and non-fatal; runs after first paint
-  // so it never blocks the workspace, and logs a dev-only summary.
-  const { syncOpenCodeLeanAgents } = await import('./opencode/opencode-agent-service')
-  await syncOpenCodeLeanAgents().catch((error) =>
-    Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
-  )
-  updaterService = new UpdaterService(storage)
-  powerWakeService = new PowerWakeService(storage, database)
-  retryScheduler = new RetrySchedulerService(storage)
-  heartbeatScheduler = new HeartbeatSchedulerService(storage)
-  chatEngine.attachHeartbeatScheduler(heartbeatScheduler)
-  speechService = new SpeechService(
-    {
-      catalogPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/model-catalog.json')
-        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
-      mlxWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/mlx-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
-      coremlWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/coreml-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
-      nativeCaptureWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/speech-capture-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
-    },
-    undefined,
-    (input) => chatEngine!.cleanupSpeechTranscript(input),
-    (input) => chatEngine!.transcribeSpeechAudio(input),
-    (input) => chatEngine!.learnSpeechLessons(input),
-    (pid, command, cwd) =>
-      chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
-  )
-  await speechService.initialize()
-  // Initialize auto-evict timers from persisted sound settings
-  try {
-    const cfg = await storage.getConfig()
-    speechService.updateUnloadOptions({
-      asr: cfg.sound.asrUnload,
-      cleanup: cfg.sound.cleanupUnload,
-      tts: cfg.sound.ttsUnload
-    })
-  } catch {
-    // defaults already applied
-  }
-  unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
-  prototypePreviewService = new PrototypePreviewService()
-  directoryPreviewService = new DirectoryPreviewService()
-  chatEngine.setPrototypePreviewRegistrar(
-    (previewSlug, canonicalRoot) =>
-      prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
-  )
-  void (async () => {
-    const projects = await projectManager.listProjects()
-    let registered = 0
-    for (const project of projects) {
-      if (project.source !== 'local' || !project.path) continue
-      registered += (await prototypePreviewService?.registerProject(project.path)) ?? 0
-    }
-    Logger.dev('Prototype preview registrations restored', { registered })
-  })().catch((error) => Logger.error('Prototype preview registration recovery failed:', error))
-  const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
-  const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
-    development: !isProduction,
-    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
-  })
-  ipcMain.removeHandler('prototypePreview:getOrigin')
-  ipcMain.handle('prototypePreview:getOrigin', async () => {
-    if (previewOrigin.origin || previewOrigin.source !== 'missing' || isProduction) {
-      return previewOrigin.origin
-    }
-    const service = prototypePreviewService
-    if (!service) return null
-    const port = await service.start()
-    return resolvePrototypePreviewOrigin(process.env, {
-      development: true,
-      bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
-      allocatedPort: port
-    }).origin
-  })
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const service = new BrowserService(mainWindow, database)
-    browserService = service
-    service.register()
-    chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
-      service.executeUtility(operation, input, context)
-    )
-  }
-  // Keep the device awake while a scheduled auto-retry is due within the wake
-  // window, so a usage-limit reset fires even when the user is away.
-  powerWakeService.attachRetryScheduler(retryScheduler)
-  retryScheduler.attachChangeListener(() => powerWakeService?.onRetryScheduleChanged())
-  updaterService.setChatEngine(chatEngine)
-  // Reap any harness processes orphaned by an unclean previous run before the
-  // first session can spawn fresh servers, so leftover dev servers/ports are
-  // reclaimed without ever touching a harness the user runs outside the app.
-  try {
-    const reaped = await chatEngine.reapOrphanProcesses()
-    if (reaped.killed.length > 0 || reaped.skipped.length > 0) {
-      Logger.info('Reaped orphaned harness processes from an unclean shutdown', {
-        killed: reaped.killed,
-        skipped: reaped.skipped
-      })
-    }
-  } catch (error) {
-    Logger.error('Orphaned harness process reaping failed at startup:', error)
-  }
-  registerIpcHandlers(storage, database, updaterService, chatEngine, {
-    projectManager,
-    projectFilesService,
-    directoryPreviewService,
-    powerWakeService,
-    retryScheduler,
-    heartbeatScheduler,
-    harnessManifestService,
-    worktreeService: scopeWorktreeService,
-    threadCreation,
-    threadDeletion,
-    hydrationHandlersRegistered: true,
-    speechService,
-    onScopedPathResolver: (resolve) => {
-      appfileScopedPathResolver = resolve
-    }
-  })
-  chatEngine.register()
-  harnessManifestService.register()
-  chatEngine.attachRetryScheduler(retryScheduler)
-  featuresReady = true
-  startupTelemetry.mark('features:ready')
-  markWorkspaceReadyIfInteractive()
-  resolveFeaturesReady?.()
-  resolveFeaturesReady = null
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-    sendToRenderer(mainWindow.webContents, 'app:featuresReady')
-  }
-
-  void (async () => {
-    const [
-      { PtyService },
-      { ProviderConnectionService },
-      { HarnessUpdateService },
-      { HarnessInstallService },
-      { HarnessAutoUpdateService },
-      { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
-      { RemoteRpcDispatcher },
-      { DeviceCredentialService },
-      { HarnessUsageRepo },
-      { MemoryService },
-      { NotificationService },
-      { RestartRecoveryService }
-    ] = await Promise.all([
-      import('./system/pty-service'),
-      import('./providers/provider-connection'),
-      import('./agents/harness-update-service'),
-      import('./agents/harness-install-service'),
-      import('./agents/harness-auto-update-service'),
-      import('./remote/remote-mode'),
-      import('./remote/remote-rpc'),
-      import('./remote/device-credential-service'),
-      import('./database/repositories/harness-usage-repo'),
-      import('./chat/memory-service'),
-      import('./notifications/notification-service'),
-      import('./system/restart-recovery-service')
-    ])
-
-    ptyService = new PtyService(
-      storage,
-      database,
-      scopeRootResolver,
-      (process) => {
-        chatEngine?.trackPtyProcess(
-          process.scopeId,
-          process.projectId,
-          process.threadId,
-          process.pid,
-          process.command,
-          process.cwd
-        )
-      },
-      (projectId, projectPath) => {
-        // User typed in a project terminal   open a user-activity window so
-        // their shell-driven edits are excluded from concurrent agent turns.
-        chatEngine?.recordUserTerminalInput(projectId, projectPath)
-      }
-    )
-    // A probe that changes a harness's install state (new install, version
-    // bump) invalidates cached provider catalogs so the model picker reflects it.
-    providerConnection = new ProviderConnectionService(() => {
-      void chatEngine?.invalidateProviderCatalogs()
-    })
-    harnessUpdateService = new HarnessUpdateService(providerConnection)
-    harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
-    harnessInstallService = new HarnessInstallService(providerConnection)
-    notificationService = new NotificationService(storage, database, openThreadFromNotification)
-
-    /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
-    remoteCredentials = new DeviceCredentialService(database)
-    const accountProfileRepo = new AccountProfileRepo(database)
-    const accountUsage = new HarnessUsageRepo(database)
-    const accountMemory = new MemoryService(storage)
-    remoteMode = new RemoteModeController({
-      lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
-      localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
-      peerSecret: remotePeerSecret(),
-      staticRoot: join(mainBundleDirectory, '../renderer'),
-      iconPath: getAppIconPath(),
-      rpc: new RemoteRpcDispatcher({
-        database,
-        chatEngine: chatEngine!,
-        storage,
-        credentials: remoteCredentials,
-        threadCreation,
-        threadDeletion
-      }),
-      storage,
-      credentials: remoteCredentials,
-      accountProfileRepo,
-      loadAccountProfileData: async () => {
-        const identity = await loadDeviceIdentity(storage)
-        const analytics = await accountUsage.profileSummary()
-        const globalMemories = (await accountMemory.getEntries()).filter(
-          (entry) => entry.scope === 'global'
-        )
-        const syncState = await readMemorySyncState(storage)
-        return {
-          deviceId: identity.deviceId,
-          deviceLabel: identity.deviceLabel,
-          platform: identity.platform,
-          usage: {
-            deviceId: identity.deviceId,
-            deviceLabel: identity.deviceLabel,
-            platform: identity.platform,
-            messageCount: analytics.messageCount,
-            costUsd: analytics.costUsd,
-            tokens: analytics.tokens,
-            durationMs: analytics.durationMs,
-            activeDays: analytics.activityDays.length,
-            projects: await accountUsage.projectUsageSummary(),
-            updatedAt: Date.now()
-          },
-          globalMemories,
-          globalMemoryTombstones: syncState?.tombstones ?? []
-        }
-      },
-      applyGlobalMemories: async (entries) => {
-        // The server returns the tombstone-filtered union of every device's
-        // memories, so replacing the local list is what propagates deletions.
-        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
-      },
-      canOwnTransport: () => instanceRegistry.isPreferredRemoteOwner(),
-      onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
-    })
-
-    const reconcileRemoteTransportOwnership = (startup = false): void => {
-      if (!remoteMode) return
-      if (remoteOwnershipPromise) {
-        remoteOwnershipReconcilePending = true
-        return
-      }
-      remoteOwnershipReconcilePending = false
-      const mayRestorePersistedMode = !startup || restorePersistedRemoteModeInDev
-      const operation =
-        instanceRegistry.isPreferredRemoteOwner() && mayRestorePersistedMode
-          ? remoteMode.restoreRemoteMode()
-          : remoteMode.relinquishTransportOwnership()
-      remoteOwnershipPromise = operation
-        .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
-        .finally(() => {
-          remoteOwnershipPromise = null
-          if (remoteOwnershipReconcilePending) reconcileRemoteTransportOwnership()
-        })
-    }
-    stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(
-      reconcileRemoteTransportOwnership
-    )
-
-    // Optional IPC   registered only after the services exist.
-    if (updaterService) {
-      updaterService.addActivitySource({
-        activeSessionCount: () => ptyService?.activeSessionCount() ?? 0
-      })
-      updaterService.addActivitySource({
-        activeSessionCount: () => (remoteMode?.status.blockedQuit ? 1 : 0)
-      })
-    }
-    remoteMode.registerIpc()
-    ptyService.register()
-    providerConnection.register()
-    harnessUpdateService.register()
-    harnessAutoUpdateService.register()
-    harnessInstallService.register()
-
-    const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
-    const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
-    const { registerUtilityIpc } = await import('./ipc/utility-ipc')
-    const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
-    const { OwnedProcessJournal } = await import('./system/owned-process-journal')
-    registerProviderAccountIpc(storage, undefined, (accountId) =>
-      chatEngine!.removeHarnessAccount(accountId)
-    )
-    registerBaseUrlProviderIpc(storage)
-    registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
-    gatewaySupervisor = registerGatewayIpc(
-      storage,
-      () => mainWindow?.webContents ?? null,
-      undefined,
-      new OwnedProcessJournal(join(getConfigRoot(), 'gateways', 'owned-processes.json'))
-    )
-    // Reap gateway processes orphaned by a previous crash before anything can
-    // bind their port again, then bring enabled gateways back up.
-    void gatewaySupervisor
-      .recoverOrphans()
-      .then(() => gatewaySupervisor?.autoStartEnabled())
-      .catch((error) => {
-        Logger.error('Gateway startup recovery failed (non-fatal):', error)
-      })
-
-    // Wire PTY to the window now that it exists.
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      ptyService.attach(mainWindow.webContents)
-    }
-
-    try {
-      await powerWakeService?.start()
-      if (powerWakeService) setPowerWakeService(powerWakeService)
-    } catch (error) {
-      Logger.error('Power wake startup failed (non-fatal):', error)
-    }
-
-    try {
-      await retryScheduler?.start()
-      await chatEngine?.repairPendingRetryThreadStatuses()
-    } catch (error) {
-      Logger.error('Retry scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      await heartbeatScheduler?.start()
-    } catch (error) {
-      Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      modelPricingService?.start()
-    } catch (error) {
-      Logger.error('Model pricing startup failed (non-fatal):', error)
-    }
-
-    try {
-      const recovery = await new RestartRecoveryService(database).recover()
-      if (recovery.recovered.length > 0) {
-        Logger.info('Recovered interrupted threads', {
-          inspected: recovery.inspected,
-          recovered: recovery.recovered.map((thread) => ({
-            projectId: thread.projectId,
-            threadId: thread.id
-          }))
-        })
-        // The renderer's thread list was hydrated before recovery ran, so its
-        // in-memory rows still hold the stale planning/executing status. Push
-        // the corrected snapshots so sidebar indicators flip to "interrupted"
-        // immediately instead of lingering on "working" until the thread is
-        // reopened. `interrupted` is not a notifiable status, so this cannot
-        // fire spurious OS notifications.
-        for (const thread of recovery.recovered) {
-          broadcastThreadUpdate(thread)
-        }
-      }
-      // Threads whose turns demonstrably completed before the stop are finalized
-      // as `completed`, never resumed. Broadcast their corrected status too so the
-      // sidebar doesn't linger on the stale "working" indicator.
-      if (recovery.completed.length > 0) {
-        Logger.info('Finalized completed interrupted threads', {
-          inspected: recovery.inspected,
-          completed: recovery.completed.map((thread) => ({
-            projectId: thread.projectId,
-            threadId: thread.id
-          }))
-        })
-        for (const thread of recovery.completed) {
-          broadcastThreadUpdate(thread)
-        }
-      }
-      if (recovery.failures.length > 0) {
-        Logger.error('Restart recovery completed with failures', recovery.failures)
-      }
-      await chatEngine?.resumePendingWork()
-      // Resume the interrupted threads themselves (regular + Sr. Engineer),
-      // gated by the "Resume work on restart" setting. Each resumed thread
-      // broadcasts a working status so the sidebar flips immediately.
-      if (recovery.recovered.length > 0) {
-        await chatEngine?.resumeRecoveredThreads(recovery.recovered)
-      }
-    } catch (error) {
-      Logger.error('Restart recovery failed (non-fatal):', error)
-    }
-
-    // One-time repair of file-change cards whose line counts were recorded as
-    // truncated by the previous whole-file gating (large files with small
-    // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
-    // candidate has been repaired.
-    try {
-      const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
-      if (repaired > 0) {
-        Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Line-stats repair failed (non-fatal):', error)
-    }
-
-    // One-time repair of file-change cards misattributed to hidden internal
-    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
-    // by turns that ran before internal attribution existed. Bounded,
-    // idempotent, and batched; a no-op once every candidate is repaired.
-    try {
-      const repaired = await new CheckpointManager(
-        database
-      ).repairMisattributedInternalCheckpoints()
-      if (repaired > 0) {
-        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Internal-attribution repair failed (non-fatal):', error)
-    }
-
-    // Restore remote mode after paint so users can see app UI while the LAN
-    // stack spins up in the background.
-    reconcileRemoteTransportOwnership(true)
-
-    try {
-      notificationService.start()
-      setNotificationService(notificationService)
-      updaterService?.start()
-    } catch (error) {
-      Logger.error('Update/notification startup failed (non-fatal):', error)
-    }
-  })()
 }
 
 /**
@@ -1173,7 +275,7 @@ function createWindow(): BrowserWindow {
       plugins: true
     }
   })
-  mainWindow = window
+  state.mainWindow = window
 
   if (isProduction) {
     lockDownProductionWindow(window)
@@ -1193,17 +295,17 @@ function createWindow(): BrowserWindow {
     // Tray. Gate the close while threads are working   ask the renderer to
     // confirm before letting the window (and with it the app) go away. During
     // an approved quit the flags below let the close pass straight through.
-    if (quitConfirmed || quitCleanupStarted) return
+    if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
-    requestCloseConfirmation()
+    requestCloseConfirmation({ state, database, window: state.mainWindow })
   })
 
   window.on('closed', () => {
-    if (mainWindow === window) mainWindow = null
+    if (state.mainWindow === window) state.mainWindow = null
   })
 
-  if (ptyService) {
-    ptyService.attach(window.webContents)
+  if (state.ptyService) {
+    state.ptyService.attach(window.webContents)
   }
   windowStateService.attach(window)
 
@@ -1228,14 +330,14 @@ function createWindow(): BrowserWindow {
     //
     // On non-mac platforms, when a terminal is focused, Ctrl+W is the shell's
     // delete-word binding   leave it alone so it reaches the shell.
-    if (isCloseShortcut(input) && !(terminalFocused && process.platform !== 'darwin')) {
+    if (isCloseShortcut(input) && !(state.terminalFocused && process.platform !== 'darwin')) {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:closeShortcut')
     }
     // Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
     // renderer. Intercept here so ghostty-web never swallows the key and feeds
     // its WASM-encoded sequence to the shell.
-    if (isNewTerminalShortcut(input) && terminalFocused) {
+    if (isNewTerminalShortcut(input) && state.terminalFocused) {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:newTerminalShortcut')
     }
@@ -1323,31 +425,11 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-/**
- * Report an explicit `CODEINOVEN_CONFIG_ROOT` redirect once per launch, so a
- * developer running several worktrees side by side can always tell which
- * app-owned data root this instance actually opened   and why an ignored value
- * (relative path, or a shipped app) was ignored instead of silently falling
- * back to the real one.
- */
-function logConfiguredDataRoot(): void {
-  const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
-  if (!configuredRoot) return
-  if (isAbsolute(configuredRoot) && getConfigRoot() === configuredRoot) {
-    Logger.info('Config root redirected by CODEINOVEN_CONFIG_ROOT', { configuredRoot })
-    return
-  }
-  Logger.info('CODEINOVEN_CONFIG_ROOT ignored', {
-    configuredRoot,
-    reason:
-      'an absolute path is required, and only an unpackaged launch or the packaged smoke harness may redirect the data root'
-  })
-}
-
 function openThreadFromNotification(payload: ThreadClickedPayload): void {
   // A quit is already in progress   never spawn a window mid-shutdown.
-  if (quitCleanupStarted) return
-  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  if (state.quitCleanupStarted) return
+  const window =
+    state.mainWindow && !state.mainWindow.isDestroyed() ? state.mainWindow : createWindow()
 
   const revealAndSend = (): void => {
     if (window.isDestroyed()) return
@@ -1376,7 +458,7 @@ void app
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
     // barrier, so low-end devices always get visual feedback first.
-    const { visualReady: splashVisualReady } = createSplashWindow()
+    const { visualReady: splashVisualReady } = createSplashWindow(mainBundleDirectory, isProduction)
     startupTelemetry.mark('splash:created')
     const splashOutcome = await splashVisualReady
     if (splashOutcome === 'ready') {
@@ -1436,41 +518,10 @@ void app
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated
-    // permission remain denied. Electron requires both handlers for complete
-    // media permission coverage.
-    session.defaultSession.setPermissionCheckHandler(
-      (webContents, permission, _origin, details) => {
-        const requestingUrl = details.requestingUrl ?? webContents?.getURL() ?? ''
-        return (
-          permission === 'media' &&
-          details.mediaType === 'audio' &&
-          details.isMainFrame &&
-          webContents === mainWindow?.webContents &&
-          windowBoundaryValidator.isTrustedNavigation(requestingUrl)
-        )
-      }
-    )
-    session.defaultSession.setPermissionRequestHandler(
-      (webContents, permission, callback, details) => {
-        const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined
-        const audioOnly =
-          Array.isArray(mediaTypes) &&
-          mediaTypes.length > 0 &&
-          mediaTypes.every((mediaType) => mediaType === 'audio')
-        callback(
-          permission === 'media' &&
-            audioOnly &&
-            details.isMainFrame &&
-            webContents === mainWindow?.webContents &&
-            windowBoundaryValidator.isTrustedNavigation(details.requestingUrl)
-        )
-      }
-    )
-
-    // Deny all downloads initiated from the renderer; exports always use the
-    // native save dialog in the main process.
-    session.defaultSession.on('will-download', (event) => {
-      event.preventDefault()
+    // permission remain denied, and renderer downloads are denied outright.
+    installRendererSessionGuards({
+      validator: windowBoundaryValidator,
+      getMainWindow: () => state.mainWindow
     })
 
     // Install the `appfile://` preview protocol before the renderer loads: the
@@ -1478,14 +529,10 @@ void app
     // the handler is not yet registered Chromium rejects those early requests
     // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
     // broken. The file service is resolved lazily from bootPostPaintServices.
-    installFilePreviewProtocol(
-      () => appfileProjectFiles,
-      (value) => {
-        const resolveScopedPath = appfileScopedPathResolver
-        if (!resolveScopedPath) throw new Error('Scoped path resolution is not ready')
-        return resolveScopedPath(value)
-      }
-    )
+    installAppFilePreviewProtocol({
+      getProjectFiles: () => state.appfileProjectFiles,
+      getScopedPathResolver: () => state.appfileScopedPathResolver
+    })
 
     const window = createWindow()
     startupTelemetry.mark('window:created')
@@ -1509,7 +556,19 @@ void app
       // already-registered services stay alive, and the failure is fully
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
-      void bootPostPaintServices().catch((error) => {
+      void bootPostPaintServices({
+        state,
+        storage,
+        database,
+        mainBundleDirectory,
+        appIconPath: getAppIconPath(),
+        isProduction,
+        restorePersistedRemoteModeInDev,
+        threadCreation,
+        threadDeletion,
+        onThreadClicked: openThreadFromNotification,
+        onFeaturesReady: markWorkspaceReadyIfInteractive
+      }).catch((error) => {
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
@@ -1531,7 +590,7 @@ void app
       // A hand-off that landed while the renderer was still loading could not
       // be pushed (its listeners did not exist yet) and was not drained either
       // (its mount-time drain had already run). Deliver it now.
-      flushOpenedPathsToRenderer()
+      flushOpenedPathsToRenderer(state)
       void completeStartupIfReady()
     })
     window.once('ready-to-show', () => {
@@ -1550,68 +609,16 @@ void app
     app.on('activate', () => {
       // The app always quits when its last window closes, so a dock click
       // can only land during the shutdown grace period   ignore it then.
-      if (quitCleanupStarted) return
+      if (state.quitCleanupStarted) return
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow()
       }
     })
   })
   .catch(async (error: unknown) => {
-    closeSplash()
     // Deterministically close resources and quit with a nonzero diagnostic
-    // code so a failed boot never leaves a headless process. Logs, flushes the
-    // durable log, closes the database (and any other initialized resource),
-    // shows the error box, then exits(1)   falling back to process.exit if the
-    // Electron quit callback throws.
-    await handleFatalStartupFailure({
-      error,
-      appName: APP_NAME,
-      resources: [
-        {
-          name: 'database',
-          close: () => database.close()
-        },
-        {
-          name: 'chatEngine',
-          close: () => void chatEngine?.dispose()
-        },
-        {
-          name: 'remoteMode',
-          close: () => void remoteMode?.dispose()
-        },
-        {
-          name: 'ptyService',
-          close: () => ptyService?.destroyAll()
-        },
-        {
-          name: 'updaterService',
-          close: () => updaterService?.stop()
-        },
-        {
-          name: 'notificationService',
-          close: () => notificationService?.stop()
-        },
-        {
-          name: 'powerWakeService',
-          close: () => powerWakeService?.stop()
-        },
-        {
-          name: 'retryScheduler',
-          close: () => retryScheduler?.dispose()
-        },
-        {
-          name: 'heartbeatScheduler',
-          close: () => heartbeatScheduler?.dispose()
-        },
-        {
-          name: 'speechService',
-          close: () => void speechService?.dispose()
-        }
-      ],
-      showErrorBox: (title, message) => dialog.showErrorBox(title, message),
-      quit: (code) => app.exit(code),
-      telemetry: startupTelemetry
-    })
+    // code so a failed boot never leaves a headless process.
+    await handleFatalStartup(error, { state, database })
   })
 
 app.on('window-all-closed', () => {
@@ -1621,180 +628,22 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-/**
- * Ordered disposal executed once the quit lifecycle begins.
- *
- * 1. Renderer notification + 500ms grace period
- * 2. Remote mode torn down (gateway, Tray, keep-alive, event forwarder)
- * 3. PTY sessions destroyed
- * 4. Notification service stopped
- * 5. Chat engine / driver processes disposed
- * 6. Log buffer flushed
- * 7. app.quit()   re-enters before-quit, but the guard skips cleanup
- *    and Electron proceeds to close windows → will-quit → exit.
- */
-async function runShutdownPipeline(): Promise<void> {
-  // Give the renderer a moment to process window:beforeQuit.
-  await new Promise<void>((resolve) => setTimeout(resolve, 500))
-
-  // Close the phone gateway, destroy the Tray, and disarm keep-alive first so
-  // closing the app disconnects every remote session and leaves nothing behind.
-  try {
-    await remoteMode?.dispose()
-  } catch (error) {
-    Logger.error('Remote mode cleanup failed during shutdown:', error)
-  }
-
-  try {
-    updaterService?.stop()
-  } catch (error) {
-    Logger.error('Updater service cleanup failed during shutdown:', error)
-  }
-
-  try {
-    ptyService?.destroyAll()
-  } catch (error) {
-    Logger.error('PTY cleanup failed during shutdown:', error)
-  }
-
-  try {
-    notificationService?.stop()
-  } catch (error) {
-    Logger.error('Notification service cleanup failed during shutdown:', error)
-  }
-  setNotificationService(null)
-  setPowerWakeService(null)
-  try {
-    powerWakeService?.stop()
-  } catch (error) {
-    Logger.error('Power-wake cleanup failed during shutdown:', error)
-  }
-
-  try {
-    retryScheduler?.dispose()
-  } catch (error) {
-    Logger.error('Retry scheduler cleanup failed during shutdown:', error)
-  }
-
-  try {
-    heartbeatScheduler?.dispose()
-  } catch (error) {
-    Logger.error('Heartbeat scheduler cleanup failed during shutdown:', error)
-  }
-
-  try {
-    modelPricingService?.stop()
-  } catch (error) {
-    Logger.error('Model pricing cleanup failed during shutdown:', error)
-  }
-
-  try {
-    browserService?.dispose()
-    browserService = null
-  } catch (error) {
-    Logger.error('Browser service cleanup failed during shutdown:', error)
-  }
-
-  try {
-    await gatewaySupervisor?.dispose()
-  } catch (error) {
-    Logger.error('Gateway supervisor cleanup failed during shutdown:', error)
-  }
-
-  try {
-    await computerUsePipService?.dispose()
-  } catch (error) {
-    Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
-  }
-
-  try {
-    ipcMain.removeHandler('prototypePreview:getOrigin')
-    chatEngine?.setPrototypePreviewRegistrar(null)
-    await prototypePreviewService?.dispose()
-    prototypePreviewService = null
-  } catch (error) {
-    Logger.error('Prototype preview service cleanup failed during shutdown:', error)
-  }
-
-  try {
-    await directoryPreviewService?.dispose()
-    directoryPreviewService = null
-  } catch (error) {
-    Logger.error('Directory preview service cleanup failed during shutdown:', error)
-  }
-
-  try {
-    unregisterSpeechIpc?.()
-    unregisterSpeechIpc = null
-    await speechService?.dispose()
-    speechService = null
-  } catch (error) {
-    Logger.error('Speech service cleanup failed during shutdown:', error)
-  }
-
-  stopRemoteOwnershipListener?.()
-  stopRemoteOwnershipListener = null
-
-  // Persist the final window geometry so the next launch restores size, position,
-  // and maximized state exactly as the user left them.
-  try {
-    await windowStateService.persistNow(mainWindow)
-  } catch (error) {
-    Logger.error('Window state flush failed during shutdown:', error)
-  }
-
-  // When another live instance can continue the project's threads, this
-  // instance exits without disposing the chat engine   disposal kills every
-  // agent-owned harness process, which would destroy threads the surviving
-  // instance is still working on. The threads' durable state lives in the
-  // shared DB, so the other instance resumes them seamlessly.
-  if (!instanceRegistry.hasOtherLiveInstance()) {
-    try {
-      await chatEngine?.dispose()
-    } catch (error) {
-      Logger.error('Chat engine disposal failed during shutdown:', error)
-    }
-  }
-
-  try {
-    await Logger.flush()
-  } catch {
-    // Logger may already be flushed; nothing more can be written.
-  }
-
-  try {
-    // Flush any in-flight thread draft commits BEFORE the database closes so a
-    // debounced draft write delivered during the quit grace period can never
-    // land on an already-closed database.
-    await flushDraftWrites()
-    // Await the graceful database close (typed worker shutdown acknowledged +
-    // primary connection closed) so app.quit() never races the storage teardown.
-    await database.close()
-  } catch (error) {
-    Logger.error('Database close failed during shutdown:', error)
-  }
-
-  instanceRegistry.stop()
-
-  app.quit()
-}
-
 app.on('before-quit', (event) => {
-  if (quitCleanupStarted) return
+  if (state.quitCleanupStarted) return
   event.preventDefault()
 
   // Hard failsafe: a wedged renderer must never hold quit hostage. Arm it on
   // every before-quit so the process is guaranteed to converge on exit even
   // when the confirmation round-trip never completes.
-  armQuitFailsafe()
+  armQuitFailsafe(state)
 
   // If the user hasn't explicitly approved a force close, gate the quit on the
   // close-confirmation flow (which proceeds immediately when nothing is working).
-  if (!quitConfirmed) {
-    requestCloseConfirmation()
+  if (!state.quitConfirmed) {
+    requestCloseConfirmation({ state, database, window: state.mainWindow })
     return
   }
-  quitCleanupStarted = true
+  state.quitCleanupStarted = true
 
   // Notify every window that the application is shutting down so the
   // renderer can unsubscribe from IPC events and release resources.
@@ -1804,16 +653,16 @@ app.on('before-quit', (event) => {
     }
   }
 
-  void runShutdownPipeline().finally(() => {
-    if (shutdownFailsafe) {
-      clearTimeout(shutdownFailsafe)
-      shutdownFailsafe = null
+  void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
+    if (state.shutdownFailsafe) {
+      clearTimeout(state.shutdownFailsafe)
+      state.shutdownFailsafe = null
     }
   })
 
   // Failsafe: if any disposal step hangs, force the process to exit so the app
   // never lingers in the Dock with a stale icon after the user chose to close.
-  shutdownFailsafe = setTimeout(() => {
+  state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Shutdown pipeline timed out   forcing exit')
     app.exit(0)
   }, 15_000)

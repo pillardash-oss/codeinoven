@@ -184,6 +184,18 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
     ...(richOptions.length > 0 ? { richOptions } : {}),
     ...(input['multiple'] === true || input['multiSelect'] === true ? { multiple: true } : {}),
     ...(input['fileRequest'] === true ? { fileRequest: true } : {}),
+    ...(input['secretRequest'] === true
+      ? {
+          secretRequest: true,
+          ...(firstString(input['secretId']) ? { secretId: firstString(input['secretId']) } : {}),
+          ...(firstString(input['secretEnvironmentVariable'])
+            ? { secretEnvironmentVariable: firstString(input['secretEnvironmentVariable']) }
+            : {}),
+          ...(firstString(input['secretUtilityId'])
+            ? { secretUtilityId: firstString(input['secretUtilityId']) }
+            : {})
+        }
+      : {}),
     ...(input['custom'] === false || input['allowCustom'] === false ? { custom: false } : {}),
     rawInput: JSON.stringify({ index, ...input })
   }

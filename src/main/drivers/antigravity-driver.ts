@@ -308,15 +308,18 @@ export function mapAntigravityUsage(value: unknown): {
     cacheWrite !== undefined ||
     rawTotal !== undefined
   if (!reported) return { aggregateTokens: undefined, normalizedUsage: undefined }
-  // Antigravity reports thinking as a subset of output, cache reads as a subset
-  // of input, and its total as covering every category, so the provider total's
-  // categories overlap when one is reported. A synthesized input+output total
-  // would hide cache or reasoning usage, so no comparable total is fabricated
-  // and the semantics are declared explicitly: `categories_may_overlap` when
-  // the provider reports a total and `unavailable` when it does not. Because
-  // the reported input already contains cached reads, uncached input is the
-  // remainder after subtracting them, clamped at zero so an inconsistent
-  // cache>input payload never produces a negative normalized category.
+  // Antigravity is ASSUMED to report thinking as a subset of output (Gemini
+  // reports thoughts separately from output in some APIs, so this is an
+  // assumption about the CLI payload, not a verified provider guarantee), cache
+  // reads as a subset of input, and its total as covering every category, so
+  // the provider total's categories overlap when one is reported. A synthesized
+  // input+output total would hide cache or reasoning usage, so no comparable
+  // total is fabricated and the semantics are declared explicitly:
+  // `categories_may_overlap` when the provider reports a total and
+  // `unavailable` when it does not. Because the reported input already contains
+  // cached reads, uncached input is the remainder after subtracting them,
+  // clamped at zero so an inconsistent cache>input payload never produces a
+  // negative normalized category.
   const normalizedUsage: NormalizedUsage = {
     uncachedInput: input === undefined ? null : Math.max(0, input - (cachedInput ?? 0)),
     cachedInput: cachedInput ?? null,
@@ -574,19 +577,11 @@ export function mapAntigravityRecord(
       if (mappedUsage.normalizedUsage) state.normalizedUsage = mappedUsage.normalizedUsage
       const structuredRateLimits = mapAntigravityRateLimits(result)
       const issue = error ? antigravityIssue(error) : undefined
-      const rateLimits =
-        structuredRateLimits.length > 0
-          ? structuredRateLimits
-          : issue?.kind === 'quota'
-            ? [
-                {
-                  id: 'antigravity-quota',
-                  label: 'Antigravity quota',
-                  usedPercent: 100,
-                  ...(issue.retryAt === undefined ? {} : { resetsAt: issue.retryAt })
-                }
-              ]
-            : []
+      // Only provider-reported windows reach the battery. A quota error with no
+      // structured quota telemetry drives the retry card from its `issue`; it
+      // must never invent a fabricated 100%-used window that has no provider
+      // reset time.
+      const rateLimits = structuredRateLimits
       if (usage || rateLimits.length > 0) {
         events.push({
           type: 'usage.updated',
@@ -841,11 +836,19 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    return this.generateTitleWithCandidates(projectPath, options, await this.cheapestCandidate())
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      options.candidates ?? (await this.cheapestCandidate())
+    )
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidate())
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      options.candidates ?? (await this.cheapestCandidate())
+    )
   }
 
   /** Cheapest candidates for any auxiliary one-shot run. */

@@ -126,42 +126,89 @@ its `cio/` branch, not the project root:
   head** and the chosen base (the checkout branch, a named branch, or a remote
   tracked ref). Pushing to the remote publishes the `cio/<slug>` branch as a
   new remote branch (`--set-upstream`), ready to be opened as a PR.
-- **Sync from main** (`git:syncFromMain`) is offered only while the panel is
-  attached to a managed worktree scope, because the project root is the source:
-  it resolves the branch checked out in the main worktree, refreshes that
-  branch's remote-tracking ref first (vaulted token when present, a failed
-  refresh is reported and never fatal), then integrates the remote-tracking ref
-  when it strictly contains the local branch otherwise the local branch, so
-  commits that exist only on the project root's main are never skipped. The
-  strategy follows the configured pull preference (`merge`, `rebase`, or
-  `ff-only`; `ask` opens the chooser). It refuses before moving any ref when the
-  active root is the project root itself, when HEAD is detached, or when a
-  merge/rebase is already in progress, and a conflicted integration is left in
-  the working tree for the standard conflict UI instead of being aborted.
-- **Sync to main** (`git:syncToMain`) is the mirror direction, offered under the
-  same condition: it folds the worktree's branch into the branch checked out in
-  the project root. Nothing is ever pushed publishing main stays an explicit
-  user action and the chooser always confirms first, even when the pull
-  preference is not `ask`, because the write lands in a checkout the panel is
-  not showing. Both checkouts must be committed and idle (only committed work
-  can move) and the project root must be on a branch; a merge/rebase in progress
-  on either side refuses as well. Strategies:
-  - `merge` integrates in main (fast-forward when possible, merge commit
-    otherwise). A merge that would conflict is rolled back and refused with the
-    from-main workflow as the fix, so a one-click action can never strand the
-    project root mid-merge where the user cannot see it.
-  - `rebase` replays this branch's commits on top of main, then fast-forwards
-    main onto the rebased branch: conflicts stay in the worktree the panel
-    shows, main stays linear and is never rewritten.
-  - `ff-only` moves main only when main has not diverged.
+- **Sync with another end** (`git:syncWith`, `git:syncPeers`) trades committed
+  work between two ends of the same repository, in either direction. "Main" is
+  not a special case carved out of it: it is the peer whose checkout is the
+  project root, so the two flows share one implementation and cannot drift.
+  The ends are offered by scope and by branch:
+  - every checkout (the project root and each non-archived managed worktree
+    scope) can contribute commits _and_ receive them,
+  - every local branch no checkout holds can contribute commits only,
+  - a branch a checkout already holds is offered as that checkout instead, so
+    one end never appears twice under two names,
+  - an unhealthy worktree still appears, marked with the reason it cannot be
+    used, and the checkout the operation runs in appears marked as itself
+    rather than being hidden.
 
-  `incoming` reports how many commits main did not have, and `mainAhead` how far
-  the moved branch is from its upstream afterwards, so the panel can say exactly
-  what happened and that nothing was published.
+  `git:syncPeers` resolves that list, and `git:syncWith` resolves the chosen
+  `{ kind: 'root' | 'worktree' | 'branch' }` peer, so the name the picker showed
+  is the name every error and toast uses. Both directions fail closed before
+  moving any ref: a peer that is this very checkout, a detached HEAD, an
+  integration already in progress, or a target with uncommitted files all refuse
+  with an actionable message, and a merge in progress in the _other_ checkout is
+  reported as well because its HEAD would be detached too.
+
+  `from` reads the peer and writes this checkout: it refreshes the peer branch's
+  remote-tracking ref first when the repository has a remote (vaulted token when
+  present, a failed refresh is reported and never fatal), then integrates the
+  remote-tracking ref when it strictly contains the local branch, otherwise the
+  local branch, so commits that exist only in the other checkout are never
+  skipped. The strategy follows the configured pull preference (`merge`,
+  `rebase`, or `ff-only`; `ask` opens the chooser).
+
+  `to` reads this checkout and writes the peer: this branch's commits are folded
+  into the branch the peer has checked out, which is why a branch peer refuses
+  this direction outright (a branch no checkout holds has nowhere to receive
+  commits). Nothing is ever pushed publishing stays an explicit user action and
+  the chooser always confirms first, even when the pull preference is not `ask`,
+  because the write lands in a checkout the panel is not showing. Strategies:
+  - `merge` integrates in the receiving checkout (fast-forward when possible,
+    merge commit otherwise). A merge that would conflict is rolled back and
+    refused with the `from` workflow as the fix, so a one-click action can never
+    strand another checkout mid-merge where the user cannot see it.
+  - `rebase` replays this branch's commits on top of the peer's branch, then
+    fast-forwards the peer onto the rebased branch: conflicts stay in the
+    checkout the panel shows, the peer stays linear and is never rewritten.
+  - `ff-only` moves the peer only when it has not diverged.
+
+  A conflicted `from`, or a conflicted `to` rebase, is left in the working tree
+  for the standard conflict UI instead of being aborted. `incoming` reports how
+  many commits the receiving end did not have, and `peerAhead` how far the moved
+  branch is from its upstream afterwards, so the caller can say exactly what
+  happened and that nothing was published.
+
+  The UI reaches it two ways, and both start from a **managed worktree scope**:
+  a worktree is the only scope with a second checkout to trade with. The Git
+  panel, attached to one, keeps **Sync from main** and **Sync to main** for the
+  common case (named, no chooser) and adds **Sync from branch…** and **Sync to
+  branch…**, which open one shared peer chooser that the scope menu reuses as
+  **Merge from project…** right below **Merge into project…**. The control is not
+  rendered at all for the project root, so `main` never offers to sync with
+  itself; the project root is reached as a peer from the worktree instead.
 
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.
+
+## 6b. Long worktree runs live in the dock
+
+Creating, adopting, re-running setup for, and deleting a scope all mutate a
+checkout, so none of them is instant. Each one runs as an **app-level job**
+(`src/renderer/lib/stores/scope-jobs.svelte.ts`) rendered by
+`src/renderer/lib/components/scope/ScopeJobDockHost.svelte` at the app root, not
+as a modal the user has to sit through. A job survives navigation, can be
+minimized to a dock chip that still names what it is doing, states its outcome
+in the panel (branch and directory for a created or adopted worktree, the
+removed checkout for a deletion), and can be dismissed once it is finished.
+
+Worktree stages stream from main on `scope:worktree:progress`, so a job a user
+started and a job an agent started through `cio:scope` render identically. A
+removal has no streamed stages main can send: the renderer performs it as an
+ordered sequence of its own steps (settle the scope's threads, remove the
+managed checkout and its branch when the scope has one, drop the scope from the
+board), and the checklist reports those steps instead. A removal job never
+absorbs worktree progress events, so a create or adopt running in the same
+project still shows its own live stages.
 
 ## 7. Health states
 
@@ -247,6 +294,17 @@ stale or mismatched IDs are rejected.
   action. The dialog also offers to permanently delete the scope's threads
   (otherwise they return to the Default scope). Deleting a project-rooted
   scope just removes the bucket; its threads follow the same choice.
+
+  The confirmation stays a dialog, but the removal itself is a dock job
+  (section 6b), exactly like a create or an adopt: confirming closes the dialog
+  and hands the work to a run the user can background. Every value the run needs
+  (the scope's threads, whether it owns a checkout, the thread disposition) is
+  read before the dialog closes, and the removal mints its own fresh preflight
+  token rather than reusing the dialog's display-only one, so the token can
+  never be stale by the time the checkout is removed. Because it is a job, the
+  dialog closes on the run already in progress instead of queueing a second
+  removal that could only fail.
+
 - **Archive / Restore:** never destructive. Hides or restores the scope on the
   board without touching Git, the worktree, or threads; archiving never
   implies removal.
@@ -254,7 +312,22 @@ stale or mismatched IDs are rejected.
   silently orphaning a registered worktree.
 
 The scope actions menu intentionally exposes only the non-overlapping
-operations (merge, remove-worktree-keep-scope, archive, delete). A leftover
+operations (reveal-in-file-manager, merge-into-project, merge-from-project,
+remove-worktree-keep-scope, archive, delete). It is a portaled popup
+(`bits-ui` `DropdownMenu`, `collisionPadding`), not a panel positioned inside
+the sidebar's own overflow, so it cannot be clipped when a scope sits near an
+edge of the board or the scoped sidebar; while it is open the trigger stays
+visible through its own open state rather than hover. **Reveal in File Manager**
+opens a managed scope's checkout in the OS file manager through the same shared
+helper (`src/renderer/lib/os-file-manager.ts`) and the same re-validating
+`shell:revealPath` contract the file surfaces use. It takes the path from the
+scope's health (the actual path when Git disagrees with the expected one), so a
+relocated checkout still reveals correctly, and a refusal from main is reported
+as a failure instead of passing as a silent no-op. _Merge from project…_ is the
+peer sync described in section
+6a run from this scope's checkout with the project root preselected, so bringing
+the project root's commits into a worktree never requires opening the Git panel
+from a thread in that scope. A leftover
 `Delete branch`-style entry is not needed: removing a worktree while keeping
 its scope is _Remove worktree (keep scope)_, and permanently removing a scope
 is _Delete scope_ (which also removes the worktree and branch). Branch-level

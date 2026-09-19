@@ -1,19 +1,12 @@
 <script lang="ts">
-  import { Archive, Bot, Brain, Cog, FileText, Loader2, RefreshCw, Zap } from '@lucide/svelte'
+  import { Bot } from '@lucide/svelte'
   import { onDestroy, tick } from 'svelte'
-  import { DropdownMenu } from 'bits-ui'
-  import ToolCard from './ToolCard.svelte'
-  import SubagentCard from './SubagentCard.svelte'
-  import ThinkingBlock from './ThinkingBlock.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
-  import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
-  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
+  import type { SubagentPart } from '$lib/working-trace-parts'
   import { latestWorkingTraceParts } from '$lib/working-trace-parts'
   import {
     newestTraceStartId,
@@ -22,16 +15,16 @@
     traceWindowStartIndex
   } from '$lib/working-trace-window'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { formatDurationSeconds } from '$lib/format/duration'
   import {
     subagentIsRunning,
-    subagentModelLabel,
     subagentStatusLabel,
-    subagentTaskDetail,
     subagentTaskLabel
   } from '$lib/subagent-presentation'
-  import SubagentModeBadge from './SubagentModeBadge.svelte'
-  import SubagentStatusIcon from './SubagentStatusIcon.svelte'
+  import WorkingTraceRow from './WorkingTraceRow.svelte'
+  import WorkingTraceStatus from './WorkingTraceStatus.svelte'
+  import WorkingTraceSummary from './WorkingTraceSummary.svelte'
+  import { subagentBadgeLabel, subagentBadgeTitle } from './working-trace-subagents'
+  import { workingTraceStartTime } from './working-trace-start'
 
   interface Props {
     parts: AgentPart[]
@@ -45,6 +38,9 @@
      *  session activity is confirming the run. Renders a saved-activity note
      *  instead of a live "Agent working…" spinner. */
     rehydrated?: boolean
+    /** True when this run belongs to another CodeInOven instance, which is where
+     *  its live output and stop control are. */
+    foreignRun?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -85,6 +81,7 @@
     latest = false,
     done = false,
     rehydrated = false,
+    foreignRun = false,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -210,21 +207,7 @@
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
-  const effectiveStartTime = $derived.by((): number | undefined => {
-    if (startTime && startTime > 0) return startTime
-    for (const part of visibleParts) {
-      const start =
-        part.type === 'tool'
-          ? part.state.time?.start
-          : part.type === 'reasoning'
-            ? part.time?.start
-            : part.type === 'subagent'
-              ? part.activity.time?.start
-              : undefined
-      if (start && start > 0) return start
-    }
-    return undefined
-  })
+  const effectiveStartTime = $derived(workingTraceStartTime(visibleParts, startTime))
 
   /** True only while a live session is streaming this trace. A restored trace
    *  (busy with the saved-activity note) is historical: its durations are
@@ -350,7 +333,6 @@
     }
     return null
   })
-  type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
   const subagentParts = $derived(
     visibleParts.filter((part): part is SubagentPart => part.type === 'subagent')
   )
@@ -364,16 +346,12 @@
   const soleActiveTask = $derived(
     runningSubagents.length === 1 ? subagentTaskLabel(runningSubagents[0].activity) : null
   )
-  const subagentBadgeTitle = $derived(
-    soleActiveTask
-      ? `${soleActiveTask} is working - ${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} - open list`
-      : `Sub-agents spawned: ${subagentCount}, ${activeSubagentCount} running - open list`
+  const subagentBadgeTitleText = $derived(
+    subagentBadgeTitle(soleActiveTask, subagentCount, activeSubagentCount)
   )
-  const subagentBadgeLabel = $derived.by(() => {
-    if (soleActiveTask) return soleActiveTask
-    if (activeSubagentCount > 0) return `${activeSubagentCount} active · ${subagentCount} total`
-    return `${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'}`
-  })
+  const subagentBadgeLabelText = $derived(
+    subagentBadgeLabel(soleActiveTask, activeSubagentCount, subagentCount)
+  )
   const hasCompaction = $derived(
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
@@ -411,128 +389,22 @@
 </script>
 
 <details class="rounded-xl border border-border bg-surface" open={isOpen}>
-  <summary
-    class="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-    onclick={onSummaryClick}
-  >
-    {#if isOpen && busy}
-      <Loader2 size={12} class="shrink-0 animate-spin text-info" />
-    {:else}
-      <Cog size={12} class="shrink-0" />
-    {/if}
-    Working Trace
-    <span class="tabular-nums text-dimmed">({visibleParts.length})</span>
-    {#if hasCompaction || subagentCount > 0}
-      <span class="ml-auto flex items-center gap-1.5">
-        {#if hasCompaction}
-          <span
-            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
-            title="This trace includes compacted context. Forking from here restores the compaction summary."
-            aria-label="Compacted context. Forking from here restores the compaction summary."
-          >
-            <Archive size={10} />
-            Compacted
-          </span>
-        {/if}
-        {#if subagentCount > 0}
-          {#if coarsePointer}
-            <button
-              type="button"
-              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[0.5625rem] text-info transition-colors active:bg-info/20"
-              aria-label={subagentBadgeTitle}
-              title={subagentBadgeTitle}
-              onclick={(e: MouseEvent) => {
-                e.preventDefault()
-                e.stopPropagation()
-                subagentSheetOpen = true
-              }}
-            >
-              <Bot size={10} />
-              {subagentBadgeLabel}
-            </button>
-          {:else}
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
-                aria-label={subagentBadgeTitle}
-                title={subagentBadgeTitle}
-                onclick={(e: MouseEvent) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                }}
-              >
-                <Bot size={10} />
-                {subagentBadgeLabel}
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  side="bottom"
-                  align="end"
-                  sideOffset={6}
-                  collisionPadding={8}
-                  class="z-50 w-96 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                >
-                  <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-                    <Bot size={12} class="shrink-0 text-info" />
-                    <span class="text-[0.6875rem] font-semibold text-foreground">
-                      {subagentCount}
-                      {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-                    </span>
-                    {#if activeSubagentCount > 0}
-                      <span class="text-[0.625rem] text-dimmed">
-                        · {activeSubagentCount} running
-                      </span>
-                    {/if}
-                  </div>
-                  <DropdownMenu.Separator class="mx-1 my-1 h-px bg-border" />
-                  <div class="max-h-60 overflow-y-auto p-0.5">
-                    {#each subagentParts as part (part.id)}
-                      {@const taskLabel = subagentTaskLabel(part.activity)}
-                      {@const taskDetail = subagentTaskDetail(part.activity)}
-                      {@const workerModel = subagentModelLabel(part.activity, true)}
-                      <DropdownMenu.Item
-                        class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => onOpenSubagent?.(part)}
-                      >
-                        <SubagentStatusIcon status={part.activity.status} />
-                        <span
-                          class="max-w-32 shrink-0 truncate text-[0.6875rem] font-semibold text-foreground"
-                          title={taskLabel}
-                        >
-                          {taskLabel}
-                        </span>
-                        {#if taskDetail}
-                          <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">
-                            {taskDetail}
-                          </span>
-                        {:else}
-                          <span class="min-w-0 flex-1"></span>
-                        {/if}
-                        <SubagentModeBadge background={part.activity.background} />
-                        {#if workerModel}
-                          <span
-                            class="max-w-24 shrink-0 truncate text-[0.625rem] text-dimmed"
-                            title={part.activity.modelId ?? workerModel}
-                          >
-                            {workerModel}
-                          </span>
-                        {/if}
-                        {#if part.activity.time?.start}
-                          <span class="shrink-0 tabular-nums text-[0.625rem] text-dimmed">
-                            {formatDurationSeconds(subagentElapsed(part))}
-                          </span>
-                        {/if}
-                      </DropdownMenu.Item>
-                    {/each}
-                  </div>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          {/if}
-        {/if}
-      </span>
-    {/if}
-  </summary>
+  <WorkingTraceSummary
+    open={isOpen}
+    {busy}
+    count={visibleParts.length}
+    {hasCompaction}
+    {subagentCount}
+    {activeSubagentCount}
+    {subagentParts}
+    {coarsePointer}
+    title={subagentBadgeTitleText}
+    label={subagentBadgeLabelText}
+    elapsedFor={subagentElapsed}
+    onOpen={(part) => onOpenSubagent?.(part)}
+    onOpenSheet={() => (subagentSheetOpen = true)}
+    onToggle={onSummaryClick}
+  />
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
@@ -540,174 +412,35 @@
       onscroll={onTraceScroll}
     >
       {#each pagedParts as part (part.id)}
-        {#if part.type === 'reasoning'}
-          <ThinkingBlock
-            {part}
-            active={busy && part.id === lastReasoningId}
-            live={liveActivity}
-            {onCiteFile}
-          />
-        {:else if part.type === 'tool'}
-          <ToolCard
-            {part}
-            live={liveActivity}
-            {projectId}
-            {threadId}
-            {checkpointId}
-            {checkpointPaths}
-          />
-        {:else if part.type === 'subagent'}
-          <SubagentCard {part} live={liveActivity} onOpen={onOpenSubagent} />
-        {:else if part.type === 'text'}
-          <div class="text-sm text-foreground">
-            <SmoothMarkdown text={part.text} streaming={busy} {onCiteFile} />
-          </div>
-        {:else if part.type === 'compaction-summary'}
-          <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-            <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>
-            <div class="text-sm text-muted">
-              <MarkdownView text={part.text} {onCiteFile} />
-            </div>
-          </div>
-        {:else if part.type === 'step-finish'}
-          {#if part.reason}
-            <span class="text-[0.625rem] text-dimmed">Step complete · {part.reason}</span>
-          {/if}
-        {:else if part.type === 'compaction'}
-          <details class="rounded-lg border border-border bg-elevated">
-            <summary
-              class="flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors hover:bg-overlay"
-            >
-              {#if busy && !part.summary}
-                <Loader2 size={12} class="shrink-0 animate-spin text-info" />
-              {:else}
-                <Archive size={12} class="shrink-0 text-info" />
-              {/if}
-              <div class="min-w-0">
-                <p
-                  class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] font-medium text-foreground"
-                >
-                  {part.auto ? 'Automatic compaction' : 'Compact Work'}
-                  {#if !part.summary && !busy}
-                    <span
-                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-normal text-warning"
-                      title="The harness completed compaction without producing a summary."
-                    >
-                      harness returned nothing
-                    </span>
-                  {/if}
-                </p>
-                <p class="text-[0.625rem] text-dimmed">
-                  {part.summary
-                    ? 'Earlier work summarized'
-                    : part.overflow
-                      ? 'Context limit reached · summarizing earlier work'
-                      : 'Summarizing earlier work to free context'}
-                </p>
-              </div>
-            </summary>
-            {#if part.summary}
-              <div class="border-t border-border px-3 py-2 text-sm text-muted">
-                <MarkdownView text={part.summary} {onCiteFile} />
-              </div>
-            {/if}
-          </details>
-        {:else if part.type === 'file'}
-          <div class="flex items-center gap-1.5 text-[0.625rem] text-dimmed">
-            {#if isImageMime(part.mime)}
-              <img
-                src={imageUrls.getUrl(part.url)}
-                alt={part.filename ?? 'file'}
-                class="h-6 w-6 shrink-0 rounded object-cover"
-                onerror={(e: Event) =>
-                  void imageUrls.bindImage(
-                    part.url,
-                    part.mime,
-                    e.currentTarget as HTMLImageElement
-                  )}
-              />
-            {:else}
-              <FileText size={10} class="shrink-0" />
-            {/if}
-            {part.filename ?? part.url.split('/').pop() ?? 'file'}
-          </div>
-        {/if}
+        <WorkingTraceRow
+          {part}
+          {busy}
+          live={liveActivity}
+          {lastReasoningId}
+          {imageUrls}
+          {onCiteFile}
+          {projectId}
+          {threadId}
+          {checkpointId}
+          {checkpointPaths}
+          {onOpenSubagent}
+        />
       {/each}
       {#if busy}
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {#if rehydrated}
-            <span class="flex min-w-0 shrink items-center gap-2">
-              <RefreshCw size={11} class="shrink-0 text-info" />
-              <span class="shrink-0 text-[0.625rem] text-info/80">
-                Showing last saved activity · live run not confirmed
-              </span>
-              {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
-                  · {formatDurationSeconds(elapsed)}
-                </span>
-              {/if}
-            </span>
-          {:else}
-            <span class="flex min-w-0 shrink items-center gap-2">
-              <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-              <span class="shrink-0 text-[0.625rem] text-info/80">Agent working…</span>
-              {#if effectiveStartTime}
-                <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
-                  · {formatDurationSeconds(elapsed)}
-                </span>
-              {/if}
-            </span>
-          {/if}
-          {#if modelLabel}
-            <span
-              class="flex min-w-0 items-center gap-1.5 text-[0.625rem] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[0.5625rem] sm:ml-auto"
-            >
-              {#if harnessId}
-                <span class="flex shrink-0 items-center gap-1">
-                  <AgentIcon agentId={harnessId} size={14} />
-                  {#if harnessName}<span class="truncate">{harnessName}</span>{/if}
-                </span>
-                <span>·</span>
-              {/if}
-              <span class="flex shrink-0 items-center gap-1">
-                <VendorIcon
-                  name={providerName ?? modelLabel}
-                  id={providerId ?? undefined}
-                  size={11}
-                />
-                <span class="truncate">{modelLabel}</span>
-              </span>
-              {#if isFast}
-                <Zap
-                  size={10}
-                  class="shrink-0 text-accent"
-                  fill="currentColor"
-                  aria-label="Fast inference"
-                  title="Fast inference"
-                />
-              {/if}
-              {#if thinkingLevel}
-                <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
-                  title={`Thinking level: ${thinkingLevel}`}
-                  aria-label={`Thinking level: ${thinkingLevel}`}
-                >
-                  <Brain size={9} />
-                  {thinkingLevel}
-                </span>
-              {/if}
-              {#if accountLabel && accountLabel !== 'Default'}
-                <span
-                  class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-                  title={`Account: ${accountLabel}`}
-                  aria-label={`Account: ${accountLabel}`}
-                >
-                  {accountLabel}
-                </span>
-              {/if}
-            </span>
-          {/if}
-        </div>
+        <WorkingTraceStatus
+          {rehydrated}
+          {foreignRun}
+          startTime={effectiveStartTime}
+          {elapsed}
+          {modelLabel}
+          {isFast}
+          {thinkingLevel}
+          {providerName}
+          {providerId}
+          {harnessId}
+          {harnessName}
+          {accountLabel}
+        />
       {/if}
     </div>
   {/if}

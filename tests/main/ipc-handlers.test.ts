@@ -89,12 +89,14 @@ const defaultConfig: AppConfig = {
   onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
+  agentQuestionCap: 3,
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  auxiliaryAgents: {},
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -627,6 +629,7 @@ describe('git IPC', () => {
     expect(handlers.has('git:status')).toBe(true)
     expect(handlers.has('git:reset')).toBe(true)
     expect(handlers.has('git:amend')).toBe(true)
+    expect(handlers.has('git:removeCommitChanges')).toBe(true)
     expect(handlers.has('git:checkout')).toBe(true)
   })
 

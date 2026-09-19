@@ -1,25 +1,53 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import { terminalSessions, type TerminalSession } from '$lib/terminal/sessions'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import {
+    terminalSessions,
+    terminalSpawnScopes,
+    type TerminalSession,
+    type TerminalSpawnBinding
+  } from '$lib/terminal/sessions'
 
   interface Props {
     terminalId: string
     projectId: string
     threadId: string
-    /** Active scope bucket so the shell starts inside the worktree when one
-     *  is active for the project. */
+    /** Scope bucket the shell must run in when it is next spawned. */
     scopeBucketId?: string
   }
 
   let { terminalId, projectId, threadId, scopeBucketId }: Props = $props()
 
+  /**
+   * Scope root the *live shell* was started in, from the session manager: the
+   * panel's own `scopeBucketId` prop is what it would spawn in now. While the
+   * two differ this panel is showing another thread's checkout, and the notice
+   * below says so. Attaching (a panel toggle, a dock move, fullscreen) restarts
+   * the shell in the prop's scope, which clears it.
+   */
+  let spawnedScope = $derived(terminalSpawnScopes.get(terminalId) ?? null)
+  let scopeStale = $derived(spawnedScope !== null && spawnedScope !== (scopeBucketId ?? null))
+
   let terminalError: string | undefined = $state(undefined)
   let loading = $state(true)
   let retrySequence = $state(0)
   /** Whether the panel has attached before: the first attach counts as a
-   *  user-initiated open, later prop-driven re-attaches do not. */
+   *  user-initiated open, later attaches do not. */
   let firstAttach = true
   let lastRetrySequence = 0
+
+  /** Where a respawned shell must start. Held in a plain (non-reactive) object
+   *  so the attachment below never depends on it: this panel is project-scoped,
+   *  so a thread switch may only retarget the *next* respawn. Re-running the
+   *  attachment instead would refit the grid and repaint the canvas on every
+   *  switch, for a session that never went anywhere. */
+  // svelte-ignore state_referenced_locally
+  const spawnTarget: TerminalSpawnBinding = { threadId, scopeBucketId }
+
+  $effect(() => {
+    spawnTarget.threadId = threadId
+    spawnTarget.scopeBucketId = scopeBucketId
+  })
 
   function retry(): void {
     retrySequence += 1
@@ -28,15 +56,12 @@
   function attachTerminal(
     currentTerminalId: string,
     currentProjectId: string,
-    currentThreadId: string,
-    currentScopeBucketId: string | undefined,
+    binding: TerminalSpawnBinding,
     retry: number
   ): Attachment<HTMLDivElement> {
     // Focus only when the attach is user-initiated: the first mount (the user
-    // opened or selected the terminal tab) or an explicit retry. Prop-driven
-    // re-attaches (thread switches rebinding the terminal's thread) must never
-    // steal focus from the chat composer — the session layer also drops focus
-    // requests inside the thread-switch guard window.
+    // opened or selected the terminal tab) or an explicit retry. The session
+    // layer also drops focus requests inside the thread-switch guard window.
     const focus = firstAttach || retry !== lastRetrySequence
     firstAttach = false
     lastRetrySequence = retry
@@ -49,14 +74,7 @@
         .getOrCreate(currentTerminalId)
         .then(async (session: TerminalSession) => {
           if (cancelled) return
-          await terminalSessions.attach(
-            session,
-            container,
-            currentProjectId,
-            currentThreadId,
-            currentScopeBucketId,
-            { focus }
-          )
+          await terminalSessions.attach(session, container, currentProjectId, binding, { focus })
           if (!cancelled) loading = false
         })
         .catch((error: unknown) => {
@@ -74,33 +92,33 @@
   }
 </script>
 
-<div
-  tabindex="-1"
-  class="terminal-wrap relative h-full w-full overflow-hidden bg-terminal-background"
->
-  <div
-    class="h-full w-full overflow-hidden py-1 pl-2"
-    {@attach attachTerminal(terminalId, projectId, threadId, scopeBucketId, retrySequence)}
-  ></div>
-  {#if loading}
-    <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
-      Loading terminal…
-    </div>
-  {:else if terminalError}
-    <div class="absolute inset-0 flex items-center justify-center bg-app p-6">
-      <div class="max-w-md text-center">
-        <p class="text-sm font-semibold text-foreground">Terminal could not start</p>
-        <p class="mt-2 text-xs text-muted">{terminalError}</p>
-        <button
-          type="button"
-          class="mt-4 h-8 border border-border-strong bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
-          onclick={retry}
-        >
-          Retry
-        </button>
+<div class="flex h-full w-full flex-col overflow-hidden bg-terminal-background">
+  <StalePanelNotice stale={scopeStale} />
+  <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
+    <div
+      class="h-full w-full overflow-hidden py-1 pl-2"
+      {@attach attachTerminal(terminalId, projectId, spawnTarget, retrySequence)}
+    ></div>
+    {#if loading}
+      <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
+        Loading terminal…
       </div>
-    </div>
-  {/if}
+    {:else if terminalError}
+      <div class="absolute inset-0 flex items-center justify-center bg-app p-6">
+        <div class="max-w-md text-center">
+          <p class="text-sm font-semibold text-foreground">Terminal could not start</p>
+          <p class="mt-2 text-xs text-muted">{terminalError}</p>
+          <button
+            type="button"
+            class="mt-4 h-8 border border-border-strong bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
+            onclick={retry}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>

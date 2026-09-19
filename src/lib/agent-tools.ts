@@ -8,6 +8,7 @@ import { GATEWAY_TOOLS } from './gateway-tools'
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
 export const BRAINSTORM_DOCUMENT_TOOL_NAME = 'cio_brainstorm_doc'
 export const PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME = 'cio_prd'
+export const ASSIGNMENT_PLAN_TOOL_NAME = 'cio_assignment'
 export const FEATURE_AUDIT_TOOL_NAME = 'request_audit'
 export const AUDIT_REPORT_TOOL_NAME = 'audit_report'
 export const PROPOSE_MEMORY_TOOL_NAME = 'propose_memory'
@@ -373,6 +374,14 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     inputSchema: SPEC_GENERATION_SCHEMA,
     source: 'application',
     sentWhen: 'Initial specification generation and every later engineering discussion or review'
+  },
+  {
+    name: ASSIGNMENT_PLAN_TOOL_NAME,
+    transportName: 'StructuredOutput',
+    description: `Submit the complete Assignment task graph for ${APP_NAME} to validate and persist as the thread's unsigned Assignment draft. The draft decomposes either the approved specification or the thread conversation, and the user signs it off before any worker starts.`,
+    inputSchema: ASSIGNMENT_PLAN_SCHEMA,
+    source: 'application',
+    sentWhen: 'Assignment generation and every Assignment discussion turn before sign-off'
   },
   {
     name: FEATURE_AUDIT_TOOL_NAME,

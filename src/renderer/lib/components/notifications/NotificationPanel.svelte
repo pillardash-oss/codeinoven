@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     Bell,
+    Bot,
     Bug,
     Check,
     ChevronDown,
@@ -11,7 +12,8 @@
   } from '@lucide/svelte'
   import {
     notificationPanelState,
-    type NotificationFilter,
+    type NotificationSubFilter,
+    type NotificationTopTab,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
@@ -33,15 +35,60 @@
 
   let { onOpenThread }: Props = $props()
 
-  const filters: { key: NotificationFilter; label: string }[] = [
-    { key: 'all', label: 'All' },
-    { key: 'attention', label: 'Attention' },
-    { key: 'spec', label: 'Spec' },
-    { key: 'error', label: 'Errors' },
-    { key: 'completed', label: 'Done' },
-    { key: 'chat-completed', label: 'Chats' },
-    { key: 'app-errors', label: 'App errors' }
+  const topTabs: { key: NotificationTopTab; label: string }[] = [
+    { key: 'projects', label: 'Projects' },
+    { key: 'chats', label: 'Chats' },
+    { key: 'assistants', label: 'Assistants' },
+    { key: 'app-errors', label: 'App Errors' }
   ]
+
+  const subFilterLabels: Record<NotificationSubFilter, string> = {
+    all: 'All',
+    done: 'Done',
+    attention: 'Attention',
+    spec: 'Spec',
+    issues: 'Issues',
+    'missed-runs': 'Missed Runs'
+  }
+
+  function subFiltersFor(tab: NotificationTopTab): NotificationSubFilter[] {
+    switch (tab) {
+      case 'projects':
+        return ['all', 'done', 'attention', 'spec', 'issues']
+      case 'chats':
+        return ['all', 'done', 'attention', 'issues']
+      case 'assistants':
+        return ['all', 'done', 'attention', 'issues', 'missed-runs']
+      case 'app-errors':
+        return []
+    }
+  }
+
+  function topTabCount(tab: NotificationTopTab): number {
+    switch (tab) {
+      case 'projects':
+        return notificationPanelState.projectCount('all')
+      case 'chats':
+        return notificationPanelState.chatCount('all')
+      case 'assistants':
+        return notificationPanelState.assistantCount('all')
+      case 'app-errors':
+        return appErrorState.count
+    }
+  }
+
+  function subCount(tab: NotificationTopTab, sub: NotificationSubFilter): number {
+    switch (tab) {
+      case 'projects':
+        return notificationPanelState.projectCount(sub)
+      case 'chats':
+        return notificationPanelState.chatCount(sub)
+      case 'assistants':
+        return notificationPanelState.assistantCount(sub)
+      case 'app-errors':
+        return 0
+    }
+  }
 
   let busyId = $state<string | null>(null)
   let copiedId = $state<string | null>(null)
@@ -66,9 +113,14 @@
     return trimmed !== undefined && trimmed.length > 0 && trimmed !== headline.trim()
   }
 
-  let showingAppErrors = $derived(notificationPanelState.filter === 'app-errors')
+  let showingAppErrors = $derived(notificationPanelState.topTab === 'app-errors')
+  let showingAssistants = $derived(notificationPanelState.topTab === 'assistants')
   let hasVisibleItems = $derived(
-    showingAppErrors ? appErrorState.count > 0 : notificationPanelState.notifications.length > 0
+    showingAppErrors
+      ? appErrorState.count > 0
+      : showingAssistants
+        ? false
+        : notificationPanelState.visible.length > 0
   )
 
   async function navigateToNotification(n: InAppNotification): Promise<void> {
@@ -100,12 +152,14 @@
   }
 
   function dismissAll(): void {
-    if (showingAppErrors) {
+    const tab = notificationPanelState.topTab
+    if (tab === 'app-errors') {
       appErrorState.dismissAll()
-    } else {
-      notificationPanelState.dismissAll()
-      contextSidebarState.hide()
+      return
     }
+    if (tab === 'assistants') return
+    notificationPanelState.dismissTab(tab)
+    contextSidebarState.hide()
   }
 
   async function copyError(e: AppErrorEntry): Promise<void> {
@@ -221,39 +275,32 @@
 {/snippet}
 
 <div class="flex h-full flex-col">
-  <!-- Filter bar -->
-  <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1.5">
-    {#each filters as f (f.key)}
+  <!-- Top-level tabs -->
+  <div
+    class="flex shrink-0 items-center gap-1 border-b border-border px-2 pt-1.5"
+    role="tablist"
+    aria-label="Notification sections"
+  >
+    {#each topTabs as tab (tab.key)}
+      {@const count = topTabCount(tab.key)}
+      {@const active = notificationPanelState.topTab === tab.key}
       <button
-        class="flex items-center gap-1.5 px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {notificationPanelState.filter ===
-        f.key
-          ? 'bg-foreground text-app'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={`Show ${f.label} notifications`}
-        title={`Show ${f.label} notifications`}
-        onclick={() => notificationPanelState.setFilter(f.key)}
+        class="-mb-px flex items-center gap-1.5 border-b-2 px-2 py-1.5 text-xs font-medium transition-colors {active
+          ? 'border-foreground text-foreground'
+          : 'border-transparent text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={active}
+        aria-label={`Show ${tab.label} notifications`}
+        title={`Show ${tab.label} notifications`}
+        onclick={() => notificationPanelState.setTab(tab.key)}
       >
-        {f.label}
-        {#if f.key === 'all'}
-          {#if notificationPanelState.totalCount > 0}
-            <span class="tabular-nums text-dimmed">{notificationPanelState.totalCount}</span>
-          {/if}
-        {:else if f.key === 'completed' && notificationPanelState.completedCount > 0}
-          <span class="tabular-nums text-dimmed">{notificationPanelState.completedCount}</span>
-        {:else if f.key === 'chat-completed' && notificationPanelState.chatCompletedCount > 0}
-          <span class="tabular-nums text-dimmed">{notificationPanelState.chatCompletedCount}</span>
-        {:else if f.key === 'attention' && notificationPanelState.attentionCount > 0}
-          <span class="tabular-nums text-dimmed">{notificationPanelState.attentionCount}</span>
-        {:else if f.key === 'spec' && notificationPanelState.specCount > 0}
-          <span class="tabular-nums text-dimmed">{notificationPanelState.specCount}</span>
-        {:else if f.key === 'error' && notificationPanelState.errorCount > 0}
-          <span class="tabular-nums text-dimmed">{notificationPanelState.errorCount}</span>
-        {:else if f.key === 'app-errors' && appErrorState.count > 0}
-          <span class="tabular-nums text-dimmed">{appErrorState.count}</span>
+        {tab.label}
+        {#if count > 0}
+          <span class="tabular-nums text-dimmed">{count}</span>
         {/if}
       </button>
     {/each}
-    <div class="ml-auto">
+    <div class="ml-auto pb-1.5">
       {#if hasVisibleItems}
         <button
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -266,6 +313,29 @@
       {/if}
     </div>
   </div>
+
+  <!-- Sub filters -->
+  {#if subFiltersFor(notificationPanelState.topTab).length > 0}
+    <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1">
+      {#each subFiltersFor(notificationPanelState.topTab) as sub (sub)}
+        {@const count = subCount(notificationPanelState.topTab, sub)}
+        {@const active = notificationPanelState.subFilter === sub}
+        <button
+          class="flex items-center gap-1.5 rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-raised hover:text-foreground'}"
+          aria-label={`Show ${subFilterLabels[sub]} notifications`}
+          title={`Show ${subFilterLabels[sub]} notifications`}
+          onclick={() => notificationPanelState.setSubFilter(sub)}
+        >
+          {subFilterLabels[sub]}
+          {#if count > 0}
+            <span class="tabular-nums text-dimmed">{count}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Content -->
   <div class="min-h-0 flex-1 overflow-y-auto">
@@ -352,14 +422,20 @@
           {/each}
         </div>
       {/if}
-    {:else if notificationPanelState.notifications.length === 0}
+    {:else if showingAssistants}
+      <!-- Assistants shell: the feature lands later; the tab stays empty for now. -->
+      <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+        <Bot size={20} class="text-dimmed" />
+        <p class="text-xs text-muted">No assistant activity yet</p>
+      </div>
+    {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
         <Bell size={20} class="text-dimmed" />
         <p class="text-xs text-muted">No notifications</p>
       </div>
     {:else}
       <div class="space-y-px p-1.5">
-        {#each notificationPanelState.notifications as n (n.id)}
+        {#each notificationPanelState.visible as n (n.id)}
           {@const active = busyId === n.id}
           <div
             class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {kindAccent(

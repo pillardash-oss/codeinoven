@@ -1,11 +1,14 @@
 <script lang="ts">
   import { Check, ChevronDown, Loader2, Maximize2, Network, Save } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type {
     AssignmentModelSelection,
     AssignmentPlan,
     AssignmentPlanContent,
-    ProviderCatalog
+    ProviderCatalog,
+    ScopeChoice
   } from '$shared/types'
 
   interface Props {
@@ -24,6 +27,11 @@
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment-wide worker scope, the level above a phase and a task. */
+    onWorkerScopeChange?: (scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -50,6 +58,9 @@
     onOpenFullscreen,
     onWorkerModelChange,
     onSeniorModelChange,
+    onTaskScopeChange,
+    onWorkerScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite
@@ -62,6 +73,7 @@
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="overflow-hidden rounded-xl border bg-surface shadow-sm"
   aria-label="Assignment ready"
 >
@@ -90,69 +102,70 @@
       </span>
       <ChevronDown
         size={14}
-        class="text-dimmed transition-transform {expanded ? 'rotate-180' : ''}"
+        class="text-dimmed transition-transform {expanded ? '' : 'rotate-180'}"
       />
     </div>
   </button>
 
-  <div
-    id={`assignment-review-${assignment.id}`}
-    class="max-h-[32rem] overflow-y-auto p-4"
-    hidden={!expanded}
-  >
-    <AssignmentReviewContent
-      content={draft}
-      {providers}
-      {projectId}
-      {harnessId}
-      {fallbackModel}
-      {seniorModel}
-      {favoriteModels}
-      {recentModels}
-      {onRemoveRecent}
-      compact
-      onChange={(content) => (draft = content)}
-      {onWorkerModelChange}
-      {onSeniorModelChange}
-      {onToggleFavorite}
-      {onReorderFavorite}
-    />
-
-    {#if error}
-      <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
-    {/if}
-  </div>
-
   {#if expanded}
-    <div class="flex items-center justify-between gap-2 border-t px-4 py-3">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground"
-        title="Review assignment full screen"
-        onclick={onOpenFullscreen}
-      >
-        <Maximize2 size={13} />
-        Full screen
-      </button>
-      <div class="flex items-center gap-2">
+    <div id={`assignment-review-${assignment.id}`} transition:slide={foldSlide()}>
+      <div class="max-h-[32rem] overflow-y-auto p-4">
+        <AssignmentReviewContent
+          content={draft}
+          {providers}
+          {projectId}
+          {harnessId}
+          {fallbackModel}
+          {seniorModel}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          compact
+          onChange={(content) => (draft = content)}
+          {onWorkerModelChange}
+          {onSeniorModelChange}
+          {onTaskScopeChange}
+          {onWorkerScopeChange}
+          {assignmentScopeBucketId}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+
+        {#if error}
+          <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-between gap-2 border-t px-4 py-3">
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:text-foreground disabled:opacity-40"
-          disabled={busy}
-          onclick={() => onSave($state.snapshot(draft))}
+          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground"
+          title="Review assignment full screen"
+          onclick={onOpenFullscreen}
         >
-          <Save size={13} />
-          Save draft
+          <Maximize2 size={13} />
+          Full screen
         </button>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-40"
-          disabled={busy}
-          onclick={() => onApprove($state.snapshot(draft))}
-        >
-          {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<Check size={13} />{/if}
-          Sign off & assign
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:text-foreground disabled:opacity-40"
+            disabled={busy}
+            onclick={() => onSave($state.snapshot(draft))}
+          >
+            <Save size={13} />
+            Save draft
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-40"
+            disabled={busy}
+            onclick={() => onApprove($state.snapshot(draft))}
+          >
+            {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<Check size={13} />{/if}
+            Sign off & assign
+          </button>
+        </div>
       </div>
     </div>
   {/if}

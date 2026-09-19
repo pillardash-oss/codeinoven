@@ -329,6 +329,19 @@
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
   }
 
+  function saveAgentQuestionCap(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < 1 || value > 10) {
+      input.value = String(config.agentQuestionCap)
+      return
+    }
+
+    void updateConfig({ agentQuestionCap: value })
+  }
+
   function saveMaxDiffLines(event: Event): void {
     const input = event.currentTarget
     if (!(input instanceof HTMLInputElement)) return
@@ -940,6 +953,25 @@
                   />
                   seconds
                 </label>
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium">Max questions per ask</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    How many questions one agent question card can carry
+                  </p>
+                </div>
+                <input
+                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={config.agentQuestionCap}
+                  disabled={!settingsReady}
+                  aria-label="Maximum questions per agent question card"
+                  onchange={saveAgentQuestionCap}
+                />
               </div>
             </div>
           </div>

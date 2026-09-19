@@ -9,7 +9,14 @@
     canDeleteRemote?: boolean
     canFetch: boolean
     checkoutLabel?: string
+    /**
+     * Disable the rows that write to this checkout (checkout, delete). A fetch
+     * in flight is deliberately not part of this: it runs on its own lane in
+     * main, so only the fetch row itself reflects it, through `fetchBusy`.
+     */
     busy?: boolean
+    /** Disable the fetch row while another fetch is running. */
+    fetchBusy?: boolean
     remoteBusy?: boolean
     onCheckout: () => void
     onFetch: () => void
@@ -25,6 +32,7 @@
     canFetch,
     checkoutLabel = 'Check out',
     busy = false,
+    fetchBusy = false,
     remoteBusy = false,
     onCheckout,
     onFetch,
@@ -49,7 +57,7 @@
 {/if}
 
 {#if canFetch}
-  <DropdownMenu.Item class={itemClass} onSelect={onFetch} disabled={busy}>
+  <DropdownMenu.Item class={itemClass} onSelect={onFetch} disabled={fetchBusy}>
     <Download size={12} class="shrink-0 text-dimmed" />
     Fetch this branch
   </DropdownMenu.Item>

@@ -268,6 +268,10 @@ describe('mapOpenCodePart', () => {
 
 describe('OpenCode token usage normalization', () => {
   it('maps reported categories into normalized usage and preserves the raw total', () => {
+    // opencode reports `reasoning` beside `output` rather than inside it (its own
+    // total is input + output + reasoning + cache), so the display aggregate's
+    // `output` is the generated total and the normalized contract keeps the
+    // categories exactly as reported.
     expect(
       mapOpenCodePart({
         type: 'step-finish',
@@ -283,7 +287,7 @@ describe('OpenCode token usage normalization', () => {
       reason: 'stop',
       tokens: {
         input: 100,
-        output: 30,
+        output: 40,
         reasoning: 10,
         cacheRead: 40,
         cacheWrite: 5,
@@ -616,7 +620,7 @@ describe('opencodePermissionTools', () => {
       providerId: 'anthropic',
       modelId: 'claude-sonnet-4-5',
       thinkingLevel: 'medium',
-      permissionLevel,
+      permissionLevel
     }) as const
 
   it('maps full_access to an allow-all bypass so nothing is asked or denied', () => {
@@ -665,7 +669,7 @@ describe('OpenCodeDriver prompt body agent field', () => {
     providerId: 'anthropic',
     modelId: 'claude-sonnet-4-5',
     thinkingLevel: 'medium',
-    permissionLevel: 'auto_review',
+    permissionLevel: 'auto_review'
   } as const
 
   function isolatedHandle(baseUrl: string): IsolatedHandle {

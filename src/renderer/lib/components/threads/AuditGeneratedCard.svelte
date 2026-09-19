@@ -1,7 +1,10 @@
 <script lang="ts">
   import { CircleAlert, FileCheck2, Loader2 } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { formatDurationMs } from '$lib/format/duration'
   import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -64,19 +67,9 @@
   let reworking = $derived(auditState === 'reworking')
   let elapsed = $derived(
     startedAt !== undefined && finishedAt !== undefined
-      ? formatDuration(Math.max(0, finishedAt - startedAt))
+      ? formatDurationMs(Math.max(0, finishedAt - startedAt))
       : null
   )
-
-  function formatDuration(durationMs: number): string {
-    const totalSeconds = Math.floor(durationMs / 1_000)
-    const hours = Math.floor(totalSeconds / 3_600)
-    const minutes = Math.floor((totalSeconds % 3_600) / 60)
-    const seconds = totalSeconds % 60
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
-    if (minutes > 0) return `${minutes}m ${seconds}s`
-    return `${seconds}s`
-  }
 
   function chooseModel(
     providerId: string,
@@ -99,6 +92,7 @@
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="rounded-xl border bg-surface p-4 {failed ? 'border-danger/40' : 'border-border'}"
   aria-label="Audit status"
 >
@@ -165,52 +159,54 @@
     <CardFoldToggle bind:folded label="audit status" />
   </div>
   {#if !folded}
-    <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
-      <ModelPicker
-        {providers}
-        {projectId}
-        harnessId={settings.harnessId}
-        providerId={settings.providerId}
-        modelId={settings.modelId}
-        accountId={settings.accountId}
-        {favoriteModels}
-        {recentModels}
-        {onRemoveRecent}
-        side="top"
-        variant="action"
-        disabled={busy || auditState === 'running'}
-        onSelect={chooseModel}
-        thinkingLevel={settings.thinkingLevel}
-        onSelectThinking={chooseThinking}
-        {onToggleFavorite}
-        {onReorderFavorite}
-      />
-      {#if failed || interrupted}
-        <button
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-          disabled={busy}
-          onclick={() => onRetry(settings)}
-        >
-          {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-          {retryLabel}
-        </button>
-      {:else if auditState === 'running' && onViewTrace}
-        <button
-          class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Open the durable auditor thread and its live working trace"
-          onclick={onViewTrace}
-        >
-          View trace
-        </button>
-      {:else if version !== undefined}
-        <button
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-          title={reworking ? 'Open the source audit report' : 'Open this report in Audit Studio'}
-          onclick={onViewReport}
-        >
-          {reworking ? 'View source report' : 'View report'}
-        </button>
-      {/if}
+    <div transition:slide={foldSlide()}>
+      <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <ModelPicker
+          {providers}
+          {projectId}
+          harnessId={settings.harnessId}
+          providerId={settings.providerId}
+          modelId={settings.modelId}
+          accountId={settings.accountId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          side="top"
+          variant="action"
+          disabled={busy || auditState === 'running'}
+          onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+        {#if failed || interrupted}
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+            disabled={busy}
+            onclick={() => onRetry(settings)}
+          >
+            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
+            {retryLabel}
+          </button>
+        {:else if auditState === 'running' && onViewTrace}
+          <button
+            class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Open the durable auditor thread and its live working trace"
+            onclick={onViewTrace}
+          >
+            View trace
+          </button>
+        {:else if version !== undefined}
+          <button
+            class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+            title={reworking ? 'Open the source audit report' : 'Open this report in Audit Studio'}
+            onclick={onViewReport}
+          >
+            {reworking ? 'View source report' : 'View report'}
+          </button>
+        {/if}
+      </div>
     </div>
   {/if}
 </section>

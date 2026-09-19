@@ -17,6 +17,7 @@ import { ModelRankingRepo } from '../../src/main/database/repositories/model-ran
 import { ModelRankingSnapshotRepo } from '../../src/main/database/repositories/model-ranking-snapshot-repo'
 import type { OpenRankingSnapshotInput } from '../../src/main/database/repositories/model-ranking-snapshot-repo'
 import type { AgentMessage, Thread } from '../../src/lib/types'
+import type { SessionInfo } from '../../src/main/chat/chat-engine/chat-engine-types'
 import type { GradeTurnOptions } from '../../src/main/drivers/driver.interface'
 
 const temporaryDatabases: Database[] = []
@@ -145,14 +146,33 @@ async function capture(
   assistant: AgentMessage
 ): Promise<void> {
   const openRankingSnapshot = privateOf<
-    (thread: Thread, threadId: string, mirror: AgentMessage[], parentTurnId: string, turnAssistant: AgentMessage, awaitingUser: boolean) => Promise<void>
+    (
+      info: SessionInfo,
+      thread: Thread,
+      mirror: AgentMessage[],
+      turnAssistant: AgentMessage,
+      awaitingUser: boolean
+    ) => Promise<void>
   >(engine, 'openRankingSnapshot')
-  await openRankingSnapshot.call(engine, fakeThread(), 't1', [user, assistant], user.id, assistant, false)
+  const info = {
+    sessionId: 's1',
+    projectId: 'p1',
+    threadId: 't1',
+    projectPath: '/p',
+    permissionLevel: 'auto_review',
+    driverId: 'pi',
+    activeTurnUserMessageId: user.id,
+    activeTurnOrigin: 'user'
+  } satisfies SessionInfo
+  await openRankingSnapshot.call(engine, info, fakeThread(), [user, assistant], assistant, false)
   // The worker-offloaded insert settles on the next tick.
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-function snapshotInput(threadId: string, overrides: Partial<OpenRankingSnapshotInput> = {}): OpenRankingSnapshotInput {
+function snapshotInput(
+  threadId: string,
+  overrides: Partial<OpenRankingSnapshotInput> = {}
+): OpenRankingSnapshotInput {
   return {
     threadId,
     projectId: 'p1',
@@ -166,6 +186,7 @@ function snapshotInput(threadId: string, overrides: Partial<OpenRankingSnapshotI
     dueAtMs: Date.now() + 24 * 3_600_000,
     userMessageText: 'fix the login bug',
     assistantOutputText: 'I fixed the login validation.',
+    anchorMessageId: 'turn-1',
     costUsd: 0.02,
     costStatus: 'known',
     ...overrides
@@ -174,8 +195,7 @@ function snapshotInput(threadId: string, overrides: Partial<OpenRankingSnapshotI
 
 function snapshotRow(db: Database): Record<string, unknown> | undefined {
   return db.get('SELECT * FROM model_ranking_snapshots LIMIT 1') as
-    | Record<string, unknown>
-    | undefined
+    Record<string, unknown> | undefined
 }
 
 function aggregateRow(db: Database): Record<string, unknown> | undefined {
@@ -184,8 +204,7 @@ function aggregateRow(db: Database): Record<string, unknown> | undefined {
 
 function snapshotCount(db: Database): number {
   const row = db.get('SELECT COUNT(*) AS n FROM model_ranking_snapshots') as
-    | { n: number }
-    | undefined
+    { n: number } | undefined
   return row?.n ?? 0
 }
 
@@ -420,10 +439,7 @@ describe('ChatEngine model-ranking pipeline', () => {
     expect(snapshotRow(db)?.['status']).toBe('failed')
 
     // Simulate the recovery cooldown elapsing; the next drain re-queues and scores.
-    db.run(
-      'UPDATE model_ranking_snapshots SET last_attempt_at_ms = ?',
-      Date.now() - 25 * 3_600_000
-    )
+    db.run('UPDATE model_ranking_snapshots SET last_attempt_at_ms = ?', Date.now() - 25 * 3_600_000)
     await engine.recoverPendingRankingGrades()
 
     expect(fake.gradeTurnCalls).toHaveLength(6)
@@ -469,7 +485,14 @@ describe('ChatEngine model-ranking pipeline', () => {
     // The follow-up lands mid-flight: the claimed row is pulled back to
     // pending and its claim token is cleared.
     const open = repo.openForThread('t1')
-    repo.registerCompletedExchange(open?.id ?? '', 'late follow-up', Date.now(), Date.now() + 86_400_000)
+    repo.registerCompletedExchange(
+      open?.id ?? '',
+      'turn-3',
+      'late follow-up',
+      'Answered the late follow-up.',
+      Date.now(),
+      Date.now() + 86_400_000
+    )
 
     // The stale pre-follow-up judge result resolves   it must not score.
     releases[0]?.(3)
@@ -528,5 +551,4 @@ describe('ChatEngine model-ranking pipeline', () => {
     expect(view[0]?.oneShot.costUsd).toBeCloseTo(0.1, 10)
     expect(rankingRepo.gradingSpend().costUsd).toBeCloseTo(0.1, 10)
   })
-
 })

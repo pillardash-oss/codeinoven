@@ -12,7 +12,7 @@
     label: string
     /** All pinned visible tasks, already in global pin order. */
     threads: Thread[]
-    selectedThreadId: string | null
+    activeThreadId: string | null
     /** Resolves the row icon for a thread (project icon, type icon, …). */
     getRowIcon: (t: Thread) => string | null
     onOpen: (t: Thread) => void
@@ -27,7 +27,7 @@
     sectionKey,
     label,
     threads,
-    selectedThreadId,
+    activeThreadId,
     getRowIcon,
     onOpen,
     onRename,
@@ -65,7 +65,7 @@
             {thread}
             compact
             projectIconUrl={getRowIcon(thread)}
-            selected={selectedThreadId === thread.id}
+            selected={activeThreadId === thread.id}
             {onOpen}
             {onRename}
             {onTogglePin}

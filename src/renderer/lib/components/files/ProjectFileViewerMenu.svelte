@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DropdownMenu } from 'bits-ui'
   import {
+    Braces,
     Check,
     Ellipsis,
     ListOrdered,
@@ -22,12 +23,18 @@
     /** Show undo/redo buttons ahead of the wrap button; only the file editor
      *  (editable source view) sets this. */
     showUndoRedo?: boolean
-    hideFullscreen?: boolean
+    /** Format label the active file can be beautified as ("JSON"), or null when
+     *  the editor cannot reformat it. Drives the menu item and, in fullscreen,
+     *  the toolbar button beside the wrap button. */
+    beautifyLabel?: string | null
+    /** The viewer already fills the window, so it no longer offers fullscreen. */
+    fullscreen?: boolean
     onUndo: () => void
     onRedo: () => void
     onReload: () => void
     onToggleLineNumbers: () => void
     onToggleWrap: () => void
+    onBeautify: () => void
     onFullscreen: () => void
     onRename: () => void
     onDelete: () => void
@@ -40,12 +47,14 @@
     reloadDisabled,
     mutationDisabled,
     showUndoRedo = false,
-    hideFullscreen = false,
+    beautifyLabel = null,
+    fullscreen = false,
     onUndo,
     onRedo,
     onReload,
     onToggleLineNumbers,
     onToggleWrap,
+    onBeautify,
     onFullscreen,
     onRename,
     onDelete
@@ -94,7 +103,18 @@
     <WrapText size={13} class={wrap ? 'text-primary' : ''} />
   </button>
 {/if}
-{#if !hideFullscreen}
+{#if fullscreen && beautifyLabel}
+  <button
+    type="button"
+    class={btnClass}
+    aria-label={`Beautify ${beautifyLabel}`}
+    title={`Beautify ${beautifyLabel}`}
+    onclick={onBeautify}
+  >
+    <Braces size={13} />
+  </button>
+{/if}
+{#if !fullscreen}
   <button
     type="button"
     class={btnClass}
@@ -145,6 +165,12 @@
             <Check size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
+        {#if beautifyLabel}
+          <DropdownMenu.Item class={itemClass} onSelect={onBeautify}>
+            <Braces size={13} class="text-muted" />
+            Beautify {beautifyLabel}
+          </DropdownMenu.Item>
+        {/if}
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
           <Pencil size={13} class="text-muted" />

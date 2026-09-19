@@ -1,0 +1,57 @@
+/** Fixed id of the hidden project that holds standalone (project-less) chats. */
+export const INBOX_PROJECT_ID = 'inbox'
+
+export type ChangeTrackingMode = 'git' | 'manual'
+
+export type RepositoryStatus = 'git' | 'not_git' | 'git_unavailable'
+
+export interface RepositoryPreflightResult {
+  status: RepositoryStatus
+  projectPath: string
+  repositoryRoot?: string
+  detail?: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  path: string
+  source: 'local' | 'ssh'
+  host?: string
+  providerId: string
+  workflowId: string
+  threadLimit: number
+  /** Hidden projects (e.g. the inbox) are excluded from the Projects tab. */
+  hidden?: boolean
+  /** Whether the project is pinned to the top of the project list. */
+  pinned?: boolean
+  /** Position for manual drag-to-reorder; items without sortOrder fall back to updatedAt. */
+  sortOrder?: number
+  /** Filename of the project's stored icon (e.g. `icon.png`), relative to its storage dir. */
+  icon?: string
+  /** Accent colour for the project (a hex colour from the project palette). */
+  color?: string
+  /** Key of the selected SVG icon type (e.g. 'folder', 'code', 'terminal'). */
+  iconType?: string
+  /** Optional while loading projects persisted before change tracking was introduced. */
+  changeTrackingMode?: ChangeTrackingMode
+  /** Whether the repo is known to have GitHub deployments; gates the Deployments tab. */
+  hasDeployments?: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateProjectInput {
+  name: string
+  path: string
+  source?: 'local' | 'ssh'
+  host?: string
+  providerId?: string
+  workflowId?: string
+  threadLimit?: number
+  hidden?: boolean
+  color?: string
+  iconType?: string
+  changeTrackingMode?: ChangeTrackingMode
+  hasDeployments?: boolean
+}

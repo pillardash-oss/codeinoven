@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
+import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
@@ -80,6 +81,7 @@ export class Database {
     this.applySchema()
     this.startMaintenanceWorker()
     await this.migrateIndependentUsageLedger()
+    await this.migrateUsageEventFeatures()
     this.db.pragma('optimize = 0x10002')
 
     Logger.info('SQLite database initialised', {
@@ -723,6 +725,7 @@ export class Database {
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateModelRankingSnapshotClaimToken(connection)
+      this.migrateModelRankingSnapshotAnchorMessageId(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
@@ -731,8 +734,36 @@ export class Database {
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
+      this.migrateAgentMessageNormalizedUsageColumn(connection)
+      this.migrateActiveTurnOwnerColumn(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
+      this.migrateAssignmentSpecNullable(connection)
+      this.migrateThreadPinnedAt(connection)
     })()
+  }
+
+  /**
+   * Historical rows reached `pinned = 1` with a NULL `pinned_at`: the thread
+   * upsert pins through a conflict path that never refreshes the pin timestamp,
+   * and Assignment activation used to pin its coordinator without one. A NULL
+   * pin time sorts last in the Pinned slice, so backfill it from the row's last
+   * write. Idempotent: the predicate stops matching once every pinned row has a
+   * timestamp. Databases without the column are left untouched.
+   */
+  private migrateThreadPinnedAt(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('pinned_at')) return
+    connection
+      .prepare(
+        `UPDATE threads
+            SET pinned_at = COALESCE(updated_at, last_activity, created_at)
+          WHERE pinned = 1 AND pinned_at IS NULL`
+      )
+      .run()
   }
 
   /**
@@ -820,6 +851,42 @@ export class Database {
   }
 
   /**
+   * Databases created before the anchor tag carry an `anchor_message_id`-less
+   * snapshot queue. Add the column in place and point each still-open row at
+   * the same visible user message the capture path would resolve today: the
+   * thread's most recent user-origin message. Without the backfill a queued row
+   * would treat its next turn as a follow-up and keep the pre-fix behaviour for
+   * one more exchange. Rows whose thread is gone (or that are already closed)
+   * keep a null anchor, which reads as "unknown". Idempotent and safe to
+   * re-run.
+   */
+  migrateModelRankingSnapshotAnchorMessageId(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const columns = new Set<string>(
+      (
+        target.prepare('PRAGMA table_info(model_ranking_snapshots)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
+    )
+    if (columns.size === 0 || columns.has('anchor_message_id')) return
+    target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN anchor_message_id TEXT')
+    target
+      .prepare(
+        `UPDATE model_ranking_snapshots
+         SET anchor_message_id = (
+           SELECT candidate.id FROM agent_messages candidate
+           WHERE candidate.thread_id = model_ranking_snapshots.thread_id
+             AND candidate.role = 'user' AND candidate.origin = 'user'
+           ORDER BY candidate.created_at DESC, candidate.id DESC
+           LIMIT 1
+         )
+         WHERE closed_at_ms IS NULL`
+      )
+      .run()
+  }
+
+  /**
    * Rows persisted before the legacy `engineeringMode` settings flag was
    * scrubbed still carry it inside their settings JSON. Rewrite affected rows
    * without the flag   the Engineering lifecycle selection is the single
@@ -874,6 +941,51 @@ export class Database {
     }
   }
 
+  /**
+   * Databases created before spec-less Assignments carry
+   * `assignment_versions.spec_id TEXT NOT NULL` / `spec_version INTEGER NOT NULL`.
+   * SQLite cannot relax a NOT NULL constraint in place, so the table is rebuilt
+   * once with the same columns and rows but nullable spec columns. The `data`
+   * blob is the authoritative plan, so nothing needs to be recomputed. Idempotent:
+   * a table whose `spec_id` is already nullable is left untouched.
+   */
+  private migrateAssignmentSpecNullable(connection: DatabaseType): void {
+    const specIdColumn = (
+      connection.prepare('PRAGMA table_info(assignment_versions)').all() as Array<{
+        name: string
+        notnull: number
+      }>
+    ).find((column) => column.name === 'spec_id')
+    if (!specIdColumn || specIdColumn.notnull === 0) return
+    connection.exec(`
+      CREATE TABLE assignment_versions_spec_nullable (
+        assignment_id        TEXT NOT NULL,
+        version              INTEGER NOT NULL,
+        project_id           TEXT NOT NULL,
+        coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        spec_id              TEXT,
+        spec_version         INTEGER,
+        status               TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
+        data                 TEXT NOT NULL,
+        created_at           INTEGER NOT NULL,
+        updated_at           INTEGER NOT NULL,
+        PRIMARY KEY (assignment_id, version)
+      );
+      INSERT INTO assignment_versions_spec_nullable(
+        assignment_id, version, project_id, coordinator_thread_id,
+        spec_id, spec_version, status, data, created_at, updated_at
+      )
+      SELECT
+        assignment_id, version, project_id, coordinator_thread_id,
+        spec_id, spec_version, status, data, created_at, updated_at
+      FROM assignment_versions;
+      DROP TABLE assignment_versions;
+      ALTER TABLE assignment_versions_spec_nullable RENAME TO assignment_versions;
+      CREATE INDEX IF NOT EXISTS idx_assignment_versions_coordinator
+        ON assignment_versions(project_id, coordinator_thread_id);
+    `)
+  }
+
   /** Existing databases predate the independent (spec-less) audit thread flags. */
   private migrateThreadIndependentAuditColumns(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -888,6 +1000,18 @@ export class Database {
       connection.exec(
         'ALTER TABLE threads ADD COLUMN independent_audit_initialized INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate the in-flight turn owner recorded for cross-instance recovery. */
+  private migrateActiveTurnOwnerColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(active_turns)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('owner_pid')) {
+      connection.exec('ALTER TABLE active_turns ADD COLUMN owner_pid INTEGER')
     }
   }
 
@@ -959,6 +1083,23 @@ export class Database {
     )
     if (!columns.has('context_estimated')) {
       connection.exec('ALTER TABLE agent_messages ADD COLUMN context_estimated INTEGER')
+    }
+  }
+
+  /**
+   * Message mirrors predate the canonical usage payload. Without the column a
+   * reloaded message loses the provider's own categories and raw evidence, so
+   * sub-agent turns (and any reconciliation after a restart) would have to be
+   * recorded from the aggregate alone.
+   */
+  private migrateAgentMessageNormalizedUsageColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('normalized_usage_json')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN normalized_usage_json TEXT')
     }
   }
 
@@ -1098,6 +1239,78 @@ export class Database {
     const result = await this.transactionViaWorker(statements)
     if (!result.ok) throw new Error(result.error ?? 'Could not migrate the usage ledger')
   }
+
+  /**
+   * Rebuild the usage ledger when its CHECK constraint predates a feature value
+   * CodeInOven now records (sub-agent and ephemeral work). The CHECK is part of
+   * the table SQL, so SQLite rejects a new value inside an old constraint; the
+   * ledger write catches and dev-logs that rejection, which would silently drop
+   * the row. Detecting the missing value in the stored SQL and rebuilding the
+   * table keeps every recorded turn admissible.
+   */
+  private async migrateUsageEventFeatures(): Promise<void> {
+    const connection = this.requireDb()
+    const stored = connection
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'usage_events'")
+      .get() as { sql?: string } | undefined
+    const tableSql = stored?.sql
+    if (!tableSql) return
+    const missing = USAGE_EVENT_FEATURES.filter((feature) => !tableSql.includes(`'${feature}'`))
+    if (missing.length === 0) return
+
+    const legacyColumns = new Set(
+      (connection.prepare('PRAGMA table_info(usage_events)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    const targetColumns = parseColumnNames(USAGE_EVENTS_COLUMNS_SQL)
+    const carried = targetColumns.filter((column) => legacyColumns.has(column) && column !== 'id')
+    const columnList = ['id', ...carried].join(', ')
+    const projectIndex = `CREATE INDEX IF NOT EXISTS idx_usage_events_project
+      ON usage_events(project_id, created_at, id)`
+    const result = await this.transactionViaWorker([
+      { sql: 'ALTER TABLE usage_events RENAME TO usage_events_feature_legacy', params: [] },
+      { sql: `CREATE TABLE usage_events (${USAGE_EVENTS_COLUMNS_SQL})`, params: [] },
+      {
+        sql: `INSERT INTO usage_events(${columnList})
+        SELECT ${columnList}
+        FROM usage_events_feature_legacy`,
+        params: []
+      },
+      { sql: 'DROP TABLE usage_events_feature_legacy', params: [] },
+      ...USAGE_EVENTS_INDEXES_SQL.split(';')
+        .map((sql) => sql.trim())
+        .filter(Boolean)
+        .map((sql) => ({ sql, params: [] })),
+      { sql: projectIndex, params: [] }
+    ])
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Could not migrate the usage event feature values')
+    }
+    Logger.info('Usage ledger rebuilt for new feature values', {
+      features: missing.join(',')
+    })
+  }
+}
+
+/** Column names declared in a CREATE TABLE column list.
+ *
+ * Reads only the top-level column declarations and stops at the first
+ * table-level constraint, so a constraint line or its continuation is never
+ * mistaken for a column.
+ */
+function parseColumnNames(columnsSql: string): string[] {
+  const names: string[] = []
+  for (const rawLine of columnsSql.split('\n')) {
+    const line = rawLine.trim().replace(/,$/u, '')
+    if (!line || line.startsWith('--')) continue
+    if (line.startsWith('CHECK') || line.startsWith('UNIQUE') || line.startsWith('PRIMARY KEY')) {
+      break
+    }
+    const [name] = line.split(/\s+/u)
+    if (name && /^[a-z_][a-z0-9_]*$/u.test(name)) names.push(name)
+  }
+  return names
 }
 
 /** Statement text attributed in slow-op logs; capped and normalized to a single line. */

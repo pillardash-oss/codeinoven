@@ -1,4 +1,3 @@
-import { createHash } from 'crypto'
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { generateId } from '../../lib/utils'
@@ -7,20 +6,15 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import type {
   AgentEvent,
   AgentMessage,
-  AgentPart,
-  AgentProviderIssue,
   AgentQuestionRequest,
-  AgentTokenUsage,
   HarnessCommand,
   PermissionReply,
   ProviderCatalog,
   SessionAgentEvent,
   ThreadSettings,
-  ThinkingLevel,
-  UsagePricingProvenance
+  ThinkingLevel
 } from '../../lib/types'
 import { Logger } from '../system/logger'
-import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { prepareHarnessInvocation } from './harness-runtime'
@@ -28,6 +22,7 @@ import { spawnInUtilityHost } from './harness-utility-host'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
+  AuxiliaryModelCandidate,
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
@@ -45,123 +40,64 @@ import {
   sanitizeGeneratedTitle,
   sanitizeHeartbeatReply
 } from '../chat/title-generator'
-import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
+import { buildRankingGradePrompt } from '../chat/turn-grader-prompt'
+import type {
+  CliLineParseContext,
+  CliLineParseResult,
+  CliTurnCommand,
+  OneShotOutcome,
+  PersistentCliSession,
+  TitleAttemptAccounting,
+  TitleModelCandidate
+} from './persistent-cli/persistent-cli-types'
 import {
-  isPermissionToolName,
-  isQuestionToolName,
-  normalizeAgentQuestions,
-  permissionPatterns
-} from '../../lib/agent-interactions'
+  cliProjectPathHash,
+  cliSessionPath,
+  findLatestThreadCliSession,
+  persistCliSession,
+  requireCliSession
+} from './persistent-cli/persistent-cli-session'
+import {
+  estimateMissingCost as estimateMessageCost,
+  foldEventIntoMessages,
+  mergeSessionMessages,
+  normalizeCliInteractionEvents
+} from './persistent-cli/persistent-cli-transcript'
+import { PersistentCliLineReader } from './persistent-cli/persistent-cli-stream'
+import {
+  parseRankingGradeForAttempt,
+  sanitizeAuxiliaryText,
+  TITLE_GENERATION_TIMEOUT_MS,
+  TitleTurnRegistry
+} from './persistent-cli/persistent-cli-title'
+import {
+  auxiliaryBlockUntil,
+  runOneShotWithCandidates,
+  type AuxiliaryQuotaBlock
+} from './persistent-cli/persistent-cli-one-shot'
+import { hasProcessExited, waitForProcessExit } from './persistent-cli/persistent-cli-process'
+import { buildUserMessage } from './persistent-cli/persistent-cli-user-message'
 
-export interface TitleModelCandidate {
-  providerId: string
-  modelId: string
-}
+export type {
+  CliLineParseContext,
+  CliLineParseResult,
+  CliTurnCommand,
+  OneShotOutcome,
+  PersistentCliSession,
+  TitleAttemptAccounting,
+  TitleAttemptUsage,
+  TitleModelCandidate
+} from './persistent-cli/persistent-cli-types'
 
-/** Provider-reported usage for one title-candidate attempt, when available. */
-export interface TitleAttemptUsage {
-  tokens?: AgentTokenUsage
-  cost?: number
-  costProvenance?: UsagePricingProvenance
-  durationMs?: number
-}
-
-/** Outcome of one title-candidate attempt, for event-level ledger integration. */
-export interface TitleAttemptAccounting {
-  /** 1-based position of this attempt in the candidate sequence. */
-  attempt: number
-  /** Model/provider asked to produce the title. */
-  providerId: string
-  modelId: string
-  /** Whether this attempt produced a usable title. */
-  success: boolean
-  /** Why this attempt fell back, or null when it succeeded. */
-  fallbackReason: string | null
-  /** Provider-reported usage retained from this attempt, or null when absent. */
-  usage: TitleAttemptUsage | null
-}
-
-/** Result of one auxiliary one-shot completion sequence over the candidates. */
-export interface OneShotOutcome {
-  /** Usable validated value produced by the first successful candidate, or null. */
-  value: string | null
-  /** True when an authentication issue stopped further attempts. */
-  authFailed: boolean
-  /** Per-candidate accounting entries gathered across the sequence. */
-  attempts: TitleAttemptAccounting[]
-}
-
-interface TitleTurnWaiter {
-  resolve: () => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
-
-class TitleTurnProviderIssueError extends Error {
-  constructor(readonly issue: AgentProviderIssue) {
-    super(issue.message)
-    this.name = 'TitleTurnProviderIssueError'
-  }
-}
-
-const TITLE_GENERATION_TIMEOUT_MS = 180_000
 const ABORT_TERM_GRACE_MS = 1_500
 const ABORT_KILL_GRACE_MS = 1_500
-
-/** Durable state for a logical CodeInOven session backed by a turn-based CLI. */
-export interface PersistentCliSession {
-  id: string
-  title: string
-  projectPathHash: string
-  nativeSessionId?: string
-  /** Owning thread, stamped by the engine so sessions survive harness switches. */
-  threadId?: string
-  messages: AgentMessage[]
-  createdAt: number
-  updatedAt: number
-}
-
-/** Process invocation constructed by a provider-specific CLI driver. */
-export interface CliTurnCommand {
-  command: string
-  args: string[]
-  input?: string
-  /** Keep stdin writable until the provider reports the turn result. */
-  keepInputOpen?: boolean
-  env?: NodeJS.ProcessEnv
-  /** Display model that produced the turn when it differs from the selected base model. */
-  provenanceModelId?: string
-  /** Called for each parsed provider record before provider-specific mapping. */
-  onJsonRecord?: (value: unknown) => void
-  /** Parse JSON records written to stderr by providers using JSON output mode. */
-  parseStderrJson?: boolean
-  /**
-   * Load provider records that only become available after the process exits
-   * (for example, interaction details from a retained session export).
-   */
-  loadTrailingRecords?: () => Promise<unknown[]>
-  /** Keep the logical turn paused when trailing records surfaced a blocking interaction. */
-  suppressIdle?: () => boolean
-  /** Treat a provider-specific, deliberately requested process stop as a successful exit. */
-  isExpectedExit?: (code: number | null, signal: NodeJS.Signals | null) => boolean
-  /** Called when spawning fails or the child exits. Must be safe to call more than once. */
-  onProcessExit?: () => void
-}
-
-/** Output of parsing one provider JSONL record. */
-export interface CliLineParseResult {
-  /** Parsed events are always tied to the active session. */
-  events?: SessionAgentEvent[]
-  messages?: AgentMessage[]
-  nativeSessionId?: string
-}
-
-/** Context supplied to provider parsers without leaking transport state. */
-export interface CliLineParseContext {
-  session: PersistentCliSession
-  sessionId: string
-  projectPath?: string
-}
+/**
+ * How long a resolved auxiliary route stays usable as a closed-route verdict.
+ * A provider catalog can gain a free candidate while a route is held back, and
+ * a stale list would postpone rows that can already be judged, so the route is
+ * re-resolved by the next run rather than trusted indefinitely.
+ */
+export const AUXILIARY_ROUTE_TTL_MS = 10 * 60 * 1000
 
 /**
  * Base class for headless, one-process-per-turn harness CLIs.
@@ -199,14 +135,40 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     string,
     { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }
   >()
-  private titleSessions = new Set<string>()
-  private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
+  private readonly titleTurns = new TitleTurnRegistry()
+  /**
+   * Provider-reported usage reset per auxiliary candidate (`providerId/modelId`),
+   * so an exhausted account is probed once per window instead of once per
+   * queued background job. In-process state by design: an app restart forgets
+   * it and probes afresh, so a stale block can never outlive the session.
+   */
+  private readonly auxiliaryQuotaBlocks = new Map<string, AuxiliaryQuotaBlock>()
+  /**
+   * The candidate list this driver's own auxiliary runs resolved last, kept so
+   * the ranking drain can tell whether a harness's whole route is inside a
+   * provider window without paying for discovery again. Null until a run
+   * resolves one, and read as unknown once it is stale.
+   */
+  private auxiliaryRoute: { at: number; candidates: TitleModelCandidate[] } | null = null
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private lastGradeTurnAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
   /** Provider-neutral interaction cards already surfaced for this driver instance. */
   private interactionRequests = new Set<string>()
+
+  /**
+   * JSONL reader for provider stdout and stderr. Built lazily so it observes
+   * the concrete driver's `id`, which is not initialized while base fields run.
+   */
+  private lineReaderInstance: PersistentCliLineReader | null = null
+  private get lineReader(): PersistentCliLineReader {
+    return (this.lineReaderInstance ??= new PersistentCliLineReader(
+      this.id,
+      (value, context) => this.parseJsonLine(value, context),
+      (result, session) => this.applyParseResult(result, session, { trackProcessIssues: true })
+    ))
+  }
 
   constructor(protected readonly storage: StorageEngine) {}
 
@@ -237,7 +199,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const session: PersistentCliSession = {
       id,
       title,
-      projectPathHash: this.projectPathHash(projectPath),
+      projectPathHash: cliProjectPathHash(projectPath),
       messages: [],
       createdAt: now,
       updatedAt: now
@@ -269,103 +231,24 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     validate: (raw: string) => string | null,
     timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
   ): Promise<OneShotOutcome> {
-    const fallback = {
-      providerId: options.settings.providerId,
-      modelId: options.settings.modelId
-    }
-    const attempts = [...candidates, fallback].filter(
-      (candidate, index, all) =>
-        Boolean(candidate.providerId && candidate.modelId) &&
-        all.findIndex(
-          (other) =>
-            other.providerId === candidate.providerId && other.modelId === candidate.modelId
-        ) === index
+    return runOneShotWithCandidates(
+      {
+        driverName: this.name,
+        titleTurns: this.titleTurns,
+        quotaBlocks: this.auxiliaryQuotaBlocks,
+        createSession: (path, title) => this.createSession(path, title),
+        sendPrompt: (path, promptOptions) => this.sendPrompt(path, promptOptions),
+        requireSession: (path, id) => this.requireSession(path, id),
+        abort: (path, id) => this.abort(path, id),
+        deleteSession: (path, id) => this.deleteSession(path, id)
+      },
+      projectPath,
+      options,
+      candidates,
+      promptText,
+      validate,
+      timeoutMs
     )
-    const accounted: TitleAttemptAccounting[] = []
-
-    for (let index = 0; index < attempts.length; index++) {
-      const candidate = attempts[index]
-      const sessionId = await this.createSession(projectPath, 'Auxiliary one-shot')
-      this.titleSessions.add(sessionId)
-      const completion = this.waitForTitleTurn(sessionId, timeoutMs)
-      try {
-        await this.sendPrompt(projectPath, {
-          sessionId,
-          settings: {
-            ...options.settings,
-            providerId: candidate.providerId,
-            modelId: candidate.modelId,
-            thinkingLevel: 'minimal',
-            inferenceMode: 'normal',
-            permissionLevel: 'auto_review'
-          },
-          text: promptText,
-          attachments: [],
-          readOnly: true,
-          allowedTools: []
-        })
-        await completion.promise
-        // Read the live session record directly: a driver override may answer
-        // from a native transcript or report [] for unresumable sessions, while
-        // title generation always wants this disposable session's own mirror.
-        const titleSession = await this.requireSession(projectPath, sessionId)
-        const messages = titleSession.messages
-        const response = [...messages].reverse().find((message) => message.role === 'assistant')
-        if (response?.error) {
-          // Surface the CLI's own failure text; without this the reason behind
-          // a null score (session limit, auth, transport) is unrecoverable.
-          Logger.dev(
-            `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} failed: ${response.error}`
-          )
-          accounted.push(
-            this.buildTitleAttempt(index + 1, candidate, false, response.error, response)
-          )
-          continue
-        }
-        const raw = response?.parts
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text)
-          .join('\n')
-        const value = raw ? validate(raw) : null
-        if (value !== null) {
-          accounted.push(this.buildTitleAttempt(index + 1, candidate, true, null, response))
-          return { value, authFailed: false, attempts: accounted }
-        }
-        Logger.dev(
-          `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} produced no usable response`,
-          raw ? raw.slice(0, 300) : '(empty response)'
-        )
-        accounted.push(
-          this.buildTitleAttempt(
-            index + 1,
-            candidate,
-            false,
-            'No usable response produced',
-            response
-          )
-        )
-      } catch (error) {
-        const fallbackReason = this.describeTitleFailure(error)
-        if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
-          accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
-          if (index === attempts.length - 1) {
-            return { value: null, authFailed: true, attempts: accounted }
-          }
-          continue
-        }
-        Logger.dev(
-          `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
-          error
-        )
-        accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
-      } finally {
-        completion.cancel()
-        await this.abort(projectPath, sessionId).catch(() => undefined)
-        await this.deleteSession(projectPath, sessionId).catch(() => undefined)
-        this.titleSessions.delete(sessionId)
-      }
-    }
-    return { value: null, authFailed: false, attempts: accounted }
   }
 
   /** Run title attempts in disposable sessions, cheapest candidate first. */
@@ -374,6 +257,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     options: GenerateTitleOptions,
     candidates: TitleModelCandidate[]
   ): Promise<string | null> {
+    if (!options.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       options,
@@ -391,6 +275,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     options: GradeTurnOptions,
     candidates: TitleModelCandidate[]
   ): Promise<number | null> {
+    if (!options.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
@@ -421,7 +306,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     projectPath: string,
     request: CheapModelRequest
   ): Promise<CheapModelResult> {
-    const candidates = await this.cheapCandidateModels(projectPath)
+    const candidates = request.candidates ?? (await this.cheapCandidateModels(projectPath))
+    if (!request.candidates?.length) this.recordAuxiliaryRoute(candidates)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
@@ -445,6 +331,35 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Until when every candidate of the given auxiliary route is inside a
+   * provider usage window, or null while one of them is free. See the
+   * `HarnessDriver` contract: the caller names the complete route, because a
+   * candidate left out would flip the verdict.
+   */
+  auxiliaryWindowUntil(candidates: readonly AuxiliaryModelCandidate[]): number | null {
+    return auxiliaryBlockUntil(candidates, this.auxiliaryQuotaBlocks, Date.now())
+  }
+
+  /** The route this driver's own auxiliary runs resolved, or null when unknown. */
+  auxiliaryRouteCandidates(): readonly AuxiliaryModelCandidate[] | null {
+    const route = this.auxiliaryRoute
+    if (!route) return null
+    if (Date.now() - route.at > AUXILIARY_ROUTE_TTL_MS) return null
+    return route.candidates
+  }
+
+  /**
+   * Remember the candidates an unpinned auxiliary run resolved, for
+   * `auxiliaryRouteCandidates`. An empty resolution forgets the route instead
+   * of keeping the previous list, because a harness whose cheap models just
+   * failed to resolve has an unknown route, not a closed one.
+   */
+  private recordAuxiliaryRoute(candidates: readonly TitleModelCandidate[]): void {
+    this.auxiliaryRoute =
+      candidates.length > 0 ? { at: Date.now(), candidates: [...candidates] } : null
+  }
+
   /** Cheapest auxiliary candidates for this harness; subclasses override. */
   protected async cheapCandidateModels(_projectPath: string): Promise<TitleModelCandidate[]> {
     return []
@@ -454,7 +369,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 
@@ -477,7 +392,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.gradeTurnWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 
@@ -504,7 +419,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * turns are never evicted.
    */
   releaseProjectResources(projectPath: string): void {
-    const projectPathHash = this.projectPathHash(projectPath)
+    const projectPathHash = cliProjectPathHash(projectPath)
     for (const [sessionId, session] of this.sessionCache) {
       if (session.projectPathHash !== projectPathHash) continue
       if (this.activeProcesses.has(sessionId)) continue
@@ -618,7 +533,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           try {
             const records = await invocation.loadTrailingRecords()
             for (const record of records) {
-              this.consumeJsonValue(record, session, projectPath)
+              this.lineReader.consumeValue(record, session, projectPath)
             }
           } catch (trailingError) {
             Logger.dev(`${this.name} trailing interaction records were unavailable:`, trailingError)
@@ -674,7 +589,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBuffer += chunk.toString()
-      stdoutBuffer = this.consumeJsonLines(stdoutBuffer, session, projectPath, invocation)
+      stdoutBuffer = this.lineReader.consumeLines(stdoutBuffer, session, projectPath, invocation)
     })
     child.stderr?.on('data', (chunk: Buffer) => {
       stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-4_000)
@@ -682,10 +597,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.on('error', (error) => void finish(error.message))
     child.on('exit', (code, signal) => {
       if (stdoutBuffer.trim())
-        this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
+        this.lineReader.consumeLine(stdoutBuffer.trim(), session, projectPath, invocation)
       if (invocation.parseStderrJson) {
         for (const line of stderrBuffer.split(/\r?\n/u)) {
-          this.consumeJsonLineIfPresent(line, session, projectPath, invocation)
+          this.lineReader.consumeLineIfPresent(line, session, projectPath, invocation)
         }
       }
       const exitedCleanly =
@@ -816,13 +731,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async abort(projectPath: string, sessionId: string): Promise<void> {
     await this.requireSession(projectPath, sessionId)
     const child = this.activeProcesses.get(sessionId)
-    if (!child || this.hasProcessExited(child)) return
+    if (!child || hasProcessExited(child)) return
 
-    const termExit = this.waitForProcessExit(child, ABORT_TERM_GRACE_MS)
+    const termExit = waitForProcessExit(child, ABORT_TERM_GRACE_MS)
     child.kill('SIGTERM')
     const exitedAfterTerm = await termExit
-    if (!exitedAfterTerm && !this.hasProcessExited(child)) {
-      const killExit = this.waitForProcessExit(child, ABORT_KILL_GRACE_MS)
+    if (!exitedAfterTerm && !hasProcessExited(child)) {
+      const killExit = waitForProcessExit(child, ABORT_KILL_GRACE_MS)
       child.kill('SIGKILL')
       await killExit
     }
@@ -849,34 +764,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
     await this.requireSession(projectPath, sessionId)
     const child = this.activeProcesses.get(sessionId)
-    return !!child && !this.hasProcessExited(child)
-  }
-
-  private hasProcessExited(child: ChildProcess): boolean {
-    return (
-      (child.exitCode !== null && child.exitCode !== undefined) ||
-      (child.signalCode !== null && child.signalCode !== undefined)
-    )
-  }
-
-  private waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-    if (this.hasProcessExited(child)) return Promise.resolve(true)
-    return new Promise((resolve) => {
-      let settled = false
-      const finish = (exited: boolean): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        child.removeListener('exit', onExit)
-        child.removeListener('close', onClose)
-        resolve(exited)
-      }
-      const onExit = (): void => finish(true)
-      const onClose = (): void => finish(true)
-      const timer = setTimeout(() => finish(false), timeoutMs)
-      child.once('exit', onExit)
-      child.once('close', onClose)
-    })
+    return !!child && !hasProcessExited(child)
   }
 
   async listProviders(_projectPath: string): Promise<ProviderCatalog[]> {
@@ -969,12 +857,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.utilityRuntimes.clear()
     this.sessionCache.clear()
     this.turnProvenance.clear()
-    for (const waiter of this.titleTurnWaiters.values()) {
-      clearTimeout(waiter.timer)
-      waiter.reject(new Error(`${this.name} is shutting down`))
-    }
-    this.titleTurnWaiters.clear()
-    this.titleSessions.clear()
+    this.titleTurns.rejectAll(this.name)
     this.interactionRequests.clear()
     this.eventCallback = null
   }
@@ -1052,7 +935,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   /** True for the disposable sessions owned by automatic title generation. */
   protected isTitleSession(sessionId: string): boolean {
-    return this.titleSessions.has(sessionId)
+    return this.titleTurns.isTitleSession(sessionId)
   }
 
   protected observeHarnessProcess(
@@ -1081,34 +964,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     session: PersistentCliSession,
     opts: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
   ): void {
-    const userMessageId = opts.userMessageId ?? generateId()
-    const publicPayload = this.outboundMessageOverrides.get(userMessageId) ?? opts
-    this.outboundMessageOverrides.delete(userMessageId)
-    const userParts: AgentPart[] = [
-      {
-        type: 'text',
-        id: `${userMessageId}:text`,
-        messageID: userMessageId,
-        text: publicPayload.text
-      },
-      ...publicPayload.attachments.map((attachment, index): AgentPart => ({
-        type: 'file',
-        id: `${userMessageId}:file:${index}`,
-        messageID: userMessageId,
-        mime: attachment.mime,
-        url: attachment.url,
-        filename: attachment.filename
-      }))
-    ]
-    this.mergeMessages(session, [
-      {
-        id: userMessageId,
-        role: 'user',
-        parts: userParts,
-        createdAt: Date.now(),
-        completedAt: Date.now()
-      }
-    ])
+    this.mergeMessages(session, [buildUserMessage(this.outboundMessageOverrides, opts)])
   }
 
   protected resolveRuntimePlaceholders(value: string, runtime: PreparedUtilityRuntime): string {
@@ -1121,78 +977,6 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         }
         return path
       })
-  }
-
-  private consumeJsonLines(
-    buffer: string,
-    session: PersistentCliSession,
-    projectPath: string,
-    invocation: CliTurnCommand
-  ): string {
-    const lines = buffer.split(/\r?\n/u)
-    const remainder = lines.pop() ?? ''
-    for (const line of lines) this.consumeJsonLine(line, session, projectPath, invocation)
-    return remainder
-  }
-
-  private consumeJsonLine(
-    line: string,
-    session: PersistentCliSession,
-    projectPath: string,
-    invocation: CliTurnCommand
-  ): void {
-    // Some CLIs interleave a progress redraw (`\r`) on the same line as a real
-    // event. Normalize the raw line, then fall back to extracting the bracketed
-    // JSON object so a genuine event is never dropped because of that noise.
-    const normalized = line.replace(/^\r+|\s+$/gu, '')
-    if (!normalized) return
-    let value: unknown
-    try {
-      value = JSON.parse(normalized) as unknown
-    } catch {
-      const recovered = this.recoverJsonValue(normalized)
-      if (recovered === null) {
-        Logger.dev(`${this.id} emitted a non-JSONL stdout line`, normalized.slice(0, 400))
-        return
-      }
-      value = recovered
-    }
-    invocation.onJsonRecord?.(value)
-    this.consumeJsonValue(value, session, projectPath)
-  }
-
-  /** Consume a provider JSON record from stderr without treating normal stderr as JSONL noise. */
-  private consumeJsonLineIfPresent(
-    line: string,
-    session: PersistentCliSession,
-    projectPath: string,
-    invocation: CliTurnCommand
-  ): void {
-    const normalized = line.replace(/^\r+|\s+$/gu, '')
-    if (!normalized) return
-    let value: unknown
-    try {
-      value = JSON.parse(normalized) as unknown
-    } catch {
-      return
-    }
-    invocation.onJsonRecord?.(value)
-    this.consumeJsonValue(value, session, projectPath)
-  }
-
-  private consumeJsonValue(
-    value: unknown,
-    session: PersistentCliSession,
-    projectPath: string
-  ): void {
-    const result = this.parseJsonLine(value, {
-      session,
-      sessionId: session.id,
-      projectPath
-    })
-    if (!result) return
-    if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
-    this.applyParseResult(result, session, { trackProcessIssues: true })
   }
 
   /**
@@ -1226,41 +1010,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     session.updatedAt = Date.now()
   }
 
-  /**
-   * Recover a JSON value from a line that mixes non-JSON noise with a single
-   * `{...}` object (e.g. `\rProgress… {"event":"…"}`). Only lines whose prefix
-   * before the first `{` and suffix after the last `}` contain no braces are
-   * treated as recoverable, so a genuinely malformed JSON line is still dropped.
-   */
-  private recoverJsonValue(line: string): unknown | null {
-    const start = line.indexOf('{')
-    const end = line.lastIndexOf('}')
-    if (start === -1 || end <= start) return null
-    const prefix = line.slice(0, start)
-    const suffix = line.slice(end + 1)
-    if (prefix.includes('{') || suffix.includes('}')) return null
-    try {
-      return JSON.parse(line.slice(start, end + 1)) as unknown
-    } catch {
-      return null
-    }
-  }
-
   protected mergeMessages(session: PersistentCliSession, messages: AgentMessage[]): void {
-    const provenance = this.turnProvenance.get(session.id)
-    for (const raw of messages) {
-      const message: AgentMessage = {
-        ...raw,
-        providerId: raw.providerId ?? provenance?.providerId,
-        modelId: raw.modelId ?? provenance?.modelId,
-        thinkingLevel: raw.thinkingLevel ?? provenance?.thinkingLevel,
-        harnessId: raw.harnessId ?? this.id
-      }
-      const index = session.messages.findIndex((current) => current.id === message.id)
-      if (index === -1) session.messages.push(message)
-      else session.messages[index] = message
-    }
-    session.messages.sort((left, right) => left.createdAt - right.createdAt)
+    mergeSessionMessages(session, messages, this.turnProvenance.get(session.id), this.id)
   }
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
@@ -1275,53 +1026,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * child transcript renders exactly like a root one.
    */
   protected applyEventToMessages(messages: AgentMessage[], event: AgentEvent): void {
-    if (event.type === 'message.part.updated') {
-      const message = messages.findLast((candidate) => candidate.id === event.part.messageID)
-      if (!message) return
-      const index = message.parts.findLastIndex((part) => part.id === event.part.id)
-      if (index === -1) message.parts.push(event.part)
-      else message.parts[index] = event.part
-      return
-    }
-    if (event.type === 'message.part.delta') {
-      const message = messages.findLast((candidate) => candidate.id === event.messageId)
-      const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
-      if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
-        part.text += event.delta
-      }
-      return
-    }
-    if (event.type === 'message.completed') {
-      const message = messages.findLast((candidate) => candidate.id === event.messageId)
-      if (message) {
-        message.completedAt = Date.now()
-        message.error = event.error
-        if (event.tokens) message.tokens = event.tokens
-        if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
-        if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
-        if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
-        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
-        if (event.rateLimits) message.rateLimits = event.rateLimits
-        if (event.credits) message.credits = event.credits
-        if (event.bankedResets) message.bankedResets = event.bankedResets
-        this.estimateMissingCost(message)
-      }
-    }
-    if (event.type === 'usage.updated') {
-      const message = messages.findLast((candidate) => candidate.id === event.messageId)
-      if (message) {
-        if (event.tokens) message.tokens = event.tokens
-        if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
-        if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
-        if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
-        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
-        if (event.cost !== undefined) message.cost = event.cost
-        if (event.rateLimits) message.rateLimits = event.rateLimits
-        if (event.credits) message.credits = event.credits
-        if (event.bankedResets) message.bankedResets = event.bankedResets
-        this.estimateMissingCost(message)
-      }
-    }
+    foldEventIntoMessages(messages, event)
   }
 
   /** Promote JSONL question/approval tool parts into the shared interaction stream. */
@@ -1329,73 +1034,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     sessionId: string,
     events: SessionAgentEvent[]
   ): SessionAgentEvent[] {
-    const normalized: SessionAgentEvent[] = []
-    for (const event of events) {
-      normalized.push(event)
-      if (event.type === 'question.asked') {
-        this.interactionRequests.add(this.interactionKey('question', sessionId, event.requestId))
-        continue
-      }
-      if (event.type !== 'message.part.updated') continue
-      const part = event.part
-      if (part.type === 'question') {
-        const requestId = this.interactionRequestId('question', sessionId, part.callID ?? part.id)
-        const key = this.interactionKey('question', sessionId, requestId)
-        if (this.interactionRequests.has(key)) continue
-        this.interactionRequests.add(key)
-        normalized.push({
-          type: 'question.asked',
-          sessionId,
-          requestId,
-          questions: [{ ...part.question, requestId }],
-          tool: { messageID: part.messageID, callID: part.callID ?? part.id }
-        })
-        continue
-      }
-      if (part.type !== 'tool') continue
-      const active = part.state.status === 'pending' || part.state.status === 'running'
-      if (!active) continue
-      const requestId = this.interactionRequestId('interaction', sessionId, part.callID || part.id)
-      if (isQuestionToolName(part.tool)) {
-        const key = this.interactionKey('question', sessionId, requestId)
-        if (this.interactionRequests.has(key)) continue
-        this.interactionRequests.add(key)
-        normalized.push({
-          type: 'question.asked',
-          sessionId,
-          requestId,
-          questions: normalizeAgentQuestions(part.state.input),
-          tool: { messageID: part.messageID, callID: part.callID }
-        })
-        continue
-      }
-      if (!isPermissionToolName(part.tool)) continue
-      const key = this.interactionKey('permission', sessionId, requestId)
-      if (this.interactionRequests.has(key)) continue
-      this.interactionRequests.add(key)
-      normalized.push({
-        type: 'permission.asked',
-        sessionId,
-        permission: {
-          id: requestId,
-          sessionId,
-          permission: part.tool,
-          patterns: permissionPatterns(part.state.input),
-          metadata: { tool: part.tool, input: part.state.input }
-        }
-      })
-    }
-    return normalized
-  }
-
-  private interactionRequestId(kind: string, sessionId: string, providerId: string): string {
-    return `${this.id}-${kind}-${sessionId}-${providerId}`
-      .replace(/[^a-zA-Z0-9._-]/gu, '-')
-      .slice(0, 256)
-  }
-
-  private interactionKey(kind: string, sessionId: string, requestId: string): string {
-    return `${kind}:${sessionId}:${requestId}`
+    return normalizeCliInteractionEvents(this.id, this.interactionRequests, sessionId, events)
   }
 
   /**
@@ -1404,40 +1043,22 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * when cost is genuinely missing; a provider-reported cost is never replaced.
    */
   protected estimateMissingCost(message: AgentMessage): void {
-    if (typeof message.cost === 'number') return
-    const estimated = estimateTokenCostUsd(message.modelId, message.providerId, message.tokens)
-    if (estimated === null) return
-    message.cost = estimated
-    message.costProvenance = {
-      source: 'model_catalog',
-      sourceId: message.modelId,
-      currency: 'USD',
-      capturedAt: message.completedAt ?? message.createdAt ?? Date.now()
-    }
+    estimateMessageCost(message)
   }
 
   protected async requireSession(
     projectPath: string,
     sessionId: string
   ): Promise<PersistentCliSession> {
-    const expectedHash = this.projectPathHash(projectPath)
-    const cached = this.sessionCache.get(sessionId)
-    const session =
-      cached ?? (await this.storage.read<PersistentCliSession>(this.sessionPath(sessionId)))
-    if (!session || session.projectPathHash !== expectedHash) {
-      throw new Error(`CLI session is unavailable: ${sessionId}`)
-    }
-    this.sessionCache.set(sessionId, session)
-    return session
+    return requireCliSession(this.storage, this.id, this.sessionCache, projectPath, sessionId)
   }
 
   protected async persistSession(session: PersistentCliSession): Promise<void> {
-    session.updatedAt = Date.now()
-    await this.storage.write(this.sessionPath(session.id), session)
+    await persistCliSession(this.storage, this.id, session)
   }
 
   protected sessionPath(sessionId: string): string {
-    return `drivers/${this.id}/sessions/${sessionId}.json`
+    return cliSessionPath(this.id, sessionId)
   }
 
   /**
@@ -1465,139 +1086,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     projectPath: string,
     threadId: string
   ): Promise<PersistentCliSession | null> {
-    const hash = this.projectPathHash(projectPath)
-    let names: string[]
-    try {
-      names = await this.storage.list(`drivers/${this.id}/sessions`)
-    } catch {
-      return null
-    }
-    let latest: PersistentCliSession | null = null
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue
-      try {
-        const session = await this.storage.read<PersistentCliSession>(
-          `drivers/${this.id}/sessions/${name}`
-        )
-        if (!session || session.threadId !== threadId || session.projectPathHash !== hash) continue
-        if (!latest || session.updatedAt > latest.updatedAt) latest = session
-      } catch {
-        continue
-      }
-    }
-    return latest
-  }
-
-  private projectPathHash(projectPath: string): string {
-    return createHash('sha256').update(projectPath).digest('hex')
+    return findLatestThreadCliSession(this.storage, this.id, projectPath, threadId)
   }
 
   protected emit(event: AgentEvent): void {
-    if ('sessionId' in event && this.titleSessions.has(event.sessionId)) {
-      const waiter = this.titleTurnWaiters.get(event.sessionId)
-      if (event.type === 'session.error') {
-        this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.reject(
-          event.issue
-            ? new TitleTurnProviderIssueError(event.issue)
-            : new Error(event.error ?? `${this.name} title generation failed`)
-        )
-      } else if (event.type === 'message.completed' && event.issue) {
-        this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.reject(new TitleTurnProviderIssueError(event.issue))
-      } else if (
-        event.type === 'session.idle' ||
-        (event.type === 'session.status' && event.status.state === 'idle')
-      ) {
-        this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.resolve()
-      }
-      return
-    }
+    if (this.titleTurns.intercept(event, this.name)) return
     this.eventCallback?.(event)
   }
-
-  private waitForTitleTurn(
-    sessionId: string,
-    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
-  ): { promise: Promise<void>; cancel: () => void } {
-    let resolvePromise: () => void = () => undefined
-    let rejectPromise: (error: Error) => void = () => undefined
-    const promise = new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve
-      rejectPromise = reject
-    })
-    // The rejection can fire while `sendPrompt` is still being awaited (the
-    // harness process may emit its error `result` before the caller reaches
-    // `await completion.promise`). Attach a no-op handler immediately so that
-    // early rejection is never reported as an unhandled rejection; a later
-    // `await` still observes it and the one-shot fallback runs normally.
-    promise.catch(() => undefined)
-    const timer = setTimeout(() => {
-      this.clearTitleTurnWaiter(sessionId)
-      rejectPromise(new Error(`${this.name} auxiliary completion timed out`))
-    }, timeoutMs)
-    this.titleTurnWaiters.set(sessionId, {
-      resolve: resolvePromise,
-      reject: rejectPromise,
-      timer
-    })
-    return { promise, cancel: () => this.clearTitleTurnWaiter(sessionId) }
-  }
-
-  private clearTitleTurnWaiter(sessionId: string): void {
-    const waiter = this.titleTurnWaiters.get(sessionId)
-    if (!waiter) return
-    clearTimeout(waiter.timer)
-    this.titleTurnWaiters.delete(sessionId)
-  }
-
-  private buildTitleAttempt(
-    attempt: number,
-    candidate: TitleModelCandidate,
-    success: boolean,
-    fallbackReason: string | null,
-    response?: AgentMessage
-  ): TitleAttemptAccounting {
-    const usage: TitleAttemptUsage | null =
-      response &&
-      (response.tokens || response.cost !== undefined || response.costProvenance !== undefined)
-        ? {
-            tokens: response.tokens,
-            cost: response.cost,
-            costProvenance: response.costProvenance,
-            durationMs:
-              response.completedAt !== undefined
-                ? Math.max(0, Math.floor(response.completedAt - response.createdAt))
-                : 0
-          }
-        : null
-    return {
-      attempt,
-      providerId: candidate.providerId,
-      modelId: candidate.modelId,
-      success,
-      fallbackReason,
-      usage
-    }
-  }
-
-  private describeTitleFailure(error: unknown): string {
-    if (error instanceof TitleTurnProviderIssueError) return error.issue.message
-    if (error instanceof Error) return error.message
-    return String(error)
-  }
-}
-
-/** Validate a one-shot grading response; returns the score digits for accounting. */
-function parseRankingGradeForAttempt(raw: string): string | null {
-  const score = parseRankingGrade(raw)
-  return score === null ? null : String(score)
-}
-
-/** Accept any non-empty auxiliary response, trimmed and length-bounded. */
-function sanitizeAuxiliaryText(raw: string): string | null {
-  const value = raw.trim()
-  if (!value) return null
-  return value.length > 16_000 ? value.slice(0, 16_000) : value
 }

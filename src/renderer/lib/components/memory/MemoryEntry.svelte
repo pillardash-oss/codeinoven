@@ -1,18 +1,34 @@
 <script lang="ts">
-  import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '$shared/types'
+  import type {
+    MemoryCategory,
+    MemoryEntry,
+    MemoryPriority,
+    MemoryScope,
+    Thread
+  } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import type { ScopeProject } from '$lib/stores/scope.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import ProjectSelect from '../shared/ProjectSelect.svelte'
+  import ThreadSelect from '../shared/ThreadSelect.svelte'
   import MemoryToggle from './MemoryToggle.svelte'
+  import type { MemoryScopeOption } from './memory-routing'
   import { Trash2, ChevronDown, ChevronUp, Zap, Clock } from '@lucide/svelte'
 
   interface Props {
     entry: MemoryEntry
     index: number
     projectId?: string
-    scopeOptions: Array<{ value: MemoryScope; label: string }>
+    scopeOptions: readonly MemoryScopeOption[]
+    /** Projects offered by the "Specific project" picker. */
+    projects?: readonly ScopeProject[]
+    /** Threads of the entry's project, offered by the "Thread" picker. */
+    threads?: readonly Thread[]
+    /** Whether the entry's project threads are still loading. */
+    threadsLoading?: boolean
     initiallyExpanded?: boolean
     onUpdate: (
       index: number,
@@ -22,14 +38,37 @@
     onRemove: (index: number) => void
   }
 
-  let { entry, index, projectId, scopeOptions, initiallyExpanded, onUpdate, onRemove }: Props =
-    $props()
+  let {
+    entry,
+    index,
+    projectId,
+    scopeOptions,
+    projects = [],
+    threads = [],
+    threadsLoading = false,
+    initiallyExpanded,
+    onUpdate,
+    onRemove
+  }: Props = $props()
   // newly-created memory should mount expanded; capturing the initial prop is intentional
   // svelte-ignore state_referenced_locally
   let expanded = $state(initiallyExpanded ?? false)
   let selectedModel = $derived(
     (entry.modelKeys ?? []).map((key) => parseModelKey(key)).find((model) => model !== null)
   )
+
+  /** The option currently selected on this entry, which decides its pickers. */
+  let currentScopeOption = $derived(scopeOptions.find((option) => option.value === entry.scope))
+  let showProjectPicker = $derived(currentScopeOption?.needsProject ?? false)
+  let showThreadPicker = $derived(currentScopeOption?.needsThread ?? false)
+  let selectedScopeProject = $derived(
+    projects.find((project) => project.id === entry.projectId) ?? null
+  )
+
+  function changeScope(scope: MemoryScope): void {
+    if (scope === entry.scope) return
+    onUpdate(index, 'scope', scope)
+  }
 
   const categoryOptions: { value: MemoryCategory; label: string }[] = [
     { value: 'behavioral', label: 'Behavioral' },
@@ -224,7 +263,7 @@
             value={entry.scope}
             onchange={(e: Event) => {
               const target = e.currentTarget as HTMLSelectElement
-              onUpdate(index, 'scope', target.value)
+              changeScope(target.value as MemoryScope)
             }}
           >
             {#each scopeOptions as opt (opt.value)}
@@ -233,6 +272,57 @@
           </select>
         </div>
       </div>
+
+      {#if showProjectPicker || showThreadPicker}
+        <div
+          class="grid gap-3 {showProjectPicker && showThreadPicker ? 'grid-cols-2' : 'grid-cols-1'}"
+        >
+          {#if showProjectPicker}
+            <div>
+              <span class="mb-1 block text-xs font-medium text-muted">Project</span>
+              <ProjectSelect
+                {projects}
+                value={entry.projectId ?? null}
+                onValueChange={(nextProjectId) => onUpdate(index, 'projectId', nextProjectId)}
+                ariaLabel="Select the project this memory applies to"
+                placeholder="Select a project"
+                searchPlaceholder="Search projects…"
+                emptyMessage="No projects match this search"
+              />
+            </div>
+          {/if}
+          {#if showThreadPicker}
+            <div>
+              <span class="mb-1 block text-xs font-medium text-muted">Thread</span>
+              <ThreadSelect
+                {threads}
+                project={selectedScopeProject}
+                value={entry.threadId ?? null}
+                onValueChange={(nextThreadId) => onUpdate(index, 'threadId', nextThreadId)}
+                ariaLabel="Select the thread this memory applies to"
+                placeholder="Select a thread"
+                searchPlaceholder="Search this project's threads…"
+                emptyMessage={threadsLoading
+                  ? 'Loading threads…'
+                  : entry.projectId
+                    ? 'No threads match this search'
+                    : 'Select a project first'}
+                disabled={!entry.projectId && !projectId}
+              />
+            </div>
+          {/if}
+        </div>
+        {#if showProjectPicker && !entry.projectId}
+          <p class="text-[0.6875rem] text-danger" role="alert">
+            Choose a project before saving this entry.
+          </p>
+        {/if}
+        {#if showThreadPicker && !entry.threadId}
+          <p class="text-[0.6875rem] text-danger" role="alert">
+            Choose a thread before saving this entry.
+          </p>
+        {/if}
+      {/if}
 
       {#if entry.category === 'models'}
         <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">

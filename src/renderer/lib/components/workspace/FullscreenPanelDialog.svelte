@@ -1,15 +1,23 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui'
   import { Minimize2, Plus, X } from '@lucide/svelte'
+  import { browserTabIndicatorSlotClass } from '$lib/stores/browser-tab-status'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import type { Snippet } from 'svelte'
 
   interface Props {
-    tabs: { id: string; title: string }[]
+    /** Tabs in the strip. `indicatorCount` is how many live indicators the tab
+     *  shows in place of the dialog's own `icon`: 0 keeps the icon, and anything
+     *  above 0 is the caller's promise that `tabIndicator` draws that many. */
+    tabs: { id: string; title: string; indicatorCount?: number }[]
     activeTabId: string | null
     newLabel: string
     minimizeLabel: string
     icon: Snippet
+    /** Per-tab overlay painted over the tab's own icon slot, used for the
+     *  browser's live audio and capture indicators. Callers whose tabs never
+     *  carry an indicator leave it, and `indicatorCount`, unset. */
+    tabIndicator?: Snippet<[{ id: string; title: string }]>
     onNew: () => void
     onMinimize: () => void
     onSelect: (id: string) => void
@@ -23,6 +31,7 @@
     newLabel,
     minimizeLabel,
     icon,
+    tabIndicator,
     onNew,
     onMinimize,
     onSelect,
@@ -76,35 +85,53 @@
         class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
         style={trafficLightInsetStyle()}
       >
-        <div
-          bind:this={stripElement}
-          class="titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto"
-        >
+        <div bind:this={stripElement} class="titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto">
           <div class="ml-auto flex min-w-max items-center gap-1">
             {#each tabs as tab (tab.id)}
-              <button
-                type="button"
-                data-active={tab.id === activeTabId ? 'true' : undefined}
-                class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
-                activeTabId
-                  ? 'bg-elevated text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-                aria-current={tab.id === activeTabId ? 'page' : undefined}
-                title={tab.title}
-                onclick={() => onSelect(tab.id)}
-              >
-                {@render icon()}
-                <span class="max-w-40 truncate">{tab.title}</span>
-              </button>
-              <button
-                type="button"
-                class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                aria-label={`Close ${tab.title}`}
-                title={`Close ${tab.title}`}
-                onclick={() => onCloseTab(tab.id)}
-              >
-                <X size={10} />
-              </button>
+              {@const indicatorCount = tabIndicator ? (tab.indicatorCount ?? 0) : 0}
+              <div class="titlebar-no-drag relative flex shrink-0 items-center">
+                <button
+                  type="button"
+                  data-active={tab.id === activeTabId ? 'true' : undefined}
+                  class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
+                  activeTabId
+                    ? 'bg-elevated text-foreground'
+                    : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
+                  aria-current={tab.id === activeTabId ? 'page' : undefined}
+                  title={tab.title}
+                  onclick={() => onSelect(tab.id)}
+                >
+                  {#if indicatorCount > 0}
+                    <span
+                      class="shrink-0 {browserTabIndicatorSlotClass(indicatorCount)}"
+                      aria-hidden="true"
+                    ></span>
+                  {:else}
+                    {@render icon()}
+                  {/if}
+                  <span class="max-w-40 truncate">{tab.title}</span>
+                </button>
+                <button
+                  type="button"
+                  class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  aria-label={`Close ${tab.title}`}
+                  title={`Close ${tab.title}`}
+                  onclick={() => onCloseTab(tab.id)}
+                >
+                  <X size={10} />
+                </button>
+                {#if indicatorCount > 0 && tabIndicator}
+                  <!-- Painted over the tab's own icon slot, as a sibling of the
+                       tab button, because a button cannot nest a button. The slot
+                       reserved above keeps a favicon's width for one indicator
+                       and widens for two, so the row can never reach the title. -->
+                  <div
+                    class="absolute left-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
+                  >
+                    {@render tabIndicator({ id: tab.id, title: tab.title })}
+                  </div>
+                {/if}
+              </div>
             {/each}
           </div>
         </div>

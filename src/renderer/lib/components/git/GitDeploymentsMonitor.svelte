@@ -12,6 +12,7 @@
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { githubAppInstallUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
@@ -229,8 +230,8 @@
           <button
             type="button"
             class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() =>
-              void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
+            data-external-url={githubAppInstallUrl()}
+            onclick={() => void openInBrowser(githubAppInstallUrl())}
           >
             Install GitHub App
           </button>

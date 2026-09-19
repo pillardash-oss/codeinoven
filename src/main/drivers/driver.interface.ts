@@ -168,6 +168,20 @@ export interface PreparedUtilityRuntime {
   cleanup(): Promise<void>
 }
 
+/**
+ * The plan and progress the owning thread is executing, published per turn so a
+ * driver-owned compaction checkpoint can rebuild context from them when a
+ * transcript can no longer be summarized. `planPath` and `progressPath` are
+ * absolute when the artifacts were located, so a checkpoint can re-read the
+ * newest version instead of the one captured at turn start.
+ */
+export interface CompactionFallbackContext {
+  plan: string | null
+  progress: string | null
+  planPath: string | null
+  progressPath: string | null
+}
+
 /** Authentication operations a harness exposes without implied account switching. */
 export interface HarnessAuthCapabilities {
   status: boolean
@@ -256,8 +270,30 @@ export interface SendPromptOptions {
   userMessageId?: string
 }
 
+/**
+ * One explicit auxiliary candidate: the provider and model a disposable
+ * auxiliary completion must use. Structurally identical to the drivers' own
+ * `TitleModelCandidate`, so callers can pass either shape.
+ */
+export interface AuxiliaryModelCandidate {
+  providerId: string
+  modelId: string
+}
+
+/**
+ * Explicit candidates that replace a driver's own auxiliary model discovery.
+ * The shared one-shot runner still appends the settings' own provider/model as
+ * the last-resort candidate and de-duplicates it, so a caller that pins the
+ * same model in `settings` gets exactly one attempt. Passing this is how a
+ * user-configured auxiliary model overrides every harness's built-in
+ * cheap-model preference (`AppConfig.auxiliaryAgents`).
+ */
+export interface AuxiliaryCandidateOverride {
+  candidates?: AuxiliaryModelCandidate[]
+}
+
 /** Input for one disposable, provider-owned thread-title completion. */
-export interface GenerateTitleOptions {
+export interface GenerateTitleOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   message: string
   /** Parent turn whose authenticated transport permits a safe auxiliary title process. */
@@ -265,7 +301,7 @@ export interface GenerateTitleOptions {
 }
 
 /** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
-export interface GradeTurnOptions {
+export interface GradeTurnOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** The initiating visible user message of the closed conversation window. */
   userMessage: string
@@ -282,7 +318,7 @@ export interface GradeTurnOptions {
  * available model, shared by every disposable cheap-model scenario (title
  * generation, turn grading, speech lessons, memory proposals, …).
  */
-export interface CheapModelRequest {
+export interface CheapModelRequest extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** Short scenario label used as the disposable session title. */
   purpose: string
@@ -368,6 +404,32 @@ export interface HarnessDriver {
    * point every cheap-model scenario must go through.
    */
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
+
+  /**
+   * The candidate list this driver's own auxiliary one-shot runs would try when
+   * the caller pins no candidates   its discovered cheap models   or null until
+   * it has discovered one.
+   *
+   * A caller that also appends the settings' own provider/model can therefore
+   * name a run's complete route. Null is the honest answer for a route that is
+   * not known, and callers must treat it as "do not know", never as "closed":
+   * a route wrongly reported closed postpones work that could run.
+   */
+  auxiliaryRouteCandidates?(): readonly AuxiliaryModelCandidate[] | null
+
+  /**
+   * Until when every given candidate sits inside a provider usage window the
+   * provider itself reported, or null while at least one of them is free (or
+   * when nothing is known about them).
+   *
+   * The caller names the complete route: for an auxiliary assignment that is
+   * the single pinned model, and for a harness's own route it is
+   * `auxiliaryRouteCandidates()` plus the settings' provider/model. Background
+   * work consults this before it spends a harness process, so an account whose
+   * provider already said "try again at <time>" is not probed once per queued
+   * job. Drivers without auxiliary one-shot work omit both methods.
+   */
+  auxiliaryWindowUntil?(candidates: readonly AuxiliaryModelCandidate[]): number | null
 
   /**
    * Send a single disposable "ping" completion pinned to the exact model in
@@ -552,6 +614,18 @@ export interface HarnessDriver {
     projectPath: string,
     sessionId: string,
     endpoint: { url: string; token: string } | null
+  ): Promise<void>
+
+  /**
+   * Publish the owning thread's plan and progress for checkpoint rebuilds.
+   * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
+   * session-keyed file; every other harness ignores the call. `null` clears it,
+   * so a thread with no plan can never inject a stale one into a rebuild.
+   */
+  publishCompactionContext?(
+    projectPath: string,
+    sessionId: string,
+    context: CompactionFallbackContext | null
   ): Promise<void>
 
   /**

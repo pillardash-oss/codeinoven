@@ -13,6 +13,11 @@
  *   db_meta           Internal database metadata
  */
 
+import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
+
+/** Quoted feature list for the usage ledger's CHECK constraint. */
+const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${feature}'`).join(',')
+
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS db_meta (
@@ -208,6 +213,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  normalized_usage_json TEXT,
   tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
@@ -312,6 +318,13 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
  * transient grading queue. At most one open snapshot per conversation window
  * (first user message + response, upgraded by one substantive follow-up).
  *
+ * One snapshot records one shot, not one provider turn: `anchor_message_id`
+ * names the visible user message the window currently answers, so the later
+ * turns that re-answer that same message   an invisible continuation (search
+ * nudge, Mermaid repair, incomplete-turn recovery, specification
+ * continuation) or a resumed retry   refresh the window in place instead of
+ * registering as a follow-up.
+ *
  * thread_id deliberately does NOT cascade-delete: thread deletion is the close
  * signal, and the raw prompt/response payload must survive deletion long
  * enough for the judge to score it. Once scored, the row is hard-deleted and
@@ -336,6 +349,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   user_message_text     TEXT NOT NULL DEFAULT '',
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
+  anchor_message_id     TEXT,
   cost_usd       REAL,
   cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
@@ -645,10 +659,15 @@ CREATE TABLE IF NOT EXISTS turn_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_thread ON turn_checkpoints(project_id, thread_id);
 
 -- ─── Active Turns ────────────────────────────────────────────────────
+-- owner_pid records the CodeInOven process running the turn, so a second
+-- instance sharing this config root can tell an orphaned turn from a turn a
+-- sibling is still working on. NULL only for rows written before that column
+-- existed.
 CREATE TABLE IF NOT EXISTS active_turns (
   project_id TEXT NOT NULL,
   thread_id  TEXT NOT NULL,
   turn_id    TEXT,
+  owner_pid  INTEGER,
   PRIMARY KEY (project_id, thread_id)
 );
 
@@ -658,8 +677,9 @@ CREATE TABLE IF NOT EXISTS assignment_versions (
   version              INTEGER NOT NULL,
   project_id           TEXT NOT NULL,
   coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  spec_id              TEXT NOT NULL,
-  spec_version         INTEGER NOT NULL,
+  -- NULL when the Assignment was decomposed from the conversation instead of a specification.
+  spec_id              TEXT,
+  spec_version         INTEGER,
   status               TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
   data                 TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
@@ -750,7 +770,7 @@ export const USAGE_EVENTS_COLUMNS_SQL = `
   project_name          TEXT,
   feature_call_id       TEXT NOT NULL,
   attempt               INTEGER NOT NULL CHECK(attempt >= 1),
-  feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
+  feature               TEXT NOT NULL CHECK(feature IN (${USAGE_EVENT_FEATURE_LIST_SQL})),
   harness_id            TEXT,
   account_id            TEXT,
   provider_id           TEXT,

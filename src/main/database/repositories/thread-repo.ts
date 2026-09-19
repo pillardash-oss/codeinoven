@@ -535,9 +535,9 @@ export class ThreadRepo {
     return thread
   }
 
-  /** Every non-archived thread currently flagged as drafting, regardless of
-   *  any listing quota. Used by the workspace to rescue drafting threads that
-   *  fell outside a bounded first-paint hydration slice. */
+  /** Every non-archived user-facing thread currently flagged as drafting,
+   *  regardless of any listing quota. Used by the workspace to rescue drafting
+   *  threads that fell outside a bounded first-paint hydration slice. */
   async listDraftingThreadsViaWorker(): Promise<Thread[]> {
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads
@@ -546,7 +546,6 @@ export class ThreadRepo {
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
          AND coordinator_thread_id IS NULL
-         AND assignment_id IS NULL
        ORDER BY last_activity DESC, id ASC`,
       [],
       0
@@ -692,9 +691,16 @@ export class ThreadRepo {
 
   /**
    * Recent threads per project for bounded sidebar hydration: at most
-   * `quotaByProject(projectId)` unarchived, non-orchestration rows per project
-   * (newest activity first), fetched in a single window-function query so one
-   * high-traffic project cannot evict other projects' threads from the slice.
+   * `quotaByProject(projectId)` user-facing rows per project (newest activity
+   * first), fetched in a single window-function query so one high-traffic
+   * project cannot evict other projects' threads from the slice.
+   *
+   * Orchestration *children* (workers and auditors) stay out of the slice so a
+   * twelve-task Assignment cannot flood it, but an Assignment **coordinator** is
+   * a user-facing thread and is listed like any other, exactly as
+   * `isOrchestrationChildThread` defines it. Pinning always surfaces a row: a
+   * pinned thread is kept even when it is a child, and it never competes for a
+   * quota slot, because the Pinned slice must show every pin the user made.
    */
   async listRecentPerProjectViaWorker(
     quotaByProject: (projectId: string) => number,
@@ -703,8 +709,9 @@ export class ThreadRepo {
     const quotas = await this.projectQuotasViaWorker()
     // Per-project quotas default to the callback value; the inbox project
     // overrides it with its configured thread_limit (the Chats bucket size).
-    // Unread threads bypass the quota entirely: a stale-but-unread row must
-    // never be hidden from the first-paint slice, whatever its age.
+    // Unread, drafting, and pinned threads bypass the quota entirely: a
+    // stale-but-unread or explicitly pinned row must never be hidden from the
+    // first-paint slice, whatever its age.
     const cases = [...quotas.entries()]
       .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
       .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
@@ -720,11 +727,15 @@ export class ThreadRepo {
          ) AS rn
          FROM threads
          WHERE archived = 0
-           AND assignment_role IS NOT 'worker'
-           AND achievement_role IS NOT 'auditor'
-           AND coordinator_thread_id IS NULL
-           AND assignment_id IS NULL
-       ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1
+           AND (
+             pinned = 1
+             OR (
+               assignment_role IS NOT 'worker'
+               AND achievement_role IS NOT 'auditor'
+               AND coordinator_thread_id IS NULL
+             )
+           )
+       ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1 OR pinned = 1
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [],
       0

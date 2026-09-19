@@ -2,7 +2,7 @@
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Check, Clock, Pin, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
@@ -10,6 +10,12 @@
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    threadHoverPopoverStyle,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS
+  } from '$lib/components/shared/thread-hover-popover-layout'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -19,6 +25,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -34,6 +41,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
     coordinatorHasActiveDelegates,
+    coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isThreadWorking,
@@ -276,11 +284,6 @@
     showCopyId: () => true
   })
 
-  const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 290
-  const POPOVER_GAP = 8
-  const VIEWPORT_MARGIN = 8
-
   // ─── Status vs Stage ──────────────────────────────────────────────────────
   //
   //   Status  = overall thread state for the dot indicator
@@ -320,8 +323,15 @@
     rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
 
-  /** Orchestration worker/auditor threads stay silent: never presented as unread. */
-  let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+  /** Orchestration worker/auditor threads stay silent: never presented as unread.
+   *  A coordinator row, though, stays unread while any of its non-reporting
+   *  workers is unread: it clears only once the coordinator itself and all of
+   *  its workers are read. Reporting workers hold nothing open, since their
+   *  progress shows through the Assignment lifecycle instead. */
+  let effectiveRead = $derived(
+    isOrchestrationChildThread(thread) ||
+      (thread.read && !coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))
+  )
 
   /** A finished temporary (side) chat on this thread is still unread   the
    *  parent thread's own `read` flag never changes for side chats, so the
@@ -353,6 +363,9 @@
       : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
   )
   let isRetryPaused = $derived(thread.status === 'working-paused')
+  /** Another CodeInOven instance owns this thread's in-flight turn, so its live
+   *  output and its stop control are there rather than here. */
+  let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
@@ -504,6 +517,17 @@
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered)
 
+  /** Tooltip for the state badge: the only place a collapsed row can explain
+   *  itself, since the badge is a bare dot or spinner. */
+  let badgeTitle = $derived.by((): string => {
+    if (isForeignRun) return 'Running in another instance'
+    if (isRetryPaused || isWorking) return stageLabel
+    if (thread.status === 'spec') return 'Spec ready'
+    if (threadState === 'scheduled') return 'Scheduled'
+    if (threadState === 'temporary-unread') return 'Temporary chat unread'
+    return threadState
+  })
+
   /** Maps ThreadState to StatusBadge props   all colours flow through the
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
@@ -522,7 +546,12 @@
         case 'todo':
           return { stage: 'todo' }
         case 'working':
-          return { variant: 'spinner', stage: 'working' }
+          // Work owned by another instance keeps the working colour but gets a
+          // distinct, still icon: a spinner here would promise live output this
+          // window never receives.
+          return isForeignRun
+            ? { variant: 'icon', icon: AppWindow, tone: 'working' }
+            : { variant: 'spinner', stage: 'working' }
         case 'scheduled':
           return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
@@ -566,38 +595,21 @@
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
-  function calculatePopoverPosition(
-    anchor: DOMRect,
-    width: number,
-    height: number
-  ): { x: number; y: number } {
-    const availableRight = window.innerWidth - anchor.right - VIEWPORT_MARGIN
-    const availableLeft = anchor.left - VIEWPORT_MARGIN
-    const placeRight = availableRight >= width || availableRight >= availableLeft
-    const preferredX = placeRight ? anchor.right + POPOVER_GAP : anchor.left - POPOVER_GAP - width
-    const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
-    const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN)
-
-    return {
-      x: Math.max(VIEWPORT_MARGIN, Math.min(preferredX, maxX)),
-      y: Math.max(VIEWPORT_MARGIN, Math.min(anchor.top, maxY))
-    }
-  }
-
   async function revealPopover(): Promise<void> {
     if (!rowEl || showMenu || !hovered) return
 
-    popoverPos = calculatePopoverPosition(
+    const size = resolveThreadHoverPopoverSize()
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
-      POPOVER_WIDTH,
-      POPOVER_ESTIMATED_HEIGHT
+      size.width,
+      size.height
     )
     showPopover = true
     await tick()
 
     if (!rowEl || !popoverEl || showMenu || !hovered) return
     const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculatePopoverPosition(
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
       popoverRect.width,
       popoverRect.height
@@ -671,17 +683,7 @@
             icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
-            title={isRetryPaused
-              ? stageLabel
-              : isWorking
-                ? stageLabel
-                : thread.status === 'spec'
-                  ? 'Spec ready'
-                  : threadState === 'scheduled'
-                    ? 'Scheduled'
-                    : threadState === 'temporary-unread'
-                      ? 'Temporary chat unread'
-                      : threadState}
+            title={badgeTitle}
           />
         {:else}
           <span
@@ -821,9 +823,12 @@
       : isBusyIndicator
         ? isRetryPaused
           ? 'border-warning bg-warning/5 hover:bg-elevated'
-          : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
+          : isForeignRun
+            ? 'border-thread-working bg-thread-working/5 hover:bg-elevated'
+            : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
+    aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
     onclick={() => {
       showPopover = false
@@ -862,17 +867,7 @@
               icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
-              title={isRetryPaused
-                ? stageLabel
-                : isWorking
-                  ? stageLabel
-                  : thread.status === 'spec'
-                    ? 'Spec ready'
-                    : threadState === 'scheduled'
-                      ? 'Scheduled'
-                      : threadState === 'temporary-unread'
-                        ? 'Temporary chat unread'
-                        : threadState}
+              title={badgeTitle}
             />
           {:else}
             <span
@@ -1061,10 +1056,17 @@
     <Portal>
       <div
         {@attach capturePopoverElement}
-        class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
-        style="left: {popoverPos.x}px; top: {popoverPos.y}px"
+        class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
+        style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
       >
-        <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
+        <ThreadHoverPopover
+          {thread}
+          {isWorking}
+          {isRetryPaused}
+          {stageLabel}
+          {threadState}
+          {isForeignRun}
+        />
       </div>
     </Portal>
   {/if}

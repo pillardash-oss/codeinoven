@@ -40,11 +40,12 @@ const NEXT_STAGE: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycle
   assignment: 'achievement'
 }
 
-/** A stage that must be enabled for the given dependent stage to run. Notably
- *  Assignment and Achievement both need an approved Spec before they can start. */
+/** A stage that must be enabled for the given dependent stage to run. Assignment
+ *  stands alone: it decomposes the approved Spec when one exists and the thread
+ *  conversation otherwise. Achievement still needs an approved Spec because its
+ *  audit loop judges the goal against that contract. */
 const STAGE_DEPENDENCIES: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycleStage[]>> =
   {
-    assignment: ['spec'],
     achievement: ['spec']
   }
 

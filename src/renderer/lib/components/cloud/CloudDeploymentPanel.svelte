@@ -19,7 +19,11 @@
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { pathToFileUrl } from '$lib/mime'
-  import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
+  import {
+    cloudDeployState,
+    CloudDeployState,
+    type CloudDeployMonitorTarget
+  } from '$lib/stores/cloud-deploy.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -58,6 +62,22 @@
 
   /** Log tail kept inline in the diagnosis prompt; the full log rides along as a pasted-text attachment. */
   const INLINE_LOG_EXCERPT_CHARS = 24_000
+
+  /**
+   * Cadence of the automatic status pass while nothing is building. A container's
+   * status only changes while a deployment runs, so the idle poll stays slow and
+   * the provider API quiet. Opening the panel and the manual refresh button both
+   * re-read immediately instead of waiting for the next tick.
+   */
+  const AUTOMATIC_REFRESH_INTERVAL_MS = 5 * 60_000
+
+  /**
+   * Cadence used while at least one container reports `building`. A build settles
+   * within seconds or minutes, so a container that is still building is polled on
+   * this fast cadence until it settles; otherwise a finished (or failed) deploy
+   * would sit on "Building" for the whole idle interval.
+   */
+  const BUILDING_REFRESH_INTERVAL_MS = 20_000
 
   /** When set, the in-app detail view replaces the container list. */
   let selectedContainer = $state<CloudDeploymentContainer | null>(null)
@@ -102,6 +122,14 @@
 
   const configured = $derived(providers.length > 0)
 
+  /**
+   * The containers this project monitors, as monitoring targets. Read from the
+   * saved config rather than from the provider overview so statuses start loading
+   * as soon as the config is known, instead of waiting for the overview round trip
+   * to reveal which containers exist.
+   */
+  const monitoredContainers = $derived((config?.project.containers ?? []).map(toMonitorTarget))
+
   function openConfigSheet(mode: 'provider' | 'container'): void {
     configSheetMode = mode
     configSheetOpen = true
@@ -133,14 +161,15 @@
         // status changes show up without a manual reload. Only the
         // status-bearing fields are overlaid so the project's label/id are
         // never replaced by the provider's.
-        const statusEntry = cloudDeployState.containerStatuses[
-          CloudDeployState.containerKey(
-            projectId,
-            container.providerKind,
-            container.id,
-            container.accountId
-          )
-        ]
+        const statusEntry =
+          cloudDeployState.containerStatuses[
+            CloudDeployState.containerKey(
+              projectId,
+              container.providerKind,
+              container.id,
+              container.accountId
+            )
+          ]
         if (statusEntry) {
           byKey[key] = {
             ...container,
@@ -156,6 +185,22 @@
     }
     return Object.values(byKey)
   })
+
+  /**
+   * The containers the panel currently shows as building, as monitoring targets.
+   * Read by the build tracker, which runs outside any tracking scope, so this reacts
+   * where it is meant to: through {@link hasBuilding}.
+   */
+  const buildingTargets = $derived(
+    containers.filter((container) => container.status === 'building').map(toMonitorTarget)
+  )
+
+  /**
+   * Whether any container is building, kept as a boolean so the tracking effect
+   * restarts when building starts or stops and never on the status writes that
+   * tracking itself produces.
+   */
+  const hasBuilding = $derived(buildingTargets.length > 0)
 
   /** Containers grouped by provider, then by project name. */
   const containersByProvider = $derived.by(() => {
@@ -278,23 +323,109 @@
     }
   }
 
-  /** True while the home screen refresh is running (spins the icon). */
+  /** True while a manual refresh is running (spins the icon). */
   let refreshingAll = $state(false)
 
+  /** The monitoring shape of a container snapshot. */
+  function toMonitorTarget(container: CloudDeploymentContainer): CloudDeployMonitorTarget {
+    return {
+      providerKind: container.providerKind,
+      id: container.id,
+      accountId: container.accountId
+    }
+  }
+
+  /**
+   * One full monitoring pass: every provider overview, then each monitored
+   * container's authoritative status. The overview alone is not enough, because
+   * providers report a coarse runtime state there (Coolify maps most applications
+   * to `unknown`) and only the per-container read knows about a build.
+   *
+   * A regular pass serves a fresh cache and only revalidates entries past their
+   * TTL; `force` re-reads everything now, which is what the refresh button needs.
+   */
+  async function refreshPass(force: boolean): Promise<void> {
+    for (const kind of providers) {
+      try {
+        await cloudDeployState.ensureOverview(projectId, kind, force)
+      } catch {
+        // The store surfaces a tailored message via its error channel; the panel
+        // keeps stale cached data (if any) on screen.
+      }
+    }
+    await cloudDeployState.monitorContainers(projectId, monitoredContainers, force)
+  }
+
+  /**
+   * Manual refresh: re-read every overview and every container status right away,
+   * instead of waiting out the automatic cadence.
+   */
   async function refreshAll(): Promise<void> {
     if (refreshingAll) return
     refreshingAll = true
     try {
-      for (const kind of providers) {
-        try {
-          await cloudDeployState.ensureOverview(projectId, kind, true)
-        } catch {
-          // The store surfaces a tailored message via its error channel; the
-          // panel keeps stale cached data (if any) on screen.
-        }
-      }
+      await refreshPass(true)
     } finally {
       refreshingAll = false
+    }
+  }
+
+  /**
+   * Start the idle monitoring loop and return its teardown.
+   *
+   * The loop reads its inputs where they are used, inside its own scheduled
+   * cycles, never while the effect that starts it runs: a pass touches the store's
+   * reactive caches, and a synchronous read there would make every status write a
+   * dependency of that effect, restarting the schedule on each write. Cycles are
+   * chained timeouts rather than an interval, so a slow pass can never overlap the
+   * next one, and the first cycle runs immediately so the panel never opens on
+   * "Unknown" pills.
+   */
+  function startStatusMonitoring(live: boolean): () => void {
+    let cancelled = false
+    let pendingRun: ReturnType<typeof setTimeout> | undefined
+
+    const cycle = async (): Promise<void> => {
+      await refreshPass(false)
+      if (cancelled || !live) return
+      pendingRun = setTimeout(() => void cycle(), AUTOMATIC_REFRESH_INTERVAL_MS)
+    }
+
+    pendingRun = setTimeout(() => void cycle(), 0)
+    return () => {
+      cancelled = true
+      if (pendingRun !== undefined) clearTimeout(pendingRun)
+    }
+  }
+
+  /**
+   * Track a running build to its end and return the teardown.
+   *
+   * While the list shows at least one container as building, just those containers
+   * are re-read, forced, on {@link BUILDING_REFRESH_INTERVAL_MS}; a build settles
+   * within seconds or minutes, and waiting out the idle interval would leave a
+   * finished or failed deploy sitting on "Building". Driven by the displayed
+   * status rather than by a pass result, so a build that only a background
+   * revalidation discovers is still followed to its end.
+   */
+  function startBuildTracking(): () => void {
+    let cancelled = false
+    let pendingRun: ReturnType<typeof setTimeout> | undefined
+
+    const tick = async (): Promise<void> => {
+      const building = buildingTargets
+      if (building.length === 0) return
+      await cloudDeployState.monitorContainers(projectId, building, true)
+      if (cancelled) return
+      pendingRun = setTimeout(() => void tick(), BUILDING_REFRESH_INTERVAL_MS)
+    }
+
+    // The pass that surfaced the build has just read these containers, so the first
+    // follow-up waits a whole fast interval instead of polling them twice.
+    pendingRun = setTimeout(() => void tick(), BUILDING_REFRESH_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      if (pendingRun !== undefined) clearTimeout(pendingRun)
     }
   }
 
@@ -379,13 +510,27 @@
     for (const kind of providers) void cloudDeployState.ensureOverview(projectId, kind)
   })
 
+  /**
+   * Load every monitored container's status as soon as the panel is shown, then
+   * keep it fresh on the idle cadence. Restarts whenever the monitored container
+   * set changes (added, edited or removed) and whenever live updates are toggled,
+   * so opening or resuming the panel never leaves the list on a stale "Unknown".
+   */
+  $effect(() => {
+    if (!configured) return
+    if (monitoredContainers.length === 0) return
+    return startStatusMonitoring(liveUpdates)
+  })
+
+  /**
+   * While anything is building, follow it on the fast cadence until it settles.
+   * The effect keys off a boolean, so it restarts when building starts or stops
+   * and never on the status writes the tracking itself produces.
+   */
   $effect(() => {
     if (!liveUpdates) return
-    const timer = setInterval(() => {
-      for (const kind of providers) void cloudDeployState.ensureOverview(projectId, kind)
-      void cloudDeployState.monitorContainers(projectId, containers)
-    }, 60_000)
-    return () => clearInterval(timer)
+    if (!hasBuilding) return
+    return startBuildTracking()
   })
 
   function openContainer(container: CloudDeploymentContainer): void {
@@ -637,8 +782,12 @@ ${fence}`
                 <button
                   type="button"
                   class="-m-0.5 shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-danger/10"
-                  title="Dismiss {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]} access error"
-                  aria-label="Dismiss {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]} access error"
+                  title="Dismiss {PROVIDER_LABELS[
+                    kind as CloudDeploymentProviderKind
+                  ]} access error"
+                  aria-label="Dismiss {PROVIDER_LABELS[
+                    kind as CloudDeploymentProviderKind
+                  ]} access error"
                   onclick={() => dismissAccessError(kind)}
                 >
                   <X size={11} />
@@ -699,7 +848,9 @@ ${fence}`
                               />
                             {/if}
                           </div>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+                          <div
+                            class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed"
+                          >
                             <span class="truncate font-mono">{container.id}</span>
                             {#if container.updatedAt}
                               <span class="shrink-0">· {relativeTime(container.updatedAt)}</span>
@@ -819,7 +970,7 @@ ${fence}`
           class="ml-1 h-7"
           aria-label="Toggle live status updates"
           title={liveUpdates
-            ? 'Live updates on   refreshing every minute'
+            ? 'Live updates on   refreshing every 5 minutes'
             : 'Live updates paused   refresh manually'}
         />
       </div>

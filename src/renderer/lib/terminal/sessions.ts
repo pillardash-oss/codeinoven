@@ -1,4 +1,5 @@
-import { FitAddon, Ghostty, Terminal, UrlRegexProvider, type ITheme } from 'ghostty-web'
+import type { FitAddon, Ghostty, ITheme, Terminal } from 'ghostty-web'
+import { SvelteMap } from 'svelte/reactivity'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
@@ -7,6 +8,7 @@ import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
+import { loadGhosttyWeb } from './runtime'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
 
@@ -18,6 +20,30 @@ export interface TerminalAttachOptions {
    *  focused clicks on it. */
   focus?: boolean
 }
+
+/**
+ * Where a respawned shell must start. The panel that attached the session owns
+ * this and keeps it current, and the session *reads* it rather than copying it,
+ * so a project-scoped terminal can follow the open thread and scope for its
+ * next respawn without ever re-attaching (a re-attach would refit the grid and
+ * repaint a canvas whose session never moved).
+ */
+export interface TerminalSpawnBinding {
+  threadId: string
+  scopeBucketId?: string
+}
+
+/**
+ * Scope root each live shell was actually started in, keyed by terminal id.
+ *
+ * `session.scopeBucketId` records what the *panel* asked for on its last
+ * attach; this records what the *running shell* was spawned with, and only a
+ * real spawn changes it. A panel renders the stale-scope notice by comparing
+ * the two, so the notice appears exactly while the shell is sitting in another
+ * worktree and clears the moment the shell is respawned there. Reactive so the
+ * panel can derive from it.
+ */
+export const terminalSpawnScopes = new SvelteMap<string, string | null>()
 
 export interface TerminalSession {
   id: string
@@ -32,6 +58,10 @@ export interface TerminalSession {
   threadId: string | null
   /** Scope bucket captured with the thread binding, or null for the project root. */
   scopeBucketId: string | null
+  /** Live spawn binding from the owning panel, when it supplied one. Read at
+   *  respawn time so a thread switch retargets the next shell without the
+   *  panel having to detach and re-attach the session. */
+  binding?: TerminalSpawnBinding
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
@@ -158,18 +188,42 @@ class TerminalSessionManager {
     session: TerminalSession,
     container: HTMLDivElement,
     projectId: string,
-    threadId: string,
-    scopeBucketId?: string,
+    binding: TerminalSpawnBinding,
     options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     fitSession(session)
-    session.threadId = threadId
-    session.scopeBucketId = scopeBucketId ?? null
-    await this.ensurePty(session, projectId, threadId, scopeBucketId)
+    session.binding = binding
+    session.threadId = binding.threadId
+    session.scopeBucketId = binding.scopeBucketId ?? null
+    const nextScope = binding.scopeBucketId ?? null
+    // A panel that survived a thread switch into another scope keeps its live
+    // shell at the old root. Restarting it here is what makes toggling the
+    // panel enough to land on the open thread's worktree   the user never has
+    // to close the tab and open a new one. Only a real scope move restarts a
+    // shell: any other attach reuses it untouched.
+    if (
+      session.kind === 'shell' &&
+      session.ptySpawned &&
+      terminalSpawnScopes.get(session.id) !== nextScope
+    ) {
+      session.term.write('\r\n\x1b[90m[shell restarted for the open thread scope]\x1b[0m\r\n')
+      session.ptySpawned = false
+      session.respawnCount = 0
+    }
+    await this.ensurePty(session, projectId, binding.threadId, binding.scopeBucketId)
     this.focusIfRequested(session, options)
+  }
+
+  /** Where a respawn must start: the live binding its panel keeps current, else
+   *  what the session captured when it attached. */
+  private spawnTargetOf(session: TerminalSession): TerminalSpawnBinding {
+    return {
+      threadId: session.binding?.threadId ?? session.threadId ?? '',
+      scopeBucketId: session.binding?.scopeBucketId ?? session.scopeBucketId ?? undefined
+    }
   }
 
   async attachAction(
@@ -199,6 +253,7 @@ class TerminalSessionManager {
           session.term.rows,
           scopeBucketId
         )
+        terminalSpawnScopes.set(session.id, scopeBucketId ?? null)
       } catch (error) {
         session.ptySpawned = false
         throw error
@@ -217,10 +272,12 @@ class TerminalSessionManager {
 
   private getRuntime(): Promise<Ghostty> {
     if (!this.runtime) {
-      this.runtime = Ghostty.load().catch((error: unknown) => {
-        this.runtime = undefined
-        throw error
-      })
+      this.runtime = loadGhosttyWeb()
+        .then(({ Ghostty }) => Ghostty.load())
+        .catch((error: unknown) => {
+          this.runtime = undefined
+          throw error
+        })
     }
     return this.runtime
   }
@@ -247,6 +304,9 @@ class TerminalSessionManager {
         session.term.rows,
         scopeBucketId
       )
+      // Recorded only after the spawn succeeded: an earlier scope here would
+      // tell a panel that its shell is current when it is not.
+      terminalSpawnScopes.set(session.id, scopeBucketId ?? null)
     } catch (error) {
       session.ptySpawned = false
       throw error
@@ -255,7 +315,8 @@ class TerminalSessionManager {
 
   private async create(id: string): Promise<TerminalSession> {
     const ghostty = await this.getRuntime()
-    patchSelectionCopy()
+    const { FitAddon, Terminal, UrlRegexProvider } = await loadGhosttyWeb()
+    await patchSelectionCopy()
     const term = new Terminal({
       ghostty,
       cursorBlink: true,
@@ -369,12 +430,8 @@ class TerminalSessionManager {
       session.respawnCount += 1
       session.ptySpawned = false
       try {
-        await this.ensurePty(
-          session,
-          session.projectId,
-          session.threadId ?? '',
-          session.scopeBucketId ?? undefined
-        )
+        const target = this.spawnTargetOf(session)
+        await this.ensurePty(session, session.projectId, target.threadId, target.scopeBucketId)
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.
         respawnTimer = setTimeout(() => {
@@ -440,6 +497,7 @@ class TerminalSessionManager {
     if (session) {
       session.term.dispose()
       this.sessions.delete(id)
+      terminalSpawnScopes.delete(id)
     }
     // The focused terminal is gone — make sure the app no longer thinks a
     // terminal is focused so non-mac Ctrl+W resumes closing surfaces.

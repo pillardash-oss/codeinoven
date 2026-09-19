@@ -26,6 +26,7 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
     existing.type === 'text' || existing.type === 'reasoning' ? existing.text : ''
   const arrivingText: string =
     incoming.type === 'text' || incoming.type === 'reasoning' ? incoming.text : ''
+  const merged = { ...incoming, ...streamedSummaryPatch(existing, incoming) }
   if (
     incoming.type === 'reasoning' &&
     arrivingText !== streamedText &&
@@ -36,7 +37,7 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
     // the snapshot is strictly more complete. Adopting its order cannot lose
     // streamed text, and it is the only way a scrambled trace gets cleaned up
     // when the final reasoning block arrives.
-    return incoming
+    return merged
   }
   if (
     (arrivingText.length < streamedText.length && streamedText.startsWith(arrivingText)) ||
@@ -45,9 +46,89 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
     // Stale, shortened, or summary-only reasoning snapshot: keep the
     // accumulated text and take the snapshot's newer metadata. Reasoning is an
     // append-only stream; a divergent snapshot is never allowed to erase it.
-    return { ...incoming, text: streamedText }
+    return { ...merged, text: streamedText }
   }
-  return incoming
+  return merged
+}
+
+/**
+ * The summary to carry across a reasoning snapshot.
+ *
+ * Reasoning summaries arrive on their own channel (Codex
+ * `item/reasoning/summaryTextDelta`) and, like reasoning text, are append-only.
+ * A completion snapshot routinely omits the summary the deltas already
+ * delivered, or echoes a truncated prefix of it, so adopting the snapshot
+ * verbatim would erase the summary the user watched stream. The accumulated
+ * summary wins unless the snapshot carries a genuinely more complete value.
+ *
+ * Returns an empty patch whenever the snapshot's own summary should stand, so
+ * spreading it over the incoming part is a no-op.
+ */
+function streamedSummaryPatch(existing: AgentPart, incoming: AgentPart): { summary?: string } {
+  if (existing.type !== 'reasoning' || incoming.type !== 'reasoning') return {}
+  const streamed = existing.summary ?? ''
+  // Nothing streamed to protect, or the snapshot already restates it.
+  if (streamed === '') return {}
+  const arriving = incoming.summary ?? ''
+  if (streamed === arriving) return {}
+  if (streamFitsSnapshot(streamed, arriving)) return {}
+  if (arriving.length < streamed.length && streamed.startsWith(arriving)) {
+    return { summary: streamed }
+  }
+  if (!arriving.startsWith(streamed)) return { summary: streamed }
+  return {}
+}
+
+/**
+ * Append one streamed delta to the field it targets on an accumulated part.
+ * Shared by the main-process fold, the durable turn-stream fold, and the
+ * renderer so all three assemble streamed parts identically.
+ *
+ * Codex streams a reasoning item on two channels: `item/reasoning/textDelta`
+ * carries the reasoning text and `item/reasoning/summaryTextDelta` carries the
+ * concise summary. Collapsing both into `text` made the same sentences render
+ * twice in the thinking block (once as the body, once under "Thinking
+ * summary"), so each channel now writes its own field.
+ */
+export function appendPartDelta(part: AgentPart, field: string, delta: string): AgentPart {
+  if (delta === '') return part
+  if (field === 'text' && (part.type === 'text' || part.type === 'reasoning')) {
+    return { ...part, text: `${part.text}${delta}` }
+  }
+  if (field === 'summary' && part.type === 'reasoning') {
+    return { ...part, summary: `${part.summary ?? ''}${delta}` }
+  }
+  return part
+}
+
+/**
+ * True when a reasoning part's summary repeats the body it accompanies, so
+ * rendering both would show the same sentences twice. Harness streams that
+ * collapse their reasoning-text and reasoning-summary channels into one field
+ * produce this shape, and sessions persisted before that collapse was fixed
+ * still carry it.
+ *
+ * Comparison ignores whitespace and Markdown emphasis markers: Codex wraps
+ * every summary line in `**` and joins the lines with `\n`, while the same
+ * sentences arrive concatenated in the body, so a literal string compare would
+ * miss the duplicate. Only full equality counts   a genuinely shorter summary
+ * whose words also appear somewhere in a long body is still a real summary and
+ * must keep rendering.
+ */
+export function reasoningSummaryRepeatsBody(text: string, summary: string): boolean {
+  const body = normalizeReasoningComparison(text)
+  const condensed = normalizeReasoningComparison(summary)
+  if (body === '' || condensed === '') return false
+  return body === condensed
+}
+
+/** Strip the whitespace and Markdown emphasis markers that differ between a
+ *  reasoning body and its summary without changing the words compared. Only
+ *  `*` and whitespace are removed: they are exactly what separates the two
+ *  copies of the Codex shape, while leaving identifiers (`snake_case`) and
+ *  inline code untouched so a real summary is never mistaken for a duplicate. */
+function normalizeReasoningComparison(value: string): string {
+  return value.replace(/[*\s]+/gu, '')
 }
 
 /**

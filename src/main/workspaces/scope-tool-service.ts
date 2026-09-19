@@ -1,31 +1,43 @@
 import { randomUUID } from 'crypto'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../lib/types'
 import type {
-  GitMainSyncDirection,
-  GitMainSyncResult,
   GitPullStrategy,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeerTarget,
+  GitSyncResult,
   PermissionLevel,
   ScopeAgentConfirmationRequest,
   ScopeBoard,
   ScopeBoardChangedEvent,
   ScopeBucket,
-  ScopeEnvironmentMode,
-  ScopeLifecycleSnapshot,
-  ScopeMergeMode,
-  ScopeSetupCommandSpec,
   ScopeTarget,
   ScopeToolAction,
-  ScopeWorktreeHealth,
   ScopeWorktreeProgress,
   ScopeWorktreeProgressEvent
 } from '../../lib/types'
-import { SCOPE_TOOL_ACTIONS, SCOPE_TOOL_DESTRUCTIVE_ACTIONS } from '../../lib/types'
+import { SCOPE_TOOL_DESTRUCTIVE_ACTIONS } from '../../lib/types'
 import { APP_SCOPE_UTILITY_ID } from '../../lib/utility-ids'
 import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import type { ScopeThreadLifecycle, ScopeWorktreeService } from '../git/scope-worktree-service'
+import { parseScopeToolInput } from './scope-tool/scope-tool-input'
+import type { ScopeSummary, ScopeToolCall } from './scope-tool/scope-tool-types'
+import {
+  conflictNextStep,
+  destructiveConsequences,
+  destructiveSummary
+} from './scope-tool/scope-tool-destructive'
+import { describeScope, readConflicts, summarizeBucket } from './scope-tool/scope-tool-reads'
+import type { ScopeReadDeps } from './scope-tool/scope-tool-reads'
+import {
+  requireScopeBucket,
+  resolveCustomScopeBucket,
+  resolveScopeBucket
+} from './scope-tool/scope-tool-resolution'
+
+export { parseScopeToolInput }
 
 /**
  * One agent turn's identity, as far as scope work is concerned. The gateway
@@ -44,15 +56,16 @@ export interface ScopeToolContext {
 /** Git operations the tool needs, supplied by the shared Git service. */
 export interface ScopeToolGit {
   getStatus(projectPath: string): Promise<GitStatus>
-  syncMain(
+  syncWith(
     projectPath: string,
     options: {
-      direction: GitMainSyncDirection
-      mainPath: string
+      direction: GitSyncDirection
+      /** The other end of the sync; the agent's scope tool always names the project root. */
+      peer: GitSyncPeerTarget
       strategy: GitPullStrategy
       token?: string
     }
-  ): Promise<GitMainSyncResult>
+  ): Promise<GitSyncResult>
 }
 
 export interface ScopeToolServiceOptions {
@@ -68,7 +81,7 @@ export interface ScopeToolServiceOptions {
   onBoardChanged?: (event: ScopeBoardChangedEvent) => void
   /** Stream a worktree job's stages, tagged as agent-originated. */
   onProgress?: (event: ScopeWorktreeProgressEvent) => void
-  /** Vaulted project credential, used to refresh main before a `from-main` sync. */
+  /** Vaulted project credential, used to refresh the peer branch before a `from` sync. */
   resolveGitToken?: (projectId: string) => Promise<string | undefined>
   /** Configured pull strategy; `ask` is already resolved to a concrete one. */
   defaultPullStrategy?: () => Promise<GitPullStrategy>
@@ -79,82 +92,7 @@ export interface ScopeToolServiceOptions {
 /** Confirmation wait when the options do not name one: long enough to answer. */
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000
 
-const MAX_TITLE_LENGTH = 120
-const MAX_NAME_LENGTH = 80
-const MAX_PATH_LENGTH = 4096
-const MAX_REFERENCE_LENGTH = 200
-
-const STRATEGIES: readonly GitPullStrategy[] = ['merge', 'rebase', 'ff-only']
-const MERGE_MODES: readonly ScopeMergeMode[] = [
-  'merge-keep',
-  'merge-delete',
-  'merge-move-to-default'
-]
-const ENVIRONMENT_MODES: readonly ScopeEnvironmentMode[] = ['copy', 'symlink']
-const THREAD_DISPOSITIONS = ['move-to-default', 'delete'] as const
-
-/** Every field the scope capability accepts; anything else is rejected, never ignored. */
-const SCOPE_TOOL_INPUT_KEYS: ReadonlySet<string> = new Set([
-  'action',
-  'scope',
-  'title',
-  'name',
-  'baseBranch',
-  'runSetup',
-  'environmentMode',
-  'setupCommands',
-  'attachThread',
-  'sourcePath',
-  'strategy',
-  'mode',
-  'target',
-  'deleteBranch',
-  'threads',
-  'confirm'
-])
-
 const DESTRUCTIVE_ACTIONS: ReadonlySet<string> = new Set(SCOPE_TOOL_DESTRUCTIVE_ACTIONS)
-
-type ThreadDisposition = (typeof THREAD_DISPOSITIONS)[number]
-
-/** One scope as the tool reports it: enough to choose a target for the next call. */
-interface ScopeSummary {
-  id: string
-  name: string
-  kind: 'project' | 'worktree'
-  /** Working root of the scope (project directory or managed worktree checkout). */
-  path: string
-  branch?: string
-  baseBranch?: string
-  directoryName?: string
-  setupState?: string
-  health?: ScopeWorktreeHealth
-  threadCount: number
-  archived: boolean
-  pinned: boolean
-  /** True for the scope the calling thread is in. */
-  active: boolean
-}
-
-/** Parsed scope capability input. Every field is validated before it is used. */
-interface ScopeToolCall {
-  action: ScopeToolAction
-  scope?: string
-  title?: string
-  name?: string
-  baseBranch?: string
-  runSetup?: boolean
-  environmentMode?: ScopeEnvironmentMode
-  setupCommands?: ScopeSetupCommandSpec[]
-  attachThread?: boolean
-  sourcePath?: string
-  strategy?: GitPullStrategy
-  mode?: ScopeMergeMode
-  target?: string
-  deleteBranch?: boolean
-  threads?: ThreadDisposition
-  confirm?: boolean
-}
 
 /**
  * Agents manage CodeInOven scopes and their managed Git worktrees through this
@@ -192,13 +130,15 @@ export class ScopeToolService {
       case 'list':
         return { scopes: await this.listScopes(context, projectPath) }
       case 'status':
-        return await this.describeScope(
+        return await describeScope(
+          this.readDeps,
           context,
           projectPath,
           this.resolveScope(call.scope, context)
         )
       case 'conflicts':
-        return await this.readConflicts(
+        return await readConflicts(
+          this.readDeps,
           context,
           projectPath,
           this.resolveScope(call.scope, context)
@@ -282,6 +222,11 @@ export class ScopeToolService {
 
   // ─── Reads ────────────────────────────────────────────────────────────────
 
+  /** Read-only dependency bundle shared by the scope read projections. */
+  private get readDeps(): ScopeReadDeps {
+    return { scopes: this.scopes, worktrees: this.worktrees, git: this.git, options: this.options }
+  }
+
   private async listScopes(
     context: ScopeToolContext,
     projectPath: string
@@ -291,7 +236,7 @@ export class ScopeToolService {
     // Sequential on purpose: each health probe runs git in the same repository,
     // and the project's worktree service serialises them anyway.
     for (const bucket of board.buckets) {
-      summaries.push(await this.summarizeBucket(context, projectPath, bucket))
+      summaries.push(await summarizeBucket(this.readDeps, context, projectPath, bucket))
     }
     return summaries
   }
@@ -301,99 +246,12 @@ export class ScopeToolService {
     projectPath: string,
     bucketId: string
   ): Promise<ScopeSummary> {
-    return await this.summarizeBucket(context, projectPath, this.requireBucket(bucketId, context))
-  }
-
-  private async summarizeBucket(
-    context: ScopeToolContext,
-    projectPath: string,
-    bucket: ScopeBucket
-  ): Promise<ScopeSummary> {
-    const threadCount =
-      (await this.options.scopeThreads?.countThreadsInScope(context.projectId, bucket.id)) ?? 0
-    if (bucket.root.kind !== 'worktree') {
-      return {
-        id: bucket.id,
-        name: bucket.name,
-        kind: 'project',
-        path: projectPath,
-        threadCount,
-        archived: bucket.archivedAt !== undefined,
-        pinned: bucket.pinned === true,
-        active: bucket.id === context.scopeBucketId
-      }
-    }
-    return {
-      id: bucket.id,
-      name: bucket.name,
-      kind: 'worktree',
-      path: getScopeRootPath(context.projectId, bucket.root.directoryName),
-      branch: bucket.root.branch,
-      baseBranch: bucket.root.baseBranch,
-      directoryName: bucket.root.directoryName,
-      setupState: bucket.root.setup.state,
-      health: await this.worktrees.health({
-        projectId: context.projectId,
-        scopeBucketId: bucket.id
-      }),
-      threadCount,
-      archived: bucket.archivedAt !== undefined,
-      pinned: bucket.pinned === true,
-      active: bucket.id === context.scopeBucketId
-    }
-  }
-
-  private async describeScope(
-    context: ScopeToolContext,
-    projectPath: string,
-    bucket: ScopeBucket
-  ): Promise<unknown> {
-    const summary = await this.summarizeBucket(context, projectPath, bucket)
-    const healthy = summary.kind !== 'worktree' || summary.health?.category === 'healthy'
-    const git = healthy ? await this.git.getStatus(summary.path) : null
-    return {
-      scope: summary,
-      git,
-      setup:
-        bucket.root.kind === 'worktree'
-          ? {
-              state: bucket.root.setup.state,
-              commands: bucket.root.setup.commands.map((record) => ({
-                index: record.index,
-                executable: record.executable,
-                args: record.args,
-                state: record.state,
-                exitCode: record.exitCode
-              }))
-            }
-          : null,
-      ...(healthy
-        ? {}
-        : {
-            guidance: `This scope’s checkout is unhealthy (${summary.health?.category}). Run ${APP_SCOPE_UTILITY_ID} with action "repair" before working in it.`
-          })
-    }
-  }
-
-  private async readConflicts(
-    context: ScopeToolContext,
-    projectPath: string,
-    bucket: ScopeBucket
-  ): Promise<unknown> {
-    const summary = await this.summarizeBucket(context, projectPath, bucket)
-    if (summary.kind === 'worktree' && summary.health?.category !== 'healthy') {
-      throw new Error(
-        `The scope “${bucket.name}” is unhealthy (${summary.health?.category}), so its conflicts cannot be read. Run ${APP_SCOPE_UTILITY_ID} with action "repair" first.`
-      )
-    }
-    const status = await this.git.getStatus(summary.path)
-    return {
-      scope: { id: bucket.id, name: bucket.name, path: summary.path },
-      conflictState: status.conflictState,
-      conflicted: status.conflicted,
-      clean: status.clean,
-      ...(status.conflicted.length === 0 ? {} : { next: conflictNextStep(status) })
-    }
+    return await summarizeBucket(
+      this.readDeps,
+      context,
+      projectPath,
+      this.requireBucket(bucketId, context)
+    )
   }
 
   // ─── Writes ───────────────────────────────────────────────────────────────
@@ -528,11 +386,12 @@ export class ScopeToolService {
     }
     const strategy = call.strategy ?? (await this.options.defaultPullStrategy?.()) ?? 'merge'
     const token = await this.options.resolveGitToken?.(context.projectId)
-    const direction: GitMainSyncDirection =
-      call.action === 'sync_from_main' ? 'from-main' : 'to-main'
-    const result = await this.git.syncMain(scopeRoot, {
+    const direction = call.action === 'sync_from_main' ? 'from' : 'to'
+    // The agent's peer is always the project directory, which is exactly what
+    // `action` names ("main" is the branch the project root has checked out).
+    const result = await this.git.syncWith(scopeRoot, {
       direction,
-      mainPath: projectPath,
+      peer: { path: projectPath, label: 'the project root' },
       strategy,
       ...(token === undefined ? {} : { token })
     })
@@ -541,13 +400,13 @@ export class ScopeToolService {
       synced: conflicted.length === 0,
       direction,
       branch: result.branch,
-      mainBranch: result.mainBranch,
+      peerBranch: result.peerBranch,
       ref: result.ref,
       strategy,
       fetched: result.fetched,
       remote: result.remote,
       incoming: result.incoming,
-      mainAhead: result.mainAhead,
+      peerAhead: result.peerAhead,
       conflicted,
       conflictState: result.status.conflictState,
       published: false,
@@ -821,41 +680,12 @@ export class ScopeToolService {
   }
 
   private requireBucket(bucketId: string, context: ScopeToolContext): ScopeBucket {
-    const bucket = this.getBoard(context).buckets.find((candidate) => candidate.id === bucketId)
-    if (!bucket) throw new Error(`Scope no longer exists: ${bucketId}`)
-    return bucket
+    return requireScopeBucket(this.getBoard(context), bucketId)
   }
 
   /** Resolve `scope` by bucket id or display name, defaulting to the caller's scope. */
   private resolveScope(reference: string | undefined, context: ScopeToolContext): ScopeBucket {
-    const board = this.getBoard(context)
-    if (reference === undefined) {
-      const active =
-        board.buckets.find((candidate) => candidate.id === context.scopeBucketId) ??
-        board.buckets.find((candidate) => candidate.id === DEFAULT_SCOPE_BUCKET_ID)
-      if (!active) throw new Error('The project has no scope to act on')
-      return active
-    }
-    const trimmed = reference.trim()
-    const byId = board.buckets.find((candidate) => candidate.id === trimmed)
-    if (byId) return byId
-    const lowered = trimmed.toLowerCase()
-    const named = board.buckets.filter(
-      (candidate) => candidate.name.trim().toLowerCase() === lowered
-    )
-    if (named.length === 1) return named[0]
-    if (named.length > 1) {
-      throw new Error(
-        `Multiple scopes are named “${trimmed}”. Pass the scope id instead: ${named
-          .map((candidate) => candidate.id)
-          .join(', ')}`
-      )
-    }
-    throw new Error(
-      `No scope matches “${trimmed}”. Available scopes: ${board.buckets
-        .map((candidate) => `${candidate.name} (${candidate.id})`)
-        .join(', ')}`
-    )
+    return resolveScopeBucket(this.getBoard(context), reference, context.scopeBucketId)
   }
 
   private resolveCustomScope(
@@ -863,13 +693,7 @@ export class ScopeToolService {
     context: ScopeToolContext,
     verb: string
   ): ScopeBucket {
-    const bucket = this.resolveScope(reference, context)
-    if (bucket.id === DEFAULT_SCOPE_BUCKET_ID) {
-      throw new Error(
-        `The Default scope cannot be ${verb}: it always uses the project directory and has no worktree.`
-      )
-    }
-    return bucket
+    return resolveCustomScopeBucket(this.getBoard(context), reference, context.scopeBucketId, verb)
   }
 
   private requireManagedTarget(
@@ -915,212 +739,4 @@ export class ScopeToolService {
       })
     }
   }
-}
-
-/** How to finish an in-progress merge or rebase after resolving files. */
-function conflictNextStep(status: GitStatus): string {
-  if (status.conflictState === 'rebase') {
-    return 'Resolve each file, stage it with `git add`, then run `git rebase --continue`. Run `git rebase --abort` to give up.'
-  }
-  if (status.conflictState === 'merge') {
-    return 'Resolve each file, stage it with `git add`, then run `git commit` to finish the merge. Run `git merge --abort` to give up.'
-  }
-  return 'Resolve each conflicted file and stage it with `git add`.'
-}
-
-function destructiveSummary(
-  call: ScopeToolCall,
-  bucket: ScopeBucket,
-  mergeTargetName?: string
-): string {
-  const label = bucket.root.kind === 'worktree' ? 'the worktree scope' : 'the scope'
-  switch (call.action) {
-    case 'detach_worktree':
-      return `detach the worktree from ${label} “${bucket.name}” (the scope and its branch stay; only the checkout is removed)`
-    case 'delete_scope':
-      return `delete ${label} “${bucket.name}”${call.deleteBranch ? ' and its branch' : ''}`
-    case 'merge_into_project':
-      return `merge the scope “${bucket.name}” into ${mergeTargetName ?? 'the project'}`
-    default:
-      return `change ${label} “${bucket.name}”`
-  }
-}
-
-function destructiveConsequences(
-  call: ScopeToolCall,
-  bucket: ScopeBucket,
-  snapshot: ScopeLifecycleSnapshot | null,
-  threadCount: number
-): string[] {
-  const consequences: string[] = []
-  if (call.action === 'detach_worktree') {
-    consequences.push('The worktree checkout directory is removed.')
-    consequences.push('The scope, its threads and its branch are kept.')
-  }
-  if (call.action === 'delete_scope') {
-    consequences.push('The scope is removed from the project board.')
-    if (bucket.root.kind === 'worktree') {
-      consequences.push('Its worktree checkout is removed.')
-      consequences.push(
-        call.deleteBranch
-          ? 'Its managed branch is deleted permanently.'
-          : 'Its managed branch is kept.'
-      )
-    }
-    if (threadCount > 0) {
-      consequences.push(
-        call.threads === 'delete'
-          ? `${threadCount} thread${threadCount === 1 ? '' : 's'} and their conversations are deleted permanently.`
-          : `${threadCount} thread${threadCount === 1 ? '' : 's'} move to the Default scope.`
-      )
-    }
-  }
-  if (call.action === 'merge_into_project') {
-    const mode = call.mode ?? 'merge-keep'
-    consequences.push('The scope’s branch is merged into the target scope’s checkout.')
-    if (mode === 'merge-delete') {
-      consequences.push('Then the source scope, its worktree and its branch are deleted.')
-    } else if (mode === 'merge-move-to-default') {
-      consequences.push(
-        'Then the source scope is deleted and its threads move to the Default scope.'
-      )
-    } else {
-      consequences.push('The source scope, its worktree and its branch are kept.')
-    }
-    consequences.push('Nothing is pushed to a remote.')
-  }
-  if (snapshot && snapshot.dirtyFiles.length > 0) {
-    consequences.push(
-      `${snapshot.dirtyFiles.length} uncommitted file${snapshot.dirtyFiles.length === 1 ? '' : 's'} in the checkout are discarded.`
-    )
-  }
-  if (snapshot && snapshot.unpushedCommits > 0) {
-    consequences.push(
-      `${snapshot.unpushedCommits} commit${snapshot.unpushedCommits === 1 ? '' : 's'} on the scope branch exist nowhere else.`
-    )
-  }
-  return consequences
-}
-
-/**
- * Normalize raw tool input into a validated call. Unknown fields are rejected
- * rather than ignored, so a model's typo can never look like a successful
- * request for something else.
- */
-export function parseScopeToolInput(input: Record<string, unknown>): ScopeToolCall {
-  for (const key of Object.keys(input)) {
-    if (!SCOPE_TOOL_INPUT_KEYS.has(key)) {
-      throw new TypeError(`Unsupported ${APP_SCOPE_UTILITY_ID} input field: ${key}`)
-    }
-  }
-  const rawAction = input['action']
-  if (typeof rawAction !== 'string' || !rawAction.trim()) {
-    throw new TypeError('action is required')
-  }
-  const action = rawAction.trim()
-  if (!(SCOPE_TOOL_ACTIONS as readonly string[]).includes(action)) {
-    throw new TypeError(
-      `Unsupported action “${action}”. Use one of: ${SCOPE_TOOL_ACTIONS.join(', ')}`
-    )
-  }
-  const call: ScopeToolCall = { action: action as ScopeToolAction }
-  const scope = optionalString(input, 'scope', MAX_REFERENCE_LENGTH)
-  if (scope !== undefined) call.scope = scope
-  const title = optionalString(input, 'title', MAX_TITLE_LENGTH)
-  if (title !== undefined) call.title = title
-  const name = optionalString(input, 'name', MAX_NAME_LENGTH)
-  if (name !== undefined) call.name = name
-  const baseBranch = optionalString(input, 'baseBranch', MAX_REFERENCE_LENGTH)
-  if (baseBranch !== undefined) call.baseBranch = baseBranch
-  const sourcePath = optionalString(input, 'sourcePath', MAX_PATH_LENGTH)
-  if (sourcePath !== undefined) call.sourcePath = sourcePath
-  const target = optionalString(input, 'target', MAX_REFERENCE_LENGTH)
-  if (target !== undefined) call.target = target
-  const runSetup = optionalBoolean(input, 'runSetup')
-  if (runSetup !== undefined) call.runSetup = runSetup
-  const attachThread = optionalBoolean(input, 'attachThread')
-  if (attachThread !== undefined) call.attachThread = attachThread
-  const deleteBranch = optionalBoolean(input, 'deleteBranch')
-  if (deleteBranch !== undefined) call.deleteBranch = deleteBranch
-  const confirm = optionalBoolean(input, 'confirm')
-  if (confirm !== undefined) call.confirm = confirm
-  const environmentMode = optionalEnum(input, 'environmentMode', ENVIRONMENT_MODES)
-  if (environmentMode !== undefined) call.environmentMode = environmentMode
-  const strategy = optionalEnum(input, 'strategy', STRATEGIES)
-  if (strategy !== undefined) call.strategy = strategy
-  const mode = optionalEnum(input, 'mode', MERGE_MODES)
-  if (mode !== undefined) call.mode = mode
-  const threads = optionalEnum(input, 'threads', THREAD_DISPOSITIONS)
-  if (threads !== undefined) call.threads = threads
-  const setupCommands = parseSetupCommands(input['setupCommands'])
-  if (setupCommands !== undefined) call.setupCommands = setupCommands
-  return call
-}
-
-function optionalString(
-  input: Record<string, unknown>,
-  key: string,
-  maxLength: number
-): string | undefined {
-  const value = input[key]
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'string') throw new TypeError(`${key} must be a string`)
-  const trimmed = value.trim()
-  if (!trimmed) return undefined
-  if (trimmed.length > maxLength) {
-    throw new TypeError(`${key} must be at most ${maxLength} characters`)
-  }
-  return trimmed
-}
-
-function optionalBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
-  const value = input[key]
-  if (value === undefined) return undefined
-  if (typeof value !== 'boolean') throw new TypeError(`${key} must be a boolean`)
-  return value
-}
-
-function optionalEnum<T extends string>(
-  input: Record<string, unknown>,
-  key: string,
-  allowed: readonly T[]
-): T | undefined {
-  const value = input[key]
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || !allowed.includes(value as T)) {
-    throw new TypeError(`${key} must be one of: ${allowed.join(', ')}`)
-  }
-  return value as T
-}
-
-function parseSetupCommands(value: unknown): ScopeSetupCommandSpec[] | undefined {
-  if (value === undefined) return undefined
-  if (!Array.isArray(value)) throw new TypeError('setupCommands must be an array')
-  if (value.length > 20) throw new TypeError('setupCommands must contain at most 20 commands')
-  return value.map((entry, index) => {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      throw new TypeError(`setupCommands entry ${index} must be an object`)
-    }
-    const record = entry as Record<string, unknown>
-    for (const key of Object.keys(record)) {
-      if (key !== 'executable' && key !== 'args') {
-        throw new TypeError(`setupCommands entry ${index} has an unsupported field: ${key}`)
-      }
-    }
-    const executable = optionalString(record, 'executable', MAX_PATH_LENGTH)
-    if (!executable) throw new TypeError(`setupCommands entry ${index} needs an executable`)
-    const args = record['args']
-    if (args !== undefined && !Array.isArray(args)) {
-      throw new TypeError(`setupCommands entry ${index} args must be an array`)
-    }
-    return {
-      executable,
-      args: ((args as unknown[] | undefined) ?? []).map((arg, argIndex) => {
-        if (typeof arg !== 'string') {
-          throw new TypeError(`setupCommands entry ${index} argument ${argIndex} must be a string`)
-        }
-        return arg
-      })
-    }
-  })
 }

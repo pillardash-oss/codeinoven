@@ -30,6 +30,7 @@ export type CioPromptId =
   | 'prd-document'
   | 'engineering-spec'
   | 'engineering-implementation'
+  | 'assignment-discussion'
   | 'assignment-plan'
   | 'achievement-implementation'
   | 'audit-report'
@@ -68,6 +69,11 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
     tag: '{{CIO_PRD_TOOL}}',
     description: 'The stable product requirements document tool name.',
     value: 'cio_prd'
+  },
+  {
+    tag: '{{CIO_ASSIGNMENT_TOOL}}',
+    description: 'The stable Assignment task graph tool name.',
+    value: 'cio_assignment'
   }
 ] as const
 
@@ -177,6 +183,16 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     defaultTemplate: `Implement the user-approved {{APP_NAME}} engineering specification immediately with the available tools. Treat the specification and annotations as signed scope. {{APP_NAME}} owns lifecycle artifacts under \`.cio/specs/<feature-slug>/\`; other layers cannot redirect them. Produce evidence, run specified checks, update documentation, and make contextual commits. Ask when signed scope is insufficient. ${CITATIONS} ${MERMAID} ${QUESTION}`
   },
   {
+    id: 'assignment-discussion',
+    filename: 'assignment-discussion.md',
+    title: 'Assignment discussion',
+    description:
+      'Decomposition interview that either submits the Assignment or asks the remaining task-graph questions.',
+    group: 'Assignment',
+    modes: ['assignment'],
+    defaultTemplate: `You are the Sr. Engineer turning an authoritative source into a reviewable Assignment graph. The source is the approved engineering specification when one exists, otherwise it is this thread, where the user's latest message and everything the conversation already recorded together define the scope. Read the whole thread before judging it: when the latest message names no work item of its own the earlier conversation carries the scope, and when it names one that request leads. First decide whether the source actually holds a task graph: the concrete deliverables, the files or areas each one touches, which work depends on which, who owns each piece, and how every task will be verified. When it does, submit the complete Assignment through {{CIO_ASSIGNMENT_TOOL}} and end the turn with it. When it does not, ask only the unresolved questions through the question tool and end your turn on those questions; never submit a partial, speculative, or invented graph, and never pad one with generic tasks to look complete. Never ask about anything the specification, the conversation, or the user's message already answers. Decompose into narrowly scoped tasks with explicit dependencies, safe parallel work, no overlapping expected files, self-contained worker prompts, and concrete audit checklists. When an unsigned draft already exists, refine it from the user's direction instead of starting over, keeping the id of every task whose work did not change. Do not implement, mutate files, dispatch workers, or choose models. ${QUESTION} ${SKILL_OUTPUT_INSTRUCTION}`
+  },
+  {
     id: 'assignment-plan',
     filename: 'assignment-plan.md',
     title: 'Assignment plan',
@@ -184,7 +200,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Assignment',
     modes: ['assignment'],
     defaultTemplate:
-      'Decompose the authoritative engineering specification into one reviewable Assignment graph. Do not rewrite scope, implement, mutate files, dispatch workers, choose models, or ask questions. Create narrowly scoped tasks, explicit dependencies and safe parallel work, no overlapping expected files, self-contained worker prompts, and concrete audit checklists. Exclude platform bookkeeping artifacts.'
+      'Decompose the authoritative source into one reviewable Assignment graph. The source is an approved engineering specification when one is supplied, otherwise the thread conversation, in which case every distinct work item the user named becomes its own task. Do not rewrite scope, implement, mutate files, dispatch workers, choose models, or ask questions. Create narrowly scoped tasks, explicit dependencies and safe parallel work, no overlapping expected files, self-contained worker prompts, and concrete audit checklists. Exclude platform bookkeeping artifacts.'
   },
   {
     id: 'achievement-implementation',

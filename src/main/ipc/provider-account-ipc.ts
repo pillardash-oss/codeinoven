@@ -1,6 +1,6 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { isAbsolute } from 'node:path'
-import type { ProviderAccountLoginOptions } from '../../lib/types'
+import type { HarnessAccount, ProviderAccountLoginOptions } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
 import { validateEntityId } from './ipc-validation'
 import type { HarnessAuthAccount, HarnessAuthStatus } from '../drivers/driver.interface'
@@ -367,7 +367,15 @@ async function resolveCredentialAccount(
   accounts: HarnessAccountRegistry,
   harnessId: string,
   accountId: string
-) {
-  if (accountId.startsWith('pending-')) return accounts.pendingAccount(harnessId, accountId)
-  return accounts.resolve(harnessId, accountId)
+): Promise<HarnessAccount> {
+  // `finalizePending` promotes an in-memory pending entry into a persisted
+  // account while preserving its `pending-` id, so a `pending-` prefix no
+  // longer implies the account is still in-memory pending. Resolve persisted
+  // accounts first, then fall back to the in-memory pending store for accounts
+  // that have not been finalized yet (e.g. mid add-provider login flow).
+  const persisted = (await accounts.list(harnessId)).find(
+    (account) => account.id === accountId
+  )
+  if (persisted) return persisted
+  return accounts.pendingAccount(harnessId, accountId)
 }

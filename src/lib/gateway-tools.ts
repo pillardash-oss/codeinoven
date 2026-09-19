@@ -10,6 +10,12 @@ export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
 /** Post-compaction capability re-dump: re-lists one utility's full docs by id. */
 export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
+/**
+ * Asks the user for secret values (API keys, tokens, passwords) and hands the
+ * agent only the names it interpolates them under. One app tool for every
+ * harness: the value goes to the encrypted vault, and the model never sees it.
+ */
+export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 /** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
@@ -105,9 +111,60 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     sentWhen: "After compaction, when a known utility's capability docs are no longer in context"
   },
   {
+    name: ASK_SECRET_TOOL_NAME,
+    description:
+      'Ask the user for secret values you do not have   an API key, token, password, or any credential a task needs   without the value ever entering this conversation. Each value is stored in the encrypted device vault, and is then available to you in three ways: bind it to an installed capability by passing utility_id (the server receives it as environment_variable when it launches), read it in a shell command as $environment_variable, or interpolate its 0600 file as "$(cat secret_path)". The result contains names and paths only, never the value: never print, echo, log, or read a secret, and never paste one into chat. Use it the moment a task or a capability you just installed needs a credential, and ask for every secret you need in one call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        secrets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 5,
+          description: 'Secrets to collect from the user, in the order they should be filled.',
+          items: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description: 'Short human label for the value, e.g. "Authorization Key".'
+              },
+              description: {
+                type: 'string',
+                description:
+                  'One line on what the value is and, when it exists, a link to where the user obtains it.'
+              },
+              environment_variable: {
+                type: 'string',
+                description:
+                  'Environment variable name the target expects (an MCP server variable, a CLI flag value). Omit to receive a derived CIO_ name.'
+              },
+              utility_id: {
+                type: 'string',
+                description:
+                  'Installed utility id to bind this value to as its credential, exactly as the Utilities page stores it.'
+              }
+            },
+            required: ['title'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['secrets'],
+      additionalProperties: false
+    },
+    route: '/ask-secret',
+    sentWhen:
+      'Whenever a task or a capability needs a secret you do not have; always when installing a capability that needs a credential'
+  },
+  {
     name: UTILITY_MANAGE_TOOL_NAME,
     description:
-      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden; tell the user to add them through Utilities after installation.',
+      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. When a capability needs an API key or token, never put the value in the bundle: collect it with ' +
+      ASK_SECRET_TOOL_NAME +
+      ' after installing, passing the installed id as utility_id and the variable the server expects as environment_variable, and the app stores it in the encrypted vault exactly as the Utilities page would. Reinstalling an existing capability updates that entry in place and reports it as "updated", removing extra copies of it, so never install a second copy to work around one that already exists. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden in the bundle itself; if ' +
+      ASK_SECRET_TOOL_NAME +
+      ' is unavailable, tell the user to add them through Utilities after installation.',
     inputSchema: {
       type: 'object',
       properties: {

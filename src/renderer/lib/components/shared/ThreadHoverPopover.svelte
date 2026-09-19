@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Clock, StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -17,6 +17,9 @@
     stageLabel?: string
     /** Whether the provider is waiting for an automatic retry. */
     isRetryPaused?: boolean
+    /** Whether this thread's in-flight turn belongs to another CodeInOven
+     *  instance, which is where its live output and stop control are. */
+    isForeignRun?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
@@ -36,6 +39,7 @@
     thread,
     isWorking = false,
     isRetryPaused = false,
+    isForeignRun = false,
     stageLabel = '',
     threadState = 'read'
   }: Props = $props()
@@ -84,6 +88,12 @@
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
 <dl class="space-y-1.5 text-[0.6875rem]">
+  <div class="flex gap-2">
+    <dt class="w-16 shrink-0 text-dimmed">ID</dt>
+    <dd class="min-w-0 select-all break-all font-mono text-muted" title={thread.id}>
+      {thread.id}
+    </dd>
+  </div>
   {#if scopeBucket}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
@@ -106,7 +116,7 @@
       <dd class="min-w-0 break-words text-muted">{project.name}</dd>
     </div>
     <div class="flex gap-2">
-      <dt class="w-16 shrink-0 text-dimmed">Repository</dt>
+      <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
       <dd class="min-w-0 break-words text-muted" title={remoteOriginUrl ?? project.path}>
         {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : ' '}
       </dd>
@@ -120,7 +130,21 @@
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
     <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
   </div>
-  {#if isWorking}
+  {#if isForeignRun}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-muted">
+        <StatusBadge
+          stage="working"
+          variant="icon"
+          icon={AppWindow}
+          size="sm"
+          title="Running in another instance"
+        />
+        Running in another instance
+      </dd>
+    </div>
+  {:else if isWorking}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-muted">

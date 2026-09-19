@@ -5,7 +5,9 @@ import {
   managedScopesFor,
   memoryDestinationFor,
   memoryLocationKey,
-  normalizeMemoryEntryForLocation
+  normalizeMemoryEntryForLocation,
+  scopeIdsForChange,
+  MEMORY_SCOPE_OPTIONS
 } from '$lib/components/memory/memory-routing'
 
 function entry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
@@ -127,16 +129,67 @@ describe('normalizeMemoryEntryForLocation', () => {
 })
 
 describe('managedScopesFor', () => {
-  it('manages project and thread scopes for a projects run', () => {
-    const scopes = managedScopesFor('projects')
-    expect(scopes).toContain('global')
-    expect(scopes).toContain('projects')
-    expect(scopes).toContain('project')
-    expect(scopes).toContain('thread')
+  it('manages every global audience on the settings surface', () => {
+    expect(managedScopesFor('settings')).toEqual(['global', 'projects', 'chat'])
   })
 
-  it('never manages projects-scoped root entries on a chats run', () => {
-    expect(managedScopesFor('chats')).not.toContain('projects')
+  it('never manages cross-audience global memory from a project sidebar', () => {
+    const scopes = managedScopesFor('sidebar-projects')
+    expect(scopes).toEqual(['projects', 'project', 'thread'])
+    expect(scopes).not.toContain('global')
+  })
+
+  it('manages chat and thread scopes from a chat sidebar', () => {
+    expect(managedScopesFor('sidebar-chats')).toEqual(['chat', 'thread'])
+  })
+})
+
+describe('MEMORY_SCOPE_OPTIONS', () => {
+  it('names the three global audiences plainly in settings', () => {
+    expect(MEMORY_SCOPE_OPTIONS.settings.map((option) => option.label)).toEqual([
+      'Projects',
+      'Chats',
+      'Both'
+    ])
+  })
+
+  it('maps the project sidebar Global option to the projects-wide scope', () => {
+    const global = MEMORY_SCOPE_OPTIONS['sidebar-projects'][0]
+    expect(global.label).toBe('Global')
+    expect(global.value).toBe('projects')
+  })
+
+  it('maps the chat sidebar Global option to the chat scope', () => {
+    const global = MEMORY_SCOPE_OPTIONS['sidebar-chats'][0]
+    expect(global.label).toBe('Global')
+    expect(global.value).toBe('chat')
+  })
+})
+
+describe('scopeIdsForChange', () => {
+  it('clears ids when a memory becomes global, projects, or chat scoped', () => {
+    const current = { projectId: 'proj-1', threadId: 'thr-1' }
+    const cleared = { projectId: undefined, threadId: undefined }
+    expect(scopeIdsForChange('global', current)).toEqual(cleared)
+    expect(scopeIdsForChange('projects', current)).toEqual(cleared)
+    expect(scopeIdsForChange('chat', current)).toEqual(cleared)
+  })
+
+  it('seeds a specific project from the panel context and drops the thread', () => {
+    expect(scopeIdsForChange('project', {}, { projectId: 'proj-2', threadId: 'thr-2' })).toEqual({
+      projectId: 'proj-2',
+      threadId: undefined
+    })
+  })
+
+  it('keeps an entry project when narrowing to a thread', () => {
+    expect(
+      scopeIdsForChange(
+        'thread',
+        { projectId: 'proj-1' },
+        { projectId: 'proj-2', threadId: 'thr-2' }
+      )
+    ).toEqual({ projectId: 'proj-1', threadId: 'thr-2' })
   })
 })
 

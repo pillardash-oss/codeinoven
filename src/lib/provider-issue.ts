@@ -1,4 +1,4 @@
-import type { AgentProviderIssue, AgentProviderIssueKind, AgentRateLimitWindow } from './types'
+import type { AgentProviderIssue, AgentProviderIssueKind } from './types'
 
 /**
  * True when a provider issue represents a usage/rate-limit reset wait rather
@@ -204,54 +204,6 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
     if (deltaMs > 0) return now + deltaMs
   }
   return undefined
-}
-
-/**
- * Convert a structured usage-limit issue into the exhausted quota window the
- * usage meter expects. Provider headers and account APIs remain preferable,
- * but a provider's explicit limit notice is authoritative telemetry too and
- * must not produce a limit card with an empty usage panel beside it.
- */
-export function rateLimitWindowFromProviderIssue(
-  issue: Pick<AgentProviderIssue, 'kind' | 'message' | 'retryAt' | 'retryable'>,
-  now = Date.now()
-): AgentRateLimitWindow | null {
-  if (!isUsageResetWaitIssue(issue)) return null
-  const normalized = extractProviderErrorEnvelope(issue.message).message.toLowerCase()
-  const hourWindow = /(\d+)\s*[- ]?h(?:(?:ou)?rs?)?/iu.exec(normalized)
-  const hours = hourWindow ? Number(hourWindow[1]) : undefined
-  const label = normalized.includes('weekly')
-    ? 'Weekly limit'
-    : normalized.includes('monthly')
-      ? 'Monthly limit'
-      : normalized.includes('daily')
-        ? 'Daily limit'
-        : hours !== undefined && Number.isFinite(hours)
-          ? `${hours}-hour limit`
-          : normalized.includes('session')
-            ? 'Session limit'
-            : issue.kind === 'rate_limit'
-              ? 'Rate limit'
-              : 'Usage limit'
-  const windowMinutes = normalized.includes('weekly')
-    ? 10_080
-    : normalized.includes('monthly')
-      ? 43_200
-      : normalized.includes('daily')
-        ? 1_440
-        : hours !== undefined && Number.isFinite(hours)
-          ? hours * 60
-          : undefined
-  const resetsAt = issue.retryAt ?? parseUsageResetAt(issue.message, now)
-  return {
-    id: `provider-issue:${label.toLowerCase().replaceAll(/[^a-z0-9]+/gu, '-')}`,
-    label,
-    status: 'exhausted',
-    usedPercent: 100,
-    remaining: 0,
-    ...(resetsAt === undefined ? {} : { resetsAt }),
-    ...(windowMinutes === undefined ? {} : { windowMinutes })
-  }
 }
 
 /**

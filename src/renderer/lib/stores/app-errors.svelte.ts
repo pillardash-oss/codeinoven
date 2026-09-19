@@ -112,15 +112,34 @@ type ToastFn = (message: string, data?: ToastData) => string | number
 
 type ToastMessage = Parameters<typeof toast.error>[0]
 
+/**
+ * Marks the Copy action this module injects. Sonner renders `action` and
+ * `cancel` as two separate buttons, so an injected Copy must be recognisable:
+ * a wrapper that runs twice (see `installToastCapture`) would otherwise read
+ * our own `action` as a caller-owned action and add a second Copy beside it.
+ */
+const INJECTED_COPY = Symbol('codeinoven.injected-toast-copy')
+
+interface ToastCopyAction {
+  label: string
+  onClick: () => void
+  [INJECTED_COPY]: true
+}
+
+function isInjectedCopy(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && INJECTED_COPY in value
+}
+
 /** Full clipboard text for an error: message plus any details/stack. */
 function errorText(message: string, details?: string): string {
   return details ? `${message}\n\n${details}` : message
 }
 
 /** The Copy button every error toast carries. */
-function copyAction(text: string): { label: string; onClick: () => void } {
+function copyAction(text: string): ToastCopyAction {
   return {
     label: 'Copy',
+    [INJECTED_COPY]: true,
     onClick: () => {
       void copyText(text).catch(() => {})
     }
@@ -132,8 +151,12 @@ function copyAction(text: string): { label: string; onClick: () => void } {
  * `action` and one secondary `cancel` button, so when the caller already owns
  * the action (a thread-navigating "Open thread", a retry, ...) the copy takes
  * the secondary slot instead of being dropped.
+ *
+ * A toast that already carries our Copy is returned unchanged: one toast shows
+ * one Copy button, no matter how many times the wrappers ran.
  */
 function withCopyButton(message: string, data: ToastData, details?: string): ToastData {
+  if (isInjectedCopy(data?.action) || isInjectedCopy(data?.cancel)) return data
   const copy = copyAction(errorText(message, details))
   if (!data?.action) return { ...data, action: copy }
   if (data.cancel) return data
@@ -155,18 +178,61 @@ function captureWith(kind: AppErrorKind, original: ToastFn): ToastFn {
   }
 }
 
-const originalError = toast.error
-const originalWarning = toast.warning
+/**
+ * Sonner exports one shared `toast` object for the whole renderer, so these
+ * wrappers are global side effects: they must be installed on the *original*
+ * functions, never on a previous wrapper. Wrapping a wrapper is exactly how an
+ * error toast ended up with two Copy buttons, because the outer wrapper read
+ * the inner wrapper's injected `action` as a caller-owned action and added a
+ * `cancel` Copy next to it.
+ *
+ * The pristine functions therefore live on the `toast` object itself under a
+ * `Symbol.for` key: re-evaluating this module (Vite HMR in development) finds
+ * them and replaces the previous wrapper instead of stacking another one.
+ */
+const PRISTINE_TOAST_FNS = Symbol.for('codeinoven.pristine-toast-fns')
 
-/** Capture an error toast, then show it with its Copy button guaranteed. */
-function errorToastWithCapture(message: ToastMessage, data?: ToastData): string | number {
-  if (typeof message !== 'string') return originalError(message, data)
-  captureToast('error', message, data)
-  return originalError(message, withCopyButton(message, data))
+interface PristineToastFns {
+  error: typeof toast.error
+  warning: typeof toast.warning
 }
 
-toast.error = errorToastWithCapture as typeof toast.error
-toast.warning = captureWith('warning', originalWarning) as typeof toast.warning
+/** A symbol-indexed view of a host object (the shared `toast` object, the
+ *  `window`), used to store and read the registries below. */
+type SymbolRegistryHost = { [key: symbol]: unknown }
+
+/** Install the capture wrappers and return the pristine sonner functions.
+ *  Returns `void` outside the browser, where there is no toast to wrap. */
+function installToastCapture(): PristineToastFns | undefined {
+  if (typeof window === 'undefined') return undefined
+  const host = toast as unknown as SymbolRegistryHost
+  const registered = host[PRISTINE_TOAST_FNS] as PristineToastFns | undefined
+  const pristine: PristineToastFns = registered ?? {
+    error: toast.error,
+    warning: toast.warning
+  }
+  host[PRISTINE_TOAST_FNS] = pristine
+
+  /** Capture an error toast, then show it with its Copy button guaranteed. */
+  const errorWithCapture = (message: ToastMessage, data?: ToastData): string | number => {
+    // A non-string message is a component renderer with no text to capture.
+    if (typeof message !== 'string') return pristine.error(message, data)
+    captureToast('error', message, data)
+    return pristine.error(message, withCopyButton(message, data))
+  }
+
+  toast.error = errorWithCapture as typeof toast.error
+  toast.warning = captureWith('warning', pristine.warning) as typeof toast.warning
+
+  return pristine
+}
+
+const pristineToasts = installToastCapture()
+/** Sonner's own functions, so toasts shown by this module never pass through
+ *  the capture wrapper above a second time. Outside the browser the shared
+ *  object is unwrapped and these fall back to it directly. */
+const originalError: ToastFn = pristineToasts?.error ?? (toast.error as ToastFn)
+const originalWarning: ToastFn = pristineToasts?.warning ?? (toast.warning as ToastFn)
 
 function messageFrom(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.trim()) return error
@@ -227,22 +293,35 @@ export function reportErrorWithDetails(
  * These never pass through a toast call, so without this they would only exist
  * in the durable log while the panel stayed silent about a real app error.
  */
+const UNCAUGHT_CAPTURE_DISPOSE = Symbol.for('codeinoven.uncaught-error-capture-dispose')
+
 function installUncaughtErrorCapture(): void {
   if (typeof window === 'undefined') return
-  window.addEventListener('error', (event) => {
+  const host = window as unknown as SymbolRegistryHost
+  // A re-evaluation of this module replaces the previous pair: leaving them
+  // behind would stack listeners that capture into a discarded state instance.
+  const disposePrevious = host[UNCAUGHT_CAPTURE_DISPOSE] as (() => void) | undefined
+  disposePrevious?.()
+  const onError = (event: ErrorEvent) => {
     const error: unknown = event.error
     appErrorState.capture('error', messageFrom(error, event.message || 'Uncaught app error'), {
       details: error instanceof Error ? serializeError(error) : undefined,
       thread: currentThreadRef()
     })
-  })
-  window.addEventListener('unhandledrejection', (event) => {
+  }
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
     const reason: unknown = event.reason
     appErrorState.capture('error', messageFrom(reason, 'Unhandled promise rejection'), {
       details: reason instanceof Error ? serializeError(reason) : undefined,
       thread: currentThreadRef()
     })
-  })
+  }
+  window.addEventListener('error', onError)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+  host[UNCAUGHT_CAPTURE_DISPOSE] = () => {
+    window.removeEventListener('error', onError)
+    window.removeEventListener('unhandledrejection', onUnhandledRejection)
+  }
 }
 
 installUncaughtErrorCapture()

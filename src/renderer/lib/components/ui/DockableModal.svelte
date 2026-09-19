@@ -14,7 +14,14 @@
   interface Props {
     open: boolean
     title: string
-    /** Whether the panel is collapsed into its dock row. */
+    /**
+     * Whether the panel is collapsed into its dock row. A docked panel is not an
+     * overlay: it renders nothing but its floating chip, so it claims neither
+     * Escape nor the close-surface shortcut, and the user restores it from the
+     * chip. That keeps Escape free for whatever is actually on view   the
+     * composer's double-Escape stop, stopping a recording, closing the surface
+     * underneath the chip.
+     */
     minimized: boolean
     /**
      * Whether the close (X) affordance is available. When false the header shows
@@ -24,8 +31,6 @@
     closable: boolean
     onMinimize: () => void
     onClose: () => void
-    /** Restore the panel from the dock. */
-    onExpand: () => void
     /**
      * Content rendered in the dock while minimized. Each dock wraps its chips in
      * `DockRow`, which owns the row's edge placement and its drag head, so a
@@ -74,7 +79,6 @@
     closable,
     onMinimize,
     onClose,
-    onExpand,
     dock,
     children,
     footer,
@@ -232,14 +236,15 @@
     persistSnapshot()
   }
 
-  // Let the Cmd/Ctrl+W "close the active surface" shortcut mirror the Escape
-  // behavior: expand a minimized panel, close a closable one, otherwise minimize.
+  // The Cmd/Ctrl+W "close the active surface" shortcut closes a closable panel
+  // and minimizes a pinned one. A docked panel registers nothing: its chip is
+  // not an overlay on view, so the shortcut belongs to the surface actually in
+  // front of the user, and `isOverlayOpen()` must not keep reporting an overlay
+  // for an off-screen chip.
   $effect(() => {
-    if (!open) return
+    if (!open || minimized) return
     return registerOverlayClose(() => {
-      if (minimized) {
-        onExpand()
-      } else if (closable) {
+      if (closable) {
         onClose()
       } else {
         onMinimize()
@@ -287,10 +292,11 @@
 
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
-    if (!open || e.key !== 'Escape') return
-    if (minimized) {
-      onExpand()
-    } else if (closable) {
+    // A docked panel deliberately ignores Escape: the chip is not on view, the
+    // user restores the panel from it, and the key stays free for everything
+    // else that owns Escape behind the chip.
+    if (!open || minimized || e.key !== 'Escape') return
+    if (closable) {
       onClose()
     } else {
       onMinimize()

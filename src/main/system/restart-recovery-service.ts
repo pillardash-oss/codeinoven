@@ -7,6 +7,29 @@ const RECOVERABLE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
 export type RecoveryOperation = 'checkpoint' | 'thread'
 
+/**
+ * Which stopped process this pass is allowed to clean up after.
+ *
+ * - `restart`: nothing else is running, so every thread left in an active status
+ *   belongs to a process that is gone. This is the classic restart contract and
+ *   the default.
+ * - `take-over`: another instance has just exited while this one kept running, so
+ *   only the turns that instance owned are adoptable. A turn with no recorded
+ *   owner cannot be told apart from one this process is starting right now, and
+ *   is left alone.
+ */
+export type RestartRecoveryScope = 'restart' | 'take-over'
+
+export interface RestartRecoveryOptions {
+  scope?: RestartRecoveryScope
+  /**
+   * Whether the process that recorded a turn as in flight is still running,
+   * consulted for the `take-over` scope. A turn whose owner is alive is never
+   * settled here, whichever instance asks.
+   */
+  isRunOwnerAlive?: (pid: number) => boolean
+}
+
 export interface RestartRecoveryFailure {
   projectId: string
   threadId: string
@@ -37,6 +60,10 @@ export interface RestartRecoveryResult {
  * as `completed` (full diff, no interruption error) and the thread is not resumed,
  * so no premature partial file-changes card or "stopped before completion" message
  * surfaces while the work was actually done.
+ *
+ * A process that is running while a sibling exits passes `scope: 'take-over'`,
+ * which adopts only the turns the departed process owned (see
+ * {@link RestartRecoveryScope}).
  */
 export class RestartRecoveryService {
   private readonly threads: ThreadRepo
@@ -49,17 +76,25 @@ export class RestartRecoveryService {
     this.db = db
   }
 
-  async recover(): Promise<RestartRecoveryResult> {
+  async recover(options: RestartRecoveryOptions = {}): Promise<RestartRecoveryResult> {
     const allThreads = await this.threads.listAllViaWorker()
-    const activeTurnThreadIds = await this.activeTurnThreadIds()
+    const activeTurnOwners = await this.activeTurnOwners()
     const recovered: Thread[] = []
     const completed: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
 
     for (const thread of allThreads) {
-      const completedWithOrphanCheckpoint =
-        thread.status === 'completed' && activeTurnThreadIds.has(thread.id)
+      const hasActiveTurn = activeTurnOwners.has(thread.id)
+      const completedWithOrphanCheckpoint = thread.status === 'completed' && hasActiveTurn
       if (!RECOVERABLE_STATUSES.has(thread.status) && !completedWithOrphanCheckpoint) continue
+      if (options.scope === 'take-over') {
+        const ownerPid = activeTurnOwners.get(thread.id)
+        // Only a turn a departed process was running can be adopted here. A turn
+        // with no owner record is either a legacy row or one this process is
+        // starting right now, and nothing can tell those apart.
+        if (typeof ownerPid !== 'number') continue
+        if (options.isRunOwnerAlive?.(ownerPid) === true) continue
+      }
 
       if (completedWithOrphanCheckpoint || (await this.turnDemonstrablyCompleted(thread))) {
         try {
@@ -108,12 +143,26 @@ export class RestartRecoveryService {
     }
   }
 
-  private async activeTurnThreadIds(): Promise<Set<string>> {
-    const result = await this.db.queryViaWorker('SELECT thread_id FROM active_turns', [], 100_000)
+  /**
+   * The process that recorded each in-flight turn, keyed by thread. A thread
+   * with no row, or a row written before `owner_pid` existed, maps to `null`.
+   */
+  private async activeTurnOwners(): Promise<Map<string, number | null>> {
+    const result = await this.db.queryViaWorker(
+      'SELECT thread_id, owner_pid FROM active_turns',
+      [],
+      100_000
+    )
     if (!result.ok) {
       throw new Error(result.error ?? 'active checkpoint recovery query failed')
     }
-    return new Set(result.rows.map((row) => String(row['thread_id'])))
+    const owners = new Map<string, number | null>()
+    for (const row of result.rows) {
+      const owner = row['owner_pid']
+      const pid = typeof owner === 'number' ? owner : Number(owner)
+      owners.set(String(row['thread_id']), Number.isInteger(pid) && pid > 0 ? pid : null)
+    }
+    return owners
   }
 
   /**

@@ -159,6 +159,7 @@
       <button
         type="button"
         class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        data-external-url={device?.verificationUri ?? ''}
         onclick={() => void openGitHub()}
       >
         <ExternalLink size={13} />

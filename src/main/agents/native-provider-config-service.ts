@@ -43,12 +43,22 @@ export function hasNativeProviderCatalog(harnessId: string): boolean {
 }
 
 /**
- * Provider ids the user configured natively in Pi's `~/.pi/agent/models.json`  
- * explicit connect targets regardless of whether their entry carries an API
- * key (keyless local servers are legitimate).
+ * Provider ids the user configured natively in Pi's `models.json`   explicit
+ * connect targets regardless of whether their entry carries an API key (keyless
+ * local servers are legitimate).
+ *
+ * `modelsPath` names the file to read. A managed account container runs Pi
+ * against its own agent directory, so it must pass its own `models.json` path;
+ * the default (`~/.pi/agent/models.json`) belongs to the harness-global account
+ * alone. A missing file is an empty set   a container is provisioned without
+ * one, and that is "no native providers configured", not "unknown". Returns
+ * `null` only when the file exists but cannot be read or repaired; callers must
+ * then treat the connected set as undeterminable rather than as empty.
  */
-export async function piNativeProviderIds(): Promise<Set<string> | null> {
-  const config = await tryReadJsoncObject(PI_MODELS_PATH)
+export async function piNativeProviderIds(
+  modelsPath = PI_MODELS_PATH
+): Promise<Set<string> | null> {
+  const config = await tryReadJsoncObject(modelsPath)
   if (!config) return null
   const providers = record(config['providers']) ?? {}
   return new Set(Object.keys(providers))

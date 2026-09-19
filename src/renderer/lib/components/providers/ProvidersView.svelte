@@ -40,6 +40,7 @@
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
+  import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
   /** Where users can browse existing PRs / open one for a V2 support effort. */
@@ -69,7 +70,7 @@
   let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
   /** Which top-level tab is on screen. */
-  let activeTab = $state<'harnesses' | 'accounts' | 'custom'>('harnesses')
+  let activeTab = $state<'harnesses' | 'accounts' | 'custom' | 'auxiliary'>('harnesses')
   /** Per-harness advanced-info disclosure (Settings for ready harnesses, Details for errored ones), collapsed by default. */
   let expandedSettings = $state<Record<string, boolean>>({})
   /** Free-text filter over harness name/command/path. */
@@ -548,6 +549,19 @@
     <button
       type="button"
       class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      'auxiliary'
+        ? 'bg-surface text-foreground shadow-sm'
+        : 'text-muted hover:text-foreground'}"
+      role="tab"
+      aria-selected={activeTab === 'auxiliary'}
+      title="Assign the model each harness uses for background work"
+      onclick={() => (activeTab = 'auxiliary')}
+    >
+      Auxiliary Agents
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'custom'
         ? 'bg-surface text-foreground shadow-sm'
         : 'text-muted hover:text-foreground'}"
@@ -999,6 +1013,8 @@
     </div>
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
+  {:else if activeTab === 'auxiliary'}
+    <AuxiliaryAgentsPanel />
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}

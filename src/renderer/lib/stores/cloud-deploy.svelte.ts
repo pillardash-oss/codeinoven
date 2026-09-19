@@ -12,8 +12,33 @@ import {
 /** How long a cached overview or container status is served without refetching. */
 const OVERVIEW_CACHE_TTL_MS = 60_000
 
-/** Container status changes as a deployment runs, so poll it on the same cadence as the overview. */
+/**
+ * Freshness window for a container status. Kept short because a deployment keeps
+ * changing state while it runs: re-opening the panel inside the window renders
+ * instantly from cache, anything older revalidates in the background, and an
+ * explicit refresh always forces a fresh read.
+ */
 const STATUS_CACHE_TTL_MS = 60_000
+
+/**
+ * How many container status requests a monitoring pass keeps in flight at once.
+ * Awaiting every container one after another made a project with many containers
+ * trickle in round trip by round trip; firing them all at once would hammer the
+ * provider, so each pass runs in small batches instead.
+ */
+const STATUS_FETCH_CONCURRENCY = 4
+
+/**
+ * One container to poll for authoritative status, deliberately narrower than a
+ * container snapshot: a monitoring pass only needs what identifies the container
+ * on the provider.
+ */
+export interface CloudDeployMonitorTarget {
+  providerKind: CloudDeploymentProviderKind
+  id: string
+  /** Account the container is monitored through; part of its cache key. */
+  accountId?: string
+}
 
 /** Logs change rarely and are heavy — hold them a little longer. */
 const LOG_CACHE_TTL_MS = 5 * 60_000
@@ -428,34 +453,41 @@ export class CloudDeployState {
   }
 
   /**
-   * Refresh the authoritative status of every configured container during
-   * automatic monitoring. Serves each container's cache first and revalidates
-   * in the background only when its TTL has elapsed or it has no cache, so the
-   * poll never over-fetches; a failed key enters its failure cooldown and keeps
-   * the last known (stale) data on screen. Per-container keys are project-scoped
-   * (task-c-4), so containers from different projects never share or collide.
+   * Refresh the authoritative status of every configured container: the automatic
+   * monitoring pass, and with `force` the explicit refresh and the follow-up poll
+   * that tracks a running build to its end.
+   *
+   * Serves each container's cache first and revalidates in the background only
+   * when its TTL has elapsed (or immediately when `force` is set), so the poll
+   * never over-fetches; a failed key enters its failure cooldown and keeps the
+   * last known (stale) data on screen. Requests run in small batches so a project
+   * with many containers fills the panel promptly without hammering the provider.
+   * Per-container keys are project-scoped, so containers from different projects
+   * never share or collide.
    */
   async monitorContainers(
     projectId: string,
-    containers: ReadonlyArray<{
-      providerKind: CloudDeploymentProviderKind
-      id: string
-      accountId?: string
-    }>
+    containers: ReadonlyArray<CloudDeployMonitorTarget>,
+    force = false
   ): Promise<void> {
-    for (const container of containers) {
-      try {
-        await this.ensureContainerStatus(
-          projectId,
-          container.providerKind,
-          container.id,
-          false,
-          container.accountId
-        )
-      } catch {
-        // The store surfaces a tailored message via its error channel; the
-        // panel keeps each container's last known status on screen.
-      }
+    for (let index = 0; index < containers.length; index += STATUS_FETCH_CONCURRENCY) {
+      const batch = containers.slice(index, index + STATUS_FETCH_CONCURRENCY)
+      await Promise.all(
+        batch.map(async (container) => {
+          try {
+            await this.ensureContainerStatus(
+              projectId,
+              container.providerKind,
+              container.id,
+              force,
+              container.accountId
+            )
+          } catch {
+            // The store surfaces a tailored message via its error channel; the
+            // panel keeps each container's last known status on screen.
+          }
+        })
+      )
     }
   }
 

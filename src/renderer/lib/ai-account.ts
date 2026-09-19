@@ -1,4 +1,3 @@
-import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
 import type { ProviderCatalog, ThreadSettings } from '$shared/types'
 
 /**
@@ -6,9 +5,12 @@ import type { ProviderCatalog, ThreadSettings } from '$shared/types'
  *
  * Pi and OpenCode publish only the providers the user holds credentials for, so
  * an empty catalog for those harnesses means "no AI account connected". The
- * send-time setup card, the model picker's empty state, and the send guard all
- * ask the same question here instead of re-deriving it.
+ * send-time setup card and the model picker's empty state both ask the same
+ * question here instead of re-deriving it.
  */
+
+/** The thread settings a runnability check needs. */
+type RunnableSettings = Pick<ThreadSettings, 'harnessId' | 'providerId' | 'modelId'>
 
 /** True when a catalog can actually run a turn. */
 function catalogRuns(provider: ProviderCatalog): boolean {
@@ -30,49 +32,20 @@ export function harnessHasProvider(providers: ProviderCatalog[], harnessId: stri
   return harnessCatalogs(providers, harnessId).some(catalogRuns)
 }
 
-/** True when the selected model still exists in the harness's own catalogs. */
-export function selectedModelExists(
-  providers: ProviderCatalog[],
-  settings: Pick<ThreadSettings, 'harnessId' | 'providerId' | 'modelId'>
-): boolean {
-  if (!settings.modelId) return false
-  return harnessCatalogs(providers, settings.harnessId).some((provider) =>
-    provider.models.some((model) => model.id === settings.modelId)
-  )
-}
-
-/** Which model a picker selection points the thread at. */
-export interface ModelSelection {
-  harnessId: string
-  providerId: string
-  modelId: string
-  accountId?: string
-}
-
 /**
- * Apply a model-picker selection to thread settings. Fast inference survives
- * the switch only when the newly selected model exposes a fast tier.
+ * True when a thread has nothing to run a turn with, so the send guard shows
+ * the setup card instead of handing the driver a turn it can only reject. The
+ * card then asks for an account, or for a model, depending on whether the
+ * harness reports a provider at all.
+ *
+ * Only a missing provider or a missing model counts. What the catalogs say
+ * about a thread that has both is deliberately not consulted: catalog snapshots
+ * lag the harnesses. A Pi thread can run an account whose provider the catalog
+ * publishes under another harness, and a CLI accepts model ids its catalog no
+ * longer lists, so reading an unresolved id as "nothing connected" blocks sends
+ * that work. A turn that truly cannot run reports its own reason through the
+ * provider status card, which explains it better than this check can.
  */
-export function withModelSelection(
-  settings: ThreadSettings,
-  providers: ProviderCatalog[],
-  selection: ModelSelection
-): ThreadSettings {
-  const harnessId = selection.harnessId || settings.harnessId
-  const selected = providers
-    .find((provider) => provider.harnessId === harnessId && provider.id === selection.providerId)
-    ?.models.find((model) => model.id === selection.modelId)
-  return normalizeFastInference(
-    {
-      ...settings,
-      harnessId,
-      accountId: selection.accountId,
-      providerId: selection.providerId,
-      modelId: selection.modelId
-    },
-    harnessId,
-    selection.providerId,
-    selection.modelId,
-    supportsFastInference(harnessId, selection.providerId, selected?.fastSupported)
-  )
+export function threadNeedsAiAccount(settings: RunnableSettings): boolean {
+  return !settings.providerId || !settings.modelId
 }

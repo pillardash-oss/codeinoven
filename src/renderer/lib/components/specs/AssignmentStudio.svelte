@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    ArrowRight,
-    Check,
-    MessageSquare,
-    Network
-  } from '@lucide/svelte'
+  import { ArrowRight, Check, MessageSquare, Network } from '@lucide/svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -28,7 +23,8 @@
     AssignmentModelSelection,
     AssignmentPlan,
     AssignmentPlanContent,
-    ProviderCatalog
+    ProviderCatalog,
+    ScopeChoice
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -38,6 +34,8 @@
     threadId: string
     versions?: AssignmentPlan[]
     providers: ProviderCatalog[]
+    /** Needed by the worker scope picker, which resolves scopes per project. */
+    projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
     seniorModel: AssignmentModelSelection
@@ -72,6 +70,11 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment-wide worker scope, the level above a phase and a task. */
+    onWorkerScopeChange?: (scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -100,6 +103,7 @@
     threadId,
     versions = [],
     providers,
+    projectId = null,
     harnessId,
     fallbackModel,
     seniorModel,
@@ -131,6 +135,9 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onTaskModelChange,
+    onTaskScopeChange,
+    onWorkerScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite,
@@ -464,8 +471,7 @@
     if (!updated) return
     speechController.observeSent(`assignment-annotation-edit-${annotation.id}`, body)
     applyAssignment(updated)
-    overlay.editing =
-      (updated.annotations ?? []).find((item) => item.id === annotation.id) ?? null
+    overlay.editing = (updated.annotations ?? []).find((item) => item.id === annotation.id) ?? null
     overlay.editingBody = overlay.editing?.body ?? ''
     overlay.editMode = false
   }
@@ -495,10 +501,7 @@
   })
 </script>
 
-<svelte:window
-  onkeydown={handleWindowKeydown}
-  onresize={() => void refreshAnnotationMarkers()}
-/>
+<svelte:window onkeydown={handleWindowKeydown} onresize={() => void refreshAnnotationMarkers()} />
 
 <StudioShell
   ariaLabel="Assignment studio"
@@ -513,7 +516,7 @@
   {openAnnotationCount}
   annotationsTitle="Anchored comments"
   annotationsEmptyLabel="No open comments in this section."
-  sectionAnnotations={sectionAnnotations}
+  {sectionAnnotations}
   onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
   {error}
   onScrollerMouseUp={captureDocumentSelection}
@@ -555,7 +558,7 @@
       {savePending}
       versionMenuTitle="Choose an assignment version"
       versionItemTitle={(version) => `Open assignment version ${version}`}
-      onSelectVersion={onSelectVersion}
+      {onSelectVersion}
       onUndo={undoEdit}
       onRedo={redoEdit}
       onSave={() => void saveDraft()}
@@ -591,7 +594,9 @@
           Assignment checks
         </p>
         <span
-          class="text-[0.625rem] tabular-nums {validation.issues.length ? 'text-danger' : 'text-dimmed'}"
+          class="text-[0.625rem] tabular-nums {validation.issues.length
+            ? 'text-danger'
+            : 'text-dimmed'}"
         >
           {validation.issues.length}
         </span>
@@ -640,35 +645,43 @@
     {/each}
   {/snippet}
 
-      <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
-        <div class="mb-6 flex items-center gap-2">
-          <Network size={18} class="text-primary" />
-          <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
-        </div>
-        <AssignmentReviewContent
-          content={draft}
-          {readOnly}
-          reworkCycle={assignment.auditCycle?.reworkCycle}
-          forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
-          assignmentVersion={assignment.version}
-          {providers}
-          {harnessId}
-          {fallbackModel}
-          {seniorModel}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          {annotations}
-          onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
-          onAnnotateSection={openSectionAnnotation}
-          onChange={updateDraft}
-          {onWorkerModelChange}
-          {onSeniorModelChange}
-          {onTaskModelChange}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-      </div>
+  <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
+    <div class="mb-6 flex items-center gap-2">
+      <Network size={18} class="text-primary" />
+      <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
+    </div>
+    <AssignmentReviewContent
+      content={draft}
+      {projectId}
+      {readOnly}
+      reworkCycle={assignment.auditCycle?.reworkCycle}
+      forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
+      assignmentVersion={assignment.version}
+      {providers}
+      {harnessId}
+      {fallbackModel}
+      {seniorModel}
+      {favoriteModels}
+      {recentModels}
+      {onRemoveRecent}
+      {annotations}
+      onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+      onAnnotateSection={openSectionAnnotation}
+      onChange={updateDraft}
+      {onWorkerModelChange}
+      {onSeniorModelChange}
+      {onTaskModelChange}
+      {onTaskScopeChange}
+      {onWorkerScopeChange}
+      {assignmentScopeBucketId}
+      workerScopeEditable={!readOnly ||
+        assignment.status === 'approved' ||
+        assignment.status === 'running' ||
+        assignment.status === 'attention'}
+      {onToggleFavorite}
+      {onReorderFavorite}
+    />
+  </div>
 </StudioShell>
 
 {#if pendingAnnotation}

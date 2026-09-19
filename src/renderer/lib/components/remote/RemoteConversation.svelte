@@ -30,6 +30,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
+  import { formatDurationMs } from '$lib/format/duration'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -301,7 +302,7 @@
     )
     pendingLifecycleSelection = null
     lifecycleGuardOpen = false
-    // The staged intent was either applied or discarded by this confirmation  
+    // The staged intent was either applied or discarded by this confirmation
     // it must not resurface on the next mount.
     clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
@@ -652,14 +653,6 @@
       : settings.harnessId
   )
 
-  function formatDuration(milliseconds: number): string {
-    const seconds = Math.max(0, Math.round(milliseconds / 1000))
-    if (seconds < 60) return `${seconds}s`
-    const minutes = Math.floor(seconds / 60)
-    const remainder = seconds % 60
-    return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
-  }
-
   let copiedMessageId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
   let forkingMessageId = $state<string | null>(null)
@@ -805,7 +798,7 @@
         return
       }
       if (engineeringLifecycle?.activeStage === 'assignment') {
-        await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings)
+        await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings, text)
         failedDelivery = null
         engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
         agentRuns.setIdle(thread.projectId, thread.id)
@@ -1348,7 +1341,7 @@
                       {/if}
                       {#if endMessage.completedAt && turnStartTime(index)}
                         <span class="shrink-0 tabular-nums">
-                          · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                          · {formatDurationMs(endMessage.completedAt - (turnStartTime(index) ?? 0))}
                         </span>
                       {/if}
                     </span>
@@ -1369,7 +1362,7 @@
 
       {#if queuedMessage}
         <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[0.75rem] text-dimmed">
-          Queued   will send once {queuedMessage.startAfterThreads.length === 1
+          Queued will send once {queuedMessage.startAfterThreads.length === 1
             ? 'the selected thread finishes'
             : 'the selected threads finish'}.
         </p>

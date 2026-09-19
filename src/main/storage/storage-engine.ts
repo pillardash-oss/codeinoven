@@ -51,11 +51,13 @@ const DEFAULT_CONFIG: AppConfig = {
   onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
+  agentQuestionCap: 3,
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  auxiliaryAgents: {},
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -156,6 +158,7 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
       },
+      auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),

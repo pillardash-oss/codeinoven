@@ -275,6 +275,22 @@ body {
   font-family: var(--font-app);
 }
 
+/*
+ * Card-scale markdown.
+ *
+ * Composer cards (an agent's question prompt and its description) carry their
+ * own type step   `text-sm` for the prompt, `text-xs` for the description. A
+ * plain text utility cannot express that here: `.markdown-body` sets an
+ * explicit size and it is emitted unlayered, so it outranks every layered
+ * Tailwind utility. This modifier gives the size and leading back to the
+ * surrounding surface while every other `.markdown-body` rule   link colour,
+ * favicon sizing, code, lists, tables   still applies.
+ */
+.markdown-body.markdown-body-card {
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .markdown-body > * {
   max-width: 100%;
 }
@@ -453,6 +469,16 @@ body {
 }
 
 .markdown-body img {
+  /* Preflight makes every replaced element a block box so a lone screenshot
+     takes the width it needs. Provider prose puts pictures *inside* its
+     sentences too: a bot's footer leads with `<a href><picture><img>` before
+     its text, and a block box there spends a whole line on a 9px logo and
+     pushes the sentence that follows onto the next one. An inline box keeps
+     the picture in the flow, which is how github.com renders the same source.
+     The favicon, emoji and pending-image rules around this one already state
+     the same for their own cases; this is the base case each was working
+     around. */
+  display: inline-block;
   max-width: 100%;
   border-radius: 8px;
 }

@@ -193,6 +193,10 @@ export class GatewaySupervisorService {
       const entry = snapshot.processes.get(root.pid)
       if (!entry) {
         skipped.push(root.pid)
+        // The journal is shared by every running instance, so `clear()` below
+        // only drops this instance's own roots; an entry whose process is gone
+        // must be removed here or it would linger across launches.
+        this.journal.unregister(root.pid)
         continue
       }
       const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)

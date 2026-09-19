@@ -24,7 +24,9 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
+  import { formatDurationSeconds } from '$lib/format/duration'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -169,9 +171,12 @@
     })
   })
 
-  // Auto-refresh every 5 seconds while the modal stays open.
+  // Auto-refresh every 5 seconds while the modal stays open. The snapshot
+  // resolves project and thread names through the database, so it stops on the
+  // quit signal: the main process closes that database while the window is
+  // still open.
   $effect(() => {
-    if (!open) return
+    if (!open || appQuitState.quitting) return
     const timer = setInterval(() => void poll(), 5000)
     return () => clearInterval(timer)
   })
@@ -233,14 +238,10 @@
     }
   }
 
+  /** Process uptime at the current snapshot, cascading w/d/h/m/s like every
+   *  other duration surface instead of piling up hours (`72h 15m`). */
   function formatDuration(startedAt: number): string {
-    const seconds = Math.max(0, Math.floor((sampledAt - startedAt) / 1000))
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = seconds % 60
-    if (hours > 0) return `${hours}h ${minutes}m`
-    if (minutes > 0) return `${minutes}m ${secs}s`
-    return `${secs}s`
+    return formatDurationSeconds((sampledAt - startedAt) / 1000)
   }
 
   function formatMemory(bytes: number | null): string {

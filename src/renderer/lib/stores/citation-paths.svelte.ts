@@ -10,19 +10,47 @@ import { INBOX_PROJECT_ID } from '$shared/types'
  * real file inside the active project. The renderer cannot stat the filesystem
  * synchronously, so MarkdownView registers candidate paths here and the store
  * batch-checks them against main. Every successful resolution bumps a reactive
- * version, so `$derived` markdown re-lexes and the link appears only then.
+ * version, so `$derived` markdown re-lexes and the link appears only then. An
+ * unresolved candidate is re-probed after a short window (see
+ * `NEGATIVE_RETRY_MS`), because a path may be cited before the write that
+ * creates it.
  *
  * Absolute paths (e.g. Codex `:codex-file-citation` tokens) are probed for
  * existence independently of the project root; they only ever become links and
  * clicks are still constrained to the main process's approved scopes.
  */
+
+/**
+ * How long an unresolved probe stays trusted before the path may be probed
+ * again. A citation is frequently rendered before its file exists   agents name
+ * the file they are about to create in their reasoning, and the reasoning trace
+ * renders through the same markdown pipeline. Caching that first "does not
+ * exist" for the rest of the session left the file's later citations as plain
+ * code spans forever, which is why one entry of a file list stayed unlinked
+ * while its siblings linked. Positives are never re-probed; negatives are,
+ * because a path that is missing now may exist one write later.
+ */
+const NEGATIVE_RETRY_MS = 3_000
+
 interface CitationPathsCache {
   /** Candidate strings confirmed to resolve to an existing project entry. */
   known: Set<string>
-  /** Candidate strings already sent to main (positive or negative). */
-  checked: Set<string>
+  /** Candidate strings last probed without a result, and when that happened. */
+  rejected: Map<string, number>
   /** Candidates queued for the next batch existence check. */
   pending: Set<string>
+}
+
+/** Whether an unresolved candidate may be probed again at `now`. */
+function retryDue(
+  known: ReadonlySet<string>,
+  rejected: ReadonlyMap<string, number>,
+  candidate: string,
+  now: number
+): boolean {
+  if (known.has(candidate)) return false
+  const rejectedAt = rejected.get(candidate)
+  return rejectedAt === undefined || now - rejectedAt >= NEGATIVE_RETRY_MS
 }
 
 class CitationPathsState {
@@ -32,7 +60,7 @@ class CitationPathsState {
     Promise<void>
   >() /** Absolute paths outside the project root confirmed to exist on disk. */
   private readonly externalKnown = new Set<string>()
-  private readonly externalChecked = new Set<string>()
+  private readonly externalRejected = new Map<string, number>()
   private readonly externalPending = new Set<string>()
   private externalInflight: Promise<void> | null = null
   /** Reactive version — bumped whenever a resolution changes the known set. */
@@ -50,7 +78,7 @@ class CitationPathsState {
   private cacheFor(projectId: string): CitationPathsCache {
     let cache = this.projects.get(projectId)
     if (!cache) {
-      cache = { known: new Set(), checked: new Set(), pending: new Set() }
+      cache = { known: new Set(), rejected: new Map(), pending: new Set() }
       this.projects.set(projectId, cache)
     }
     return cache
@@ -96,8 +124,7 @@ class CitationPathsState {
       if (!threadId) return
       const artifactCandidates = candidates.filter(
         (candidate) =>
-          isAbsoluteCitationPath(candidate) &&
-          candidate.includes(`/chats-artifacts/${threadId}/`)
+          isAbsoluteCitationPath(candidate) && candidate.includes(`/chats-artifacts/${threadId}/`)
       )
       if (artifactCandidates.length > 0) this.ensureExternalChecked(artifactCandidates)
       return
@@ -119,17 +146,21 @@ class CitationPathsState {
   }
 
   /**
-   * Queue existence checks, deduplicating candidates already resolved and
-   * coalescing bursts (e.g. every MarkdownView mounting at once) into one
-   * inflight drain per project.
+   * Queue existence checks, coalescing bursts (e.g. every MarkdownView mounting
+   * at once) into one inflight drain per project. A candidate already resolved
+   * is never asked about again; an unresolved one is charged to the negative
+   * retry window so a path created later still becomes a link without turning
+   * every render into an IPC round trip.
    */
   ensureChecked(projectId: string, candidates: string[], scopeBucketId?: string): void {
     if (projectId === INBOX_PROJECT_ID) return
     const cacheKey = `${projectId}:${scopeBucketId ?? ''}`
     const cache = this.cacheFor(cacheKey)
+    const now = Date.now()
     for (const candidate of candidates) {
-      if (candidate.length === 0 || cache.checked.has(candidate)) continue
-      cache.checked.add(candidate)
+      if (candidate.length === 0) continue
+      if (!retryDue(cache.known, cache.rejected, candidate, now)) continue
+      cache.rejected.set(candidate, now)
       cache.pending.add(candidate)
     }
     if (cache.pending.size === 0 || this.inflight.has(cacheKey)) return
@@ -172,9 +203,11 @@ class CitationPathsState {
   }
 
   private ensureExternalChecked(candidates: string[]): void {
+    const now = Date.now()
     for (const candidate of candidates) {
-      if (candidate.length === 0 || this.externalChecked.has(candidate)) continue
-      this.externalChecked.add(candidate)
+      if (candidate.length === 0) continue
+      if (!retryDue(this.externalKnown, this.externalRejected, candidate, now)) continue
+      this.externalRejected.set(candidate, now)
       this.externalPending.add(candidate)
     }
     if (this.externalPending.size === 0 || this.externalInflight) return

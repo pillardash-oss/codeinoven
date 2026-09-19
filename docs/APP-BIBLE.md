@@ -31,6 +31,157 @@ specify → review → approve → implement
 
 The IPC contract is a hard boundary. Renderer code never reaches into Node APIs; main-process code never assumes renderer state. All messages are validated on both sides.
 
+### How code is organised inside each layer
+
+Heavy files are split by concern, and always into one of three shapes, so each
+layer decomposes the same way instead of inventing a new structure per file:
+
+- **Pure logic lives in plain `.ts` modules.** Rules with no reactive state and
+  no DOM (partitioning, merging, formatting, validation, precedence) become
+  exported functions that take everything they need as explicit arguments.
+- **Reactive behaviour lives in `.svelte.ts` controllers.** A cohesive group of
+  rune state plus the operations over it becomes a class, so a component owns
+  rendering while the controller owns the state machine.
+- **Cohesive markup lives in child `.svelte` components.** A region of a large
+  template becomes a component with an explicit, typed prop surface.
+
+Conventions that keep this safe to do incrementally:
+
+- A split never changes a public prop or export. Callers keep importing the same
+  name from the same path.
+- New files are named after the unit they came from (`thread-turn-parts.ts`,
+  `SourcesPanelHeader.svelte`, `git-store-deployments.svelte.ts`) so a reader can
+  trace a module back to its owner and parallel work cannot collide on a generic
+  name such as `helpers.ts`.
+- When a module is split, the original file stays as the composition root and
+  re-exports everything it exported before. `src/lib/types.ts` and
+  `src/lib/ipc-contract.ts` are barrels over domain modules for exactly this
+  reason.
+- Each split ends with scoped `check`, `lint`, `format`, and relevant tests
+  before it is committed as its own change.
+
+### Reference map for the largest surfaces
+
+**Conversation** (`src/renderer/lib/components/threads/`)
+`ThreadView.svelte` is the composition root for a conversation surface. Its rules
+live in focused siblings:
+
+| Module | Owns |
+| --- | --- |
+| `thread-turn-parts.ts` | turn spans, working-trace part collection, final answer and audit matching |
+| `thread-response-ranges.ts` | quoted-selection DOM geometry, highlight registry, bubble placement |
+| `thread-message-presentation.ts` | display text, inline reference chips, trace previews, model/harness/token attribution |
+| `thread-usage-merge.ts` | context-usage and rate-limit merge precedence |
+| `thread-history.ts` | mounted-window size, history panel user list, multi-page jump reach |
+| `thread-scroll-memory.ts` | per-thread viewport memory that survives a remount |
+| `WorkingTrace*.svelte`, `SourcesPanel*.svelte`, `SubagentSessionView*.svelte` | the trace, sources, and sub-agent surfaces |
+
+The studio region of `ThreadView.svelte` deliberately stays in the parent: each
+branch is a single `SpecStudio`, `BrainstormStudio`, `PrdStudio`,
+`AssignmentStudio`, or `AuditStudio` invocation wiring many props, so wrapping it
+would add prop drilling rather than remove coupling. The checkpoint and
+file-citation helpers stay for the same reason: they are already thin adapters
+over `src/renderer/lib/threads/checkpoint-matching.ts`,
+`src/renderer/lib/stores/project-files.svelte.ts`, and
+`src/renderer/lib/stores/context-sidebar.svelte.ts`.
+
+**Git** (`src/renderer/lib/components/git/`, `src/renderer/lib/stores/`)
+`GitStatusPanel.svelte` composes `GitStatusPanelChangesView`, `BranchesView`,
+`StashesView`, `CommitComposer`, `CommitSearch`, `Dialogs`, `Notices`, and
+`RepoStates`. `stores/git.svelte.ts` is the composition root over
+`git-store-{deployments,pull-requests,pr-conflicts,pr-operations,local-operations,github}.svelte.ts`
+plus `git-store-helpers.ts`. `GitPullRequestDetail.svelte` composes the
+`GitPullRequestDetail*` section components (Conversation, Changes, Checks,
+AgentReport, MergeDialogs) and `GitPullRequestDetailCommentDialogs`, with its
+pure presentation in `git-pull-request-detail-format.ts`.
+
+**GitHub-authored content** (`src/main/git/`, `src/renderer/lib/components/markdown/`)
+The renderer CSP allows images only from `data:` and local sources, so remote
+pictures are inlined in main: `github-avatars.ts` for the accounts a conversation
+names, `github-images.ts` for the images a provider-authored body embeds. Both
+cache by URL and treat the URL as untrusted input. The renderer reaches them
+through `stores/avatars.svelte.ts` and `stores/github-images.svelte.ts`, which
+batch, cache, and bump a reactive version so the picture replaces the placeholder
+in place. `markdown-remote-images.ts` holds the URL rules the renderer and the
+store both need, so they cannot drift apart. Comment text itself is rendered by
+`markdown/github-emoji.ts` (shortcodes) and `github-references.ts` (pull requests,
+cross-repo issues, commits, mentions), both layered into `markdown/markdown.ts`.
+
+**Workspace and shell** (`src/renderer/lib/components/workspace/`, `.../layout/`)
+`Workspace.svelte` composes `WorkspaceSidebar`, `WorkspaceConversationPane`,
+`WorkspaceContextPanelContent`, `WorkspaceTerminalDockContent`, the browser and
+fullscreen surfaces, and the project dialogs, with sidebar state in
+`WorkspaceSidebarController.svelte.ts` and browser state in
+`WorkspaceBrowserController.svelte.ts`. `AppHeader.svelte` composes the view
+switcher, scope tabs, git chip, editor menu, and thread modals, with navigation
+state in `AppHeaderNavigationController.svelte.ts`.
+
+**Composer** (`src/renderer/lib/components/chats/`)
+`ChatComposer.svelte` composes the attachment strip, drop zone, image gate,
+inference and permission pickers, and plus menu, with input handling split across
+`chat-composer-{mentions,keydown,drop,paste,slash,attachments,settings,preview}`.
+
+**Shared contracts** (`src/lib/`)
+`types.ts` and `ipc-contract.ts` are barrels. The types live in
+`src/lib/types/<domain>.ts` (one module per domain: common, project, scope, thread,
+context, plan, provider, agent, agent-parts, usage, account, agent-message,
+agent-events, checkpoints, brainstorm, prd, spec, assignment, audit, settings, git,
+github, cloud, paths, cua, utility and the base-url provider). The IPC contract
+lives in `src/lib/ipc/` as one partial contract per channel group plus `events.ts`.
+Every consumer keeps importing `$shared/types` and `$shared/ipc-contract`.
+
+**Main-process services** (`src/main/`)
+- `chat/chat-engine.ts` keeps the `ChatEngine` class and composes
+  `chat-engine/chat-engine-{prompts,changes,errors,constants,types,pure,message-merge,message-text,generated-artifacts,images}.ts`.
+- `ipc/ipc-handlers.ts` is the composition root over one registrar per domain in
+  `ipc/handlers/`; `ipc/ipc-validation.ts` is a barrel over `ipc/validation/`.
+- Drivers compose per-harness module folders: `drivers/pi/` (+ `drivers/pi/tools/`),
+  `drivers/codex/`, `drivers/claude-code/`, alongside the shared
+  `drivers/persistent-cli-driver.ts` base.
+- `git/git-service.ts` composes `git/git/`; `git/scope-worktree-service.ts` composes
+  `git/scope-worktree/` (porcelain parsing, environment, git ops, setup, health, merge).
+- `index.ts` keeps the boot sequence and composes `bootstrap/` (bootstrap state, data
+  root, splash, keyboard shortcuts, open-with, session guards, post-paint services,
+  shutdown pipeline, quit lifecycle, fatal startup).
+- `browser/browser-service.ts` composes `browser/browser-service/`;
+  `editor/project-files-service.ts` composes `editor/project-files/`;
+  `workspaces/scope-tool-service.ts` composes `workspaces/scope-tool/`.
+- Drivers that were split later follow the same pattern: `drivers/opencode/`,
+  `drivers/muse/`, `drivers/persistent-cli/`, `drivers/cline/`.
+
+**Shared engines** (`src/lib/engines/`)
+`thread-manager.ts` composes `thread-manager-{capacity,deletion,lineage,search,transcripts,fork}.ts`
+and `assignment-engine.ts` composes
+`assignment-engine-{error,plan-lookup,snapshot,annotations,artifacts,audit-cycle,tasks,workers}.ts`.
+
+**Speech** (`src/renderer/lib/speech/`)
+`speech-controller.svelte.ts` keeps the rune state and orchestration over
+`speech-controller-{types,capture,voice-send,artifacts,playback,cues}`.
+
+**Renderer stores** (`src/renderer/lib/stores/`)
+Each store is the composition root over its own prefixed modules:
+`context-sidebar.svelte.ts` over `context-sidebar-{types,persistence,browser,tabs}`,
+`project-files.svelte.ts` over `project-files-{state,explorer}`,
+`thread-messages.svelte.ts` over `thread-messages-{merge,cache,events}`,
+`scope.svelte.ts` over `scope-{board,threads,worktrees}`, and
+`git.svelte.ts` over the `git-store-*` modules.
+
+**App shell and Spec Studio**
+`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,os-handoff,ipc-subscriptions}`.
+`components/specs/SpecStudio.svelte` composes
+`SpecStudio{Document,ResolutionSection,ContextSection,EditableListSection,EditableMiniList,AnnotationBubbles}.svelte`
+plus `spec-studio-{document-anchors,draft-edits,formatting,context-picker}`.
+
+**Settings, providers and shared pickers**
+`settings/UtilityEditorModal.svelte`, `settings/SoundSettingsTab.svelte`,
+`providers/AddProviderModal.svelte`, `shared/ModelPicker.svelte`,
+`shared/RichMarkdownEditor.svelte`, `files/ProjectFileExplorer.svelte`,
+`files/ProjectFilesPanel.svelte`, `settings/ProfileSettingsTab.svelte`,
+`git/GitPullRequestDetail.svelte` and `git/GitPullRequestSheet.svelte` each keep
+their public props and compose owner-prefixed section components plus one
+`<owner>-helpers.ts` (or `-format.ts`) module for their pure logic. Destructive
+confirmations in these surfaces all route through the shared `ConfirmDialog`.
+
 ---
 
 ## 2. Product Personality
@@ -113,6 +264,7 @@ Reuse before you create:
 - **Tooltips are never native.** The native `title` tooltip is unreliable. The custom tooltip system (`Tooltip`/`TooltipHost`) shows a reliable tooltip after 1500ms of hover for every element with a `title` attribute, so keep using `title`/`aria-label` and never build ad-hoc tooltip behavior.
 - If a component will be used in two or more places, make it reusable.
 - Use `StatusPill` for statuses instead of freeform colored text.
+- Destructive actions confirm through the shared `ConfirmDialog` (`src/renderer/lib/components/ui/ConfirmDialog.svelte`) instead of a hand-rolled modal footer.
 - Empty states must explain what is missing and offer one concrete next action.
 
 ### 3.6 Buttons and controls
@@ -147,6 +299,8 @@ Motion is subtle and functional:
 
 - `@lucide/svelte` for interface icons; 14–18px in toolbars, 18–22px in cards and empty states; keep stroke widths consistent.
 - Use the brand icon component for the logo/app mark. Never recreate the logo in CSS or ad-hoc SVG markup.
+- Two brand marks exist and neither substitutes for the other. Vendor surfaces (model picker, `cio-` providers, about rows) use the tile-free mark (`src/renderer/static/icon-mark.svg`, bundled as `vendor-icons/icons/cio.svg`), whose ink follows its surface. The `.cio` scratch folder wears the full app icon (`src/renderer/static/icon.svg`) with its tile, gloss and ember glow, because that is the artwork CodeInOven is recognised by. Both are vendored into the renderer as committed copies by `scripts/generate-brand-icons.ts`; never import anything from `src/renderer/static/` (the renderer's `publicDir`) from JavaScript.
+- Never recreate either mark in CSS or ad-hoc SVG markup.
 - The brand name flows from the single brand constant (`src/lib/brand.ts`). Never hardcode the product name in UI or build config.
 
 ### 3.10 Copywriting
@@ -194,7 +348,7 @@ Accessibility is part of the design system, not an afterthought:
 ### 4.2 Logging
 
 - `console.*` is **forbidden** anywhere in the codebase.
-- Use the `Logger` class (`src/main/logger.ts`). Dev-only output goes through `Logger.dev`.
+- Use the `Logger` class (`src/main/system/logger.ts`). Dev-only output goes through `Logger.dev`.
 
 ### 4.3 Verification commands (scoped, never repo-wide)
 
@@ -217,6 +371,7 @@ Unless explicitly asked to run against the whole project:
 ### 4.4 Architecture rules
 
 - Respect the layer boundaries: renderer ↔ typed IPC contract ↔ main process. No shortcuts around IPC validation.
+- **Split by concern, not by line count.** A heavy file is decomposed into the three shapes above: pure functions in a plain `.ts` module, rune state plus its operations in a `.svelte.ts` controller, and a cohesive markup region as a child `.svelte` component. A structural split changes no public prop and no export, moves code rather than rewriting it, and ships as its own verified commit.
 - All persistent writes are atomic (write `.tmp`, then `rename`) via the storage engine   never ad-hoc `fs.writeFile` for state.
 - Drivers implement `driver.interface.ts`; adapters implement `adapter.interface.ts`. New providers plug in via those contracts, never via special-cased branches.
 - CodeInOven's own state lives under its config directory only. Never write into a user's repository from app code.

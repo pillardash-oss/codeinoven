@@ -1,41 +1,48 @@
 <script lang="ts">
   import { ChevronDown, GitCompareArrows, GitPullRequestArrow, Loader2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import type { GitMainSyncDirection } from '$shared/types'
+  import type { GitSyncDirection } from '$shared/types'
 
   interface Props {
-    /** A `sync-main` operation is in flight, so the button reports the wait. */
+    /** A sync operation is in flight, so the button reports the wait. */
     busy: boolean
     /** Another remote operation is running, or the worktree has conflicts to resolve first. */
     blocked: boolean
-    onSync: (direction: GitMainSyncDirection) => void
+    /** Start the main-branch flow, which knows both ends already. */
+    onSync: (direction: GitSyncDirection) => void
+    /** Open the peer chooser, for any other checkout or branch in the project. */
+    onPickPeer: (direction: GitSyncDirection) => void
   }
 
-  let { busy, blocked, onSync }: Props = $props()
+  let { busy, blocked, onSync, onPickPeer }: Props = $props()
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40'
 </script>
 
 <!--
-  Worktree scopes are the only checkouts with a main worktree to trade commits
-  with, so this button only ever renders for them. Both directions live in one
-  menu because they are one job seen from two sides, and the branch row has room
-  for a single slot.
+  Sync is one job seen from two sides, whatever the other end is, so every
+  direction lives in one menu. The two "main" entries stay separate because they
+  are the common case and need no chooser; the other two open the peer chooser
+  for any worktree or branch the project has.
+
+  The Git panel renders this only for a managed worktree scope, so "main" here is
+  always the project root, a different checkout: from the project root itself
+  "sync with main" would be a sync with this very checkout.
 -->
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
     class="flex h-6 shrink-0 items-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40 data-[state=open]:bg-raised"
     disabled={blocked}
-    title="Sync this worktree with main"
-    aria-label="Sync this worktree with main"
+    title="Sync this checkout with another branch or worktree"
+    aria-label="Sync this checkout with another branch or worktree"
   >
     {#if busy}
       <Loader2 size={11} class="animate-spin" aria-hidden="true" />
     {:else}
       <GitCompareArrows size={11} aria-hidden="true" />
     {/if}
-    <span class="sync-label">Sync main</span>
+    <span class="sync-label">Sync</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
@@ -44,15 +51,24 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+      class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
     >
-      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from-main')}>
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from')}>
         <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync from main
       </DropdownMenu.Item>
-      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to-main')}>
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to')}>
         <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync to main
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onPickPeer('from')}>
+        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync from branch…
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onPickPeer('to')}>
+        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        Sync to branch…
       </DropdownMenu.Item>
     </DropdownMenu.Content>
   </DropdownMenu.Portal>
