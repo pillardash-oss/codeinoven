@@ -17,7 +17,8 @@
  */
 
 import { invoke } from '$lib/ipc.svelte'
-import { SelectionManager, type GhosttyTerminal } from 'ghostty-web'
+import type { GhosttyTerminal, SelectionManager } from 'ghostty-web'
+import { loadGhosttyWeb } from './runtime'
 
 interface SelectionCoordinate {
   col: number
@@ -31,39 +32,48 @@ interface SelectionManagerInternals {
   wasmTerm: GhosttyTerminal
 }
 
-let patched = false
+let patchPromise: Promise<void> | null = null
 
-/** Install the wrap-aware selection text extraction once. Idempotent. */
-export function patchSelectionCopy(): void {
-  if (patched) return
-  patched = true
+/** Install the wrap-aware selection text extraction once. Idempotent; every
+ *  caller awaits the same install, and a failed install can be retried. */
+export function patchSelectionCopy(): Promise<void> {
+  patchPromise ??= install().catch((error: unknown) => {
+    patchPromise = null
+    throw error
+  })
+  return patchPromise
+}
+
+async function install(): Promise<void> {
+  // Aliased so the `SelectionManager` *type* keeps meaning the instance type in
+  // the `this` annotations below, instead of being shadowed by the class value.
+  const { SelectionManager: selectionManagerClass } = await loadGhosttyWeb()
+  const prototype = selectionManagerClass.prototype as unknown as {
+    copyToClipboard: (text: string) => Promise<void>
+    getSelection: () => string
+  }
 
   // Prefer the Electron clipboard (always available in this app) over the
   // browser's `execCommand("copy")` fallback, which logs `❌ execCommand
   // copy failed` noise in the console and is deprecated.
-  const originalCopy = (
-    SelectionManager.prototype as unknown as {
-      copyToClipboard: (text: string) => Promise<void>
+  const originalCopy = prototype.copyToClipboard
+  prototype.copyToClipboard = async function (this: SelectionManager, text: string): Promise<void> {
+    // Try Electron IPC first — works even when the terminal isn't focused.
+    try {
+      await invoke('clipboard:writeText', text)
+      return
+    } catch {
+      // Fall through to the browser / execCommand path.
     }
-  ).copyToClipboard
-  ;(SelectionManager.prototype as unknown as { copyToClipboard: (text: string) => Promise<void> }).copyToClipboard =
-    async function (this: SelectionManager, text: string): Promise<void> {
-      // Try Electron IPC first — works even when the terminal isn't focused.
-      try {
-        await invoke('clipboard:writeText', text)
-        return
-      } catch {
-        // Fall through to the browser / execCommand path.
-      }
-      try {
-        await originalCopy.call(this, text)
-      } catch {
-        // Both paths failed — swallow the ghostty-web `console.error` noise.
-        // The selection itself is still valid; manual copy remains possible.
-      }
+    try {
+      await originalCopy.call(this, text)
+    } catch {
+      // Both paths failed — swallow the ghostty-web `console.error` noise.
+      // The selection itself is still valid; manual copy remains possible.
     }
+  }
 
-  SelectionManager.prototype.getSelection = function (this: SelectionManager): string {
+  prototype.getSelection = function (this: SelectionManager): string {
     const { selectionStart, selectionEnd, wasmTerm } = this as unknown as SelectionManagerInternals
     if (!selectionStart || !selectionEnd) return ''
 

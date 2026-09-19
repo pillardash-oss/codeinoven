@@ -1,4 +1,4 @@
-import { FitAddon, Ghostty, Terminal, UrlRegexProvider, type ITheme } from 'ghostty-web'
+import type { FitAddon, Ghostty, ITheme, Terminal } from 'ghostty-web'
 import { SvelteMap } from 'svelte/reactivity'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
@@ -8,6 +8,7 @@ import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
+import { loadGhosttyWeb } from './runtime'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
 
@@ -271,10 +272,12 @@ class TerminalSessionManager {
 
   private getRuntime(): Promise<Ghostty> {
     if (!this.runtime) {
-      this.runtime = Ghostty.load().catch((error: unknown) => {
-        this.runtime = undefined
-        throw error
-      })
+      this.runtime = loadGhosttyWeb()
+        .then(({ Ghostty }) => Ghostty.load())
+        .catch((error: unknown) => {
+          this.runtime = undefined
+          throw error
+        })
     }
     return this.runtime
   }
@@ -312,7 +315,8 @@ class TerminalSessionManager {
 
   private async create(id: string): Promise<TerminalSession> {
     const ghostty = await this.getRuntime()
-    patchSelectionCopy()
+    const { FitAddon, Terminal, UrlRegexProvider } = await loadGhosttyWeb()
+    await patchSelectionCopy()
     const term = new Terminal({
       ghostty,
       cursorBlink: true,
