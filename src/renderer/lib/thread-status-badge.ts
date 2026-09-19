@@ -46,9 +46,7 @@ export function statusBadgeForThread(thread: Thread, isWorking: boolean): Action
     case 'interrupted':
       return { label: 'Needs attention · interrupted', tone: 'done' }
     case 'completed':
-      return thread.read
-        ? { label: 'Done', stage: 'done' }
-        : { label: 'Done · unread', kind: 'completed' }
+      return thread.read ? { label: 'Done', stage: 'done' } : { label: 'Unread', stage: 'unread' }
     case 'created':
       return { label: 'New', stage: 'todo' }
     default: {
