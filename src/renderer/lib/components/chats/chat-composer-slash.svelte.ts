@@ -8,6 +8,8 @@ export interface ComposerSlashActionsOptions {
   getFileSystemMode: () => boolean | undefined
   getSupportsThinking: () => boolean
   getAccountPickerVisible: () => boolean
+  /** The scope shoe's picker is live (project mode, new thread). */
+  getScopePickerVisible: () => boolean
   getThinkingPresets: () => ThinkingPreset[]
   getActions: () => readonly ActionDefinition[]
 }
@@ -63,6 +65,18 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
               category: 'model' as const,
               source: composerActionSource,
               keywords: ['account', 'user', 'profile', 'login', 'credential']
+            }
+          ]
+        : []),
+      ...(options.getScopePickerVisible()
+        ? [
+            {
+              id: 'selector:scope' as const,
+              title: '/scope',
+              description: 'Open the scope picker and search',
+              category: 'mode' as const,
+              source: composerActionSource,
+              keywords: ['scope', 'worktree', 'environment', 'branch', 'isolate', 'board']
             }
           ]
         : []),

@@ -535,6 +535,11 @@
   /** Whether the shared model picker renders the account picker (more than one
    *  account for the selected provider)   gates the `/account` slash action. */
   let accountPickerVisible = $state(false)
+  /** The scope shoe instance, so the `/scope` slash action can open its picker. */
+  let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
+  /** The scope picker is live on the shoe (project mode, new thread)   gates
+   *  the `/scope` slash action the same way the shoe's badge chevron does. */
+  let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
   let startAfterPickerOpen = $state(false)
   // The composer is remounted by the parent when a restore is required, so
   // capture the persisted dependencies exactly once at construction.
@@ -687,6 +692,11 @@
     thinkingMenuOpen = false
   }
 
+  function showScopeMenu(): void {
+    closeAllMenus()
+    scopeShoeComponent?.openScopeMenu()
+  }
+
   function showInferenceMenu(): void {
     if (!supportsFast) return
     inferenceMenuOpen = true
@@ -822,6 +832,7 @@
     getFileSystemMode: () => resolved.fileSystemMode,
     getSupportsThinking: () => supportsThinking,
     getAccountPickerVisible: () => accountPickerVisible,
+    getScopePickerVisible: () => scopePickerAvailable,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -954,6 +965,12 @@
     if (action.id === 'selector:account') {
       // The account picker lives in the shared model picker's dropdown   open it directly.
       showAccountMenu()
+      return
+    }
+
+    if (action.id === 'selector:scope') {
+      // The scope picker lives in the shoe under the composer   open it directly.
+      showScopeMenu()
       return
     }
 
@@ -1818,6 +1835,7 @@
       class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
     >
       <ComposerShoe
+        bind:this={scopeShoeComponent}
         projectId={scopeShoe.projectId}
         threadId={scopeShoe.threadId}
         bucket={scopeShoe.bucket}

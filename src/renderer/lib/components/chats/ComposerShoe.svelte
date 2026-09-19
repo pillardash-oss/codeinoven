@@ -175,6 +175,13 @@
       menuOpen = false
       return
     }
+    openScopeMenu()
+  }
+
+  /** Opens the scope picker for callers that already know it is live (the
+   *  composer's `/scope` slash action); inert on existing or working threads. */
+  export function openScopeMenu(): void {
+    if (!isNewThread || isWorking) return
     menuOpen = true
     void scopeState.ensureBoardLoaded(projectId)
   }
@@ -283,8 +290,7 @@
             hint: 'Inherited',
             createLabel: 'Auto create new scope & worktree',
             createHint: 'Copy env',
-            createTitle:
-              'Generate a new scope with its own isolated worktree (copy environment)'
+            createTitle: 'Generate a new scope with its own isolated worktree (copy environment)'
           }}
           value={{ mode: 'inherit' }}
           busy={creatingAuto}
