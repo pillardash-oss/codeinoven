@@ -1846,6 +1846,7 @@
         isNewThread={scopeShoe.isNewThread}
         isWorking={scopeShoe.isWorking}
         onOpenScopeView={scopeShoe.onOpenScopeView}
+        onScopeMenuClosed={focusComposerAtSavedCaret}
         report={scopeShoe.report}
       />
     </div>

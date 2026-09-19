@@ -25,6 +25,9 @@
     /** Reassigns the thread's project; only honoured before the first message. */
     onSwitchProject?: (projectId: string) => void
     onOpenScopeView?: () => void | Promise<void>
+    /** Runs whenever the scope picker menu closes, so the composer can win its
+     *  focus back and resume typing at the saved caret. */
+    onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
     report?: ComposerWorkerReport
   }
@@ -77,6 +80,9 @@
     onSwitchProject?: (projectId: string) => void
     /** Opens the projects/threads scope view for this thread (existing threads). */
     onOpenScopeView?: () => void | Promise<void>
+    /** Runs whenever the scope picker menu closes, so the composer can win its
+     *  focus back and resume typing at the saved caret. */
+    onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
     report?: ComposerWorkerReport
   }
@@ -92,6 +98,7 @@
     project,
     onSwitchProject,
     onOpenScopeView,
+    onScopeMenuClosed,
     report
   }: Props = $props()
 
@@ -111,7 +118,7 @@
       })
       workspaceState.updateThread(updated)
       scopeState.updateThread(updated)
-      menuOpen = false
+      closeMenu()
     } catch (error) {
       reportError(error, 'The scope could not be changed.')
     }
@@ -145,7 +152,7 @@
       }
     )
     creatingAuto = false
-    menuOpen = false
+    closeMenu()
   }
 
   /**
@@ -172,7 +179,7 @@
       return
     }
     if (menuOpen) {
-      menuOpen = false
+      closeMenu()
       return
     }
     openScopeMenu()
@@ -186,8 +193,13 @@
     void scopeState.ensureBoardLoaded(projectId)
   }
 
+  /** The single close path for the scope menu: every dismissal   Escape, a
+   *  pick, the click-away overlay, or toggling the shoe again   routes through
+   *  here so the composer's focus restoration sees exactly one transition. */
   function closeMenu(): void {
+    if (!menuOpen) return
     menuOpen = false
+    onScopeMenuClosed?.()
   }
 
   function toggleReportMenu(): void {
