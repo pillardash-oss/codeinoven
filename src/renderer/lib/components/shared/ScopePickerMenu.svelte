@@ -5,10 +5,11 @@
    * component renders only the panel: positioning, the click-away overlay and
    * any creation modal belong to the caller.
    */
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { FolderTree, Search, X } from '@lucide/svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { isTypeableKey } from '$lib/components/shared/model-picker-helpers'
   import type { ScopeBucket, ScopeChoice } from '$shared/types'
 
   interface ScopePickerTarget {
@@ -57,6 +58,11 @@
 
   let query = $state('')
   let searchInput: HTMLInputElement | undefined = $state(undefined)
+  /** The panel root, so arrow keys can find a row without a ref per button. */
+  let menuEl: HTMLDivElement | undefined = $state(undefined)
+
+  /** Stable identity for each navigable row, in visual order. */
+  type ScopeRowKey = 'inherit' | 'dedicated' | 'create' | `scope:${string}`
 
   let inheritName = $derived(target.bucket?.name ?? target.fallbackName)
   let inheritColor = $derived(
@@ -86,6 +92,74 @@
     onCreateScope()
   }
 
+  /** Every navigable row in DOM order: the fixed rows, then the search hits. */
+  let scopeRowKeys = $derived.by<ScopeRowKey[]>(() => [
+    'inherit',
+    'dedicated',
+    'create',
+    ...otherBuckets.map((candidate): ScopeRowKey => `scope:${candidate.id}`)
+  ])
+
+  /** Return focus to the search field and put the caret at its end, so typed
+   *  characters continue editing the query where the user left it. */
+  function focusSearchInput(offset = 0): void {
+    if (!searchInput) return
+    searchInput.focus()
+    const len = searchInput.value.length
+    const target = Math.max(0, Math.min(len, len + offset))
+    searchInput.setSelectionRange(target, target)
+  }
+
+  /** Move focus onto one of the menu's rows, keeping it in view. */
+  function focusScopeRow(key: ScopeRowKey): void {
+    void tick().then(() => {
+      menuEl?.querySelector<HTMLElement>(`[data-scope-row="${CSS.escape(key)}"]`)?.focus()
+    })
+  }
+
+  /** Arrow-key navigation, Escape dismissal, and editing-key hand-off back to
+   *  the search field, matching the shared model picker's behaviour. */
+  function rowKeydown(event: KeyboardEvent, rowKey: ScopeRowKey): void {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const currentIndex = scopeRowKeys.indexOf(rowKey)
+      if (currentIndex === -1) return
+      const targetIndex =
+        event.key === 'ArrowDown'
+          ? Math.min(currentIndex + 1, scopeRowKeys.length - 1)
+          : Math.max(currentIndex - 1, 0)
+      if (targetIndex === currentIndex) return
+      focusScopeRow(scopeRowKeys[targetIndex])
+      return
+    }
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      onClose()
+      return
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      focusSearchInput(event.key === 'ArrowLeft' ? -1 : 0)
+      return
+    }
+    if (event.key === 'Backspace') {
+      event.preventDefault()
+      focusSearchInput(0)
+      query = query.slice(0, -1)
+      return
+    }
+    if (event.key === 'Delete') {
+      event.preventDefault()
+      focusSearchInput(0)
+      return
+    }
+    if (isTypeableKey(event)) {
+      event.preventDefault()
+      focusSearchInput(0)
+      query += event.key
+    }
+  }
+
   /**
    * Hold the search field and, when the caller asked for it, focus it. An
    * attachment runs as the field enters the DOM, so the focus lands on the same
@@ -102,6 +176,7 @@
 </script>
 
 <div
+  bind:this={menuEl}
   class="w-72 overflow-hidden rounded-xl border bg-surface p-1.5 shadow-lg"
   role="menu"
   aria-label={label}
@@ -115,6 +190,17 @@
       class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
       placeholder="Search scopes…"
       aria-label="Search scopes"
+      onkeydown={(event: KeyboardEvent) => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          focusScopeRow('inherit')
+          return
+        }
+        if (event.key === 'Escape') {
+          event.stopPropagation()
+          onClose()
+        }
+      }}
     />
     {#if query}
       <button
@@ -136,7 +222,9 @@
     <!-- Inherited scope for this picker's caller -->
     <button
       type="button"
-      class="mt-1 flex w-full items-center gap-2 rounded-lg border-l-2 bg-raised px-2.5 py-1.5 text-left text-xs text-foreground"
+      data-scope-row="inherit"
+      onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'inherit')}
+      class="mt-1 flex w-full items-center gap-2 rounded-lg border-l-2 bg-raised px-2.5 py-1.5 text-left text-xs text-foreground focus:bg-elevated focus:outline-none"
       style:border-left-color={inheritColor}
       title={`Inherited scope: ${inheritName}`}
       aria-label={`Inherited scope: ${inheritName}`}
@@ -157,7 +245,9 @@
     >
     <button
       type="button"
-      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+      data-scope-row="dedicated"
+      onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'dedicated')}
+      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
       title={target.createTitle}
       aria-label={target.createLabel}
       role="menuitemradio"
@@ -170,7 +260,9 @@
     </button>
     <button
       type="button"
-      class="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+      data-scope-row="create"
+      onkeydown={(event: KeyboardEvent) => rowKeydown(event, 'create')}
+      class="flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none"
       title="Open the full scope creation form"
       aria-label="Create a scope"
       onclick={openCreateScope}
@@ -185,7 +277,9 @@
     {#each otherBuckets as candidate (candidate.id)}
       <button
         type="button"
-        class="flex w-full items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        data-scope-row="scope:{candidate.id}"
+        onkeydown={(event: KeyboardEvent) => rowKeydown(event, `scope:${candidate.id}`)}
+        class="flex w-full items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated focus:text-foreground focus:outline-none"
         style:border-left-color={bucketColor(candidate)}
         title={candidate.name}
         aria-label={`Use scope: ${candidate.name}`}
