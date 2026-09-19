@@ -169,6 +169,24 @@ export function allTasksCompleted(tasks: AssignmentTask[]): boolean {
   return tasks.every((task) => task.status === 'completed')
 }
 
+/**
+ * Drop an audit offer the plan has outgrown.
+ *
+ * `available` means "the implementation finished, review it", and it is only
+ * ever written by a review that completed every task. A later transition can
+ * reopen work on that same plan: a steered worker, a worker that went
+ * unavailable, a failed review. The offer is void from that moment, and leaving
+ * it behind left the composer showing an audit prompt for a plan that was
+ * running again, where neither dismissing nor starting the audit was possible.
+ * Rework cycles are untouched: `reworking` deliberately tracks a working plan.
+ */
+export function settleAuditOffer(plan: AssignmentPlan): AssignmentPlan {
+  if (plan.auditCycle?.status !== 'available') return plan
+  if (plan.status === 'completed' && allTasksCompleted(plan.content.tasks)) return plan
+  const { auditCycle: _settled, ...rest } = plan
+  return rest
+}
+
 export function anyTaskFailed(tasks: AssignmentTask[]): boolean {
   return tasks.some((task) => task.status === 'failed')
 }

@@ -899,9 +899,11 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     // An Assignment offer is derived from its audit cycle, not the thread audit
     // state, so dismissing it must land on the plan too. The cycle stays
     // `available`, which keeps the audit reachable from the coordinator panel
-    // and the studios while the composer prompt disappears.
+    // and the studios while the composer prompt disappears. The cycle alone is
+    // the condition: a plan whose tasks were reopened after the offer appeared
+    // still shows the card, so it must still be dismissible.
     const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
-    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'available') {
+    if (assignment?.auditCycle?.status === 'available') {
       await assignmentEngine.dismissAuditOffer(validProjectId, validThreadId)
     }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)

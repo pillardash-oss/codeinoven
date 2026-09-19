@@ -54,6 +54,7 @@ import {
   deriveResumedStatus,
   planStatusAfterSteer,
   restoreStoppedAuditCycle,
+  settleAuditOffer,
   unblockDependentTasks
 } from './assignment-engine-tasks'
 import { AssignmentWorkerSelection, buildWorkerPrompt } from './assignment-engine-workers'
@@ -503,9 +504,7 @@ export class AssignmentEngine {
       stoppedAt: undefined,
       updatedAt: this.now()
     }
-    this.repo.save(resumed, active.version)
-    await this.artifacts.writeMarkdown(resumed)
-    return resumed
+    return this.persistPlan(resumed, active.version)
   }
 
   /**
@@ -827,9 +826,7 @@ export class AssignmentEngine {
       },
       updatedAt: this.now()
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
-    return updated
+    return this.persistPlan(updated, active.version)
   }
 
   async appendFollowUpTask(
@@ -858,9 +855,7 @@ export class AssignmentEngine {
       content: { ...active.content, tasks: [...active.content.tasks, { ...task, status }] },
       updatedAt: this.now()
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
-    return updated
+    return this.persistPlan(updated, active.version)
   }
 
   async assignTask(
@@ -1147,13 +1142,12 @@ export class AssignmentEngine {
       updatedAt: now,
       completedAt: allComplete ? now : undefined
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
+    const saved = await this.persistPlan(updated, active.version)
     if (allComplete) {
       this.removeWorkerApiCapabilitiesForAssignment(active.id)
     }
     const result: AssignmentToolResult = {
-      assignment: updated,
+      assignment: saved,
       task: reviewedTask,
       idempotent: false
     }
@@ -1184,9 +1178,7 @@ export class AssignmentEngine {
       },
       updatedAt: this.now()
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
-    return updated
+    return this.persistPlan(updated, active.version)
   }
 
   async markWorkerSteered(assignmentId: string, workerThreadId: string): Promise<AssignmentPlan> {
@@ -1219,9 +1211,7 @@ export class AssignmentEngine {
       content: { ...active.content, tasks },
       updatedAt: this.now()
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
-    return updated
+    return this.persistPlan(updated, active.version)
   }
 
   workerPrompt(plan: AssignmentPlan, task: AssignmentTask, featureSlug: string): string {
@@ -1295,13 +1285,26 @@ export class AssignmentEngine {
       },
       updatedAt: this.now()
     }
-    this.repo.save(updated, active.version)
-    await this.artifacts.writeMarkdown(updated)
-    return updated
+    return this.persistPlan(updated, active.version)
+  }
+
+  /**
+   * Save a plan after settling its audit offer against its own task graph, then
+   * rewrite the reviewable markdown. Every writer that can reopen finished work
+   * goes through here, so an offered audit and the plan it belongs to can never
+   * disagree about whether the implementation is finished.
+   */
+  private async persistPlan(
+    plan: AssignmentPlan,
+    approvedVersion?: number
+  ): Promise<AssignmentPlan> {
+    const settled = settleAuditOffer(plan)
+    this.repo.save(settled, approvedVersion)
+    await this.artifacts.writeMarkdown(settled)
+    return settled
   }
 
   private async persist(plan: AssignmentPlan): Promise<void> {
-    this.repo.save(plan)
-    await this.artifacts.writeMarkdown(plan)
+    await this.persistPlan(plan)
   }
 }

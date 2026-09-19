@@ -2787,7 +2787,14 @@
     const cycleStatus = assignment?.auditCycle?.status
     if (cycleStatus === 'failed') return 'failed'
     if (cycleStatus === 'available' && assignmentAuditThread?.status === 'failed') return 'failed'
-    if (cycleStatus === 'available') return 'offered'
+    // An `available` cycle means "the implementation finished, review it", so it
+    // is only an offer while the plan really is finished. A plan whose tasks were
+    // reopened after the offer appeared would otherwise pin the card to the
+    // composer with no way out: the audit cannot start from there and Cancel
+    // cannot dismiss it, so the card returned on every refresh.
+    if (cycleStatus === 'available') {
+      return assignment?.status === 'completed' ? 'offered' : undefined
+    }
     if (cycleStatus === 'running') return 'running'
     if (cycleStatus === 'report_ready') return 'report_ready'
     if (

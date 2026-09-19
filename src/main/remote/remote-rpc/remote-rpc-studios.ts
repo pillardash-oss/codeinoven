@@ -281,7 +281,7 @@ export async function callRemoteStudioRpc(
       const projectId = requireString(args[0])
       const threadId = requireString(args[1])
       const assignment = ctx.assignmentEngine.getActive(projectId, threadId)
-      if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'available') {
+      if (assignment?.auditCycle?.status === 'available') {
         await ctx.assignmentEngine.dismissAuditOffer(projectId, threadId)
       }
       return ctx.threadManager.setAuditState(projectId, threadId, undefined)

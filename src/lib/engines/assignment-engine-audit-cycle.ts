@@ -3,6 +3,7 @@ import type { AssignmentPlan } from '../types'
 import { AssignmentEngineError } from './assignment-engine-error'
 import { requireActivePlan } from './assignment-engine-plan-lookup'
 import type { AssignmentArtifactWriter } from './assignment-engine-artifacts'
+import { settleAuditOffer } from './assignment-engine-tasks'
 
 /**
  * State machine for the post-implementation Assignment audit cycle. Every
@@ -129,10 +130,13 @@ export class AssignmentAuditCycleBook {
   }
 
   /** Hide the offered audit from the composer without giving it up: the cycle
-   *  stays `available` so the coordinator panel and studios can still start it. */
+   *  stays `available` so the coordinator panel and studios can still start it.
+   *  Only the offer itself is required: a plan whose tasks were reopened after
+   *  the offer appeared must stay dismissible, or Cancel on the composer card
+   *  silently does nothing and the card returns on the next refresh. */
   async dismissOffer(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
     const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
-    if (active.status !== 'completed' || active.auditCycle?.status !== 'available') {
+    if (active.auditCycle?.status !== 'available') {
       throw new AssignmentEngineError(
         'invalid_transition',
         'Assignment audit offer cannot be dismissed right now'
@@ -202,7 +206,9 @@ export class AssignmentAuditCycleBook {
     active: AssignmentPlan,
     auditCycle: NonNullable<AssignmentPlan['auditCycle']>
   ): Promise<AssignmentPlan> {
-    const updated: AssignmentPlan = { ...active, auditCycle, updatedAt: this.now() }
+    // The one write path for the cycle, so an offered audit can never be stored
+    // on a plan that has since reopened work: `settleAuditOffer` drops it there.
+    const updated = settleAuditOffer({ ...active, auditCycle, updatedAt: this.now() })
     this.repo.save(updated, active.version)
     await this.artifacts.writeMarkdown(updated)
     return updated

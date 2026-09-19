@@ -62,6 +62,8 @@ When implementation finishes, the coordinator thread shows the **Implementation 
 
 The cycle stays `available` with `offerDismissedAt` set, so the audit remains reachable from the coordinator panel's **Audit Work** action and from Spec Studio, and asking for it there restores the composer prompt (`audit:restoreOffer`). Starting the audit or making it available again clears the dismissal.
 
+The offer belongs to a finished implementation, so it is only written and only shown while every task is `completed`. Any transition that reopens work on that plan (a steered worker, a worker that went unavailable and was recovered, a review that did not pass) drops it through `settleAuditOffer`, and the composer derives the offer from `completed` alone. Without that, a plan holding an `available` cycle while its tasks ran again pinned the prompt to the composer where it could neither be started nor dismissed, and Cancel appeared to do nothing because it landed on a plan whose audit was no longer startable.
+
 ### Worker scope
 
 An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.
