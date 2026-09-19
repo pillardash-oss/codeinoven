@@ -1408,8 +1408,11 @@
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
       scopeState.updateThread(updated)
-      if (isOrchestrationChildThread(updated)) return
-      upsertThreadInList(updated)
+      // Children stay out of the sidebar list, but the read flow below must
+      // still cover them: the coordinator panel renders a worker's live status
+      // chip from its own thread row, so an opened worker settles unread to
+      // read exactly like a regular thread.
+      if (!isOrchestrationChildThread(updated)) upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         // Auto-mark the selected thread read only while the window actually
@@ -1465,7 +1468,9 @@
     const thread = selectedThread
     if (!thread || thread.id === readSettledThreadId) return
     readSettledThreadId = thread.id
-    if (thread.read || isOrchestrationChildThread(thread) || !document.hasFocus()) return
+    // Orchestration children settle too: the coordinator panel shows their
+    // status chip, so an opened or selected worker must not stay unread.
+    if (thread.read || !document.hasFocus()) return
     markThreadReadAfterPaint(thread)
   })
 
@@ -1478,7 +1483,7 @@
   $effect(() => {
     const onWindowFocus = (): void => {
       const selected = workspaceState.selectedThread
-      if (!selected || selected.read || isOrchestrationChildThread(selected)) return
+      if (!selected || selected.read) return
       requestThreadRead(selected.projectId, selected.id)
     }
     window.addEventListener('focus', onWindowFocus)
