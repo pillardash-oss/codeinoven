@@ -14,12 +14,29 @@ export interface TurnProvenance {
   thinkingLevel?: ThinkingLevel
 }
 
+/**
+ * Upsert a batch of messages into a session transcript, keeping it ordered by
+ * `createdAt`.
+ *
+ * The transcript is re-sorted only when the batch could have disturbed the
+ * order. Every driver on this transport streams one whole-message snapshot per
+ * parsed record   cline and muse emit one per text/reasoning delta   and an
+ * ordered transcript is the single input to that upsert, so re-sorting an
+ * already-ordered array on every record is work whose result is discarded. A
+ * stable sort of an ordered array is that same array, which makes skipping it
+ * equivalent to always sorting.
+ *
+ * `session.messages` order is owned here: this function is the only place that
+ * appends to it, and the only other mutation (dropping one empty assistant
+ * stub) removes an element without reordering the rest.
+ */
 export function mergeSessionMessages(
   session: PersistentCliSession,
   messages: AgentMessage[],
   provenance: TurnProvenance | undefined,
   driverId: string
 ): void {
+  let orderDisturbed = false
   for (const raw of messages) {
     const message: AgentMessage = {
       ...raw,
@@ -29,10 +46,20 @@ export function mergeSessionMessages(
       harnessId: raw.harnessId ?? driverId
     }
     const index = session.messages.findIndex((current) => current.id === message.id)
-    if (index === -1) session.messages.push(message)
-    else session.messages[index] = message
+    if (index === -1) {
+      const last = session.messages.at(-1)
+      if (last !== undefined && last.createdAt > message.createdAt) orderDisturbed = true
+      session.messages.push(message)
+      continue
+    }
+    // Replacing a message moves it only when its timestamp changed; a snapshot
+    // that keeps its `createdAt` cannot leave the transcript unordered.
+    if (session.messages[index]?.createdAt !== message.createdAt) orderDisturbed = true
+    session.messages[index] = message
   }
-  session.messages.sort((left, right) => left.createdAt - right.createdAt)
+  if (orderDisturbed) {
+    session.messages.sort((left, right) => left.createdAt - right.createdAt)
+  }
 }
 
 /**
