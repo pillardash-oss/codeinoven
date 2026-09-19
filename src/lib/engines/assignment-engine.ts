@@ -1224,10 +1224,11 @@ export class AssignmentEngine {
   /**
    * The scope bucket a worker's thread is created in.
    *
-   * A worker that inherits simply follows the Assignment's own scope, which was
-   * frozen from the Sr. Engineer's at sign-off, and `workerScopeBucketId` is not
-   * consulted: a task whose scope the user changed back to `inherit` must run
-   * where `inherit` points now, not in the checkout an earlier choice created.
+   * A worker that inherits simply follows its phase's scope, which in turn
+   * follows the Assignment's own scope, frozen from the Sr. Engineer's at
+   * sign-off. `workerScopeBucketId` is not consulted for `inherit`: a task whose
+   * scope the user changed back to `inherit` must run where `inherit` points now,
+   * not in the checkout an earlier choice created.
    * Every other choice goes to the app, which validates a named scope and may
    * create a worktree.
    */
@@ -1237,7 +1238,8 @@ export class AssignmentEngine {
     workerName: string
   ): Promise<string> {
     const assignmentScopeBucketId = active.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    const choice = task.workerScope
+    const phase = active.content.phases.find((candidate) => candidate.id === task.phaseId)
+    const choice = task.workerScope ?? phase?.workerScope
     if (choice === undefined || choice.mode === 'inherit') return assignmentScopeBucketId
     const request: WorkerScopeRequest = {
       projectId: active.projectId,

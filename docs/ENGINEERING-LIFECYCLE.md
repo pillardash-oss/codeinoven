@@ -62,17 +62,19 @@ The cycle stays `available` with `offerDismissedAt` set, so the audit remains re
 
 An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.
 
-Each worker task can be pointed somewhere else before sign-off. The task row in the assignment review carries a scope picker next to its model picker, and the choice lives on the task (`AssignmentTask.workerScope`):
+A phase can be pointed somewhere else too, exactly like the phase model: the phase header in the assignment review carries the same scope picker next to its model picker, and the choice lives on the phase (`AssignmentPhase.workerScope`). A phase pick governs that phase and every phase after it, mirroring the phase-model cascade, so a mid-list pick never bleeds upward. Dispatch resolves `task.workerScope ?? phase.workerScope ?? inherit`, so a task override always wins and the Assignment's own scope is the final fallback.
 
-- **Inherit (default)** the worker runs in the Assignment's scope. No field is stored, and `workerScopeBucketId` is deliberately not consulted, so a task whose scope the user changed back to inherit follows wherever inherit points now rather than the checkout an earlier choice created.
-- **Dedicated worktree** the worker gets a managed worktree scope of its own, with its own branch and setup, created when the task is dispatched. Signing off an Assignment with a dozen such tasks stays instant because nothing is created up front.
+Both levels offer the same three choices. Each worker task also carries the picker on its own row, and its choice lives on the task (`AssignmentTask.workerScope`):
+
+- **Inherit (default)** the worker runs in whatever the level above resolved to: the Assignment's scope for a phase, the phase's choice for a task. No field is stored, and `workerScopeBucketId` is deliberately not consulted, so a task whose scope the user changed back to inherit follows wherever inherit points now rather than the checkout an earlier choice created.
+- **Dedicated worktree** the worker gets a managed worktree scope of its own, with its own branch and setup, created when the task is dispatched. Signing off an Assignment with a dozen such tasks stays instant because nothing is created up front. A phase with this choice gives every one of its tasks its own worktree, one per dispatch.
 - **Existing scope** the worker runs in a scope already on the project board, or one created from the picker on the spot.
 
 Provisioning happens in the app rather than the engine. The engine calls an `AssignmentWorkerScopeProvisioner` port, installed on it by the IPC layer once the scope and worktree services exist, and that implementation creates the bucket and then the worktree exactly like an agent-made scope, including rolling the empty bucket back if the worktree never lands. A dedicated scope is named after the worker and its task, uniquified against every existing scope name, because scope names are how a scope is addressed by reference and a duplicate would make every name-based lookup ambiguous.
 
 `AssignmentTask.workerScopeBucketId` records the scope a dispatched worker actually runs in. A retried task passes it back to the provisioner, so a replacement worker reuses the checkout holding the failed attempt's commits instead of leaking a second worktree for the same task. Changing the choice clears it, and the engine refuses both to change a scope once a worker thread exists and to fail a dispatch quietly: if the scope can no longer be created or found, the dispatch fails with `scope_unavailable` and the task stays `ready` rather than starting a worker in the wrong directory. The auditor always inherits the Assignment scope.
 
-Agent-generated task graphs cannot set a worker scope. Only the human choice made on the review surface does, so Autopilot, which has no sign-off, always inherits.
+Agent-generated task graphs cannot set a worker scope, at either level. Only the human choice made on the review surface does, so Autopilot, which has no sign-off, always inherits.
 
 ### Reopening a finished worker
 

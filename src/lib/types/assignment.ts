@@ -100,6 +100,12 @@ export interface AssignmentPhase {
   description: string
   info?: string
   defaultModel?: AssignmentModelSelection
+  /**
+   * Scope chosen for this phase's workers before sign-off, mirroring the phase
+   * model: a change cascade from its own phase down the list. Absent means the
+   * phase uses the Assignment's own scope, and a task `workerScope` overrides it.
+   */
+  workerScope?: ScopeChoice
 }
 
 export interface AssignmentTaskReport {

@@ -104,6 +104,31 @@
     return task.owner === 'senior' ? seniorModel : phaseModel(task.phaseId)
   }
 
+  /**
+   * The scope a task's `inherit` resolves to, which is its phase's choice when
+   * the phase set one and the Assignment's own scope otherwise. The task picker
+   * shows this instead of assuming the Assignment's scope, so the cascade a phase
+   * pick applies stays visible and a task never claims a scope it will not run in.
+   */
+  function taskInheritScope(task: AssignmentTask): {
+    bucketId: string | undefined
+    fallbackName: string
+    hint: string
+  } {
+    const phaseScope = content.phases.find((phase) => phase.id === task.phaseId)?.workerScope
+    if (phaseScope?.mode === 'scope') {
+      return { bucketId: phaseScope.bucketId, fallbackName: 'Phase scope', hint: 'From phase' }
+    }
+    if (phaseScope?.mode === 'dedicated') {
+      return { bucketId: undefined, fallbackName: 'New worktree', hint: 'From phase' }
+    }
+    return {
+      bucketId: assignmentScopeBucketId,
+      fallbackName: "Sr. Engineer's scope",
+      hint: 'Inherited'
+    }
+  }
+
   function canUpdateTaskModel(task: AssignmentTask): boolean {
     if (!readOnly) return true
     return (
@@ -124,6 +149,22 @@
       task.status !== 'completed' &&
       task.status !== 'stopped'
     )
+  }
+
+  /**
+   * A phase scope governs that phase and every phase after it, mirroring the
+   * phase-model cascade, so a mid-list pick never bleeds upward. Task overrides
+   * are untouched and still win at dispatch.
+   */
+  function updatePhaseScope(phaseId: string, scope: ScopeChoice): void {
+    const index = content.phases.findIndex((phase) => phase.id === phaseId)
+    if (index < 0) return
+    update({
+      ...content,
+      phases: content.phases.map((phase, phaseIndex) =>
+        phaseIndex < index ? phase : { ...phase, workerScope: scope }
+      )
+    })
   }
 
   async function updateTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
@@ -520,6 +561,14 @@
                   level
                 )}
             />
+            {#if projectId}
+              <WorkerScopePicker
+                {projectId}
+                inheritBucketId={assignmentScopeBucketId}
+                value={phase.workerScope ?? { mode: 'inherit' }}
+                onSelect={(choice) => updatePhaseScope(phase.id, choice)}
+              />
+            {/if}
           </div>
         {/if}
       </div>
@@ -529,6 +578,7 @@
           {@const selectedTaskModel = resolvedTaskModel(task)}
           {@const displayedReworkCycle = taskReworkCycle(task)}
           {@const workerScopeName = workerScopeBadgeName(task)}
+          {@const taskScope = taskInheritScope(task)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -647,7 +697,9 @@
                   {#if projectId && task.owner === 'worker' && (!readOnly || canUpdateTaskScope(task))}
                     <WorkerScopePicker
                       {projectId}
-                      inheritBucketId={assignmentScopeBucketId}
+                      inheritBucketId={taskScope.bucketId}
+                      inheritFallbackName={taskScope.fallbackName}
+                      inheritHint={taskScope.hint}
                       value={task.workerScope ?? { mode: 'inherit' }}
                       onSelect={(choice) => void updateTaskScope(task.id, choice)}
                     />

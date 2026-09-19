@@ -126,6 +126,16 @@ function validateAssignmentContent(value: unknown): AssignmentPlanContent {
               phase.defaultModel,
               `Assignment phase ${index} model`
             )
+          }),
+      // Carried through untouched, exactly like the phase model: the choice is
+      // made on the review surface, so it must survive the save/approve round trip.
+      ...(phase.workerScope === undefined
+        ? {}
+        : {
+            workerScope: validateAssignmentWorkerScope(
+              phase.workerScope,
+              `Assignment phase ${index} worker scope`
+            )
           })
     }
   })

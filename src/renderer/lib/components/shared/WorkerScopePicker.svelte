@@ -15,14 +15,29 @@
 
   interface Props {
     projectId: string
-    /** The Assignment's own scope, i.e. what `inherit` resolves to. */
+    /**
+     * The scope an `inherit` choice resolves to, i.e. the one the caller's parent
+     * level chose: the Assignment's own scope for a phase, the phase's for a task.
+     */
     inheritBucketId?: string
+    /** Name for the inherit row when that scope is not on the board yet. */
+    inheritFallbackName?: string
+    /** Trailing hint on the inherit row, e.g. "Inherited" or "From phase". */
+    inheritHint?: string
     value: ScopeChoice
     disabled?: boolean
     onSelect: (choice: ScopeChoice) => void
   }
 
-  let { projectId, inheritBucketId, value, disabled = false, onSelect }: Props = $props()
+  let {
+    projectId,
+    inheritBucketId,
+    inheritFallbackName = "Sr. Engineer's scope",
+    inheritHint = 'Inherited',
+    value,
+    disabled = false,
+    onSelect
+  }: Props = $props()
 
   let open = $state(false)
   let createModalOpen = $state(false)
@@ -50,7 +65,7 @@
       ? 'New worktree'
       : value.mode === 'scope'
         ? (selectedBucket?.name ?? 'Chosen scope')
-        : (inheritBucket?.name ?? "Sr. Engineer's scope")
+        : (inheritBucket?.name ?? inheritFallbackName)
   )
 
   let showWorktree = $derived(selectedBucket?.root.kind === 'worktree')
@@ -112,8 +127,8 @@
           {projectId}
           target={{
             bucket: inheritBucket,
-            fallbackName: "Sr. Engineer's scope",
-            hint: 'Inherited',
+            fallbackName: inheritFallbackName,
+            hint: inheritHint,
             createLabel: 'New worktree for this worker',
             createHint: 'At dispatch',
             createTitle:
