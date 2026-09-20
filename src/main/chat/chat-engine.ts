@@ -19964,8 +19964,7 @@ export class ChatEngine {
     // gateway (handoff clear + gateway.cleanup); the steer's deliverAfterTurn
     // path runs a full sendPrompt that re-arms a fresh gateway turn, and if
     // the two raced the stale cleanup would wipe the new turn's credentials
-    // mid-turn, leaving the harness with dead cio_util_* tools and a
-    // retrieve_mcp_host fallback that finds no live turn for the session.
+    // mid-turn, leaving the harness with dead cio_util_* tools.
     const finalization = this.onSessionIdle(sessionId)
       .catch((error) => Logger.error('Session idle finalization failed:', error))
       .then(() => {

@@ -18,7 +18,6 @@ import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
-import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -2913,14 +2912,7 @@ export class PiDriver extends PersistentCliDriver {
           // prompt handoff, which only the root session's hook reads. A worker
           // gets this distilled contract instead, so it can never be left with
           // none of the application rules.
-          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT,
-          sessionId,
-          // Same durable resolver the orchestration service publishes for the
-          // prose recovery path; the gateway tools use it for host-level
-          // self-healing when the loopback port moved across an app restart.
-          retrieveScriptPath: this.storage.resolve(
-            join('runtime', 'utility-gateway', `${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`)
-          )
+          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT
         })
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)

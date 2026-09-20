@@ -17,7 +17,6 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
-import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import {
   ADB_CAPABILITY_DOCS,
   ADB_CAPABILITY_NAME,
@@ -37,7 +36,6 @@ import {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
-  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   canToggleUtilityEnabled
 } from '../../lib/utility-ids'
@@ -45,7 +43,6 @@ export {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
-  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   APP_SCOPE_UTILITY_ID
 }
 
@@ -69,9 +66,20 @@ export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
 
 /** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
-  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  'codeinoven:retrieve-mcp-host': APP_RETRIEVE_MCP_HOST_UTILITY_ID
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
 }
+
+/**
+ * App-owned entries the app no longer ships.
+ *
+ * The seed only adds defaults, and an app-owned entry is locked against user
+ * deletion, so a registry written by an older build would keep the entry alive
+ * forever. Retiring it here is what removes it from an existing install.
+ */
+const RETIRED_APP_UTILITY_IDS: ReadonlySet<string> = new Set([
+  'cio:retrieve-mcp-host',
+  'codeinoven:retrieve-mcp-host'
+])
 
 function isBlankImageDescriptorConfig(config: ImageDescriptorUtilityConfig): boolean {
   return (
@@ -117,6 +125,7 @@ export class UtilityRegistryService {
   private async performSeed(): Promise<void> {
     const registry = await this.loadRaw()
     const migrated = this.migrateLegacyAppUtilities(registry)
+    const retired = this.retireRemovedAppUtilities(registry)
     const now = Date.now()
     const defaults: UtilityDefinition[] = [
       {
@@ -135,30 +144,6 @@ export class UtilityRegistryService {
             harnessId: ALL_HARNESSES_BINDING_ID,
             strategy: 'native',
             nativeCapability: 'image_descriptor'
-          }
-        ],
-        appOwned: true,
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: APP_RETRIEVE_MCP_HOST_UTILITY_ID,
-        kind: 'skill',
-        name: RETRIEVE_MCP_HOST_TOOL_NAME,
-        description:
-          'Recovers the live app-managed MCP/utility gateway host from the CodeInOven instance that owns the exact current utility turn.',
-        enabled: true,
-        activation: 'always',
-        scope: { level: 'global' },
-        config: {
-          instructions: `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
-        },
-        credentials: [],
-        harnessBindings: [
-          {
-            harnessId: ALL_HARNESSES_BINDING_ID,
-            strategy: 'skill',
-            transportName: RETRIEVE_MCP_HOST_TOOL_NAME
           }
         ],
         appOwned: true,
@@ -263,7 +248,7 @@ export class UtilityRegistryService {
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     const rebound = this.normalizeAppOwnedBindings(registry)
-    if (missing.length > 0 || migrated || rebound) {
+    if (missing.length > 0 || migrated || retired || rebound) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
@@ -333,6 +318,17 @@ export class UtilityRegistryService {
       changed = true
     }
     return changed
+  }
+
+  /**
+   * Drops app-owned entries this build no longer ships. Idempotent: once the
+   * entry is gone the pass reports no change and no further write happens.
+   */
+  private retireRemovedAppUtilities(registry: UtilityRegistryFile): boolean {
+    const kept = registry.utilities.filter((utility) => !RETIRED_APP_UTILITY_IDS.has(utility.id))
+    if (kept.length === registry.utilities.length) return false
+    registry.utilities = kept
+    return true
   }
 
   /** Raw registry read that never triggers seeding (used by the seed itself). */
@@ -495,10 +491,6 @@ export class UtilityRegistryService {
           'App-owned utility identity, activation, scope, credentials, and bindings are locked'
         )
       }
-      if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {
-        throw new Error(`The app-owned ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is fully managed`)
-      }
-
       const normalized = normalizeInput({
         kind: current.kind,
         name: patch.name ?? current.name,

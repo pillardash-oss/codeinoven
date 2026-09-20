@@ -34,8 +34,6 @@ interface InstanceEntry {
   pid: number
   startedAt: number
   lastHeartbeat: number
-  /** Live app-utility gateway owned by this process, when one has been started. */
-  mcpHost?: string
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
 }
@@ -101,20 +99,6 @@ export class InstanceRegistry {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
       // Best effort   the file may already be gone.
-    }
-  }
-
-  /**
-   * Publish the utility gateway owned by this process. Recovery helpers read
-   * every live instance entry instead of assuming the port from one app window.
-   */
-  setMcpHost(mcpHost: string | null): void {
-    if (mcpHost) this.selfEntry.mcpHost = mcpHost
-    else delete this.selfEntry.mcpHost
-    try {
-      this.writeEntry()
-    } catch {
-      // Recovery metadata is best effort; the gateway remains usable directly.
     }
   }
 

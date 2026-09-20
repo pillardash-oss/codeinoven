@@ -16,7 +16,6 @@ import { APP_ADB_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
@@ -51,7 +50,6 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
 import type { AgentSecretResolution } from './agent-secret-service'
-import { instanceRegistry } from '../system/instance-registry'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_ALIGNMENT_OPERATIONS,
@@ -75,10 +73,7 @@ import {
 import {
   BROWSER_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
-  RETRIEVE_MCP_HOST_ROUTE,
-  RETRIEVE_MCP_HOST_SCRIPT_PATH,
   buildCuaSessionId,
-  buildMcpHostRetrieverScript,
   buildUtilityGatewayScript,
   gatewayUtility
 } from './utility-orchestration/utility-gateway-scripts'
@@ -410,8 +405,6 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // Host recovery belongs to the transport, never to model-facing skills.
-    eligible = eligible.filter(({ utility }) => utility.id !== APP_RETRIEVE_MCP_HOST_UTILITY_ID)
     // This capability is bound to the live interview, never installed globally.
     eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
     if (request.saveBrainstormNotes) {
@@ -524,7 +517,6 @@ export class UtilityOrchestrationService {
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    await this.ensureMcpHostRetriever()
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
@@ -928,25 +920,6 @@ export class UtilityOrchestrationService {
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
-        const input = await readJsonBody(request)
-        const sessionId = requiredString(input['session_id'], 'session_id', 128)
-        // turn_id pins the lookup to one utility turn; when omitted (the
-        // extension's self-healing path only knows the session id), any live
-        // utility turn for that session proves instance ownership.
-        const turnId = typeof input['turn_id'] === 'string' ? input['turn_id'] : ''
-        const turn = turnId
-          ? this.turns.get(turnId)
-          : [...this.turns.values()]
-              .filter((entry) => entry.state.request.sessionId === sessionId)
-              .at(-1)
-        if (turn?.state.request.sessionId !== sessionId || !this.gatewayBaseUrl) {
-          this.respond(response, 404, { error: 'Utility turn is not owned by this instance' })
-          return
-        }
-        this.respond(response, 200, { mcpHost: this.gatewayBaseUrl })
-        return
-      }
       const authorization = request.headers.authorization
       const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       const turnId = this.turnIdsByToken.get(token)
@@ -995,7 +968,6 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
-        instanceRegistry.setMcpHost(this.gatewayBaseUrl)
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -1014,7 +986,6 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
-    instanceRegistry.setMcpHost(null)
     if (!server) return
     await new Promise<void>((resolve) => {
       if (!server.listening) {
@@ -1023,19 +994,6 @@ export class UtilityOrchestrationService {
       }
       server.close(() => resolve())
     })
-  }
-
-  /**
-   * Materialize one durable app-owned recovery module. Turn instructions pass
-   * their session id as data, so cleanup can retire turn state without leaving
-   * a command in persistent agent context that points at a deleted module.
-   */
-  private async ensureMcpHostRetriever(): Promise<string> {
-    const script = buildMcpHostRetrieverScript(this.storage.resolve('instances'))
-    if ((await this.storage.readRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH)) !== script) {
-      await this.storage.writeRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH, script)
-    }
-    return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
   }
 
   /**

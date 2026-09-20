@@ -27,14 +27,11 @@
  * handoff is picked up by the long-lived process, and a cleared handoff makes
  * stale tokens unusable after the turn ends.
  *
- * Self-healing: when a call fails, the extension re-reads the handoff once
- * (the driver may have rotated credentials between the read and the request)
- * and, when the gateway host itself is unreachable, discovers the live
- * instance's `mcpHost` through the same shell resolver the prose fallback
- * used   the session id and resolver path are embedded at materialization
- * time. A recognized-but-rejected token (404) is NOT recoverable client-side:
- * the turn credentials were cleaned up, so the tool says so plainly instead of
- * letting the model guess.
+ * Self-healing: when a call fails, the extension re-reads the handoff once and
+ * retries against the freshly read credentials, since the driver may have
+ * rotated them between the read and the request. A recognized-but-rejected
+ * token (404) is NOT recoverable client-side: the turn credentials were cleaned
+ * up, so the tool says so plainly instead of letting the model guess.
  */
 
 import {
@@ -75,8 +72,7 @@ const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
-  return `import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+  return `import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
@@ -87,8 +83,6 @@ interface GatewayHandoff {
 }
 
 const HANDOFF_PATH = '__HANDOFF_PATH__'
-const SESSION_ID = '__CIO_SESSION_ID__'
-const RETRIEVE_SCRIPT = '__CIO_RETRIEVE_SCRIPT__'
 
 interface GatewayFailure extends Error {
   gatewayInactive?: boolean
@@ -184,32 +178,6 @@ function postJson(base: string, token: string, route: string, body: Record<strin
   })
 }
 
-/** Discover the live instance's loopback gateway host through the shell
- *  resolver the prose fallback used. Returns null when unavailable. */
-function discoverGatewayHost(): Promise<string | null> {
-  if (!RETRIEVE_SCRIPT || !SESSION_ID) return Promise.resolve(null)
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [RETRIEVE_SCRIPT, SESSION_ID],
-      { timeout: 4000 },
-      (error, stdout) => {
-        if (error) {
-          resolve(null)
-          return
-        }
-        try {
-          const parsed = JSON.parse(stdout)
-          const host = parsed?.mcpHost
-          resolve(typeof host === 'string' && host.startsWith('http://127.0.0.1') ? host : null)
-        } catch {
-          resolve(null)
-        }
-      }
-    )
-  })
-}
-
 async function callGateway(route: string, body: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
   const first = await loadHandoff()
   try {
@@ -234,16 +202,6 @@ async function callGateway(route: string, body: Record<string, unknown>, timeout
       }
     }
     if (error && error.gatewayInactive) throw error
-    // Host-level recovery: the app may have restarted and moved the loopback
-    // port while this long-lived session kept the old handoff.
-    const host = await discoverGatewayHost()
-    if (host && host !== fresh.url) {
-      try {
-        return await postJson(host, fresh.token, route, body, timeoutMs)
-      } catch (recoveredError) {
-        if (recoveredError && recoveredError.gatewayInactive) throw recoveredError
-      }
-    }
     throw error
   }
 }

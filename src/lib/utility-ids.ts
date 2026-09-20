@@ -25,9 +25,6 @@ export const APP_SCOPE_UTILITY_ID = 'cio:scope'
  */
 export const APP_ADB_UTILITY_ID = 'cio:adb'
 
-/** Stable id of the app-owned gateway host retriever, which is fully managed. */
-export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
-
 /**
  * App-owned knowledge a user may switch off.
  *
