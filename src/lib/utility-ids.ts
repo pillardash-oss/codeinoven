@@ -17,9 +17,10 @@ export const APP_CUA_DRIVER_UTILITY_ID = 'cio:cua-driver'
 export const APP_SCOPE_UTILITY_ID = 'cio:scope'
 
 /**
- * Stable id of the app-owned Android target control utility, backed by adb.
- * Named `adb` rather than `device` on purpose: `device` already means a paired
- * phone running the CodeInOven PWA (see `remote_devices` and
+ * Stable id of the app-owned Android device skill, a playbook an agent applies
+ * with its own shell rather than a tool the app executes. Named `adb` rather
+ * than `device` on purpose: `device` already means a paired phone running the
+ * CodeInOven PWA (see `remote_devices` and
  * `src/renderer/lib/remote/device-identity.ts`).
  */
 export const APP_ADB_UTILITY_ID = 'cio:adb'

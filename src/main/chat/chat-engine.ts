@@ -132,7 +132,6 @@ import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-proc
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
-  AdbUtilityExecutor,
   BrowserUtilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
@@ -1435,15 +1434,6 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
-  }
-
-  /**
-   * Wire the app-owned Android target capability that the utility gateway
-   * exposes. The service has no dependencies of its own, so the boot sequence
-   * constructs it and hands it over here.
-   */
-  setAdbTargetService(executor: AdbUtilityExecutor | null): void {
-    this.utilityOrchestration.setAdbExecutor(executor)
   }
 
   /**

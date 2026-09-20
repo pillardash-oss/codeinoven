@@ -32,6 +32,7 @@ import {
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
+import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
@@ -67,7 +68,6 @@ import {
   utilitySearchScore
 } from './utility-orchestration/utility-search'
 import {
-  ADB_UTILITY_TOOLS,
   BROWSER_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   RETRIEVE_MCP_HOST_ROUTE,
@@ -179,17 +179,6 @@ export type BrowserUtilityExecutor = (
 ) => Promise<unknown>
 
 /**
- * Runs one gateway invocation of the app-owned Android target capability for the
- * turn that made it. The chat engine supplies it because it owns the service
- * instance and the thread identity the lease is keyed on.
- */
-export type AdbUtilityExecutor = (
-  operation: string,
-  input: Record<string, unknown>,
-  context: { projectId: string; threadId: string }
-) => Promise<unknown>
-
-/**
  * Runs one gateway invocation of the app-owned scope and worktree capability
  * for the turn that made it. The chat engine supplies it because it owns the
  * thread's scope, project root and permission tier.
@@ -289,7 +278,6 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
-  private adbExecutor: AdbUtilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -351,16 +339,6 @@ export class UtilityOrchestrationService {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.browserExecutor = executor
-  }
-
-  /**
-   * Register the executor behind the app-owned `cio:adb` capability. Android
-   * target control is an ordinary app-owned utility rather than a listed tool:
-   * most turns never touch a phone, and a turn that does not must not carry
-   * thirteen operation schemas in its context.
-   */
-  setAdbExecutor(executor: AdbUtilityExecutor | null): void {
-    this.adbExecutor = executor
   }
 
   /**
@@ -478,6 +456,10 @@ export class UtilityOrchestrationService {
     // a schema: whether it is offered at all is the registry's call, so
     // disabling it in Utilities removes the pointer too.
     const hasScopeCapability = eligible.some(({ utility }) => utility.id === APP_SCOPE_UTILITY_ID)
+    // The Android device skill is advertised the same way, as a pointer rather
+    // than a schema. It is knowledge an agent applies with its own shell, so the
+    // only thing a turn needs from the app is to know the playbook exists.
+    const hasAdbCapability = eligible.some(({ utility }) => utility.id === APP_ADB_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -537,6 +519,11 @@ export class UtilityOrchestrationService {
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+          ]
+        : []),
+      ...(hasAdbCapability
+        ? [
+            `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context.`
           ]
         : []),
       ...(hasOnDemand
@@ -1185,11 +1172,6 @@ export class UtilityOrchestrationService {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
     }
-    if (resolved.utility.id === APP_ADB_UTILITY_ID) {
-      if (!this.adbExecutor)
-        throw new Error('Android target control is unavailable in this session')
-      return { tools: ADB_UTILITY_TOOLS }
-    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
@@ -1312,16 +1294,6 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
-      result = await executor(operation, operationInput, {
-        projectId: state.request.projectId,
-        threadId: state.request.threadId
-      })
-    } else if (resolved.utility.id === APP_ADB_UTILITY_ID) {
-      const executor = this.adbExecutor
-      if (!executor) throw new Error('Android target control is unavailable in this session')
-      // Audited without the serial or any screen content: which operations a turn
-      // ran against a phone is the durable fact, the phone's contents are user data.
-      await this.audit(state, 'adb.tool', { operation })
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId

@@ -22,7 +22,7 @@ import {
   ADB_CAPABILITY_DOCS,
   ADB_CAPABILITY_NAME,
   ADB_CAPABILITY_SUMMARY
-} from '../../lib/adb-tool'
+} from '../../lib/adb-skill'
 import {
   SCOPE_CAPABILITY_DOCS,
   SCOPE_CAPABILITY_NAME,
@@ -235,9 +235,10 @@ export class UtilityRegistryService {
         updatedAt: now
       },
       {
-        // On demand rather than always active: a session that never touches a
-        // phone must not carry thirteen operation schemas, and the user asked
-        // for driving a target to be an explicit opt-in per thread.
+        // Knowledge, not a tool: no executor, no operation catalog, no gateway
+        // contract. Activation hands back the playbook and the agent works the
+        // device with its own shell, which keeps the text the only thing that
+        // has to change when adb, Android or a project's tooling moves on.
         id: APP_ADB_UTILITY_ID,
         kind: 'skill',
         name: ADB_CAPABILITY_NAME,
@@ -250,8 +251,7 @@ export class UtilityRegistryService {
         harnessBindings: [
           {
             harnessId: ALL_HARNESSES_BINDING_ID,
-            strategy: 'native' as const,
-            nativeCapability: 'adb'
+            strategy: 'skill' as const
           }
         ],
         appOwned: true,
