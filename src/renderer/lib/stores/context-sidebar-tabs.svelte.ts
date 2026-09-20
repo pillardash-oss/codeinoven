@@ -629,6 +629,53 @@ export class SidebarTabContexts {
     this.closeContextTab(tab.id)
   }
 
+  /**
+   * Dock the assistant how-to panel for a task thread. A routine-level open
+   * re-titles the tab rather than duplicating it; the routine id is refreshed
+   * so an ungrouped task's panel reflects the change.
+   */
+  openAssistantHowTo(
+    projectId: string,
+    threadId: string,
+    routineId: string | null,
+    title: string
+  ): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `assistant-how-to:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing && existing.kind === 'assistant-how-to') {
+      existing.title = title
+      existing.routineId = routineId
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'assistant-how-to',
+      title,
+      projectId,
+      threadId,
+      routineId
+    })
+  }
+
+  /** Whether the how-to panel is already docked for a task thread. */
+  hasAssistantHowTo(projectId: string, threadId: string): boolean {
+    const context = this.contextFor(projectId, threadId)
+    return context?.tabs.some((tab) => tab.kind === 'assistant-how-to') ?? false
+  }
+
+  /** Update the routine an open how-to tab targets (task grouping changed). */
+  setAssistantHowToRoutine(
+    projectId: string,
+    threadId: string,
+    routineId: string | null
+  ): void {
+    const context = this.contextFor(projectId, threadId)
+    const tab = context?.tabs.find((candidate) => candidate.kind === 'assistant-how-to')
+    if (tab && tab.kind === 'assistant-how-to') tab.routineId = routineId
+  }
+
   openMemory(projectId: string, threadId: string, section?: MemorySection): void {
     const context = this.ensureProjectContext(projectId)
     const id = `memory:${projectId}`

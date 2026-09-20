@@ -70,7 +70,7 @@ const PERSIST_DEBOUNCE_MS = 400
  */
 export class RendererRecoveryStore {
   activeView = $state<MainView>('projects')
-  lastContentView = $state<'projects' | 'chats' | 'threads'>('projects')
+  lastContentView = $state<'projects' | 'chats' | 'threads' | 'assistant'>('projects')
   lastViewBeforeSettings = $state<MainView>('projects')
   selectedProjectId = $state<string | null>(null)
   selectedThread = $state<SelectedThreadReference | null>(null)
@@ -182,7 +182,8 @@ export class RendererRecoveryStore {
       view === 'projects' ||
       view === 'projects-scope' ||
       view === 'chats' ||
-      view === 'threads'
+      view === 'threads' ||
+      view === 'assistant'
     ) {
       this.lastContentView = view === 'projects-scope' ? 'projects' : view
     }

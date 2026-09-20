@@ -4,6 +4,7 @@
   import {
     Bell,
     Bot,
+    BotMessageSquare,
     BrainCircuit,
     Bug,
     ChevronDown,
@@ -119,7 +120,8 @@
     'git',
     'actions',
     'thread-note',
-    'coordinator'
+    'coordinator',
+    'assistant-how-to'
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -297,6 +299,8 @@
       <StickyNote size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
+    {:else if tab.kind === 'assistant-how-to'}
+      <BotMessageSquare size={12} class="shrink-0 text-primary" />
     {:else}
       <Bot size={12} class="shrink-0 text-info" />
     {/if}

@@ -130,13 +130,14 @@
       threadActionsMenu.startDelete()
       return
     }
-    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4') {
+    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4' || key === '5') {
       event.preventDefault()
       if (key === '0') void navigation.navigateToView('chats')
       else if (key === '1') void navigation.navigateToView('projects')
       else if (key === '2') void navigation.navigateToView('threads')
       else if (key === '3') void navigation.openProjectWithScopeState()
-      else void navigation.navigateToView('scope')
+      else if (key === '4') void navigation.navigateToView('scope')
+      else void navigation.navigateToView('assistant')
     }
   }
 

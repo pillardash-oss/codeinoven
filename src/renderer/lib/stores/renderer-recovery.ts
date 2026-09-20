@@ -31,6 +31,7 @@ export type MainView =
   | 'projects'
   | 'projects-scope'
   | 'chats'
+  | 'assistant'
   | 'scope'
   | 'threads'
   | 'settings'
@@ -105,7 +106,7 @@ export interface RendererRecoverySnapshot {
   /** Last content view (Projects/Chats/Threads) — the shell returns here when
    *  leaving Settings or Scope. Persisted so a restart made while on a Settings
    *  page or the Scope view still returns to the previous content view. */
-  lastContentView: 'projects' | 'chats' | 'threads'
+  lastContentView: 'projects' | 'chats' | 'threads' | 'assistant'
   /** Last non-Settings view — the Settings back button returns here. */
   lastViewBeforeSettings: MainView
   selectedProjectId: string | null
@@ -139,6 +140,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects',
   'projects-scope',
   'chats',
+  'assistant',
   'scope',
   'threads',
   'settings',
@@ -303,8 +305,10 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
-function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
-  if (value === 'projects' || value === 'chats' || value === 'threads') return value
+function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' | 'assistant' {
+  if (value === 'projects' || value === 'chats' || value === 'threads' || value === 'assistant') {
+    return value
+  }
   return 'projects'
 }
 
@@ -313,6 +317,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects' ||
     value === 'projects-scope' ||
     value === 'chats' ||
+    value === 'assistant' ||
     value === 'scope' ||
     value === 'threads'
   ) {

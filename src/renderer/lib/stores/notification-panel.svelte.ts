@@ -6,6 +6,7 @@ import {
   type Project,
   type Thread
 } from '$shared/types'
+import { assistantRoutines } from './assistant-routines.svelte'
 
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
@@ -73,7 +74,8 @@ class NotificationPanelState {
     return this._notifications.filter((n) => this.isChat(n))
   }
 
-  /** Assistants are a forthcoming feature; the tab is an empty shell. */
+  /** Assistants surface scheduled missed runs (v1). The panel renders them
+   *  straight from the assistant store, so the notification list stays empty. */
   get assistantNotifications(): InAppNotification[] {
     return []
   }
@@ -107,7 +109,10 @@ class NotificationPanelState {
   }
 
   assistantCount(sub: NotificationSubFilter): number {
-    return this.count(this.assistantNotifications, sub)
+    // The assistants tab carries pending missed runs; the panel renders them
+    // directly from the assistant store, so counts read that list here.
+    if (sub === 'all' || sub === 'missed-runs') return assistantRoutines.missedRuns.length
+    return 0
   }
 
   get hasCompleted(): boolean {

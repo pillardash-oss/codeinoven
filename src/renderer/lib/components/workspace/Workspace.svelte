@@ -47,6 +47,8 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
+  import AssistantSidebar from '../assistant/AssistantSidebar.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -95,6 +97,7 @@
     coordinatorHasActiveDelegates,
     activeThreadRowId,
     INBOX_PROJECT_ID,
+    ASSISTANT_SPACE_ID,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
@@ -107,12 +110,13 @@
     AppConfigPatch,
     Project,
     PromptAttachment,
+    Routine,
     Thread
   } from '$shared/types'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
     /** True while the Scope page is on screen   thread switches must keep the
@@ -253,7 +257,7 @@
   // Keep each mode's scroll position and restore it when the mode comes back,
   // and briefly suppress the focus-follow reveal so it doesn't yank the
   // restored scroll back to the selected thread's row.
-  const sidebarScrollByMode = new SvelteMap<'projects' | 'chats' | 'threads', number>()
+  const sidebarScrollByMode = new SvelteMap<'projects' | 'chats' | 'threads' | 'assistant', number>()
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
@@ -1278,6 +1282,19 @@
   let pinnedProjects = $derived(visibleProjects.filter((p) => p.pinned))
   let regularProjects = $derived(visibleProjects.filter((p) => !p.pinned))
 
+  // ─── Assistant space ──────────────────────────────────────────────────────
+  /** The hidden assistant container (assistant tasks live here). */
+  let assistantProject = $derived(
+    projects.find((project) => project.id === ASSISTANT_SPACE_ID) ?? null
+  )
+  /** Assistant tasks, active (non-archived) only, most recent activity first. */
+  let assistantTasks = $derived(
+    allThreads
+      .filter((thread) => thread.projectId === ASSISTANT_SPACE_ID && !thread.archived)
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  )
+  let assistantRoutineList = $derived(assistantRoutines.routines)
+
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
     for (const t of allThreads) {
@@ -1999,6 +2016,10 @@
 
   async function loadData(): Promise<void> {
     try {
+      assistantRoutines.initialize()
+      // Ensure the assistant container exists before the thread list is read so
+      // assistant tasks are present on the first load.
+      await assistantRoutines.ensureSpace().catch(() => undefined)
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
         invoke('thread:listRecentPerProject')
@@ -2826,6 +2847,65 @@
     revealThreadInSidebar(thread.id)
   }
 
+  // ─── Assistant actions ────────────────────────────────────────────────────
+  function openAssistantTask(task: Thread): void {
+    upsertThreadInList(task)
+    workspaceState.openThread(task, assistantProject)
+  }
+
+  /** Create a routine-less task; a non-empty title is applied once persisted. */
+  async function createAssistantTask(title: string): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject)
+    const created = workspaceState.selectedThread
+    const trimmed = title.trim()
+    if (!created || trimmed.length === 0) return
+    try {
+      const updated = await invoke('thread:update', created.projectId, created.id, {
+        title: trimmed,
+        titleSource: 'manual'
+      })
+      upsertThreadInList(updated)
+      workspaceState.updateThread(updated)
+    } catch (error) {
+      reportError(error, 'Could not name the new task')
+    }
+  }
+
+  function openAssistantHowToForTask(task: Thread): void {
+    contextSidebarState.openAssistantHowTo(
+      ASSISTANT_SPACE_ID,
+      task.id,
+      task.routineId ?? null,
+      task.title
+    )
+  }
+
+  /** Open the how-to panel for a routine, creating a first task if it has none. */
+  async function openAssistantHowToForRoutine(routine: Routine): Promise<void> {
+    let anchor =
+      assistantTasks.find((task) => task.routineId === routine.id) ??
+      (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
+        ? workspaceState.selectedThread
+        : undefined)
+    if (!anchor) {
+      if (!assistantProject) return
+      await createThreadInProject(assistantProject)
+      const created = workspaceState.selectedThread
+      if (!created) return
+      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
+      upsertThreadInList(grouped)
+      workspaceState.updateThread(grouped)
+      anchor = grouped
+    }
+    contextSidebarState.openAssistantHowTo(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      routine.id,
+      routine.name
+    )
+  }
+
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
@@ -2998,6 +3078,14 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** An assistant task was forked to a project: open it in the projects view. */
+  function handleAssistantHandoff(forked: Thread): void {
+    upsertThreadInList(forked)
+    scopeState.updateThread(forked)
+    navigate('projects')
+    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
   /** Register a freshly added project without landing in a new thread   used by
    *  the continue-chat-in-project flow which creates its own thread. */
   async function handleChatProjectCreated(project: Project): Promise<void> {
@@ -3037,11 +3125,24 @@
 <svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
-  <!-- Shared sidebar   shows Projects or Chats depending on the shell mode -->
-  <WorkspaceSidebar
-    bind:scroller={sidebarScroller}
-    {mode}
-    {navigate}
+  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
+  {#if mode === 'assistant'}
+    <AssistantSidebar
+      bind:scroller={sidebarScroller}
+      routines={assistantRoutineList}
+      tasks={assistantTasks}
+      selectedThreadId={activeThreadRowId(selectedThread)}
+      onOpenTask={openAssistantTask}
+      onCreateTask={(title) => void createAssistantTask(title)}
+      onOpenHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
+      onOpenTaskHowTo={openAssistantHowToForTask}
+    />
+  {:else}
+    <WorkspaceSidebar
+      bind:scroller={sidebarScroller}
+      {mode}
+      {active}
+      {navigate}
     {projects}
     {visibleProjects}
     {projectIcons}
@@ -3078,6 +3179,7 @@
     onOpenScopedThread={openScopedThread}
     onSwitchScopedProject={switchScopedProject}
   />
+  {/if}
 
   <!-- Main Content -->
   <section class="flex min-w-0 flex-1 overflow-hidden">
@@ -3125,6 +3227,7 @@
             }}
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
+            onHandedOffTask={handleAssistantHandoff}
           />
         {/snippet}
         <div

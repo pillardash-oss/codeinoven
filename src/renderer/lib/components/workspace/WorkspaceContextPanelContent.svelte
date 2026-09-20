@@ -10,6 +10,8 @@
   import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
   import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
   import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
+  import HowToPanel from '$lib/components/assistant/HowToPanel.svelte'
+  import type { Thread } from '$shared/types'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
@@ -36,6 +38,8 @@
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Open a forked task thread in its project after an assistant hand-off. */
+    onHandedOffTask?: (forked: Thread) => void
   }
 
   let {
@@ -49,7 +53,8 @@
     coordinator,
     onDismissCoordinator,
     onContinueInThread,
-    onOpenSubagent
+    onOpenSubagent,
+    onHandedOffTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -147,6 +152,13 @@
       {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
         <NotificationPanel />
       {/await}
+    {:else if activeContextTab.kind === 'assistant-how-to'}
+      <HowToPanel
+        projectId={activeContextTab.projectId}
+        threadId={activeContextTab.threadId}
+        routineId={activeContextTab.routineId}
+        onHandedOff={onHandedOffTask}
+      />
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}
         {#if coordinator.panel.component === 'assignment'}

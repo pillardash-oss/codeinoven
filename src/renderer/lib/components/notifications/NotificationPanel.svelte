@@ -8,6 +8,7 @@
     Copy,
     MessageCircleDashed,
     MessageSquare,
+    RotateCcw,
     X
   } from '@lucide/svelte'
   import {
@@ -19,11 +20,12 @@
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
     onOpenThread?: (
@@ -119,7 +121,7 @@
     showingAppErrors
       ? appErrorState.count > 0
       : showingAssistants
-        ? false
+        ? assistantRoutines.missedRuns.length > 0
         : notificationPanelState.visible.length > 0
   )
 
@@ -149,6 +151,46 @@
 
   function dismiss(n: InAppNotification): void {
     notificationPanelState.dismiss(n.id)
+  }
+
+  /** Open the assistant task thread a missed run belongs to. */
+  async function openMissedRun(threadId: string): Promise<void> {
+    busyId = threadId
+    try {
+      if (onOpenThread) {
+        await onOpenThread(ASSISTANT_SPACE_ID, threadId)
+        return
+      }
+      const [project, thread] = await Promise.all([
+        invoke('project:get', ASSISTANT_SPACE_ID),
+        invoke('thread:get', ASSISTANT_SPACE_ID, threadId)
+      ])
+      if (!project || !thread) return
+      const openDesktopThread = workspaceState.openThreadFromNotification
+      if (!openDesktopThread) return
+      await openDesktopThread(thread, project)
+    } catch {
+      // The task may have been deleted
+    } finally {
+      busyId = null
+    }
+  }
+
+  async function dismissMissedRun(id: string): Promise<void> {
+    try {
+      await assistantRoutines.dismissMissedRun(id)
+    } catch {
+      // Surfaced as a missed run returning on the next refresh; nothing to do here.
+    }
+  }
+
+  async function runMissedRunNow(id: string): Promise<void> {
+    busyId = id
+    try {
+      await assistantRoutines.runMissedRunNow(id)
+    } finally {
+      busyId = null
+    }
   }
 
   function dismissAll(): void {
@@ -301,7 +343,7 @@
       </button>
     {/each}
     <div class="ml-auto pb-1.5">
-      {#if hasVisibleItems}
+      {#if hasVisibleItems && !showingAssistants}
         <button
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}
@@ -423,11 +465,68 @@
         </div>
       {/if}
     {:else if showingAssistants}
-      <!-- Assistants shell: the feature lands later; the tab stays empty for now. -->
-      <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-        <Bot size={20} class="text-dimmed" />
-        <p class="text-xs text-muted">No assistant activity yet</p>
-      </div>
+      {#if assistantRoutines.missedRuns.length === 0}
+        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+          <Bot size={20} class="text-dimmed" />
+          <p class="text-xs text-muted">No missed runs</p>
+        </div>
+      {:else}
+        <div class="space-y-px p-1.5" aria-label="Missed runs">
+          {#each assistantRoutines.missedRuns as run (run.id)}
+            {@const active = busyId === run.id}
+            <div
+              class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 {active
+                ? 'opacity-60 pointer-events-none'
+                : ''}"
+              style="border-color: var(--color-missed)"
+            >
+              <div class="flex w-2 shrink-0 pt-1">
+                <StatusBadge tone="missed" title="Missed run" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                    >{run.title}</span
+                  >
+                  <span class="shrink-0 text-[0.625rem] text-dimmed"
+                    >{formatTime(run.dueAt)}</span
+                  >
+                </div>
+                <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
+                  A scheduled run was due while the app was closed.
+                </p>
+              </div>
+              <div class="flex shrink-0 items-center gap-1">
+                <button
+                  class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
+                  aria-label="Dismiss missed run"
+                  title="Dismiss"
+                  onclick={() => void dismissMissedRun(run.id)}
+                >
+                  Dismiss
+                </button>
+                <button
+                  class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+                  aria-label="Run missed task now"
+                  title="Run now"
+                  onclick={() => void runMissedRunNow(run.id)}
+                >
+                  <RotateCcw size={11} strokeWidth={1.8} />
+                  Run now
+                </button>
+                <button
+                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  aria-label="Open task"
+                  title="Open task"
+                  onclick={() => void openMissedRun(run.threadId)}
+                >
+                  <Bot size={11} />
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
         <Bell size={20} class="text-dimmed" />

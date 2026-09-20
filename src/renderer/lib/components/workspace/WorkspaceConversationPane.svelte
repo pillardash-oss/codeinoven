@@ -28,7 +28,7 @@
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
 
   interface Props {
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
     active: boolean
     selectedThread: Thread | null
     visibleProjects: Project[]

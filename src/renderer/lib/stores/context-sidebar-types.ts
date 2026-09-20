@@ -149,6 +149,22 @@ export interface CoordinatorContextTab {
   threadId: string
 }
 
+/**
+ * Assistant View's how-to panel, docked into the context sidebar. It anchors to
+ * one assistant task thread (so thread-scoped tab plumbing applies) while
+ * showing its routine's how-to, schedule, and connections, plus the task's own
+ * schedule override.
+ */
+export interface AssistantHowToContextTab {
+  id: string
+  kind: 'assistant-how-to'
+  title: string
+  projectId: string
+  threadId: string
+  /** Routine whose how-to the panel edits; null for a routine-less task. */
+  routineId: string | null
+}
+
 export type TemporaryChatMode = 'elaborate' | 'quick'
 
 /** Shared instruction sent to the harness when the user asks a side chat to
@@ -200,6 +216,7 @@ export type ContextSidebarTab =
   | NotificationContextTab
   | MemoryContextTab
   | CoordinatorContextTab
+  | AssistantHowToContextTab
   | BrowserContextTab
 
 export interface ThreadSidebarContext {
