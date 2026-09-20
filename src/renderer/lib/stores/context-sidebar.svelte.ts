@@ -61,6 +61,13 @@ class ContextSidebarState {
   /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
    *  consumer (Workspace) can run the close-through-confirmation flow. */
   closeActiveTabRequest = $state(0)
+  /** The tab a pending close-shortcut request targets. Captured when the
+   *  request is made, because closing a tab changes which tab is active: a
+   *  consumer that resolved the tab itself would close the next one too, and
+   *  then every panel the user opened afterwards. */
+  private closeShortcutTabId: string | null = null
+  /** Requests already served, so one request closes exactly one tab. */
+  private consumedCloseActiveTabRequestCount = 0
 
   private tabContexts = new SidebarTabContexts({
     activeProjectId: () => this.activeProjectId,
@@ -641,10 +648,35 @@ class ContextSidebarState {
     this.tabContexts.closeContextTab(id)
   }
 
-  /** Signal Workspace to close the active tab through its confirmation flow
-   *  (unsaved-file dialog). The tab is not closed here, Workspace decides. */
-  requestCloseActiveTab(): void {
+  /** Signal Workspace to close the active tab of `region` through its
+   *  confirmation flow (unsaved-file dialog). The tab is not closed here,
+   *  Workspace decides. Returns whether a closeable tab was actually found: a
+   *  request for a region that is not on screen (or holds no tab) is dropped
+   *  instead of arming a close the user never asked for. */
+  requestCloseActiveTab(region: 'sidebar' | 'dock' = 'sidebar'): boolean {
+    const tabId = this.closeShortcutTabFor(region)
+    if (!tabId) return false
+    this.closeShortcutTabId = tabId
     this.closeActiveTabRequest += 1
+    return true
+  }
+
+  /** The active tab a close-shortcut request for `region` targets, or null when
+   *  that surface is off screen: a collapsed bottom dock and a hidden right
+   *  sidebar both keep their tabs in memory, and the shortcut must never close
+   *  a tab the user cannot see. */
+  private closeShortcutTabFor(region: 'sidebar' | 'dock'): string | null {
+    if (region === 'dock') return this.terminalDockVisible ? this.terminalActiveTabId : null
+    return this.sidebarVisible ? this.sidebarActiveTabId : null
+  }
+
+  /** Take the tab id of the pending close-shortcut request, if one is waiting.
+   *  One request is served once; a consumer that asks again gets nothing, so
+   *  closing a tab can never cascade into closing the next active one. */
+  consumeCloseActiveTabRequest(): string | null {
+    if (this.consumedCloseActiveTabRequestCount === this.closeActiveTabRequest) return null
+    this.consumedCloseActiveTabRequestCount = this.closeActiveTabRequest
+    return this.closeShortcutTabId
   }
 
   reorder(id: string, targetId: string, position: 'before' | 'after'): void {

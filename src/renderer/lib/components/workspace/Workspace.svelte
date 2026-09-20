@@ -2189,17 +2189,14 @@
   })
 
   /** Cmd/Ctrl+W while the context sidebar has focus closes its active tab
-   *  (through the unsaved-changes confirmation) rather than the thread. */
+   *  (through the unsaved-changes confirmation) rather than the thread. The
+   *  store captures the tab id when the request is made and hands it over
+   *  exactly once, and this effect reads nothing else: resolving the active tab
+   *  here instead closed the *next* tab on every re-run, because closing a tab
+   *  changes which tab is active, so one shortcut press cascaded through every
+   *  panel the thread had and kept closing each new panel afterwards. */
   $effect(() => {
-    const request = contextSidebarState.closeActiveTabRequest
-    if (request === 0) return
-    const focused = document.activeElement instanceof Element ? document.activeElement : null
-    const region = focused?.closest<HTMLElement>('[data-region="context-sidebar"]')
-    const placement = region?.dataset.placement
-    const tabId =
-      placement === 'bottom'
-        ? contextSidebarState.terminalActiveTabId
-        : contextSidebarState.sidebarActiveTabId
+    const tabId = contextSidebarState.consumeCloseActiveTabRequest()
     if (tabId) closeContextTab(tabId)
   })
 
