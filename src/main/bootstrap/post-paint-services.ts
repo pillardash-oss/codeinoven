@@ -68,6 +68,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { DirectoryPreviewService },
     { ForeignRunService },
     { ThreadTransferService },
+    { RoutineManager },
+    { RoutineSchedulerService },
+    { broadcastMissedRunsChanged },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -91,6 +94,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../preview/directory-preview-service'),
     import('../chat/foreign-run-service'),
     import('../chat/thread-transfer-service'),
+    import('../../lib/engines/routine-manager'),
+    import('../scheduler/routine-scheduler-service'),
+    import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
     import('../git/github-auth-service')
@@ -176,6 +182,47 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.retryScheduler = new RetrySchedulerService(storage)
   state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
+  state.routineManager = new RoutineManager(database)
+  const routineManager = state.routineManager
+  state.routineScheduler = new RoutineSchedulerService(storage, {
+    routines: routineManager,
+    dispatch: (task, routine) => {
+      const chatEngine = state.chatEngine
+      const settings = task.settings
+      // A scheduled run needs a bound model; a task that was never configured
+      // is skipped rather than fired with guessed settings.
+      if (!chatEngine || !settings) {
+        Logger.dev('Scheduled routine run skipped   task has no bound settings', {
+          threadId: task.id
+        })
+        return
+      }
+      const prompt =
+        task.title.trim().length > 0
+          ? `Run this scheduled task now: ${task.title}`
+          : 'Run this scheduled task now.'
+      const howTo = routine?.howTo?.trim()
+      return chatEngine.sendPrompt(
+        task.projectId,
+        task.id,
+        settings,
+        prompt,
+        [],
+        undefined,
+        undefined,
+        howTo && howTo.length > 0 ? howTo : undefined,
+        undefined,
+        undefined,
+        'internal',
+        undefined,
+        undefined,
+        true
+      )
+    }
+  })
+  state.routineScheduler.attachChangeListener(() => {
+    broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
+  })
   state.speechService = new SpeechService(
     {
       catalogPath: app.isPackaged
@@ -289,6 +336,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     powerWakeService: state.powerWakeService,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
+    routineManager: state.routineManager ?? undefined,
+    routineScheduler: state.routineScheduler ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation: context.threadCreation,
@@ -473,6 +522,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       await state.heartbeatScheduler?.start()
     } catch (error) {
       Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await state.routineScheduler?.start()
+    } catch (error) {
+      Logger.error('Routine scheduler startup failed (non-fatal):', error)
     }
 
     try {

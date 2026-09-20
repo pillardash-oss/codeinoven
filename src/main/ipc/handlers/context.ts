@@ -47,6 +47,8 @@ import type { HarnessUsageRepo } from '../../database/repositories/harness-usage
 import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
 import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
+import type { RoutineManager } from '../../../lib/engines/routine-manager'
+import type { RoutineSchedulerService } from '../../scheduler/routine-scheduler-service'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { AttachmentStorageScope } from '../../../lib/types'
 
@@ -60,6 +62,10 @@ export interface RegisterIpcHandlersOptions {
   retryScheduler?: RetrySchedulerService
   /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
   heartbeatScheduler?: HeartbeatSchedulerService
+  /** Assistant View's routine scheduler (app-open-only firing, missed-run records). */
+  routineScheduler?: RoutineSchedulerService
+  /** Shared assistant routine manager; defaults to a database-backed instance. */
+  routineManager?: RoutineManager
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
@@ -163,6 +169,8 @@ export interface IpcHandlerContext {
   /** Transient grading queue behind the ranking aggregates, cleared with them. */
   rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
+  routineManager: RoutineManager
+  routineScheduler: RoutineSchedulerService | undefined
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */
   privileged: <TArgs extends unknown[]>(

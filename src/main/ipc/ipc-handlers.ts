@@ -15,6 +15,7 @@ import {
   validatePrNumber
 } from './ipc-validation'
 import { ProjectManager } from '../../lib/engines/project-manager'
+import { RoutineManager } from '../../lib/engines/routine-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
@@ -72,6 +73,7 @@ import { registerHistoryHandlers } from './handlers/history-handlers'
 import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
+import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -94,6 +96,7 @@ export function registerIpcHandlers(
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
+  const routineManager = options.routineManager ?? new RoutineManager(database)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
@@ -406,6 +409,8 @@ export function registerIpcHandlers(
     modelRankingRepo,
     rankingSnapshotRepo,
     noteRepo,
+    routineManager,
+    routineScheduler: options.routineScheduler,
     privilegedIpc,
     privileged,
     attachmentStorageDirectory,
@@ -434,4 +439,5 @@ export function registerIpcHandlers(
   registerSearchHandlers(ctx)
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
+  registerAssistantHandlers(ctx)
 }
