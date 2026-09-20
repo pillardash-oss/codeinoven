@@ -5253,6 +5253,21 @@ export class ChatEngine {
 
     assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId) ?? assignment
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    // A deliberate user stop vetoes the automatic resume: the assignment state
+    // itself is untouched by Stop, so without this latch the next launch (or the
+    // next attention reconcile) would silently re-prompt a thread the user
+    // stopped on purpose. A fresh prompt clears the latch and re-arms resuming.
+    if (
+      coordinator &&
+      (await this.threadManager.wasStoppedByUser(projectId, coordinatorThreadId))
+    ) {
+      Logger.info('Assignment resume suppressed: the user stopped this thread', {
+        projectId,
+        threadId: coordinatorThreadId,
+        assignmentStatus: assignment.status
+      })
+      return assignment
+    }
     if (coordinator?.settings && (await this.assignmentNeedsCoordinatorTurn(assignment))) {
       await this.ensureAssignmentApi()
       await this.sendAssignmentCoordinatorPrompt(
@@ -5275,6 +5290,7 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
+    await this.threadManager.markStoppedByUser(projectId, threadId)
     this.userAbortedSessions.add(sessionId)
     if (owner.parentSessionId && driver.abortSubagent) {
       // The harness keeps this worker inside its parent's process, so aborting
@@ -6469,6 +6485,9 @@ export class ChatEngine {
       const activeRuntime = await this.resolve(projectId, driverId, threadId, activeAccountId)
       this.userAbortedSessions.add(activeSessionId)
       this.clearHeldSteers(activeSessionId)
+      // A stop-and-resend steers over a dying turn; the very next statement
+      // sends the user's new prompt, which clears the latch again.
+      await this.threadManager.markStoppedByUser(projectId, threadId)
       await activeRuntime.driver.abort(activeRuntime.projectPath, activeSessionId)
       this.sessionStatuses.set(activeSessionId, { state: 'idle' })
       this.handleSessionIdleSignal(activeSessionId)
@@ -6926,7 +6945,12 @@ export class ChatEngine {
      *  the first user prompt in its conversation. */
     visiblePrompt = false
   ): Promise<AgentMessage> {
-    if (origin === 'user') this.touchUserActivity()
+    if (origin === 'user') {
+      this.touchUserActivity()
+      // A real user prompt re-arms automatic resumes: the stop latch only ever
+      // vetoes resuming until the user themselves come back to the thread.
+      void this.threadManager.clearStoppedByUser(projectId, threadId)
+    }
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     // Queue behind an in-flight optimistic create so a just-created thread can
@@ -10418,6 +10442,9 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
+    // Latch the stop immediately so a failure that arrives mid-teardown cannot
+    // re-track an auto-retry between this point and the status write below.
+    await this.threadManager.markStoppedByUser(projectId, threadId)
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     if (activeBrainstorm) {
@@ -10523,8 +10550,10 @@ export class ChatEngine {
     // A thread waiting on a scheduled usage-reset retry has no live turn to
     // abort, so a Stop click must cancel the pending resume itself   otherwise
     // the scheduler fires later and silently revives the thread the user
-    // deliberately stopped.
+    // deliberately stopped. Every record of this thread goes: a successor
+    // session id (retry failures re-track under a new one) must not survive.
     this.retryScheduler?.clear(thread.sessionId)
+    this.retryScheduler?.dropThread(threadId)
     // A queued specification generation must die with the run the user just
     // stopped. If the persisted spec-generation record survives, reopening the
     // thread resumes the exact spec work the user deliberately cancelled.
@@ -17031,6 +17060,15 @@ export class ChatEngine {
         }
         if (isOrchestrationChildThread(thread)) continue
         if (!thread.settings || !thread.sessionId) continue
+        // A deliberate user stop before the restart vetoes the hidden Continue;
+        // the user can still resume by hand (Retry or any prompt).
+        if (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id)) {
+          Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
+            projectId: thread.projectId,
+            threadId: thread.id
+          })
+          continue
+        }
         const current = this.sessionStatuses.get(thread.sessionId)
         if (current?.state === 'working' || current?.state === 'waiting') continue
         // The in-memory status map is empty right after a restart, but the
@@ -20390,7 +20428,10 @@ export class ChatEngine {
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
-    scheduler.attachContinue((record) => this.continueScheduledThread(record))
+    scheduler.attachStoppedThreadTest((projectId, threadId) =>
+      this.threadManager.wasStoppedByUser(projectId, threadId)
+    )
+    void scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
@@ -20435,6 +20476,12 @@ export class ChatEngine {
             try {
               const thread = await this.threadManager.getThread(record.projectId, record.threadId)
               if (!thread) continue
+              if (await this.threadManager.wasStoppedByUser(record.projectId, record.threadId)) {
+                // The user stopped this thread; the ledger was supposed to be
+                // clean already, but a concurrent write raced the stop. Drop.
+                this.retryScheduler?.dropThread(record.threadId)
+                continue
+              }
               if (thread.status === 'working-paused') continue
               if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
               const updated = await this.threadManager.setStatus(
@@ -20474,6 +20521,10 @@ export class ChatEngine {
           const thread = await this.threadManager.getThread(row.project_id, row.id)
           if (!thread) continue
           if (thread.status === 'working-paused') continue
+          // A user-stopped thread is never relabelled to working-paused, and
+          // never re-armed by this scan: its stop intent outranks the stale
+          // persisted error text.
+          if (await this.threadManager.wasStoppedByUser(row.project_id, row.id)) continue
           // Only threads that still look actively working should be considered.
           if (!['planning', 'executing'].includes(thread.status)) continue
 
@@ -20520,7 +20571,7 @@ export class ChatEngine {
           // fallback timer instead of leaving the card "waiting" with nothing
           // to auto-resume it.
           if (scheduler && row.session_id) {
-            scheduler.track({
+            const trackedRepair = await scheduler.track({
               sessionId: row.session_id,
               projectId: row.project_id,
               threadId: row.id,
@@ -20529,6 +20580,9 @@ export class ChatEngine {
               issueKind: kind,
               issueMessage: lastError
             })
+            // A user-stopped thread is never re-armed by the repair scan: the
+            // status write above already stayed off it, so nothing else to do.
+            if (!trackedRepair) continue
           }
           Logger.info('Repaired orphaned working thread to Waiting to retry', {
             projectId: row.project_id,
@@ -20592,10 +20646,23 @@ export class ChatEngine {
     }
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
     if (!hasRetryAt && !usageResetWait) return false
+    // A deliberate user stop is never overwritten by a new wait. This is the
+    // re-arm path that survived the Stop click: the abort cleared the session
+    // that was tracked, but the SAME failure re-reported under a successor
+    // session would land here and silently revive the thread.
+    if (await this.threadManager.wasStoppedByUser(info.projectId, info.threadId)) {
+      Logger.info('Auto-retry refused: the user stopped this thread', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        sessionId,
+        issueKind: issue.kind
+      })
+      return false
+    }
     await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
     })
-    const tracked = scheduler.track({
+    const tracked = await scheduler.track({
       sessionId,
       projectId: info.projectId,
       threadId: info.threadId,
@@ -20606,7 +20673,11 @@ export class ChatEngine {
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
-    if (!tracked && scheduler.isEnabled) {
+    if (!tracked) {
+      // track() refuses for a user-stopped thread (or a probe failure). Keep
+      // the wait OFF the ledger and leave the thread on the visible warning
+      // card; with auto-retry on this also marks the thread failed so it is
+      // never silently revived. A manual Retry stays available.
       await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
         read: false,
         error: issue.message,
@@ -20677,7 +20748,17 @@ export class ChatEngine {
     // fall to failed and hide the will-retry state (ba9a... silent case).
     // scheduleAutomaticRetry already persisted working-paused in this branch,
     // so we just need to signal the caller that the thread is paused.
-    const shouldStayPaused = !retryScheduled && isUsageResetWaitIssue(issue) && issue.retryable
+    // A user-stopped thread is exempt: schedule refused the record, and the
+    // fallback here must not re-persist working-paused (or a later launch's
+    // orphan-repair scan would re-arm a timer for the stopped thread).
+    const shouldStayPaused =
+      !retryScheduled &&
+      isUsageResetWaitIssue(issue) &&
+      issue.retryable &&
+      !(await this.threadManager.wasStoppedByUser(
+        this.sessionRegistry.get(sessionId)?.projectId ?? '',
+        this.sessionRegistry.get(sessionId)?.threadId ?? ''
+      ))
     if (shouldStayPaused) {
       const info = this.sessionRegistry.get(sessionId)
       if (info && !info.ephemeral) {

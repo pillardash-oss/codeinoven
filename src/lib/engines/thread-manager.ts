@@ -6,6 +6,7 @@ import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
 import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
 import { validateEntityId } from '../../main/ipc/ipc-validation'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
+import { Logger } from '../../main/system/logger'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
   AgentMessageRepo,
@@ -905,6 +906,54 @@ export class ThreadManager {
     await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
+  }
+
+  /**
+   * Latch a deliberate user stop so no automatic resume may revive this
+   * thread. The flag lives inside the persisted settings, so it survives app
+   * restarts, forks, and the settings round-trips of `updateThread`.
+   */
+  async markStoppedByUser(projectId: string, threadId: string): Promise<void> {
+    try {
+      const existing = await this.getThread(projectId, threadId)
+      if (!existing?.settings) return
+      const settings: ThreadSettings = {
+        ...existing.settings,
+        stoppedByUserAt: Date.now()
+      }
+      await this.threadRepo.upsertViaWorker({ ...existing, settings })
+      this.onChange?.({ ...existing, settings })
+    } catch (error) {
+      Logger.error('Stop latch could not be persisted', {
+        projectId,
+        threadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  /** A deliberate user stop the thread has not outlived with a new prompt yet. */
+  async wasStoppedByUser(projectId: string, threadId: string): Promise<boolean> {
+    const thread = await this.getThread(projectId, threadId)
+    return thread?.settings?.stoppedByUserAt !== undefined
+  }
+
+  /** A real user prompt re-arms automatic resumes on the thread. */
+  async clearStoppedByUser(projectId: string, threadId: string): Promise<void> {
+    try {
+      const existing = await this.getThread(projectId, threadId)
+      if (!existing || existing.settings?.stoppedByUserAt === undefined) return
+      const { stoppedByUserAt: _cleared, ...settings } = existing.settings
+      const updated: Thread = { ...existing, settings, updatedAt: Date.now() }
+      await this.threadRepo.upsertViaWorker(updated)
+      this.onChange?.(updated)
+    } catch (error) {
+      Logger.error('Stop latch could not be cleared', {
+        projectId,
+        threadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {

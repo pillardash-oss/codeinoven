@@ -133,3 +133,19 @@ Desktop preview registration is reconstructed from validated feature-scoped mani
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
 - Remote disconnection: reconnect the paired client and reload the persisted lifecycle before resuming.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
+
+### Stop outranks every auto-resume
+
+A deliberate Stop (the composer stop button, a child stop, or the steer
+stop-and-resend) latches `stoppedByUserAt` into the thread's settings, and the
+latch survives app restarts. Every automatic resume checks it and stays quiet
+while it is set: assignment-attention resume, restart recovery of interrupted
+threads, the scheduled usage-reset retry (its pending record is dropped at
+launch and never re-tracked), and the launch repair scan. The next real user
+prompt clears the latch, which re-arms all automatic resumes.
+
+The assignment's own status is deliberately untouched by Stop, so the Auto
+Pilot chain and the manual resume controls keep working; only the *automatic*
+paths honour the latch. With auto-retry off in General settings, a recorded
+usage-reset wait backs the visible "Waiting to retry" card but never fires
+automatically.

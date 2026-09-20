@@ -73,6 +73,13 @@ export interface ThreadSettings {
   imageDescriptor?: AgentModelSelection
   /** Fallback vision model tried automatically when the primary image descriptor fails. */
   imageDescriptorFallback?: AgentModelSelection
+  /**
+   * Durable latch set when the user deliberately stops the thread and cleared
+   * by the next user prompt. Every automatic resume (assignments, restart
+   * recovery, scheduled usage-reset retries) checks it and stays quiet while
+   * it is set, so Stop means the thread stays stopped.
+   */
+  stoppedByUserAt?: number
 }
 
 /**
