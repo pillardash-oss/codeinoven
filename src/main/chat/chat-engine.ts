@@ -1286,6 +1286,13 @@ export class ChatEngine {
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
+    // Every audit-cycle transition lands on the plan's coordinator thread, so a
+    // retry or dismissal performed on the auditor's card clears the matching
+    // card on the Sr. Engineer (and the reverse). Re-announcing the coordinator
+    // thread is what reaches every mounted view of the plan.
+    this.assignmentEngine.setAuditCycleListener((plan) => {
+      void this.reannounceAssignmentAudit(plan)
+    })
     // Register available harness drivers. Order follows the harness registry
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
@@ -16067,6 +16074,17 @@ export class ChatEngine {
         ? assignment.auditCycle.startedAt
         : Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
+    // Mark the cycle running before any driver or recovery work: a retry must
+    // flip both audit cards (the Sr. Engineer's and the auditor's) the moment it
+    // starts, even if the harness session is slow to come back. The recovery
+    // block below is guarded so it can never leave the cycle running.
+    if (!resumingAudit) {
+      await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
+    }
+    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
+      read: false
+    })
     const priorRepair = await this.readAssignmentAuditRepairManifest(projectId, coordinatorThreadId)
     let repairManifest: AssignmentAuditRepairManifest | null =
       priorRepair?.status === 'invalid' &&
@@ -16082,9 +16100,16 @@ export class ChatEngine {
         assignment.auditCycle?.status === 'failed' ||
         auditorThread.status === 'failed')
     ) {
-      const previousOutput = latestAssignmentAuditOutput(
-        await driver.loadMessages(projectPath, sessionId)
-      )
+      // Reading the interrupted session is best-effort: a stale or unreachable
+      // harness must not abort the retry after the cycle is already running.
+      let previousOutput: string | null = null
+      try {
+        previousOutput = latestAssignmentAuditOutput(
+          await driver.loadMessages(projectPath, sessionId)
+        )
+      } catch (error) {
+        Logger.dev('Assignment audit recovery read failed:', error)
+      }
       if (previousOutput !== null) {
         const recoveredAttempt = await this.persistAssignmentAuditAttempt({
           projectId,
@@ -16150,13 +16175,6 @@ export class ChatEngine {
       }
     }
 
-    if (!resumingAudit) {
-      await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
-    }
-    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
-    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
-      read: false
-    })
     if (recoveredContent !== null) {
       return this.completeAssignmentAudit({
         projectId,
@@ -20234,6 +20252,19 @@ export class ChatEngine {
       return message.createdAt || undefined
     }
     return undefined
+  }
+
+  /** Re-announce the coordinator thread so every view of its Assignment plan
+   *  reconciles after an audit-cycle transition. The renderer keys the audit
+   *  cards   the Sr. Engineer's and the auditor's   off that one plan, so this is
+   *  what keeps the two connected. */
+  private async reannounceAssignmentAudit(plan: AssignmentPlan): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(plan.projectId, plan.coordinatorThreadId)
+      if (thread) broadcastThreadUpdate(thread)
+    } catch (error) {
+      Logger.dev('Assignment audit reannounce failed:', error)
+    }
   }
 
   /**

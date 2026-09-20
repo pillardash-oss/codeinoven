@@ -10293,6 +10293,7 @@
           assignmentAvailable={assignment !== null}
           brainstormAvailable={brainstorm !== null}
           prdAvailable={prd !== null}
+          specAvailable={spec !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
@@ -10343,6 +10344,7 @@
           auditAvailable={auditReport !== null}
           brainstormAvailable={brainstorm !== null}
           prdAvailable={prd !== null}
+          specAvailable={spec !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}

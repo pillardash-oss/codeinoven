@@ -51,6 +51,9 @@
     error?: string
     brainstormAvailable?: boolean
     prdAvailable?: boolean
+    /** Whether a specification exists for this thread. Without one the Spec tab
+     *  is not offered at all, so it can never open onto a blank document. */
+    specAvailable?: boolean
     assignmentAvailable?: boolean
     agentMessagesOpen?: boolean
     actionsAvailable?: boolean
@@ -85,6 +88,7 @@
     error,
     brainstormAvailable = false,
     prdAvailable = false,
+    specAvailable = false,
     assignmentAvailable = false,
     agentMessagesOpen = false,
     actionsAvailable = true,
@@ -549,6 +553,7 @@
       active="audit"
       {brainstormAvailable}
       {prdAvailable}
+      {specAvailable}
       {assignmentAvailable}
       auditAvailable
       {agentMessagesOpen}

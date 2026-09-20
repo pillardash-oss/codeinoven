@@ -119,6 +119,15 @@ export class AssignmentEngine {
     this.workerScopes = provisioner ?? inheritOnlyWorkerScopes
   }
 
+  /**
+   * Install a listener for every persisted audit-cycle transition. The app uses
+   * it to push the new cycle status to every mounted view of the Assignment, so
+   * the Sr. Engineer's card and the auditor's card can never disagree.
+   */
+  setAuditCycleListener(listener: ((plan: AssignmentPlan) => void) | null): void {
+    this.auditCycle.setChangedListener(listener)
+  }
+
   async createDraft(input: CreateAssignmentInput): Promise<AssignmentPlan> {
     const coordinator = await this.threads.getThread(input.projectId, input.coordinatorThreadId)
     if (!coordinator || coordinator.projectId !== input.projectId) {
