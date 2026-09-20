@@ -534,6 +534,25 @@ export interface RankingJudgeOutcome {
 }
 
 /**
+ * A judge route decided last, after the graded harness's own row and every
+ * user-assigned auxiliary model have failed: the model and account the user is
+ * actively using, or a cheap model of any other resolvable harness. Ranking
+ * measures the graded model, so the judge's harness is an implementation
+ * detail and grading must never be tied to one harness.
+ */
+export interface FallbackRankingJudgeRoute {
+  driver: HarnessDriver
+  harnessId: string
+  providerId: string
+  modelId: string
+  accountId: string
+  /** Explicit candidates the disposable session must try, cheapest first. */
+  candidates: AuxiliaryModelCandidate[]
+  /** Harness-correct settings for the disposable auxiliary session. */
+  settings: ThreadSettings
+}
+
+/**
  * What one ranking drain pass may judge, decided before it claims anything.
  *
  * A row whose every judge route sits inside a provider usage window the

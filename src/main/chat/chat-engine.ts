@@ -350,6 +350,7 @@ import type {
   AuxiliaryRoute,
   AssignmentWorkerContext,
   AssignmentWorkerRoutingResult,
+  FallbackRankingJudgeRoute,
   ChildSessionInfo,
   CoordinatorHandoffQueue,
   HeldSteer,
@@ -1186,6 +1187,18 @@ export class ChatEngine {
    * scored row clears the record.
    */
   private rankingJudgeFailures = new Map<string, number>()
+
+  /**
+   * Native graded-harness judge strikes. Set once a harness's own grading
+   * route failed one row, cleared only when that route scores again. While a
+   * harness carries a strike, its queue stops spending harness processes on
+   * its own candidates and judges through the harness-agnostic fallback lane
+   * (see `resolveFallbackRankingJudge`). Deliberately in-memory like
+   * `rankingJudgeFailures`: a restart gives the native route one fresh
+   * attempt, which is cheap, and the fallback lane keeps that attempt from
+   * ever duplicating the held-back herd of a permanently unusable account.
+   */
+  private rankingNativeJudgeStrikes = new Map<string, number>()
 
   private utilityTurns = new Map<
     string,
@@ -10038,6 +10051,117 @@ export class ChatEngine {
         loopMode: false
       }
     }
+  }
+
+  /**
+   * The harness-agnostic fallback judge lane, resolved only when the graded
+   * harness's own candidates and any auxiliary assignment cannot grade.
+   * Candidate probes are tried in this order:
+   *
+   * 1. The model and account of a session that currently has an active turn:
+   *    the judge the user is using right now, already authenticated and
+   *    freshly exercised.
+   * 2. The harness of any other registered session.
+   * 3. Any other installed harness with a resolvable account, judged through
+   *    that harness's own cheap-model candidates.
+   *
+   * A probe whose provider reported its usage window closed is demoted behind
+   * free probes rather than dropped, so a fallback that exists always runs
+   * even while every lane is congested. A probe that fails to resolve
+   * (driver unavailable, account removed) is skipped silently; a null result
+   * simply keeps the caller's existing failure path.
+   */
+  private async resolveFallbackRankingJudge(
+    workingDirectory: string,
+    excludeHarnessIds: readonly string[]
+  ): Promise<FallbackRankingJudgeRoute | null> {
+    const excluded = new Set(excludeHarnessIds)
+    interface FallbackProbe {
+      harnessId: string
+      accountId?: string
+      /** Provider that owns the probe model, when read from a live session. */
+      providerId?: string
+      /** The exact model of the conversation the user has open, when known. */
+      inUseModelId?: string
+    }
+    const active: FallbackProbe[] = []
+    const idle: FallbackProbe[] = []
+    for (const session of this.sessionRegistry.values()) {
+      if (!session.driverId || excluded.has(session.driverId)) continue
+      const probe: FallbackProbe = { harnessId: session.driverId, accountId: session.accountId }
+      // A live session carries the exact model of the conversation the user is
+      // in: read its settings back so the judge candidate is that model.
+      if (session.projectId !== INBOX_PROJECT_ID && session.threadId) {
+        const thread = await this.threadManager.getThread(session.projectId, session.threadId)
+        if (thread?.settings && thread.settings.providerId && thread.settings.modelId) {
+          probe.providerId = thread.settings.providerId
+          probe.inUseModelId = thread.settings.modelId
+        }
+      }
+      if (session.activeTurnId) active.push(probe)
+      else idle.push(probe)
+    }
+    const harnessProbes: FallbackProbe[] = [...this.drivers.keys()]
+      .filter((harnessId) => !excluded.has(harnessId))
+      .map((harnessId) => ({ harnessId }))
+
+    const resolved: Array<{ route: FallbackRankingJudgeRoute; untilMs: number | null }> = []
+    const skipped: Array<{ route: FallbackRankingJudgeRoute; untilMs: number | null }> = []
+    for (const probe of [...active, ...idle, ...harnessProbes]) {
+      try {
+        const account = await this.accountRegistry.resolve(probe.harnessId, probe.accountId)
+        const driver = await this.driverForAccount(probe.harnessId, account.id)
+        // The probe's exact conversation model is the first candidate when
+        // the user has a live session on it; otherwise the harness's own
+        // cheap-model discovery, which the shared one-shot runner also
+        // de-duplicates against the settings fallback.
+        const modelToCandidate = new Map<string, AuxiliaryModelCandidate>()
+        if (probe.providerId && probe.inUseModelId) {
+          modelToCandidate.set(probe.inUseModelId, {
+            providerId: probe.providerId,
+            modelId: probe.inUseModelId
+          })
+        }
+        for (const candidate of driver.auxiliaryRouteCandidates?.() ?? []) {
+          if (candidate.modelId) modelToCandidate.set(candidate.modelId, candidate)
+        }
+        const candidates = [...modelToCandidate.values()]
+        if (candidates.length === 0) continue
+        const modelId = candidates[0].modelId
+        const candidateProviderId = candidates[0].providerId
+        const settings: ThreadSettings = {
+          harnessId: probe.harnessId,
+          accountId: account.id,
+          providerId: candidateProviderId,
+          modelId,
+          thinkingLevel: 'minimal',
+          permissionLevel: 'auto_review',
+          assignmentMode: false,
+          loopMode: false
+        }
+        const untilMs = this.windowUntil(driver, candidates)
+        const entry = {
+          route: {
+            driver,
+            harnessId: probe.harnessId,
+            providerId: candidateProviderId,
+            modelId,
+            accountId: account.id,
+            candidates,
+            settings
+          },
+          untilMs
+        }
+        if (untilMs === null) resolved.push(entry)
+        else skipped.push(entry)
+      } catch (error) {
+        Logger.dev('Ranking fallback judge probe skipped:', {
+          harnessId: probe.harnessId,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+    return resolved[0]?.route ?? skipped[0]?.route ?? null
   }
 
   /** Delegate one-shot title generation and model fallback to the selected driver. */
@@ -22501,10 +22625,11 @@ export class ChatEngine {
    * Decide what this pass may judge, before any row is claimed or any harness
    * process is spent.
    *
-   * A row is held back only when every route it would take is inside a provider
-   * usage window the provider already reported closed: the user-assigned
-   * auxiliary model when one exists, and otherwise the graded harness's own
-   * discovered candidates. Everything else   a driver that cannot be resolved
+   * A row is held back only when every judge route it would take is inside a
+   * provider usage window the provider already reported closed: the
+   * user-assigned auxiliary model when one exists, the graded harness's own
+   * discovered candidates, and the harness-agnostic fallback judge (see
+   * `resolveFallbackRankingJudge`). Everything else   a driver that cannot be resolved
    * or cannot name its route, no auxiliary assignment, one free candidate, a
    * window that already reopened   keeps the row judgeable, so a wrong guess can
    * only ever postpone a row whose route was genuinely closed.
@@ -22515,6 +22640,7 @@ export class ChatEngine {
     const projectPath = await this.auxiliaryWorkingDirectory()
     const drivers = new Map<string, Promise<HarnessDriver | null>>()
     const routes = new Map<string, Promise<AuxiliaryRoute | null>>()
+    const fallbacks = new Map<string, Promise<FallbackRankingJudgeRoute | null>>()
     // One resolution per harness for the whole window: the routes and their
     // drivers are the same for every row of a harness, only the graded model
     // differs, and re-resolving them per row would re-read the config.
@@ -22532,12 +22658,29 @@ export class ChatEngine {
       routes.set(harnessId, pending)
       return pending
     }
+    // One fallback resolution per harness: the graded harness and its
+    // auxiliary assignment are excluded, and the fallback's drivers are the
+    // same for every row, so only the exclusion set differs per harness.
+    const fallbackFor = (
+      harnessId: string,
+      exclude: readonly string[]
+    ): Promise<FallbackRankingJudgeRoute | null> => {
+      const cached = fallbacks.get(harnessId)
+      if (cached) return cached
+      const pending = this.resolveFallbackRankingJudge(projectPath, exclude).catch(() => null)
+      fallbacks.set(harnessId, pending)
+      return pending
+    }
     const claimIds: string[] = []
     const heldBack = new Map<number, string[]>()
     for (const row of head) {
       const native = await driverFor(row.harness_id)
       const auxiliary = await routeFor(row.harness_id)
-      const untilMs = this.rankingRowBlockedUntil(row, native, auxiliary)
+      const fallback = await fallbackFor(
+        row.harness_id,
+        auxiliary ? [row.harness_id, auxiliary.harnessId] : [row.harness_id]
+      )
+      const untilMs = this.rankingRowBlockedUntil(row, native, auxiliary, fallback)
       if (untilMs === null) {
         claimIds.push(row.id)
         // A full batch ends the pass: the window is scanned again one pass
@@ -22562,19 +22705,42 @@ export class ChatEngine {
   private rankingRowBlockedUntil(
     row: RankingQueueHead,
     native: HarnessDriver | null,
-    auxiliary: AuxiliaryRoute | null
+    auxiliary: AuxiliaryRoute | null,
+    fallback: FallbackRankingJudgeRoute | null
   ): number | null {
     const nativeUntil = this.nativeRouteWindowUntil(row, native)
-    if (!auxiliary) return nativeUntil
     // An auxiliary assignment pins exactly one candidate, so its route is known
     // in full and needs no discovery.
-    const auxiliaryUntil = this.windowUntil(auxiliary.driver, [
-      { providerId: auxiliary.providerId, modelId: auxiliary.modelId }
+    const auxiliaryUntil = auxiliary
+      ? this.windowUntil(auxiliary.driver, [
+          { providerId: auxiliary.providerId, modelId: auxiliary.modelId }
+        ])
+      : null
+    const fallbackUntil = fallback ? this.windowUntil(fallback.driver, fallback.candidates) : null
+    // Either free route being enough: a held auxiliary or native window still
+    // falls through, and a fallback judge keeps rows judgeable however blocked
+    // the graded harness's routes are. `undefined` marks a lane that does not
+    // exist at all, so an absent lane can never rescue a closed one.
+    return this.blockedUntilOf([
+      auxiliary ? auxiliaryUntil : undefined,
+      nativeUntil,
+      fallback ? fallbackUntil : undefined
     ])
-    // Either route being free is enough: an auxiliary judge held back by its own
-    // window still falls through to the graded harness's candidates.
-    if (auxiliaryUntil === null || nativeUntil === null) return null
-    return Math.min(auxiliaryUntil, nativeUntil)
+  }
+
+  /**
+   * The moment the judge routes of one row reopen, or null while one lane can
+   * still judge it. A resolvable route with no window knowledge is treated as
+   * free, so a row is held back only when every existing route sits inside a
+   * window the provider itself reported closed.
+   */
+  private blockedUntilOf(lando: ReadonlyArray<number | null | undefined>): number | null {
+    const closed = lando.filter(
+      (until): until is number => typeof until === 'number' && until < Number.POSITIVE_INFINITY
+    )
+    if (closed.length === 0) return null
+    if (lando.some((until) => until === null)) return null
+    return Math.min(...closed)
   }
 
   /**
@@ -22789,32 +22955,81 @@ export class ChatEngine {
       }
       // The snapshot is self-contained: grading judges the conversation payload,
       // never the project, so a deleted or renamed project cannot block it.
-      const driver = await this.driverForAccount(candidate.harnessId)
+      // A harness whose own route already failed once is struck out: it is
+      // judged through the harness-agnostic fallback below instead of spending
+      // one more harness process per row on candidates that cannot run.
+      let nativeScore: number | null = null
+      if ((this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) === 0) {
+        try {
+          const driver = await this.driverForAccount(candidate.harnessId)
+          judge = {
+            score: null,
+            judgeHarnessId: candidate.harnessId,
+            judgeModelId: candidate.modelId,
+            viaAuxiliary: false
+          }
+          const score = await driver.gradeTurn(workingDirectory, {
+            settings: {
+              harnessId: candidate.harnessId,
+              providerId: candidate.providerId,
+              modelId: candidate.modelId,
+              thinkingLevel: candidate.thinkingLevel,
+              permissionLevel: 'auto_review'
+            },
+            userMessage: candidate.userMessage,
+            assistantOutput: candidate.assistantOutput,
+            followUp: candidate.followUp
+          })
+          // A driver that violates its number-or-null contract is a judge
+          // failure, not a score.
+          nativeScore = typeof score === 'number' ? score : null
+        } catch (error) {
+          Logger.dev('Ranking grading failed on the graded harness:', {
+            harnessId: candidate.harnessId,
+            modelId: candidate.modelId,
+            error: rawErrorMessage(error)
+          })
+          nativeScore = null
+        }
+        if (nativeScore === null) {
+          this.rankingNativeJudgeStrikes.set(
+            candidate.harnessId,
+            (this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) + 1
+          )
+        } else {
+          this.rankingNativeJudgeStrikes.delete(candidate.harnessId)
+          Logger.dev('Ranking grading completed', {
+            harnessId: candidate.harnessId,
+            modelId: candidate.modelId,
+            score: nativeScore
+          })
+          return { ...judge, score: nativeScore }
+        }
+      }
+      // No harness-native judge is available. Ranking measures the graded
+      // model, so the judge's harness is an implementation detail: fall back
+      // to the model and account the user is actively using, or to any other
+      // resolvable harness's cheap candidates.
+      const fallback = await this.resolveFallbackRankingJudge(
+        workingDirectory,
+        auxiliary ? [candidate.harnessId, auxiliary.harnessId] : [candidate.harnessId]
+      )
+      if (!fallback) return judge
       judge = {
         score: null,
-        judgeHarnessId: candidate.harnessId,
-        judgeModelId: candidate.modelId,
-        viaAuxiliary: false
+        judgeHarnessId: fallback.harnessId,
+        judgeModelId: fallback.modelId,
+        viaAuxiliary: true
       }
-      const score = await driver.gradeTurn(workingDirectory, {
-        settings: {
-          harnessId: candidate.harnessId,
-          providerId: candidate.providerId,
-          modelId: candidate.modelId,
-          thinkingLevel: candidate.thinkingLevel,
-          permissionLevel: 'auto_review'
-        },
+      const fallbackScore = await fallback.driver.gradeTurn(workingDirectory, {
+        settings: fallback.settings,
+        candidates: fallback.candidates,
         userMessage: candidate.userMessage,
         assistantOutput: candidate.assistantOutput,
         followUp: candidate.followUp
       })
-      Logger.dev('Ranking grading completed', {
-        harnessId: candidate.harnessId,
-        modelId: candidate.modelId,
-        score
-      })
       // A driver that violates its number-or-null contract is a judge failure.
-      return { ...judge, score: typeof score === 'number' ? score : null }
+      return { ...judge, score: typeof fallbackScore === 'number' ? fallbackScore : null }
     } catch (error) {
       Logger.dev('Ranking grading failed:', rawErrorMessage(error))
       return judge
