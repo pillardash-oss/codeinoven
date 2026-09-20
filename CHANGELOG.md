@@ -51,6 +51,25 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- The vision-model error card is dismissable in every state. A request that the
+  engine already settled (its five-minute decision timeout, a newer descriptor
+  request superseding it, or its harness session being retired) used to answer
+  a dismiss click with `Image descriptor request is no longer pending`, leaving
+  the card on screen; those paths now broadcast their resolution so the card
+  closes, and a reply for a settled request settles the card instead of
+  failing. Dismissing a question or secret card follows the same rule, and a
+  `false_positive` report still records the model even when it arrives late.
+- Image-descriptor requests now supersede each other: when a model issues
+  several descriptor calls in one turn, the newest request dismisses the older
+  cards and only the newest one waits for an answer, instead of leaving
+  unanswerable cards behind that each timed out separately.
+- A model that can already see images no longer receives the image descriptor.
+  The utility gateway now withholds it for any model the provider catalog marks
+  as image-capable, not only for models the user reported, and re-checks that
+  capability on every gateway call so a `false_positive` report takes effect
+  for the rest of the turn. A vision record also matches the model name segment
+  of an id, so one report covers the same model behind other provider prefixes
+  (`z-ai/glm-5.3-flash` and `ali/deepseek-v4.1-flash`).
 - ⌘/Ctrl+Enter in the **New pull request** panel now docks the panel while the
   commit → push → create sequence runs, and the docked chip names the step in
   progress instead of only spinning. A dismiss button can no longer be

@@ -41,6 +41,7 @@ import {
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
+import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
@@ -365,20 +366,23 @@ export class StorageEngine {
    *  lowercased) so the record matches the same model across every harness
    *  and provider. Duplicate reports are ignored. */
   async addVisionModel(modelId: string): Promise<void> {
-    const id = modelId.trim().toLowerCase()
+    const id = normalizeVisionModelId(modelId)
     if (!id) throw new TypeError('Vision model id cannot be empty')
     const models = await this.getVisionModels()
-    if (models.some((model) => model.id === id)) return
+    if (models.some((model) => visionModelRecordMatches(model.id, id))) return
     models.push({ id, addedAt: Date.now() })
     await this.write(VISION_MODELS_FILE, models)
   }
 
-  /** True when the app's own record says this model can see images. */
+  /**
+   * True when the app's own record says this model can see images. A record is
+   * compared by the model-name segment of the id, so one report covers every
+   * provider prefix of the same model (see `visionModelRecordMatches`).
+   */
   async hasVisionModel(modelId: string): Promise<boolean> {
-    const id = modelId.trim().toLowerCase()
-    if (!id) return false
+    if (!normalizeVisionModelId(modelId)) return false
     const models = await this.getVisionModels()
-    return models.some((model) => model.id === id)
+    return models.some((model) => visionModelRecordMatches(model.id, modelId))
   }
 
   /** Read a JSON file relative to config root */

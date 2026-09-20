@@ -16,8 +16,6 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  * harness: the value goes to the encrypted vault, and the model never sees it.
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
-/** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
-export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {

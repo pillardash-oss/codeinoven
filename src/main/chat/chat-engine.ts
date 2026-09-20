@@ -216,6 +216,7 @@ import type {
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
   MemoryScope,
+  ModelIdentity,
   PermissionLevel,
   PermissionReply,
   PermissionRequest,
@@ -1285,6 +1286,13 @@ export class ChatEngine {
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
+    // Every audit-cycle transition lands on the plan's coordinator thread, so a
+    // retry or dismissal performed on the auditor's card clears the matching
+    // card on the Sr. Engineer (and the reverse). Re-announcing the coordinator
+    // thread is what reaches every mounted view of the plan.
+    this.assignmentEngine.setAuditCycleListener((plan) => {
+      void this.reannounceAssignmentAudit(plan)
+    })
     // Register available harness drivers. Order follows the harness registry
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
@@ -1434,6 +1442,17 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
+  /**
+   * Land a utility registry change in the turns that are already running.
+   *
+   * Called by the renderer boundary after every successful write, so switching a
+   * capability off in Utilities takes effect immediately instead of at the next
+   * turn, and without the user restarting anything.
+   */
+  async applyUtilityRegistryChange(utilityId: string): Promise<void> {
+    await this.utilityOrchestration.applyRegistryChange(utilityId)
   }
 
   /**
@@ -2327,7 +2346,19 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const pending = this.pendingQuestions.get(requestId)
+    if (
+      !pending ||
+      pending.request.projectId !== projectId ||
+      pending.request.threadId !== threadId ||
+      pending.resolving
+    ) {
+      // Discarding must always work: the request was auto-answered, answered in
+      // another view, or its session was retired, so the question (or secret)
+      // card only has to close. Never answer a dead card with an error.
+      Logger.dev(`Ignoring dismissal of settled question request: ${requestId}`)
+      return
+    }
     if (pending.request.questions.some(isSecretQuestion)) {
       // An app-owned secret card has no harness side to reject: settle the
       // waiting tool call so the agent continues without the value.
@@ -2631,10 +2662,8 @@ export class ChatEngine {
     }
     this.pendingQuestions.clear()
     for (const pending of this.pendingImageDescriptorDecisions.values()) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer)
-      pending.resolve({ action: 'ignore' })
+      this.settleImageDescriptorDecision(pending)
     }
-    this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
@@ -2853,7 +2882,8 @@ export class ChatEngine {
         ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
-        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
+        resolveExecutingModelVisionCapable: () =>
+          this.executingModelVisionCapable(projectId, settings),
         allowManagement,
         ...(brainstormInterview
           ? {
@@ -3095,7 +3125,8 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
-        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
+        resolveExecutingModelVisionCapable: () =>
+          this.executingModelVisionCapable(projectId, settings),
         // A steered turn keeps the setup + diagnostics contract alive when the
         // user has invoked @cio-utility in this thread, so reuse survives a
         // steer landing after the previous turn's gateway cleanup.
@@ -5222,6 +5253,21 @@ export class ChatEngine {
 
     assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId) ?? assignment
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    // A deliberate user stop vetoes the automatic resume: the assignment state
+    // itself is untouched by Stop, so without this latch the next launch (or the
+    // next attention reconcile) would silently re-prompt a thread the user
+    // stopped on purpose. A fresh prompt clears the latch and re-arms resuming.
+    if (
+      coordinator &&
+      (await this.threadManager.wasStoppedByUser(projectId, coordinatorThreadId))
+    ) {
+      Logger.info('Assignment resume suppressed: the user stopped this thread', {
+        projectId,
+        threadId: coordinatorThreadId,
+        assignmentStatus: assignment.status
+      })
+      return assignment
+    }
     if (coordinator?.settings && (await this.assignmentNeedsCoordinatorTurn(assignment))) {
       await this.ensureAssignmentApi()
       await this.sendAssignmentCoordinatorPrompt(
@@ -5244,6 +5290,7 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
+    await this.threadManager.markStoppedByUser(projectId, threadId)
     this.userAbortedSessions.add(sessionId)
     if (owner.parentSessionId && driver.abortSubagent) {
       // The harness keeps this worker inside its parent's process, so aborting
@@ -6438,6 +6485,9 @@ export class ChatEngine {
       const activeRuntime = await this.resolve(projectId, driverId, threadId, activeAccountId)
       this.userAbortedSessions.add(activeSessionId)
       this.clearHeldSteers(activeSessionId)
+      // A stop-and-resend steers over a dying turn; the very next statement
+      // sends the user's new prompt, which clears the latch again.
+      await this.threadManager.markStoppedByUser(projectId, threadId)
       await activeRuntime.driver.abort(activeRuntime.projectPath, activeSessionId)
       this.sessionStatuses.set(activeSessionId, { state: 'idle' })
       this.handleSessionIdleSignal(activeSessionId)
@@ -6895,7 +6945,12 @@ export class ChatEngine {
      *  the first user prompt in its conversation. */
     visiblePrompt = false
   ): Promise<AgentMessage> {
-    if (origin === 'user') this.touchUserActivity()
+    if (origin === 'user') {
+      this.touchUserActivity()
+      // A real user prompt re-arms automatic resumes: the stop latch only ever
+      // vetoes resuming until the user themselves come back to the thread.
+      void this.threadManager.clearStoppedByUser(projectId, threadId)
+    }
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     // Queue behind an in-flight optimistic create so a just-created thread can
@@ -9009,11 +9064,12 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
-    // A model the user reported as vision-capable must never have a dedicated
-    // vision model describe images for it   the report exists precisely so the
-    // descriptor is skipped, even when the model itself asks for the tool.
-    if (thread?.settings && (await this.storage.hasVisionModel(thread.settings.modelId))) {
-      Logger.info('Image descriptor skipped: executing model is recorded as vision-capable', {
+    // A model that can already see images must never have a dedicated vision
+    // model describe them: the provider catalog says so, or the user reported
+    // it as a false positive. The check is resolved here, at executor time, so
+    // it holds even when the model reached the descriptor through the gateway.
+    if (thread?.settings && !(await this.modelLacksVision(request.projectId, thread.settings))) {
+      Logger.info('Image descriptor skipped: executing model can see images', {
         modelId: thread.settings.modelId,
         threadId: request.threadId
       })
@@ -9416,6 +9472,20 @@ export class ChatEngine {
   }
 
   /**
+   * The model identity a vision-capability report is attributed to: the model
+   * that was executing the turn when the descriptor ran. Shared by the error
+   * card and by a report that arrives after the card already settled.
+   */
+  private visionReportModel(settings: ThreadSettings | undefined): ModelIdentity | undefined {
+    if (!settings) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId
+    }
+  }
+
+  /**
    * Surface an image-descriptor failure to the renderer and await the user's
    * decision. The gateway HTTP request stays open while the user picks, so the
    * text-only model's tool call blocks exactly like a permission prompt. On
@@ -9444,6 +9514,7 @@ export class ChatEngine {
       (candidate) =>
         candidate.threadId === request.threadId || candidate.id === owningThread?.assignmentTaskId
     )
+    const requestingModel = this.visionReportModel(owningThread?.settings)
     return new Promise<ImageDescriptorUserDecision>((resolve) => {
       // The card blocks the turn on user input, exactly like the question tool:
       // park the thread on "Needs attention" and restore the working status
@@ -9465,15 +9536,7 @@ export class ChatEngine {
         kind,
         selection,
         ...(imageId ? { imageId } : {}),
-        ...(owningThread?.settings
-          ? {
-              requestingModel: {
-                harnessId: owningThread.settings.harnessId,
-                providerId: owningThread.settings.providerId,
-                modelId: owningThread.settings.modelId
-              }
-            }
-          : {}),
+        ...(requestingModel ? { requestingModel } : {}),
         partialOutput: '',
         imageCount: request.images.length,
         createdAt: Date.now()
@@ -9486,13 +9549,22 @@ export class ChatEngine {
         resolve,
         resumeStatus,
         timer: setTimeout(() => {
-          this.pendingImageDescriptorDecisions.delete(id)
+          // Never leave the card behind when this decision auto-resolves: a
+          // card whose request is gone is a card the user cannot dismiss.
+          this.settleImageDescriptorDecision(pending)
           this.startSessionWatchdog(request.sessionId)
           void this.threadManager
             .setStatus(request.projectId, request.threadId, resumeStatus)
             .catch(() => undefined)
-          resolve({ action: 'ignore' })
         }, IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS)
+      }
+      // One blocked session can only receive one answer, so a newer request
+      // supersedes every older one for the same session: the older cards are
+      // settled as `ignore` immediately instead of staying on screen as
+      // unanswerable cards that report themselves as no longer pending.
+      for (const [supersededId, superseded] of this.pendingImageDescriptorDecisions) {
+        if (superseded.sessionId !== request.sessionId || supersededId === id) continue
+        this.settleImageDescriptorDecision(superseded)
       }
       this.pendingImageDescriptorDecisions.set(id, pending)
       void this.threadManager
@@ -9506,6 +9578,28 @@ export class ChatEngine {
         request: requestForCard
       })
     })
+  }
+
+  /**
+   * Settle one pending image-descriptor decision as `ignore` without a user
+   * reply (timeout, a newer request superseding it, or the session being
+   * retired). The blocked tool call returns with partial output and the card is
+   * removed in every view, so no card is ever left behind that would answer
+   * itself with "no longer pending".
+   */
+  private settleImageDescriptorDecision(pending: PendingImageDescriptorDecision): void {
+    const requestId = pending.request.id
+    if (pending.timer !== undefined) clearTimeout(pending.timer)
+    this.pendingImageDescriptorDecisions.delete(requestId)
+    this.broadcast({
+      type: 'imageDescriptor.resolved',
+      sessionId: pending.sessionId,
+      projectId: pending.projectId,
+      threadId: pending.request.surfaceThreadId,
+      requestId,
+      action: 'ignore'
+    })
+    pending.resolve({ action: 'ignore' })
   }
 
   /** Persist the image-descriptor vision model to the thread so retries and
@@ -10348,6 +10442,9 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
+    // Latch the stop immediately so a failure that arrives mid-teardown cannot
+    // re-track an auto-retry between this point and the status write below.
+    await this.threadManager.markStoppedByUser(projectId, threadId)
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     if (activeBrainstorm) {
@@ -10453,8 +10550,10 @@ export class ChatEngine {
     // A thread waiting on a scheduled usage-reset retry has no live turn to
     // abort, so a Stop click must cancel the pending resume itself   otherwise
     // the scheduler fires later and silently revives the thread the user
-    // deliberately stopped.
+    // deliberately stopped. Every record of this thread goes: a successor
+    // session id (retry failures re-track under a new one) must not survive.
     this.retryScheduler?.clear(thread.sessionId)
+    this.retryScheduler?.dropThread(threadId)
     // A queued specification generation must die with the run the user just
     // stopped. If the persisted spec-generation record survives, reopening the
     // thread resumes the exact spec work the user deliberately cancelled.
@@ -10851,6 +10950,11 @@ export class ChatEngine {
    * model so it can work with it or explain what is missing; `false_positive`
    * records the model that was executing the turn as vision-capable so the
    * image descriptor never runs for it again, then continues like `ignore`.
+   *
+   * A card whose request the engine already settled (timeout, a newer request
+   * superseding it, or its session being retired) is never an error: the reply
+   * settles the card and applies what it still can, because a card the user can
+   * see must always be dismissable.
    */
   async replyImageDescriptor(
     projectId: string,
@@ -10873,8 +10977,22 @@ export class ChatEngine {
       throw new TypeError('Invalid image descriptor reply')
     }
     const pending = this.pendingImageDescriptorDecisions.get(requestId)
+    const staleRequest =
+      pending === undefined ||
+      pending.projectId !== projectId ||
+      pending.request.surfaceThreadId !== threadId
     if (action === 'false_positive') {
-      const requestingModel = pending?.request.requestingModel
+      // The card normally carries the model executing the turn. A report that
+      // arrives for an already settled card keeps the same attribution by
+      // reading the thread the card was shown for, so a late report still lands
+      // instead of failing the user's click.
+      const requestingModel =
+        pending?.request.requestingModel ??
+        this.visionReportModel(
+          staleRequest
+            ? (await this.threadManager.getThread(projectId, threadId).catch(() => null))?.settings
+            : undefined
+        )
       if (!requestingModel) {
         throw new Error('This report needs the model that was executing the turn')
       }
@@ -10885,17 +11003,8 @@ export class ChatEngine {
         harnessId: requestingModel.harnessId
       })
     }
-    // A replacement image picked from the error card is validated here (it
-    // must be a readable file) and keeps the failed image's id so its
-    // description still maps to the same slot in the per-image result set.
-    let replacement: ResolvedImageEntry | undefined
-    if (action === 'pick_image') {
-      const failedImageId = pending?.request.imageId
-      if (!failedImageId) {
-        throw new Error('This image descriptor request has no failed image to replace')
-      }
-      replacement = await buildImageDescriptorReplacement(failedImageId, imagePath)
-    }
+    // A retry carries the vision model the user chose on the card, so it is
+    // validated at the IPC boundary even when the card turns out to be settled.
     if (action === 'retry' && selection !== undefined) {
       selection = {
         harnessId: validateBoundedString(
@@ -10918,12 +11027,23 @@ export class ChatEngine {
             })
       }
     }
-    if (
-      !pending ||
-      pending.projectId !== projectId ||
-      pending.request.surfaceThreadId !== threadId
-    ) {
-      throw new Error(`Image descriptor request is no longer pending: ${requestId}`)
+    if (staleRequest || !pending) {
+      // Nothing is left to resolve: the blocked tool call already returned, so
+      // the reply only clears the card. Never throw here; a stale card must not
+      // trap the user.
+      Logger.dev(`Ignoring reply for settled image descriptor request: ${requestId}`)
+      return
+    }
+    // A replacement image picked from the error card is validated here (it must
+    // be a readable file) and keeps the failed image's id so its description
+    // still maps to the same slot in the per-image result set.
+    let replacement: ResolvedImageEntry | undefined
+    if (action === 'pick_image') {
+      const failedImageId = pending.request.imageId
+      if (!failedImageId) {
+        throw new Error('This image descriptor request has no failed image to replace')
+      }
+      replacement = await buildImageDescriptorReplacement(failedImageId, imagePath)
     }
     if (pending.timer !== undefined) {
       clearTimeout(pending.timer)
@@ -15983,6 +16103,17 @@ export class ChatEngine {
         ? assignment.auditCycle.startedAt
         : Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
+    // Mark the cycle running before any driver or recovery work: a retry must
+    // flip both audit cards (the Sr. Engineer's and the auditor's) the moment it
+    // starts, even if the harness session is slow to come back. The recovery
+    // block below is guarded so it can never leave the cycle running.
+    if (!resumingAudit) {
+      await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
+    }
+    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
+      read: false
+    })
     const priorRepair = await this.readAssignmentAuditRepairManifest(projectId, coordinatorThreadId)
     let repairManifest: AssignmentAuditRepairManifest | null =
       priorRepair?.status === 'invalid' &&
@@ -15998,9 +16129,16 @@ export class ChatEngine {
         assignment.auditCycle?.status === 'failed' ||
         auditorThread.status === 'failed')
     ) {
-      const previousOutput = latestAssignmentAuditOutput(
-        await driver.loadMessages(projectPath, sessionId)
-      )
+      // Reading the interrupted session is best-effort: a stale or unreachable
+      // harness must not abort the retry after the cycle is already running.
+      let previousOutput: string | null = null
+      try {
+        previousOutput = latestAssignmentAuditOutput(
+          await driver.loadMessages(projectPath, sessionId)
+        )
+      } catch (error) {
+        Logger.dev('Assignment audit recovery read failed:', error)
+      }
       if (previousOutput !== null) {
         const recoveredAttempt = await this.persistAssignmentAuditAttempt({
           projectId,
@@ -16066,13 +16204,6 @@ export class ChatEngine {
       }
     }
 
-    if (!resumingAudit) {
-      await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
-    }
-    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
-    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
-      read: false
-    })
     if (recoveredContent !== null) {
       return this.completeAssignmentAudit({
         projectId,
@@ -16929,6 +17060,15 @@ export class ChatEngine {
         }
         if (isOrchestrationChildThread(thread)) continue
         if (!thread.settings || !thread.sessionId) continue
+        // A deliberate user stop before the restart vetoes the hidden Continue;
+        // the user can still resume by hand (Retry or any prompt).
+        if (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id)) {
+          Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
+            projectId: thread.projectId,
+            threadId: thread.id
+          })
+          continue
+        }
         const current = this.sessionStatuses.get(thread.sessionId)
         if (current?.state === 'working' || current?.state === 'waiting') continue
         // The in-memory status map is empty right after a restart, but the
@@ -18568,6 +18708,19 @@ export class ChatEngine {
     return !(await this.storage.hasVisionModel(settings.modelId))
   }
 
+  /**
+   * Whether the model executing this turn can see images itself, resolved live
+   * for the utility gateway. Consumes the same rule as `modelLacksVision`, so
+   * the prompt note, the gateway's reachable utilities and the descriptor
+   * executor can never disagree about one model.
+   */
+  private async executingModelVisionCapable(
+    projectId: string,
+    settings: ThreadSettings
+  ): Promise<boolean> {
+    return !(await this.modelLacksVision(projectId, settings))
+  }
+
   /** Last-resort image-descriptor model: the first vision-capable model in the
    *  cached catalog, so the tool works even when nothing was configured. */
   private firstVisionModelFromCache(projectId: string): AgentModelSelection | undefined {
@@ -18832,13 +18985,12 @@ export class ChatEngine {
 
   /** Resolve (as ignore) every image-descriptor decision bound to a session that
    *  is being torn down, so blocked gateway tool calls return partial output
-   *  instead of hanging forever. */
+   *  instead of hanging forever. Each settled decision also clears its card, so
+   *  a retired session never leaves an unanswerable card on screen. */
   private clearPendingImageDescriptorDecisionsForSession(sessionId: string): void {
-    for (const [requestId, pending] of this.pendingImageDescriptorDecisions) {
+    for (const [, pending] of this.pendingImageDescriptorDecisions) {
       if (pending.sessionId !== sessionId) continue
-      if (pending.timer !== undefined) clearTimeout(pending.timer)
-      this.pendingImageDescriptorDecisions.delete(requestId)
-      pending.resolve({ action: 'ignore' })
+      this.settleImageDescriptorDecision(pending)
     }
   }
 
@@ -19868,8 +20020,7 @@ export class ChatEngine {
     // gateway (handoff clear + gateway.cleanup); the steer's deliverAfterTurn
     // path runs a full sendPrompt that re-arms a fresh gateway turn, and if
     // the two raced the stale cleanup would wipe the new turn's credentials
-    // mid-turn, leaving the harness with dead cio_util_* tools and a
-    // retrieve_mcp_host fallback that finds no live turn for the session.
+    // mid-turn, leaving the harness with dead cio_util_* tools.
     const finalization = this.onSessionIdle(sessionId)
       .catch((error) => Logger.error('Session idle finalization failed:', error))
       .then(() => {
@@ -20141,6 +20292,19 @@ export class ChatEngine {
     return undefined
   }
 
+  /** Re-announce the coordinator thread so every view of its Assignment plan
+   *  reconciles after an audit-cycle transition. The renderer keys the audit
+   *  cards   the Sr. Engineer's and the auditor's   off that one plan, so this is
+   *  what keeps the two connected. */
+  private async reannounceAssignmentAudit(plan: AssignmentPlan): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(plan.projectId, plan.coordinatorThreadId)
+      if (thread) broadcastThreadUpdate(thread)
+    } catch (error) {
+      Logger.dev('Assignment audit reannounce failed:', error)
+    }
+  }
+
   /**
    * Broadcast an agent event to every renderer window and the remote peer.
    *
@@ -20264,7 +20428,10 @@ export class ChatEngine {
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
-    scheduler.attachContinue((record) => this.continueScheduledThread(record))
+    scheduler.attachStoppedThreadTest((projectId, threadId) =>
+      this.threadManager.wasStoppedByUser(projectId, threadId)
+    )
+    void scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
@@ -20309,6 +20476,12 @@ export class ChatEngine {
             try {
               const thread = await this.threadManager.getThread(record.projectId, record.threadId)
               if (!thread) continue
+              if (await this.threadManager.wasStoppedByUser(record.projectId, record.threadId)) {
+                // The user stopped this thread; the ledger was supposed to be
+                // clean already, but a concurrent write raced the stop. Drop.
+                this.retryScheduler?.dropThread(record.threadId)
+                continue
+              }
               if (thread.status === 'working-paused') continue
               if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
               const updated = await this.threadManager.setStatus(
@@ -20348,6 +20521,10 @@ export class ChatEngine {
           const thread = await this.threadManager.getThread(row.project_id, row.id)
           if (!thread) continue
           if (thread.status === 'working-paused') continue
+          // A user-stopped thread is never relabelled to working-paused, and
+          // never re-armed by this scan: its stop intent outranks the stale
+          // persisted error text.
+          if (await this.threadManager.wasStoppedByUser(row.project_id, row.id)) continue
           // Only threads that still look actively working should be considered.
           if (!['planning', 'executing'].includes(thread.status)) continue
 
@@ -20394,7 +20571,7 @@ export class ChatEngine {
           // fallback timer instead of leaving the card "waiting" with nothing
           // to auto-resume it.
           if (scheduler && row.session_id) {
-            scheduler.track({
+            const trackedRepair = await scheduler.track({
               sessionId: row.session_id,
               projectId: row.project_id,
               threadId: row.id,
@@ -20403,6 +20580,9 @@ export class ChatEngine {
               issueKind: kind,
               issueMessage: lastError
             })
+            // A user-stopped thread is never re-armed by the repair scan: the
+            // status write above already stayed off it, so nothing else to do.
+            if (!trackedRepair) continue
           }
           Logger.info('Repaired orphaned working thread to Waiting to retry', {
             projectId: row.project_id,
@@ -20466,10 +20646,23 @@ export class ChatEngine {
     }
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
     if (!hasRetryAt && !usageResetWait) return false
+    // A deliberate user stop is never overwritten by a new wait. This is the
+    // re-arm path that survived the Stop click: the abort cleared the session
+    // that was tracked, but the SAME failure re-reported under a successor
+    // session would land here and silently revive the thread.
+    if (await this.threadManager.wasStoppedByUser(info.projectId, info.threadId)) {
+      Logger.info('Auto-retry refused: the user stopped this thread', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        sessionId,
+        issueKind: issue.kind
+      })
+      return false
+    }
     await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
     })
-    const tracked = scheduler.track({
+    const tracked = await scheduler.track({
       sessionId,
       projectId: info.projectId,
       threadId: info.threadId,
@@ -20480,7 +20673,11 @@ export class ChatEngine {
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
-    if (!tracked && scheduler.isEnabled) {
+    if (!tracked) {
+      // track() refuses for a user-stopped thread (or a probe failure). Keep
+      // the wait OFF the ledger and leave the thread on the visible warning
+      // card; with auto-retry on this also marks the thread failed so it is
+      // never silently revived. A manual Retry stays available.
       await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
         read: false,
         error: issue.message,
@@ -20551,7 +20748,17 @@ export class ChatEngine {
     // fall to failed and hide the will-retry state (ba9a... silent case).
     // scheduleAutomaticRetry already persisted working-paused in this branch,
     // so we just need to signal the caller that the thread is paused.
-    const shouldStayPaused = !retryScheduled && isUsageResetWaitIssue(issue) && issue.retryable
+    // A user-stopped thread is exempt: schedule refused the record, and the
+    // fallback here must not re-persist working-paused (or a later launch's
+    // orphan-repair scan would re-arm a timer for the stopped thread).
+    const shouldStayPaused =
+      !retryScheduled &&
+      isUsageResetWaitIssue(issue) &&
+      issue.retryable &&
+      !(await this.threadManager.wasStoppedByUser(
+        this.sessionRegistry.get(sessionId)?.projectId ?? '',
+        this.sessionRegistry.get(sessionId)?.threadId ?? ''
+      ))
     if (shouldStayPaused) {
       const info = this.sessionRegistry.get(sessionId)
       if (info && !info.ephemeral) {

@@ -12,10 +12,10 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
+import { APP_ADB_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
@@ -31,6 +31,7 @@ import {
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
+import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
@@ -49,7 +50,6 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
 import type { AgentSecretResolution } from './agent-secret-service'
-import { instanceRegistry } from '../system/instance-registry'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_ALIGNMENT_OPERATIONS,
@@ -66,12 +66,14 @@ import {
   utilitySearchScore
 } from './utility-orchestration/utility-search'
 import {
+  type ThreadBankEntry,
+  forgetUtility,
+  reconcileActivated
+} from './utility-orchestration/utility-turn-state'
+import {
   BROWSER_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
-  RETRIEVE_MCP_HOST_ROUTE,
-  RETRIEVE_MCP_HOST_SCRIPT_PATH,
   buildCuaSessionId,
-  buildMcpHostRetrieverScript,
   buildUtilityGatewayScript,
   gatewayUtility
 } from './utility-orchestration/utility-gateway-scripts'
@@ -102,9 +104,13 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
-  /** True when the executing model is recorded as vision-capable (user report),
-   *  so the image descriptor utility stays hidden for this turn. */
-  executingModelVisionCapable?: boolean
+  /**
+   * Live check for whether the executing model can see images itself. Resolved
+   * fresh on every eligibility pass (turn start and each mid-turn refresh) so a
+   * vision report the user makes mid-turn hides the image descriptor from the
+   * very next gateway search instead of only from the following turn.
+   */
+  resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
@@ -237,13 +243,6 @@ interface TurnState {
  * name, kind, description) so later turns can invoke the utility directly by
  * id and re-list its docs with cio_util_docs_lookup after compaction.
  */
-interface ThreadBankEntry {
-  id: string
-  name: string
-  kind: UtilityKind
-  description: string
-}
-
 /** Thread bank entries survive app restarts as one small JSON file per thread. */
 const THREAD_BANK_DIRECTORY = 'utility-banks'
 const THREAD_BANK_MAX_ENTRIES = 64
@@ -378,6 +377,20 @@ export class UtilityOrchestrationService {
     return request.nativeCapabilities.map(normalizeCapability).includes('computer_use')
   }
 
+  /** Whether the executing model sees images itself, so the image descriptor
+   *  must stay out of this turn's reachable utilities. A capability lookup that
+   *  fails keeps the descriptor reachable rather than hiding a capability the
+   *  turn may legitimately need. */
+  private async executingModelVisionCapable(request: UtilityTurnRequest): Promise<boolean> {
+    if (!request.resolveExecutingModelVisionCapable) return false
+    try {
+      return await request.resolveExecutingModelVisionCapable()
+    } catch (error) {
+      Logger.dev('Executing-model vision capability lookup failed:', error)
+      return false
+    }
+  }
+
   /**
    * Resolve the utilities one turn may reach, from the registry plus the
    * interview-bound brainstorm capability. Shared by turn start and the mid-turn
@@ -392,8 +405,6 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // Host recovery belongs to the transport, never to model-facing skills.
-    eligible = eligible.filter(({ utility }) => utility.id !== APP_RETRIEVE_MCP_HOST_UTILITY_ID)
     // This capability is bound to the live interview, never installed globally.
     eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
     if (request.saveBrainstormNotes) {
@@ -406,10 +417,10 @@ export class UtilityOrchestrationService {
       // so enforce the native preference by stable utility identity too.
       eligible = eligible.filter(({ utility }) => utility.id !== CUA_UTILITY_ID)
     }
-    // A model the user reported as vision-capable must never see the image
-    // descriptor: announcing it invites the model to call it, which is exactly
-    // the false-positive report path the vision record exists to prevent.
-    if (request.executingModelVisionCapable === true) {
+    // A model that can already see images must never see the image descriptor:
+    // announcing it invites the model to call it, which is exactly the
+    // false-positive report path the app's vision record exists to prevent.
+    if (await this.executingModelVisionCapable(request)) {
       eligible = eligible.filter(({ utility }) => utility.kind !== 'image_descriptor')
     }
     // Stamp the thread's permission level onto the Cua Driver MCP utility so
@@ -454,6 +465,10 @@ export class UtilityOrchestrationService {
     // a schema: whether it is offered at all is the registry's call, so
     // disabling it in Utilities removes the pointer too.
     const hasScopeCapability = eligible.some(({ utility }) => utility.id === APP_SCOPE_UTILITY_ID)
+    // The Android device skill is advertised the same way, as a pointer rather
+    // than a schema. It is knowledge an agent applies with its own shell, so the
+    // only thing a turn needs from the app is to know the playbook exists.
+    const hasAdbCapability = eligible.some(({ utility }) => utility.id === APP_ADB_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -502,7 +517,6 @@ export class UtilityOrchestrationService {
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    await this.ensureMcpHostRetriever()
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
@@ -513,6 +527,11 @@ export class UtilityOrchestrationService {
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+          ]
+        : []),
+      ...(hasAdbCapability
+        ? [
+            `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
           ]
         : []),
       ...(hasOnDemand
@@ -901,25 +920,6 @@ export class UtilityOrchestrationService {
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
-        const input = await readJsonBody(request)
-        const sessionId = requiredString(input['session_id'], 'session_id', 128)
-        // turn_id pins the lookup to one utility turn; when omitted (the
-        // extension's self-healing path only knows the session id), any live
-        // utility turn for that session proves instance ownership.
-        const turnId = typeof input['turn_id'] === 'string' ? input['turn_id'] : ''
-        const turn = turnId
-          ? this.turns.get(turnId)
-          : [...this.turns.values()]
-              .filter((entry) => entry.state.request.sessionId === sessionId)
-              .at(-1)
-        if (turn?.state.request.sessionId !== sessionId || !this.gatewayBaseUrl) {
-          this.respond(response, 404, { error: 'Utility turn is not owned by this instance' })
-          return
-        }
-        this.respond(response, 200, { mcpHost: this.gatewayBaseUrl })
-        return
-      }
       const authorization = request.headers.authorization
       const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       const turnId = this.turnIdsByToken.get(token)
@@ -968,7 +968,6 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
-        instanceRegistry.setMcpHost(this.gatewayBaseUrl)
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -987,7 +986,6 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
-    instanceRegistry.setMcpHost(null)
     if (!server) return
     await new Promise<void>((resolve) => {
       if (!server.listening) {
@@ -996,19 +994,6 @@ export class UtilityOrchestrationService {
       }
       server.close(() => resolve())
     })
-  }
-
-  /**
-   * Materialize one durable app-owned recovery module. Turn instructions pass
-   * their session id as data, so cleanup can retire turn state without leaving
-   * a command in persistent agent context that points at a deleted module.
-   */
-  private async ensureMcpHostRetriever(): Promise<string> {
-    const script = buildMcpHostRetrieverScript(this.storage.resolve('instances'))
-    if ((await this.storage.readRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH)) !== script) {
-      await this.storage.writeRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH, script)
-    }
-    return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
   }
 
   /**
@@ -1036,12 +1021,68 @@ export class UtilityOrchestrationService {
     // resolution rather than paying installation discovery again.
     const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
     if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
-    // A utility this turn already activated stays reachable even if it was removed
-    // since activation, so refresh cannot break a call the transcript already made.
-    for (const [utilityId, resolved] of state.activated) {
-      if (!next.has(utilityId)) next.set(utilityId, resolved)
-    }
     state.eligible = next
+    // A refresh lists only what is eligible now, so an activated utility missing
+    // from it was disabled, deleted, or moved out of scope while this turn ran.
+    // Dropping it here is what lands that change mid-turn: the call the transcript
+    // already made has returned, and keeping the id alive on its behalf was what
+    // made a disabled capability stay callable until the user sent another message.
+    await this.forgetUtilities(state, reconcileActivated(state, new Set(next.keys())))
+  }
+
+  /**
+   * Why a utility an agent asked for is unreachable, when the registry can say.
+   *
+   * A user who switches a capability off expects it to stop being callable, and
+   * an agent should report that as the user's change rather than as a broken app,
+   * so the registry is consulted once on the failure path only.
+   */
+  private async unreachableUtilityReason(utilityId: string): Promise<string | null> {
+    const utility = await this.registry.get(utilityId)
+    if (!utility) return `\`${utilityId}\` is no longer installed.`
+    if (!utility.enabled) {
+      return `\`${utilityId}\` was switched off in Utilities, so it is unavailable for the rest of this session.`
+    }
+    return null
+  }
+
+  /**
+   * Land a registry change in every turn that is already running.
+   *
+   * The read inside `refreshEligible` covers the next search or activation, but
+   * not a utility a turn already activated. Without this, switching a capability
+   * off would leave it callable until the turn ended, which reads as the change
+   * needing a restart. Dropping it from live turn state means the very next
+   * invoke reports it as unavailable.
+   */
+  async applyRegistryChange(utilityId: string): Promise<void> {
+    for (const turn of this.turns.values()) {
+      const state = turn.state
+      const wasReachable = forgetUtility(state, utilityId)
+      await this.forgetUtilities(state, [utilityId])
+      // The next search must re-read the registry instead of serving the set this
+      // turn built before the change.
+      state.eligibilityRefreshedAt = 0
+      if (wasReachable) await this.audit(state, 'utility.registry_changed', { utilityId })
+    }
+  }
+
+  /** Forget utilities a turn may no longer reach, releasing what belonged to them. */
+  private async forgetUtilities(state: TurnState, utilityIds: readonly string[]): Promise<void> {
+    await Promise.all(utilityIds.map((utilityId) => this.releaseUtility(state, utilityId)))
+  }
+
+  /** End one utility's CUA session and close its MCP client, if it had either. */
+  private async releaseUtility(state: TurnState, utilityId: string): Promise<void> {
+    const sessionId = state.cuaSessionIds.get(utilityId)
+    const client = state.clients.get(utilityId)
+    state.cuaSessionIds.delete(utilityId)
+    state.clients.delete(utilityId)
+    if (!client) return
+    if (sessionId) {
+      await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
+    }
+    await Promise.allSettled([client.close()])
   }
 
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
@@ -1253,12 +1294,15 @@ export class UtilityOrchestrationService {
       // per-turn eligibility gate still applies; the MCP client is reconnected
       // lazily below (stateless per turn, id persistent per thread).
       if (!state.bank.has(utilityId)) {
-        throw new Error('Activate this utility before invoking it')
+        const reason = await this.unreachableUtilityReason(utilityId)
+        throw new Error(reason ?? 'Activate this utility before invoking it')
       }
       const eligible = state.eligible.get(utilityId)
       if (!eligible) {
+        const reason = await this.unreachableUtilityReason(utilityId)
         throw new Error(
-          'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
+          reason ??
+            'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
         )
       }
       resolved = eligible
@@ -1319,6 +1363,12 @@ export class UtilityOrchestrationService {
           pinnedSelection: await this.pinnedImageDescriptorSelection()
         })
       }
+    } else if (resolved.utility.kind === 'skill') {
+      // A skill is documentation. Its whole contract arrived at activation, so
+      // there is nothing to invoke; say so instead of reporting a kind mismatch.
+      throw new Error(
+        `\`${resolved.utility.id}\` is a skill: it exposes no tool. Its instructions arrived when it was activated, so re-list them with ${UTILITY_DOCS_TOOL_NAME} if they are gone, then do the work with your own tools.`
+      )
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }

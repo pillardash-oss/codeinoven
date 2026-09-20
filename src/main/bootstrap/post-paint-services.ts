@@ -459,7 +459,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       undefined,
       undefined,
       undefined,
-      state.computerUsePipService ?? undefined
+      state.computerUsePipService ?? undefined,
+      // A capability the user switches off must stop being callable in the turns
+      // that are already running, without the user restarting anything.
+      (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve()
     )
     state.gatewaySupervisor = registerGatewayIpc(
       storage,

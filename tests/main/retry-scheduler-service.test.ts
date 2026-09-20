@@ -45,7 +45,7 @@ describe('RetrySchedulerService', () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()
     const saved = record()
-    expect(scheduler.track(saved)).toBe(true)
+    expect(await scheduler.track(saved)).toBe(true)
     expect(scheduler.getPendingRetry('session-1')).toEqual(saved)
     scheduler.stop()
   })
@@ -55,7 +55,7 @@ describe('RetrySchedulerService', () => {
     const first = new RetrySchedulerService(storageEngine)
     await first.start()
     const saved = record({ retryAt: Date.now() + 120_000 })
-    first.track(saved)
+    await first.track(saved)
     // Wait for the serialized atomic write to land before simulating shutdown.
     await first.flush()
     first.dispose()
@@ -96,7 +96,11 @@ describe('RetrySchedulerService', () => {
     scheduler.setEnabled(false)
     const resume = vi.fn(async () => undefined)
     scheduler.attachContinue(resume)
-    expect(scheduler.track(record({ retryAt: Date.now() - 1 }))).toBe(false)
+    // The wait is still recorded (it backs the manual "Waiting to retry"
+    // card), but with the toggle off `tick` never fires it: the resume
+    // callback must not be invoked.
+    expect(await scheduler.track(record({ retryAt: Date.now() - 1 }))).toBe(true)
+    expect(scheduler.getPendingRetry('session-1')).toBeDefined()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(resume).not.toHaveBeenCalled()
   })

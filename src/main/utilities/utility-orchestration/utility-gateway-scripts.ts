@@ -3,12 +3,10 @@ import type {
   ResolvedUtility,
   UtilityDefinitionFor
 } from '../../../lib/types'
-import { GATEWAY_TOOLS, RETRIEVE_MCP_HOST_TOOL_NAME } from '../../../lib/gateway-tools'
+import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
-export const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
-export const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`
 
 /** Turn identity the app-owned gateway utility needs; UtilityTurnRequest satisfies it. */
 export interface GatewayTurnContext {
@@ -222,107 +220,6 @@ for await (const line of lines) {
       write({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: error instanceof Error ? error.message : 'Gateway failure' } })
     }
   }
-}
-`
-}
-
-/**
- * Build the durable, shell-callable host resolver. It reads only public process
- * metadata and probes every loopback gateway in parallel; bearer credentials
- * never enter the registry, command arguments, or tool output.
- */
-export function buildMcpHostRetrieverScript(instanceDirectory: string): string {
-  return String.raw`import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
-
-const instanceDirectory = ${JSON.stringify(instanceDirectory)}
-const sessionId = process.argv[2]?.trim()
-const turnId = process.argv[3]?.trim()
-
-if (!sessionId || sessionId.length > 128 || (turnId !== undefined && turnId.length > 128)) {
-  process.stderr.write(
-    '${RETRIEVE_MCP_HOST_TOOL_NAME} requires the utility session id (and optionally the turn id).\n'
-  )
-  process.exit(1)
-}
-
-function validLoopbackHost(value) {
-  if (typeof value !== 'string') return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' && url.hostname === '127.0.0.1' ? url.origin : null
-  } catch {
-    return null
-  }
-}
-
-async function registeredHosts() {
-  let files
-  try {
-    files = await fs.readdir(instanceDirectory)
-  } catch {
-    return []
-  }
-  const entries = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file) => {
-        try {
-          return JSON.parse(await fs.readFile(join(instanceDirectory, file), 'utf8'))
-        } catch {
-          return null
-        }
-      })
-  )
-  const newestAllowedHeartbeat = Date.now() - 120_000
-  return [
-    ...new Set(
-      entries
-        .filter(
-          (entry) =>
-            typeof entry?.lastHeartbeat === 'number' &&
-            entry.lastHeartbeat >= newestAllowedHeartbeat
-        )
-        .map((entry) => validLoopbackHost(entry.mcpHost))
-        .filter(Boolean)
-    )
-  ]
-}
-
-async function resolveHost(host) {
-  try {
-    const response = await fetch(host + ${JSON.stringify(RETRIEVE_MCP_HOST_ROUTE)}, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(turnId ? { session_id: sessionId, turn_id: turnId } : { session_id: sessionId }),
-      signal: AbortSignal.timeout(1500)
-    })
-    if (!response.ok) return null
-    const body = await response.json()
-    return validLoopbackHost(body?.mcpHost)
-  } catch {
-    return null
-  }
-}
-
-const hosts = await registeredHosts()
-let resolved = null
-try {
-  resolved = await Promise.any(
-    hosts.map(async (host) => {
-      const candidate = await resolveHost(host)
-      if (!candidate) throw new Error('Not the owning instance')
-      return candidate
-    })
-  )
-} catch {
-  // No registered live instance owns this session.
-}
-if (!resolved) {
-  process.stderr.write('No live CodeInOven instance owns this utility session.\n')
-  process.exitCode = 1
-} else {
-  process.stdout.write(JSON.stringify({ mcpHost: resolved }) + '\n')
 }
 `
 }

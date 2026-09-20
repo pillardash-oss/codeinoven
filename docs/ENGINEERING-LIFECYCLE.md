@@ -64,6 +64,8 @@ The cycle stays `available` with `offerDismissedAt` set, so the audit remains re
 
 The offer belongs to a finished implementation, so it is only written and only shown while every task is `completed`. Any transition that reopens work on that plan (a steered worker, a worker that went unavailable and was recovered, a review that did not pass) drops it through `settleAuditOffer`, and the composer derives the offer from `completed` alone. Without that, a plan holding an `available` cycle while its tasks ran again pinned the prompt to the composer where it could neither be started nor dismissed, and Cancel appeared to do nothing because it landed on a plan whose audit was no longer startable.
 
+An Assignment's audit belongs to one plan, so the Sr. Engineer's card and the auditor's card are the same cycle seen from two threads and never disagree. Every persisted cycle transition (start, failure, retry, report, rework, dismissal, completion) re-announces the coordinator thread, which reconciles every mounted view of that plan. A retry started from the auditor's card therefore clears the Sr. Engineer's failed card the moment the run begins, and a dismissal or completion on the coordinator clears the auditor's card just as directly. The cycle is also marked `running` before any driver or recovery work, so the cards flip on the action rather than on the harness coming back. The same plan drives the studio tabs: a thread with no specification does not offer a **Spec** tab at all, instead of a tab that opens onto an empty document.
+
 ### Worker scope
 
 An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.
@@ -131,3 +133,19 @@ Desktop preview registration is reconstructed from validated feature-scoped mani
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
 - Remote disconnection: reconnect the paired client and reload the persisted lifecycle before resuming.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
+
+### Stop outranks every auto-resume
+
+A deliberate Stop (the composer stop button, a child stop, or the steer
+stop-and-resend) latches `stoppedByUserAt` into the thread's settings, and the
+latch survives app restarts. Every automatic resume checks it and stays quiet
+while it is set: assignment-attention resume, restart recovery of interrupted
+threads, the scheduled usage-reset retry (its pending record is dropped at
+launch and never re-tracked), and the launch repair scan. The next real user
+prompt clears the latch, which re-arms all automatic resumes.
+
+The assignment's own status is deliberately untouched by Stop, so the Auto
+Pilot chain and the manual resume controls keep working; only the *automatic*
+paths honour the latch. With auto-retry off in General settings, a recorded
+usage-reset wait backs the visible "Waiting to retry" card but never fires
+automatically.

@@ -357,8 +357,13 @@ it the same way:
 The activation is banked per thread, so later turns can invoke it by id without
 searching again, and `cio_util_docs_lookup` re-lists the contract after
 compaction. Because it is an ordinary registry utility, the Utilities screen
-lists it, and disabling it there removes both the capability and the one-line
-pointer the turn instructions add for it.
+lists it and its contract is editable there, but its availability is locked:
+the Git panel's review flow tells an agent to activate `cio:scope` by id
+(`src/renderer/lib/components/git/git-status-panel-prompts.ts`), so switching it
+off would break a shipped path. `cio:adb` is the one app-owned entry a user may
+switch off (`canToggleUtilityEnabled` in `src/lib/utility-ids.ts`), because a
+playbook is advice an agent applies with its own shell, not a part of the app's
+wiring.
 
 Agents are told to use it **only** when the user explicitly asks to work in a
 separate worktree, never on their own initiative: that rule is in the turn

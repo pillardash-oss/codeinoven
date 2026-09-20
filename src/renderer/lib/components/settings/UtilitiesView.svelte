@@ -40,6 +40,7 @@
     UtilityKind
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
+  import { canToggleUtilityEnabled } from '$shared/utility-ids'
 
   /** Sections of the Utilities page; the selected one lives in the settings route. */
   export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
@@ -828,10 +829,12 @@
                     >
                       {rowKindBadge(row)}
                     </span>
-                    {#if row.appOwned}
+                    {#if row.src === 'registry' && row.appOwned}
                       <span
                         class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
-                        title="Built into the app and always available; it cannot be deleted"
+                        title={canToggleUtilityEnabled(row.utility)
+                          ? 'Built into the app. It cannot be deleted, and you can switch it off so it stops competing with your own skill for a topic.'
+                          : 'Built into the app and always available; it cannot be deleted'}
                       >
                         Built-in
                       </span>
@@ -870,7 +873,7 @@
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
-                  {#if row.src === 'registry' && !row.appOwned}
+                  {#if row.src === 'registry' && canToggleUtilityEnabled(row.utility)}
                     <Switch
                       checked={row.enabled}
                       onchange={() => void toggleEnabled(row)}
@@ -878,7 +881,7 @@
                       title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
                     />
                   {/if}
-                  {#if !row.appOwned}
+                  {#if !row.appOwned || (row.src === 'registry' && canToggleUtilityEnabled(row.utility))}
                     <button
                       class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
                       aria-label="Edit {row.name}"
@@ -887,6 +890,8 @@
                     >
                       <Pencil size={14} />
                     </button>
+                  {/if}
+                  {#if !row.appOwned}
                     <button
                       class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
                       aria-label="Delete {row.name}"

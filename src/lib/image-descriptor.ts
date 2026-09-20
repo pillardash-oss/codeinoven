@@ -23,6 +23,34 @@ export interface ImageDescriptorEntry {
 /** Maximum images accepted in one call. */
 export const IMAGE_DESCRIPTOR_MAX_IMAGES = 8
 
+/** Normalize a model id the way the app's vision record stores it. */
+export function normalizeVisionModelId(modelId: string): string {
+  return modelId.trim().toLowerCase()
+}
+
+/**
+ * The part of a model id that names the model itself. Providers address one
+ * model through different gateway prefixes (`glm-5.3-flash` as
+ * `z-ai/glm-5.3-flash`, a namespaced mirror, and so on), and the segment after
+ * the last separator is the only part that identifies the model.
+ */
+function visionModelSegment(modelId: string): string {
+  const normalized = normalizeVisionModelId(modelId)
+  const separator = normalized.lastIndexOf('/')
+  return separator === -1 ? normalized : normalized.slice(separator + 1)
+}
+
+/**
+ * Whether a recorded vision-capable model id names the same model as
+ * `modelId`. One report then covers every provider prefix of that model
+ * instead of only the exact id the report was made from.
+ */
+export function visionModelRecordMatches(recordedId: string, modelId: string): boolean {
+  const segment = visionModelSegment(modelId)
+  if (!segment) return false
+  return visionModelSegment(recordedId) === segment
+}
+
 /** Exhaustive description instruction given to the vision model. */
 export const IMAGE_DESCRIPTOR_PROMPT =
   'Describe this image exhaustively, in a structured reading order from the top-left corner to the bottom-right corner across the entire image, so that another model can use this description for a mission-critical operation. Ensure no detail is skipped. Describe every single thing that you can identify: layout, subjects and objects, people, actions, text verbatim, colors, spatial relationships, textures, lighting, and any anomalies or edges.'

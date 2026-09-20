@@ -1,12 +1,7 @@
 import { SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
+import { normalizeVisionModelId, visionModelRecordMatches } from '$shared/image-descriptor'
 import type { VisionModelRecord } from '$shared/types'
-
-/** Normalize a model id the same way the main-process record does, so a model
- *  reported once matches across every harness and provider. */
-function normalizeModelId(modelId: string): string {
-  return modelId.trim().toLowerCase()
-}
 
 /**
  * Renderer mirror of the app's own vision record: model ids the user reported
@@ -20,7 +15,12 @@ class VisionModelsState {
   loaded = $state(false)
 
   has(modelId: string): boolean {
-    return this.ids.has(normalizeModelId(modelId))
+    const id = normalizeVisionModelId(modelId)
+    if (!id) return false
+    for (const recorded of this.ids) {
+      if (visionModelRecordMatches(recorded, id)) return true
+    }
+    return false
   }
 
   async load(): Promise<void> {
@@ -32,8 +32,8 @@ class VisionModelsState {
   /** Optimistically record a freshly reported model so dependent UI updates
    *  immediately; the durable record lives in the main process. */
   markReported(modelId: string): void {
-    const id = normalizeModelId(modelId)
-    if (!id || this.ids.has(id)) return
+    const id = normalizeVisionModelId(modelId)
+    if (!id || this.has(id)) return
     this.ids.add(id)
   }
 }

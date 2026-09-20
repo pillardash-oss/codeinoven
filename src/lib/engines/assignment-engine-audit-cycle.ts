@@ -11,11 +11,19 @@ import { settleAuditOffer } from './assignment-engine-tasks'
  * rewrites the reviewable markdown.
  */
 export class AssignmentAuditCycleBook {
+  /** Notified after every persisted cycle transition, so the app can mirror the
+   *  new status to every mounted view of the plan. */
+  private onChanged: ((plan: AssignmentPlan) => void) | null = null
+
   constructor(
     private readonly repo: AssignmentRepo,
     private readonly artifacts: AssignmentArtifactWriter,
     private readonly now: () => number
   ) {}
+
+  setChangedListener(listener: ((plan: AssignmentPlan) => void) | null): void {
+    this.onChanged = listener
+  }
 
   async begin(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
     const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
@@ -211,6 +219,7 @@ export class AssignmentAuditCycleBook {
     const updated = settleAuditOffer({ ...active, auditCycle, updatedAt: this.now() })
     this.repo.save(updated, active.version)
     await this.artifacts.writeMarkdown(updated)
+    this.onChanged?.(updated)
     return updated
   }
 }

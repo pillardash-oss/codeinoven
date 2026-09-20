@@ -70,7 +70,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'fileSystemMode',
   'loopAuditor',
   'imageDescriptor',
-  'imageDescriptorFallback'
+  'imageDescriptorFallback',
+  'stoppedByUserAt'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
@@ -149,6 +150,14 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   }
   if (input.fileSystemMode !== undefined) {
     settings.fileSystemMode = validateBoolean(input.fileSystemMode, 'File System')
+  }
+  if (input.stoppedByUserAt !== undefined) {
+    settings.stoppedByUserAt = validateBoundedInteger(
+      input.stoppedByUserAt,
+      'Stopped-by-user timestamp',
+      0,
+      Number.MAX_SAFE_INTEGER
+    )
   }
   if (input.reportToCoordinator !== undefined) {
     settings.reportToCoordinator = validateBoolean(

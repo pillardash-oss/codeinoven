@@ -803,11 +803,27 @@
       navigate(lastViewBeforeSettings)
       return
     }
-    // Focus inside the context sidebar: close its active tab (through Workspace's
-    // unsaved-changes confirmation) instead of clearing the thread.
+    // Focus inside the context sidebar: close the active tab of the surface that
+    // holds it (through Workspace's unsaved-changes confirmation) instead of
+    // clearing the thread. A terminal docked at the bottom is its own surface,
+    // so the placement of the focused region decides which tab the chord closes.
     const active = document.activeElement instanceof Element ? document.activeElement : null
-    if (active?.closest('[data-region="context-sidebar"]')) {
-      contextSidebarState.requestCloseActiveTab()
+    const sidebarRegion = active?.closest<HTMLElement>('[data-region="context-sidebar"]')
+    if (sidebarRegion) {
+      contextSidebarState.requestCloseActiveTab(
+        sidebarRegion.dataset.placement === 'bottom' ? 'dock' : 'sidebar'
+      )
+      return
+    }
+    // The context rail is the sidebar's own chrome: a rail icon opens or hides a
+    // panel but leaves the focus on the rail button, so the panel the user just
+    // revealed (a quick chat above all) must still be what the chord closes.
+    // With nothing on screen the rail owns no tab, and the chord falls through
+    // to the thread below instead of silently doing nothing.
+    if (
+      active?.closest('[data-region="context-dock"]') &&
+      contextSidebarState.requestCloseActiveTab(contextSidebarState.visible ? 'sidebar' : 'dock')
+    ) {
       return
     }
     // An open thread: deselect it back to the thread list.
