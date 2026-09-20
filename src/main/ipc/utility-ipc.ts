@@ -12,6 +12,7 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CuaBridgeService } from '../utilities/cua-bridge-service'
+import { Logger } from '../system/logger'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
 
 /** Register the strict renderer boundary for utility configuration. */
@@ -20,8 +21,24 @@ export function registerUtilityIpc(
   registry = new UtilityRegistryService(storage),
   vault = new SecretVault(storage),
   cuaBridge = new CuaBridgeService(storage),
-  pip?: ComputerUsePipService
+  pip?: ComputerUsePipService,
+  /** Applied to turns that are already running, after a successful write. */
+  onRegistryChanged?: (utilityId: string) => Promise<void>
 ): void {
+  /**
+   * A write has to reach the turns that are already running, or a capability the
+   * user just switched off stays callable until the turn ends, which reads as the
+   * change needing a restart. Best effort on purpose: the registry write already
+   * succeeded, so a failure here must not report the toggle as failed.
+   */
+  async function afterRegistryChange(utilityId: string): Promise<void> {
+    try {
+      await onRegistryChanged?.(utilityId)
+    } catch (error) {
+      Logger.dev('Utility registry change could not be applied to running turns:', error)
+    }
+  }
+
   ipcMain.handle('computerUse:getCuaStatus', () => cuaBridge.getStatus())
   ipcMain.handle('computerUse:setCuaEnabled', (_, enabled: unknown) => {
     if (typeof enabled !== 'boolean') throw new TypeError('Cua bridge enabled state is invalid')
@@ -79,9 +96,12 @@ export function registerUtilityIpc(
       throw error
     }
   })
-  ipcMain.handle('utilities:update', (_, id: unknown, patch: UtilityDefinitionPatch) =>
-    registry.update(validateEntityId(id, 'Utility ID', 256), patch)
-  )
+  ipcMain.handle('utilities:update', async (_, id: unknown, patch: UtilityDefinitionPatch) => {
+    const safeId = validateEntityId(id, 'Utility ID', 256)
+    const updated = await registry.update(safeId, patch)
+    await afterRegistryChange(safeId)
+    return updated
+  })
   ipcMain.handle('utilities:delete', async (_, id: unknown) => {
     const safeId = validateEntityId(id, 'Utility ID', 256)
     const utility = await registry.get(safeId)
@@ -89,7 +109,9 @@ export function registerUtilityIpc(
     for (const credential of utility.credentials) {
       await vault.remove(credential.secretRef)
     }
-    return registry.delete(safeId)
+    const deleted = await registry.delete(safeId)
+    if (deleted) await afterRegistryChange(safeId)
+    return deleted
   })
   ipcMain.handle(
     'utilities:setCredential',

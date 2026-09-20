@@ -1438,6 +1438,17 @@ export class ChatEngine {
   }
 
   /**
+   * Land a utility registry change in the turns that are already running.
+   *
+   * Called by the renderer boundary after every successful write, so switching a
+   * capability off in Utilities takes effect immediately instead of at the next
+   * turn, and without the user restarting anything.
+   */
+  async applyUtilityRegistryChange(utilityId: string): Promise<void> {
+    await this.utilityOrchestration.applyRegistryChange(utilityId)
+  }
+
+  /**
    * Wire the app-owned scope and worktree capability that the utility gateway
    * exposes. The IPC layer owns the scope and worktree services, so it supplies
    * the executor the gateway calls.

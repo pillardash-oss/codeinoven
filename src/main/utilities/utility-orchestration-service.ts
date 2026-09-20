@@ -68,6 +68,11 @@ import {
   utilitySearchScore
 } from './utility-orchestration/utility-search'
 import {
+  type ThreadBankEntry,
+  forgetUtility,
+  reconcileActivated
+} from './utility-orchestration/utility-turn-state'
+import {
   BROWSER_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   RETRIEVE_MCP_HOST_ROUTE,
@@ -243,13 +248,6 @@ interface TurnState {
  * name, kind, description) so later turns can invoke the utility directly by
  * id and re-list its docs with cio_util_docs_lookup after compaction.
  */
-interface ThreadBankEntry {
-  id: string
-  name: string
-  kind: UtilityKind
-  description: string
-}
-
 /** Thread bank entries survive app restarts as one small JSON file per thread. */
 const THREAD_BANK_DIRECTORY = 'utility-banks'
 const THREAD_BANK_MAX_ENTRIES = 64
@@ -1065,12 +1063,68 @@ export class UtilityOrchestrationService {
     // resolution rather than paying installation discovery again.
     const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
     if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
-    // A utility this turn already activated stays reachable even if it was removed
-    // since activation, so refresh cannot break a call the transcript already made.
-    for (const [utilityId, resolved] of state.activated) {
-      if (!next.has(utilityId)) next.set(utilityId, resolved)
-    }
     state.eligible = next
+    // A refresh lists only what is eligible now, so an activated utility missing
+    // from it was disabled, deleted, or moved out of scope while this turn ran.
+    // Dropping it here is what lands that change mid-turn: the call the transcript
+    // already made has returned, and keeping the id alive on its behalf was what
+    // made a disabled capability stay callable until the user sent another message.
+    await this.forgetUtilities(state, reconcileActivated(state, new Set(next.keys())))
+  }
+
+  /**
+   * Why a utility an agent asked for is unreachable, when the registry can say.
+   *
+   * A user who switches a capability off expects it to stop being callable, and
+   * an agent should report that as the user's change rather than as a broken app,
+   * so the registry is consulted once on the failure path only.
+   */
+  private async unreachableUtilityReason(utilityId: string): Promise<string | null> {
+    const utility = await this.registry.get(utilityId)
+    if (!utility) return `\`${utilityId}\` is no longer installed.`
+    if (!utility.enabled) {
+      return `\`${utilityId}\` was switched off in Utilities, so it is unavailable for the rest of this session.`
+    }
+    return null
+  }
+
+  /**
+   * Land a registry change in every turn that is already running.
+   *
+   * The read inside `refreshEligible` covers the next search or activation, but
+   * not a utility a turn already activated. Without this, switching a capability
+   * off would leave it callable until the turn ended, which reads as the change
+   * needing a restart. Dropping it from live turn state means the very next
+   * invoke reports it as unavailable.
+   */
+  async applyRegistryChange(utilityId: string): Promise<void> {
+    for (const turn of this.turns.values()) {
+      const state = turn.state
+      const wasReachable = forgetUtility(state, utilityId)
+      await this.forgetUtilities(state, [utilityId])
+      // The next search must re-read the registry instead of serving the set this
+      // turn built before the change.
+      state.eligibilityRefreshedAt = 0
+      if (wasReachable) await this.audit(state, 'utility.registry_changed', { utilityId })
+    }
+  }
+
+  /** Forget utilities a turn may no longer reach, releasing what belonged to them. */
+  private async forgetUtilities(state: TurnState, utilityIds: readonly string[]): Promise<void> {
+    await Promise.all(utilityIds.map((utilityId) => this.releaseUtility(state, utilityId)))
+  }
+
+  /** End one utility's CUA session and close its MCP client, if it had either. */
+  private async releaseUtility(state: TurnState, utilityId: string): Promise<void> {
+    const sessionId = state.cuaSessionIds.get(utilityId)
+    const client = state.clients.get(utilityId)
+    state.cuaSessionIds.delete(utilityId)
+    state.clients.delete(utilityId)
+    if (!client) return
+    if (sessionId) {
+      await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
+    }
+    await Promise.allSettled([client.close()])
   }
 
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
@@ -1282,12 +1336,15 @@ export class UtilityOrchestrationService {
       // per-turn eligibility gate still applies; the MCP client is reconnected
       // lazily below (stateless per turn, id persistent per thread).
       if (!state.bank.has(utilityId)) {
-        throw new Error('Activate this utility before invoking it')
+        const reason = await this.unreachableUtilityReason(utilityId)
+        throw new Error(reason ?? 'Activate this utility before invoking it')
       }
       const eligible = state.eligible.get(utilityId)
       if (!eligible) {
+        const reason = await this.unreachableUtilityReason(utilityId)
         throw new Error(
-          'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
+          reason ??
+            'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
         )
       }
       resolved = eligible
