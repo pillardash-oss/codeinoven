@@ -1723,8 +1723,14 @@
       peer: { kind: 'root' },
       strategy
     })
-    if (gitState.error) {
-      syncMainError = gitState.error
+    // The returned result is this operation's own answer, so it alone decides
+    // whether the chooser closes. `gitState.error` is shared with every other
+    // git read the panel runs, so a concurrent refresh can set it while the sync
+    // actually landed; keying the modal on it reopened the dialog with the
+    // strategy buttons replaced, leaving the user staring at a merge that had
+    // already happened.
+    if (!result) {
+      syncMainError = gitState.error ?? 'The sync could not be completed'
       gitState.error = null
       syncDirection = direction
       syncMainOpen = true
@@ -1735,7 +1741,6 @@
       void refreshStatus()
       return
     }
-    if (!result) return
     syncMainOpen = false
     syncMainError = ''
     void refreshStatus()
