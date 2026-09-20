@@ -216,6 +216,7 @@ import type {
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
   MemoryScope,
+  ModelIdentity,
   PermissionLevel,
   PermissionReply,
   PermissionRequest,
@@ -2327,7 +2328,19 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const pending = this.pendingQuestions.get(requestId)
+    if (
+      !pending ||
+      pending.request.projectId !== projectId ||
+      pending.request.threadId !== threadId ||
+      pending.resolving
+    ) {
+      // Discarding must always work: the request was auto-answered, answered in
+      // another view, or its session was retired, so the question (or secret)
+      // card only has to close. Never answer a dead card with an error.
+      Logger.dev(`Ignoring dismissal of settled question request: ${requestId}`)
+      return
+    }
     if (pending.request.questions.some(isSecretQuestion)) {
       // An app-owned secret card has no harness side to reject: settle the
       // waiting tool call so the agent continues without the value.
@@ -2631,10 +2644,8 @@ export class ChatEngine {
     }
     this.pendingQuestions.clear()
     for (const pending of this.pendingImageDescriptorDecisions.values()) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer)
-      pending.resolve({ action: 'ignore' })
+      this.settleImageDescriptorDecision(pending)
     }
-    this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
@@ -2853,7 +2864,8 @@ export class ChatEngine {
         ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
-        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
+        resolveExecutingModelVisionCapable: () =>
+          this.executingModelVisionCapable(projectId, settings),
         allowManagement,
         ...(brainstormInterview
           ? {
@@ -3095,7 +3107,8 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
-        executingModelVisionCapable: await this.storage.hasVisionModel(settings.modelId),
+        resolveExecutingModelVisionCapable: () =>
+          this.executingModelVisionCapable(projectId, settings),
         // A steered turn keeps the setup + diagnostics contract alive when the
         // user has invoked @cio-utility in this thread, so reuse survives a
         // steer landing after the previous turn's gateway cleanup.
@@ -9009,11 +9022,12 @@ export class ChatEngine {
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
-    // A model the user reported as vision-capable must never have a dedicated
-    // vision model describe images for it   the report exists precisely so the
-    // descriptor is skipped, even when the model itself asks for the tool.
-    if (thread?.settings && (await this.storage.hasVisionModel(thread.settings.modelId))) {
-      Logger.info('Image descriptor skipped: executing model is recorded as vision-capable', {
+    // A model that can already see images must never have a dedicated vision
+    // model describe them: the provider catalog says so, or the user reported
+    // it as a false positive. The check is resolved here, at executor time, so
+    // it holds even when the model reached the descriptor through the gateway.
+    if (thread?.settings && !(await this.modelLacksVision(request.projectId, thread.settings))) {
+      Logger.info('Image descriptor skipped: executing model can see images', {
         modelId: thread.settings.modelId,
         threadId: request.threadId
       })
@@ -9416,6 +9430,20 @@ export class ChatEngine {
   }
 
   /**
+   * The model identity a vision-capability report is attributed to: the model
+   * that was executing the turn when the descriptor ran. Shared by the error
+   * card and by a report that arrives after the card already settled.
+   */
+  private visionReportModel(settings: ThreadSettings | undefined): ModelIdentity | undefined {
+    if (!settings) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId
+    }
+  }
+
+  /**
    * Surface an image-descriptor failure to the renderer and await the user's
    * decision. The gateway HTTP request stays open while the user picks, so the
    * text-only model's tool call blocks exactly like a permission prompt. On
@@ -9444,6 +9472,7 @@ export class ChatEngine {
       (candidate) =>
         candidate.threadId === request.threadId || candidate.id === owningThread?.assignmentTaskId
     )
+    const requestingModel = this.visionReportModel(owningThread?.settings)
     return new Promise<ImageDescriptorUserDecision>((resolve) => {
       // The card blocks the turn on user input, exactly like the question tool:
       // park the thread on "Needs attention" and restore the working status
@@ -9465,15 +9494,7 @@ export class ChatEngine {
         kind,
         selection,
         ...(imageId ? { imageId } : {}),
-        ...(owningThread?.settings
-          ? {
-              requestingModel: {
-                harnessId: owningThread.settings.harnessId,
-                providerId: owningThread.settings.providerId,
-                modelId: owningThread.settings.modelId
-              }
-            }
-          : {}),
+        ...(requestingModel ? { requestingModel } : {}),
         partialOutput: '',
         imageCount: request.images.length,
         createdAt: Date.now()
@@ -9486,13 +9507,22 @@ export class ChatEngine {
         resolve,
         resumeStatus,
         timer: setTimeout(() => {
-          this.pendingImageDescriptorDecisions.delete(id)
+          // Never leave the card behind when this decision auto-resolves: a
+          // card whose request is gone is a card the user cannot dismiss.
+          this.settleImageDescriptorDecision(pending)
           this.startSessionWatchdog(request.sessionId)
           void this.threadManager
             .setStatus(request.projectId, request.threadId, resumeStatus)
             .catch(() => undefined)
-          resolve({ action: 'ignore' })
         }, IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS)
+      }
+      // One blocked session can only receive one answer, so a newer request
+      // supersedes every older one for the same session: the older cards are
+      // settled as `ignore` immediately instead of staying on screen as
+      // unanswerable cards that report themselves as no longer pending.
+      for (const [supersededId, superseded] of this.pendingImageDescriptorDecisions) {
+        if (superseded.sessionId !== request.sessionId || supersededId === id) continue
+        this.settleImageDescriptorDecision(superseded)
       }
       this.pendingImageDescriptorDecisions.set(id, pending)
       void this.threadManager
@@ -9506,6 +9536,28 @@ export class ChatEngine {
         request: requestForCard
       })
     })
+  }
+
+  /**
+   * Settle one pending image-descriptor decision as `ignore` without a user
+   * reply (timeout, a newer request superseding it, or the session being
+   * retired). The blocked tool call returns with partial output and the card is
+   * removed in every view, so no card is ever left behind that would answer
+   * itself with "no longer pending".
+   */
+  private settleImageDescriptorDecision(pending: PendingImageDescriptorDecision): void {
+    const requestId = pending.request.id
+    if (pending.timer !== undefined) clearTimeout(pending.timer)
+    this.pendingImageDescriptorDecisions.delete(requestId)
+    this.broadcast({
+      type: 'imageDescriptor.resolved',
+      sessionId: pending.sessionId,
+      projectId: pending.projectId,
+      threadId: pending.request.surfaceThreadId,
+      requestId,
+      action: 'ignore'
+    })
+    pending.resolve({ action: 'ignore' })
   }
 
   /** Persist the image-descriptor vision model to the thread so retries and
@@ -10851,6 +10903,11 @@ export class ChatEngine {
    * model so it can work with it or explain what is missing; `false_positive`
    * records the model that was executing the turn as vision-capable so the
    * image descriptor never runs for it again, then continues like `ignore`.
+   *
+   * A card whose request the engine already settled (timeout, a newer request
+   * superseding it, or its session being retired) is never an error: the reply
+   * settles the card and applies what it still can, because a card the user can
+   * see must always be dismissable.
    */
   async replyImageDescriptor(
     projectId: string,
@@ -10873,8 +10930,22 @@ export class ChatEngine {
       throw new TypeError('Invalid image descriptor reply')
     }
     const pending = this.pendingImageDescriptorDecisions.get(requestId)
+    const staleRequest =
+      pending === undefined ||
+      pending.projectId !== projectId ||
+      pending.request.surfaceThreadId !== threadId
     if (action === 'false_positive') {
-      const requestingModel = pending?.request.requestingModel
+      // The card normally carries the model executing the turn. A report that
+      // arrives for an already settled card keeps the same attribution by
+      // reading the thread the card was shown for, so a late report still lands
+      // instead of failing the user's click.
+      const requestingModel =
+        pending?.request.requestingModel ??
+        this.visionReportModel(
+          staleRequest
+            ? (await this.threadManager.getThread(projectId, threadId).catch(() => null))?.settings
+            : undefined
+        )
       if (!requestingModel) {
         throw new Error('This report needs the model that was executing the turn')
       }
@@ -10885,17 +10956,8 @@ export class ChatEngine {
         harnessId: requestingModel.harnessId
       })
     }
-    // A replacement image picked from the error card is validated here (it
-    // must be a readable file) and keeps the failed image's id so its
-    // description still maps to the same slot in the per-image result set.
-    let replacement: ResolvedImageEntry | undefined
-    if (action === 'pick_image') {
-      const failedImageId = pending?.request.imageId
-      if (!failedImageId) {
-        throw new Error('This image descriptor request has no failed image to replace')
-      }
-      replacement = await buildImageDescriptorReplacement(failedImageId, imagePath)
-    }
+    // A retry carries the vision model the user chose on the card, so it is
+    // validated at the IPC boundary even when the card turns out to be settled.
     if (action === 'retry' && selection !== undefined) {
       selection = {
         harnessId: validateBoundedString(
@@ -10918,12 +10980,23 @@ export class ChatEngine {
             })
       }
     }
-    if (
-      !pending ||
-      pending.projectId !== projectId ||
-      pending.request.surfaceThreadId !== threadId
-    ) {
-      throw new Error(`Image descriptor request is no longer pending: ${requestId}`)
+    if (staleRequest || !pending) {
+      // Nothing is left to resolve: the blocked tool call already returned, so
+      // the reply only clears the card. Never throw here; a stale card must not
+      // trap the user.
+      Logger.dev(`Ignoring reply for settled image descriptor request: ${requestId}`)
+      return
+    }
+    // A replacement image picked from the error card is validated here (it must
+    // be a readable file) and keeps the failed image's id so its description
+    // still maps to the same slot in the per-image result set.
+    let replacement: ResolvedImageEntry | undefined
+    if (action === 'pick_image') {
+      const failedImageId = pending.request.imageId
+      if (!failedImageId) {
+        throw new Error('This image descriptor request has no failed image to replace')
+      }
+      replacement = await buildImageDescriptorReplacement(failedImageId, imagePath)
     }
     if (pending.timer !== undefined) {
       clearTimeout(pending.timer)
@@ -18568,6 +18641,19 @@ export class ChatEngine {
     return !(await this.storage.hasVisionModel(settings.modelId))
   }
 
+  /**
+   * Whether the model executing this turn can see images itself, resolved live
+   * for the utility gateway. Consumes the same rule as `modelLacksVision`, so
+   * the prompt note, the gateway's reachable utilities and the descriptor
+   * executor can never disagree about one model.
+   */
+  private async executingModelVisionCapable(
+    projectId: string,
+    settings: ThreadSettings
+  ): Promise<boolean> {
+    return !(await this.modelLacksVision(projectId, settings))
+  }
+
   /** Last-resort image-descriptor model: the first vision-capable model in the
    *  cached catalog, so the tool works even when nothing was configured. */
   private firstVisionModelFromCache(projectId: string): AgentModelSelection | undefined {
@@ -18832,13 +18918,12 @@ export class ChatEngine {
 
   /** Resolve (as ignore) every image-descriptor decision bound to a session that
    *  is being torn down, so blocked gateway tool calls return partial output
-   *  instead of hanging forever. */
+   *  instead of hanging forever. Each settled decision also clears its card, so
+   *  a retired session never leaves an unanswerable card on screen. */
   private clearPendingImageDescriptorDecisionsForSession(sessionId: string): void {
-    for (const [requestId, pending] of this.pendingImageDescriptorDecisions) {
+    for (const [, pending] of this.pendingImageDescriptorDecisions) {
       if (pending.sessionId !== sessionId) continue
-      if (pending.timer !== undefined) clearTimeout(pending.timer)
-      this.pendingImageDescriptorDecisions.delete(requestId)
-      pending.resolve({ action: 'ignore' })
+      this.settleImageDescriptorDecision(pending)
     }
   }
 

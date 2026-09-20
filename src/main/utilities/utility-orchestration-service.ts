@@ -104,9 +104,13 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
-  /** True when the executing model is recorded as vision-capable (user report),
-   *  so the image descriptor utility stays hidden for this turn. */
-  executingModelVisionCapable?: boolean
+  /**
+   * Live check for whether the executing model can see images itself. Resolved
+   * fresh on every eligibility pass (turn start and each mid-turn refresh) so a
+   * vision report the user makes mid-turn hides the image descriptor from the
+   * very next gateway search instead of only from the following turn.
+   */
+  resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
@@ -380,6 +384,20 @@ export class UtilityOrchestrationService {
     return request.nativeCapabilities.map(normalizeCapability).includes('computer_use')
   }
 
+  /** Whether the executing model sees images itself, so the image descriptor
+   *  must stay out of this turn's reachable utilities. A capability lookup that
+   *  fails keeps the descriptor reachable rather than hiding a capability the
+   *  turn may legitimately need. */
+  private async executingModelVisionCapable(request: UtilityTurnRequest): Promise<boolean> {
+    if (!request.resolveExecutingModelVisionCapable) return false
+    try {
+      return await request.resolveExecutingModelVisionCapable()
+    } catch (error) {
+      Logger.dev('Executing-model vision capability lookup failed:', error)
+      return false
+    }
+  }
+
   /**
    * Resolve the utilities one turn may reach, from the registry plus the
    * interview-bound brainstorm capability. Shared by turn start and the mid-turn
@@ -408,10 +426,10 @@ export class UtilityOrchestrationService {
       // so enforce the native preference by stable utility identity too.
       eligible = eligible.filter(({ utility }) => utility.id !== CUA_UTILITY_ID)
     }
-    // A model the user reported as vision-capable must never see the image
-    // descriptor: announcing it invites the model to call it, which is exactly
-    // the false-positive report path the vision record exists to prevent.
-    if (request.executingModelVisionCapable === true) {
+    // A model that can already see images must never see the image descriptor:
+    // announcing it invites the model to call it, which is exactly the
+    // false-positive report path the app's vision record exists to prevent.
+    if (await this.executingModelVisionCapable(request)) {
       eligible = eligible.filter(({ utility }) => utility.kind !== 'image_descriptor')
     }
     // Stamp the thread's permission level onto the Cua Driver MCP utility so
@@ -1330,6 +1348,12 @@ export class UtilityOrchestrationService {
           pinnedSelection: await this.pinnedImageDescriptorSelection()
         })
       }
+    } else if (resolved.utility.kind === 'skill') {
+      // A skill is documentation. Its whole contract arrived at activation, so
+      // there is nothing to invoke; say so instead of reporting a kind mismatch.
+      throw new Error(
+        `\`${resolved.utility.id}\` is a skill: it exposes no tool. Its instructions arrived when it was activated, so re-list them with ${UTILITY_DOCS_TOOL_NAME} if they are gone, then do the work with your own tools.`
+      )
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }

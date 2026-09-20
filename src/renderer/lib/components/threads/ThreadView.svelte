@@ -5021,7 +5021,9 @@
   }
 
   /** Resolve a pending image-descriptor error card: retry with a (possibly new)
-   *  vision model, or ignore and send whatever partial output exists onward. */
+   *  vision model, or ignore and send whatever partial output exists onward.
+   *  Dismissing always clears the card, even when the engine already settled the
+   *  request, because the user must never be trapped behind a dead card. */
   async function replyImageDescriptor(
     requestId: string,
     action: ImageDescriptorReplyAction,
@@ -5029,6 +5031,9 @@
     imagePath?: string
   ): Promise<void> {
     const { projectId, id } = thread
+    if (action === 'ignore' && pendingImageDescriptorError?.id === requestId) {
+      pendingImageDescriptorError = null
+    }
     try {
       await invoke(
         'agent:replyImageDescriptor',
@@ -5039,8 +5044,15 @@
         selection,
         imagePath
       )
-      pendingImageDescriptorError = null
+      if (pendingImageDescriptorError?.id === requestId) pendingImageDescriptorError = null
     } catch (error) {
+      // A dismissal is a request to close the card, never a request the engine
+      // must still hold: when the request is already settled the card closes
+      // anyway, so a dead card can never become undismissable.
+      if (action === 'ignore') {
+        pendingImageDescriptorError = null
+        return
+      }
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
       throw error
