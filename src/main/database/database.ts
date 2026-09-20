@@ -731,6 +731,7 @@ export class Database {
       this.migrateThreadIndependentAuditColumns(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
+      this.migrateThreadAssistantColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
@@ -1041,6 +1042,31 @@ export class Database {
     }
     if (!columns.has('draft_json')) {
       connection.exec('ALTER TABLE threads ADD COLUMN draft_json TEXT')
+    }
+  }
+
+  /** Existing databases predate assistant-space task columns: routine grouping,
+   *  custom row icon, per-task schedule override, and last-run timestamp. */
+  private migrateThreadAssistantColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('routine_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN routine_id TEXT')
+    }
+    if (!columns.has('assistant_icon_type')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_icon_type TEXT')
+    }
+    if (!columns.has('assistant_icon')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_icon TEXT')
+    }
+    if (!columns.has('schedule_override')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN schedule_override TEXT')
+    }
+    if (!columns.has('last_run_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_run_at INTEGER')
     }
   }
 

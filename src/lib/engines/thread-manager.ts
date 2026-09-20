@@ -553,6 +553,11 @@ export class ThreadManager {
         | 'independentAuditInitialized'
         | 'activeAuditId'
         | 'activeAuditVersion'
+        | 'routineId'
+        | 'assistantIconType'
+        | 'assistantIcon'
+        | 'lastRunAt'
+        | 'scheduleOverride'
       >
     >
   ): Promise<Thread> {
@@ -587,6 +592,12 @@ export class ThreadManager {
         input.independentAuditInitialized ?? existing.independentAuditInitialized,
       activeAuditId: input.activeAuditId ?? existing.activeAuditId,
       activeAuditVersion: input.activeAuditVersion ?? existing.activeAuditVersion,
+      routineId: input.routineId ?? existing.routineId,
+      assistantIconType: input.assistantIconType ?? existing.assistantIconType,
+      assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      lastRunAt: input.lastRunAt ?? existing.lastRunAt,
+      scheduleOverride:
+        input.scheduleOverride !== undefined ? input.scheduleOverride : existing.scheduleOverride,
       scopeSortOrder:
         input.scopeBucketId !== undefined &&
         input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)

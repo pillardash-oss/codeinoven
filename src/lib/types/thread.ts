@@ -2,6 +2,8 @@ import type { ScopeSlice } from './scope'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
+import type { RoutineSchedule } from './schedule'
+import { ASSISTANT_SPACE_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
 export const DEFAULT_THREAD_TITLE = 'New Thread'
@@ -117,6 +119,18 @@ export interface Thread {
   /** Reject renderer-originated prompts while permitting internal orchestration turns. */
   userInputLocked?: boolean
 
+  // ─── Assistant task fields (assistant space only) ────────────────────────
+  /** Routine this assistant task belongs to, when it is grouped. */
+  routineId?: string
+  /** Custom icon key shown in the task row's provider-icon slot. */
+  assistantIconType?: string
+  /** Custom image filename shown in the task row's provider-icon slot. */
+  assistantIcon?: string
+  /** Per-task schedule override; falls back to the routine schedule when undefined. */
+  scheduleOverride?: RoutineSchedule | null
+  /** Epoch ms of the last scheduled run fired on this task. */
+  lastRunAt?: number
+
   createdAt: number
   updatedAt: number
   lastActivity: number
@@ -135,6 +149,11 @@ export interface ThreadNote {
   body: string
   createdAt: number
   updatedAt: number
+}
+
+/** A thread that lives in the assistant space (a routine task). */
+export function isAssistantThread(thread: Thread): boolean {
+  return thread.projectId === ASSISTANT_SPACE_ID
 }
 
 /**
@@ -279,6 +298,10 @@ export interface CreateThreadInput {
   achievementRole?: Thread['achievementRole']
   auditorThreadId?: string
   userInputLocked?: boolean
+  routineId?: string
+  assistantIconType?: string
+  assistantIcon?: string
+  scheduleOverride?: RoutineSchedule | null
 }
 
 /** Where a thread search match was found. */

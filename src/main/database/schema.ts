@@ -120,6 +120,11 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
+  routine_id           TEXT,
+  assistant_icon_type  TEXT,
+  assistant_icon       TEXT,
+  schedule_override    TEXT,
+  last_run_at          INTEGER,
   drafting             INTEGER NOT NULL DEFAULT 0,
   draft_json           TEXT,
   created_at           INTEGER NOT NULL,
@@ -854,6 +859,30 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
+/**
+ * Assistant routines: the top-level grouping for assistant tasks. A routine
+ * owns the agent-authored how-to, a default schedule, and its connection picks;
+ * tasks are threads in the assistant space that reference `routines.id`.
+ */
+export const ROUTINES_SQL = `
+-- ─── Assistant routines ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS routines (
+  id                  TEXT PRIMARY KEY NOT NULL,
+  name                TEXT NOT NULL,
+  color               TEXT,
+  icon                TEXT,
+  icon_type           TEXT,
+  schedule            TEXT,
+  how_to              TEXT NOT NULL DEFAULT '',
+  how_to_updated_at   INTEGER,
+  connections         TEXT NOT NULL DEFAULT '[]',
+  sort_order          INTEGER,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(sort_order, updated_at DESC);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -868,5 +897,6 @@ export const DATABASE_SCHEMA_SQL = [
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
-  THREAD_NOTES_SQL
+  THREAD_NOTES_SQL,
+  ROUTINES_SQL
 ].join('\n')

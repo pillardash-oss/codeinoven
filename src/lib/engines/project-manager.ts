@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, readdir, realpath, rm } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
 import type { Project, CreateProjectInput } from '../types'
-import { INBOX_PROJECT_ID } from '../types'
+import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import { ensureProjectScratchSpace } from '../project-artifacts'
 import { toPosixPath } from '../paths'
@@ -265,6 +265,36 @@ export class ProjectManager {
       threadLimit: 200,
       hidden: true,
       color: pickColorForSeed(INBOX_PROJECT_ID),
+      changeTrackingMode: 'manual',
+      createdAt: now,
+      updatedAt: now
+    }
+
+    this.projectRepo.upsert(project)
+
+    return project
+  }
+
+  /**
+   * Ensure the hidden assistant-space container exists. Assistant tasks are
+   * threads in this container, so they never leak into the Projects or Chats
+   * lists (it is hidden) while still reusing every thread surface.
+   */
+  async ensureAssistantSpace(): Promise<Project> {
+    const existing = this.projectRepo.get(ASSISTANT_SPACE_ID)
+    if (existing) return existing
+
+    const now = Date.now()
+    const project: Project = {
+      id: ASSISTANT_SPACE_ID,
+      name: 'Assistant',
+      path: '',
+      source: 'local',
+      providerId: '',
+      workflowId: 'default',
+      threadLimit: 500,
+      hidden: true,
+      color: pickColorForSeed(ASSISTANT_SPACE_ID),
       changeTrackingMode: 'manual',
       createdAt: now,
       updatedAt: now
