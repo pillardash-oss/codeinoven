@@ -18,6 +18,15 @@
  * Every command in the playbook was run against a real target (Samsung A54,
  * Android 16, over USB) or an emulator before it was written down. Keep it that
  * way: a recipe that was not verified does not belong here.
+ *
+ * This capability cannot collide with a skill the user installed. It has no
+ * frontmatter name and never lands in a skill directory, so it cannot shadow or
+ * be shadowed by `<skill-dir>/<name>/SKILL.md`; the two reach a model through
+ * different mechanisms (the harness's own skill list versus the utility
+ * gateway). What it can do is compete as knowledge, which is why both the
+ * playbook and the turn pointer it arrives with tell the agent to follow the
+ * environment's own Android or adb skill where the two disagree. Ours is the
+ * baseline that is always present, never the authority.
  */
 
 /** Display name shown in a search result, the Utilities UI and the thread bank. */
@@ -48,6 +57,8 @@ export const ADB_CAPABILITY_SUMMARY =
 export const ADB_CAPABILITY_DOCS = `Driving an Android target with adb.
 
 You already have bash, so you already have the capability. This text is a playbook, not a tool: there is nothing to invoke. Find adb once, keep the recipes below, and the device stops costing you rediscovery. Every command here was verified against a plugged Samsung A54 on Android 16 and against an emulator.
+
+Your environment's own instructions outrank this text. If this project or your harness already ships an Android or adb skill, a runbook, or an AGENTS.md section, follow that one and use this baseline only for what it does not cover. Where the two disagree about a command, the environment's version was written for this machine, this device and this project; this one was verified on macOS against one phone.
 
 ## The two rules that matter most
 
