@@ -70,7 +70,8 @@ export const STATUS_TONE_COLORS: Record<ThreadStatusTone, string> = {
   attention: 'var(--color-warning)',
   spec: 'var(--color-thread-spec)',
   done: 'var(--color-thread-done)',
-  error: 'var(--color-thread-error)'
+  error: 'var(--color-thread-error)',
+  missed: 'var(--color-missed)'
 }
 
 export const STAGE_ORDER: ThreadStage[] = [
