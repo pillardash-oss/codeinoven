@@ -37,12 +37,15 @@ import {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
-  APP_SCOPE_UTILITY_ID
+  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID,
+  canToggleUtilityEnabled
 } from '../../lib/utility-ids'
 export {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
+  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
   APP_SCOPE_UTILITY_ID
 }
 
@@ -63,8 +66,6 @@ const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brav
 
 /** Stable id of the app-seeded image-descriptor utility. */
 export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
-/** Stable id of the app-owned, always-active MCP host recovery utility. */
-export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 
 /** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
@@ -472,18 +473,26 @@ export class UtilityRegistryService {
       const index = registry.utilities.findIndex((candidate) => candidate.id === id)
       const current = registry.utilities[index]
       if (!current) throw new Error(`Utility not found: ${id}`)
-      if (
-        current.appOwned &&
-        (patch.name ??
-          patch.description ??
-          patch.enabled ??
-          patch.activation ??
-          patch.scope ??
-          patch.credentials ??
-          patch.harnessBindings) !== undefined
-      ) {
+      // App-owned identity stays the app's call, and so does availability, with
+      // one exception: app-owned knowledge is advice rather than wiring, so a
+      // user who already has a better runbook for a topic may switch ours off.
+      // See `canToggleUtilityEnabled`.
+      const lockedAppOwnedField =
+        patch.name ??
+        patch.description ??
+        patch.activation ??
+        patch.scope ??
+        patch.credentials ??
+        patch.harnessBindings
+      const lockedAvailability = patch.enabled !== undefined && !canToggleUtilityEnabled(current)
+      if (current.appOwned && lockedAvailability) {
         throw new Error(
-          'App-owned utility identity, availability, scope, credentials, and bindings are locked'
+          'This app-owned utility cannot be disabled: the app supplies the wiring behind it'
+        )
+      }
+      if (current.appOwned && lockedAppOwnedField !== undefined) {
+        throw new Error(
+          'App-owned utility identity, activation, scope, credentials, and bindings are locked'
         )
       }
       if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {

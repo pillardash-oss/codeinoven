@@ -33,6 +33,7 @@
   import UtilityEditorModalFooter from './UtilityEditorModalFooter.svelte'
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
+  import { canToggleUtilityEnabled } from '$shared/utility-ids'
   import {
     allHarnessBinding,
     buildBindings,
@@ -126,6 +127,10 @@
   let nativeEntry = $derived(target?.kind === 'native' ? target.entry : null)
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
   let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
+  /** An app-owned skill may be switched off, so its editor keeps the switch. */
+  let canToggleAvailability = $derived(
+    editingRegistry !== null && canToggleUtilityEnabled(editingRegistry)
+  )
 
   /** Installed, supported harnesses the editor may bind a capability to.
    *  Follows the model picker's protocol: the provider catalog (persisted
@@ -338,8 +343,14 @@
     }
     let saved: UtilityDefinition
     if (draft.id) {
-      // The app-owned image descriptor is locked except for the vision model.
-      const patch: UtilityDefinitionPatch = isAppOwned ? { config: buildConfig(draft) } : common
+      // The app-owned image descriptor is locked except for the vision model,
+      // and an app-owned skill may also change whether it is enabled.
+      const patch: UtilityDefinitionPatch = isAppOwned
+        ? {
+            config: buildConfig(draft),
+            ...(canToggleAvailability ? { enabled: draft.enabled } : {})
+          }
+        : common
       saved = await invoke('utilities:update', draft.id, patch)
       const credential = buildCredential(draft, credentialDraft())
       if (credential && !isAppOwned)
@@ -626,8 +637,9 @@
           <p
             class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary"
           >
-            This is a built-in utility: only the vision model can be changed. Everything else is
-            managed by the app.
+            {canToggleAvailability
+              ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
+              : 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'}
           </p>
         {/if}
 
@@ -746,7 +758,7 @@
           />
         {/if}
 
-        {#if !isAppOwned}
+        {#if !isAppOwned || canToggleAvailability}
           <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
         {/if}
       </form>
