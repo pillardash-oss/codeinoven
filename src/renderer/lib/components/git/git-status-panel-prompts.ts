@@ -10,6 +10,77 @@ import type {
   PullRequestSummary
 } from '$shared/types'
 
+/**
+ * The comment a temporary explain / quick chat is anchored on, resolved to the
+ * few facts the chat needs. The comment body itself never travels here: it is
+ * attached to the chat as the selection.
+ */
+export interface PrCommentChatSubject {
+  /** Login that wrote the comment, as the provider declared it. */
+  author: string
+  /** Permalink GitHub itself uses for this exact comment. */
+  url: string
+  /** Human label for what kind of entry it is, e.g. `inline review`. */
+  kindLabel: string
+  /** Inline anchor `path:line`, present only for an inline review comment. */
+  location?: string
+}
+
+/**
+ * The pinned context a temporary chat opened on a pull request comment is
+ * anchored with.
+ *
+ * A side chat normally rides the parent conversation's transcript, but a
+ * comment opened from the reader has no such transcript behind it. What gives
+ * the agent its bearings instead is the pull request the comment belongs to
+ * and the comment's own permalink, which is also the canonical way back to the
+ * remote copy of anything the comment references.
+ */
+export function prCommentChatContext(
+  comment: PrCommentChatSubject,
+  pr: PullRequestSummary,
+  repository: string
+): string {
+  return [
+    'The user opened this comment from the pull request reader and is asking about it. Everything below is read-only context for that question.',
+    `Pull request: #${pr.number} "${pr.title}" in ${repository} (${pr.headRef} \u2192 ${pr.baseRef})`,
+    `Comment: ${comment.kindLabel} by @${comment.author}`,
+    `Comment link: ${comment.url}`,
+    ...(comment.location ? [`Inline location: ${comment.location}`] : []),
+    'The comment body is attached to this chat as the selection.'
+  ].join('\n')
+}
+
+/**
+ * The instruction a temporary explain chat receives when it is opened from a
+ * pull request comment.
+ *
+ * The point of the brief is grounding. A comment refers to code that may exist
+ * in the working tree, only on the pull request's head, or nowhere the agent
+ * can read. The agent has read-only tools only, so fetching the remote copy is
+ * a deliberate step the user authorizes, not something the agent does on its
+ * own.
+ */
+export function prCommentExplainPrompt(comment: PrCommentChatSubject): string {
+  return [
+    'Explain the attached pull request comment (its link is in the context above).',
+    '',
+    'Ground every claim in code you have actually read:',
+    '- Look for what the comment references (a file, symbol, or behaviour) in the current working tree with the read, glob, and grep tools, and cite the exact project-relative path and line you read.',
+    ...(comment.location
+      ? [
+          `- The comment is anchored at ${comment.location}; start there and confirm it still matches what you read.`
+        ]
+      : []),
+    '- If the referenced code is not in the working tree, say plainly that it is missing here and name what is missing. It then lives only on the remote: the pull request head, another branch, or another repository.',
+    '- Do not fetch the remote copy on your own. When grounding needs it, state exactly which remote file or link you would fetch and ask the user whether to fetch it. Only after the user agrees, read it with the web fetch tool: the file as it exists on the pull request head lives at `https://raw.githubusercontent.com/<owner>/<repo>/<headRef>/<path>` (repository and head are in the context above), and the comment link is the reference for the comment itself.',
+    '- Never describe code or line numbers you have not read, and do not pad the answer with guesses.',
+    '',
+    'Then explain what the comment is saying and why it matters for this pull request, in everyday language and without unnecessary jargon.',
+    'Stay read-only: do not modify files, commit, push, or run mutating commands.'
+  ].join('\n')
+}
+
 /** The first message the review agent receives   explicit about isolation and output. */
 export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
   return [

@@ -19,6 +19,8 @@
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
@@ -42,9 +44,15 @@
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
   import {
     buildConversation,
+    conversationKindLabel,
     conversationQuoteBlock,
     type ConversationEntry
   } from './git-pull-request-detail-format'
+  import {
+    prCommentChatContext,
+    prCommentExplainPrompt,
+    type PrCommentChatSubject
+  } from './git-status-panel-prompts'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -63,6 +71,8 @@
 
   interface Props {
     projectId: string
+    /** Thread whose sidebar hosts the comment side chats this reader opens. */
+    threadId: string
     identity: { owner: string; repo: string }
     summary: PullRequestSummary
     onBack: () => void
@@ -93,6 +103,7 @@
 
   let {
     projectId,
+    threadId,
     identity,
     summary,
     onBack,
@@ -295,6 +306,34 @@
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * Open a read-only sidebar side chat anchored on one comment.
+   *
+   * The comment rides as the selection, and the pinned context carries the pull
+   * request plus the comment's own permalink, so the agent can look the thread
+   * up and, when the user agrees, ground its answer in the remote copy of what
+   * the comment references. Explain auto-sends the grounding brief; Quick chat
+   * opens with the comment attached and the reader writing the question.
+   */
+  function openCommentChat(entry: ConversationEntry, mode: 'explain' | 'quick'): void {
+    const subject: PrCommentChatSubject = {
+      author: githubDisplayLogin(entry.author),
+      url: entry.url,
+      kindLabel: conversationKindLabel(entry.kind, entry.meta),
+      ...(entry.kind === 'inline' && entry.meta ? { location: entry.meta } : {})
+    }
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode === 'explain' ? 'elaborate' : 'quick',
+      entry.body,
+      prCommentChatContext(subject, summary, `${identity.owner}/${identity.repo}`),
+      threadSettings.lastUsed,
+      true,
+      mode === 'explain' ? prCommentExplainPrompt(subject) : undefined
+    )
   }
 
   /**
@@ -883,6 +922,7 @@
         {number}
         authorLogin={summary.authorLogin}
         onQuote={(entry) => void quoteEntry(entry)}
+        onCommentChat={openCommentChat}
         onNotice={(message) => (notice = message)}
         onRefresh={refresh}
       />

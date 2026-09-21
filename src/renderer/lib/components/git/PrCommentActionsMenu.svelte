@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * Per-comment actions, matching the set github.com offers on one of its own
-   * comments.
+   * Per-comment actions. Most match the set github.com offers on one of its own
+   * comments; Explain and Quick chat are this app's own additions, opening a
+   * read-only side chat anchored on the comment.
    *
    * Two rules shape what appears. GitHub only lets an author edit or delete a
    * comment, so those rows exist only for the viewer's own; and blocking is
@@ -18,6 +19,8 @@
     ClipboardCopy,
     Flag,
     Link2,
+    MessageCircleDashed,
+    MessageSquareDashed,
     MessageSquareQuote,
     MessageSquarePlus,
     Pencil,
@@ -59,6 +62,12 @@
     onCopyLink: () => void
     onCopyMarkdown: () => void
     onQuote: () => void
+    /** Open a read-only temporary side chat that explains this comment.
+     *  Omitted when the entry has no body to anchor a chat on (an empty review). */
+    onExplain?: () => void
+    /** Open an empty read-only temporary side chat with this comment attached.
+     *  Omitted for the same reason as `onExplain`. */
+    onQuickChat?: () => void
     onReferenceInNewIssue: () => void
     onEdit: () => void
     onDelete: () => void
@@ -78,6 +87,8 @@
     onCopyLink,
     onCopyMarkdown,
     onQuote,
+    onExplain,
+    onQuickChat,
     onReferenceInNewIssue,
     onEdit,
     onDelete,
@@ -105,6 +116,28 @@
   /** Blocking yourself is not an action GitHub offers, and never should be. */
   const canBlock = $derived(viewerLogin !== null && viewerLogin !== author)
 </script>
+
+<!--
+  The two side-chat rows sit above the clipboard rows: they are the only actions
+  here that do something inside the app rather than hand the comment off, so
+  they read first. A review with no body has nothing to anchor a chat on, so
+  both rows disappear together there.
+-->
+{#if onExplain}
+  <Menu.Item class={itemClass} onSelect={onExplain} disabled={busy}>
+    <MessageCircleDashed size={12} class="shrink-0 text-dimmed" />
+    Explain
+  </Menu.Item>
+{/if}
+{#if onQuickChat}
+  <Menu.Item class={itemClass} onSelect={onQuickChat} disabled={busy}>
+    <MessageSquareDashed size={12} class="shrink-0 text-dimmed" />
+    Quick chat
+  </Menu.Item>
+{/if}
+{#if onExplain || onQuickChat}
+  <Menu.Separator class="my-1 h-px bg-border" />
+{/if}
 
 <Menu.Item class={itemClass} onSelect={onCopyLink} disabled={busy}>
   <Link2 size={12} class="shrink-0 text-dimmed" />

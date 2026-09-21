@@ -37,14 +37,26 @@
     authorLogin: string
     /** Insert a quote of this entry into the reader's composer. */
     onQuote: (entry: ConversationEntry) => void
+    /** Open a read-only side chat anchored on this entry: explain it, or attach
+     *  it to an empty quick chat the reader writes into. */
+    onCommentChat: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
     /** Surface a one-line confirmation in the reader's header. */
     onNotice: (message: string) => void
     /** Reload the bundle after a mutation. */
     onRefresh: () => Promise<void>
   }
 
-  let { entries, projectId, identity, number, authorLogin, onQuote, onNotice, onRefresh }: Props =
-    $props()
+  let {
+    entries,
+    projectId,
+    identity,
+    number,
+    authorLogin,
+    onQuote,
+    onCommentChat,
+    onNotice,
+    onRefresh
+  }: Props = $props()
 
   /** The conversation row whose body is being rewritten in place, if any. */
   let editingKey = $state<string | null>(null)
@@ -285,6 +297,12 @@
                     onCopyLink={() => void copyEntryLink(entry)}
                     onCopyMarkdown={() => void copyEntryMarkdown(entry)}
                     onQuote={() => onQuote(entry)}
+                    onExplain={entry.body.trim()
+                      ? () => onCommentChat(entry, 'explain')
+                      : undefined}
+                    onQuickChat={entry.body.trim()
+                      ? () => onCommentChat(entry, 'quick')
+                      : undefined}
                     onReferenceInNewIssue={() => void referenceInNewIssue(entry)}
                     onEdit={() => startEdit(entry)}
                     onDelete={() => (deletingEntry = entry)}

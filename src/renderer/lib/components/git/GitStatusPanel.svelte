@@ -3462,6 +3462,7 @@
           {#if selectedPullRequest && githubIdentity}
             <GitPullRequestDetail
               {projectId}
+              {threadId}
               identity={githubIdentity}
               summary={selectedPullRequest}
               bind:tab={prDetailTab}
@@ -3679,6 +3680,7 @@
       {#if fullscreenActivePullRequest && githubIdentity}
         <GitPullRequestDetail
           {projectId}
+          {threadId}
           identity={githubIdentity}
           summary={fullscreenActivePullRequest}
           variant="fullscreen"
