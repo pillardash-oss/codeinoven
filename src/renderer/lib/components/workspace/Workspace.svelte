@@ -1962,14 +1962,15 @@
   })
 
   // Sync allThreads when a thread is moved to a different project via the composer pill.
+  // The request is claimed once, and the list is only read on the run that claimed
+  // it: re-reading `allThreads` after writing it re-invalidated this very effect and
+  // spun the flush until Svelte threw `effect_update_depth_exceeded`, which is what
+  // switching the project of a new thread used to crash on.
   $effect(() => {
-    const count = workspaceState.moveThreadCount
-    const oldId = workspaceState.pendingMoveThreadId
-    const newThread = workspaceState.pendingMoveThread
-    if (count && oldId && newThread) {
-      allThreads = allThreads.filter((t) => t.id !== oldId)
-      upsertThreadInList(newThread)
-    }
+    const move = workspaceState.consumeMoveThreadRequest()
+    if (!move) return
+    allThreads = allThreads.filter((t) => t.id !== move.oldThreadId)
+    upsertThreadInList(move.newThread)
   })
 
   async function loadData(): Promise<void> {
