@@ -238,18 +238,22 @@ class TerminalSessionManager {
     threadId: string,
     script: string,
     variables: Record<string, string>,
-    scopeBucketId?: string,
+    scopeBucketId: string | undefined,
+    live: boolean,
     options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) container.replaceChildren(session.host)
     fitSession(session)
-    if (!session.ptySpawned) {
-      // The run is not live yet, so this attach spawns it. A run that IS live
-      // is left completely untouched: a panel toggle or thread switch must
-      // never restart a running action. The action store keys a run by its
-      // action id and keeps the same terminalId for the run's lifetime, so the
-      // session here is the run's own and its PTY keeps streaming regardless
-      // of whether the panel is mounted.
+    if (live && !session.ptySpawned) {
+      // The run is live but this session has no PTY yet, so the attach spawns
+      // it. A run that already finished must never respawn here: its terminal
+      // re-attaching (panel toggle, thread switch, a rebuilt session map) only
+      // shows the history it still has. And a run that IS live with a spawned
+      // session is left completely untouched: a panel toggle or thread switch
+      // must never restart a running action. The action store keys a run by
+      // its action id and keeps the same terminalId for the run's lifetime, so
+      // the session here is the run's own and its PTY keeps streaming
+      // regardless of whether the panel is mounted.
       session.projectId = projectId
       session.threadId = threadId
       session.ptySpawned = true
