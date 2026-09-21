@@ -2,6 +2,7 @@ import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
   ComputerUsePipState,
+  CuaUpdateProgress,
   ProviderConnectionInfo,
   Thread
 } from '../types'
@@ -113,6 +114,12 @@ export const IPC_EVENT_CONTRACT = {
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * Progress of an in-app Cua Driver update. The update itself answers over
+   * `computerUse:updateCua`; this stream carries the installer's milestones so a
+   * multi-minute download never looks like a hang.
+   */
+  'computerUse:cuaUpdate': [] as unknown as [progress: CuaUpdateProgress],
   /**
    * Emitted for every computer-use operation an agent performs, and again with
    * `active: false` when that thread's turn ends. Thread rows use this (not the

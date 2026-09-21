@@ -116,7 +116,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'computer-use',
     title: 'Computer use',
     description: 'Bridge settings for computer-control agents.',
-    keywords: ['cua', 'bridge', 'automation'],
+    keywords: ['cua', 'bridge', 'automation', 'update'],
     icon: MonitorUp
   },
   {

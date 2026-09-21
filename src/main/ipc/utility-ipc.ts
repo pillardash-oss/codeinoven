@@ -1,4 +1,6 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { BrowserWindow } from 'electron'
+import { sendToRenderer } from './renderer-delivery'
 import type {
   UtilityBundleInstallRequest,
   UtilityCredentialInput,
@@ -44,6 +46,15 @@ export function registerUtilityIpc(
     if (typeof enabled !== 'boolean') throw new TypeError('Cua bridge enabled state is invalid')
     return cuaBridge.setEnabled(enabled)
   })
+  ipcMain.handle('computerUse:checkCuaUpdate', (_, skipCache: unknown) => {
+    if (skipCache !== undefined && typeof skipCache !== 'boolean') {
+      throw new TypeError('Cua update cache preference is invalid')
+    }
+    return cuaBridge.checkForUpdate({ skipCache: skipCache === true })
+  })
+  ipcMain.handle('computerUse:updateCua', () =>
+    cuaBridge.applyUpdate((progress) => broadcastToWindows('computerUse:cuaUpdate', progress))
+  )
   ipcMain.handle('computerUse:pipGetState', () => pip?.getState() ?? { active: false })
   ipcMain.handle('computerUse:activityGet', () => pip?.getActivitySnapshot() ?? [])
   ipcMain.handle('computerUse:pipSetFrameWidth', (_, requested: unknown) => {
@@ -253,6 +264,18 @@ function validateBundleCredentials(value: unknown, entryIndex: number): UtilityC
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Push a utility event to every window, mirroring how the computer-use PiP
+ * broadcasts its own state.
+ */
+function broadcastToWindows(channel: string, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      sendToRenderer(window.webContents, channel, payload)
+    }
+  }
 }
 
 function validateText(value: unknown, label: string, maximumLength: number, trim = true): string {
