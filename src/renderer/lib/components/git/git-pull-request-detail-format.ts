@@ -452,7 +452,7 @@ export function reviewBadgeClass(meta: string | undefined): string {
 }
 
 /**
- * The label a commenter wears, and what it means.
+ * One label a commenter wears, and what it means.
  *
  * The word is the badge; the title is the sentence behind it, because
  * `COLLABORATOR` and `CONTRIBUTOR` are GitHub's vocabulary rather than a
@@ -466,24 +466,38 @@ export interface CommentRoleBadge {
 /**
  * What the person behind a comment is to this repository.
  *
- * Two facts decide the label and the pull request's author wins: an account
- * that opened the pull request reads as `Author` even when it is also a member,
- * which is exactly what github.com shows, because "wrote this pull request" is
- * the fact a reader is weighing. Everything else falls back to GitHub's own
- * `author_association`, and an account with no relationship to the repository
- * wears nothing at all rather than a label saying nothing.
+ * A commenter holds two separate facts at once and both are worth saying: an
+ * account can be the one that opened the pull request *and* a member of the
+ * organization, and answering that with a single winner hides one of them. So
+ * this returns every label the account earns, `Author` first because opening
+ * the pull request is the fact a reader is weighing, then the relationship
+ * GitHub reports for it.
  *
  * The login comparison is case-insensitive because GitHub logins are: the same
  * account is written `Octocat` and `octocat` across payloads.
  */
-export function commentRoleBadge(
+export function commentRoleBadges(
   entry: ConversationEntry,
   pullRequestAuthor: string
-): CommentRoleBadge | null {
+): CommentRoleBadge[] {
+  const badges: CommentRoleBadge[] = []
   if (entry.author.toLowerCase() === pullRequestAuthor.toLowerCase()) {
-    return { label: 'Author', title: 'Opened this pull request' }
+    badges.push({ label: 'Author', title: 'Opened this pull request' })
   }
-  switch (entry.authorAssociation) {
+  const association = associationBadge(entry.authorAssociation)
+  if (association) badges.push(association)
+  return badges
+}
+
+/**
+ * GitHub's own `author_association` as a label, or null when it names nothing.
+ *
+ * Split from the badges above because the two facts are independent: this one
+ * answers "what is this account to the repository", which is true of the pull
+ * request's author as well.
+ */
+function associationBadge(association: PrAuthorAssociation | null): CommentRoleBadge | null {
+  switch (association) {
     case 'OWNER':
       return { label: 'Owner', title: 'Owns this repository' }
     case 'MEMBER':
