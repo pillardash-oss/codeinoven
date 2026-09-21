@@ -37,6 +37,7 @@ export type GitOperation =
   | 'pr-comment'
   | 'pr-comment-edit'
   | 'pr-comment-delete'
+  | 'pr-comment-reply'
   | 'pr-comment-hide'
   | 'pr-review'
   | 'pr-list'

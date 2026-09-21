@@ -2,7 +2,8 @@
   /**
    * Per-comment actions. Most match the set github.com offers on one of its own
    * comments; Explain and Quick chat are this app's own additions, opening a
-   * read-only side chat anchored on the comment.
+   * read-only side chat anchored on the comment, and Reply here is the one that
+   * answers the comment where it stands instead of in the panel's composer.
    *
    * Two rules shape what appears. GitHub only lets an author edit or delete a
    * comment, so those rows exist only for the viewer's own; and blocking is
@@ -23,6 +24,7 @@
     MessageSquareDashed,
     MessageSquareQuote,
     MessageSquarePlus,
+    MessageSquareReply,
     Pencil,
     Trash2
   } from '@lucide/svelte'
@@ -62,6 +64,12 @@
     onCopyLink: () => void
     onCopyMarkdown: () => void
     onQuote: () => void
+    /**
+     * Answer this exact comment where it stands. Omitted when the surface has no
+     * reply box to open, so the row is never drawn for an action that could not
+     * run.
+     */
+    onReply?: () => void
     /** Open a read-only temporary side chat that explains this comment.
      *  Omitted when the entry has no body to anchor a chat on (an empty review). */
     onExplain?: () => void
@@ -87,6 +95,7 @@
     onCopyLink,
     onCopyMarkdown,
     onQuote,
+    onReply,
     onExplain,
     onQuickChat,
     onReferenceInNewIssue,
@@ -151,6 +160,12 @@
   <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
   Quote reply
 </Menu.Item>
+{#if onReply}
+  <Menu.Item class={itemClass} onSelect={onReply} disabled={busy}>
+    <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+    Reply here
+  </Menu.Item>
+{/if}
 <Menu.Item
   class={itemClass}
   data-external-url={externalUrls.reference}

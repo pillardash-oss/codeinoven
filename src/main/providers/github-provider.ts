@@ -40,6 +40,7 @@ import type {
   MinimizePrCommentInput,
   PrCommentTarget,
   PullRequestTarget,
+  ReplyPrReviewCommentInput,
   UpdatePrCommentInput
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
@@ -521,6 +522,25 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
+   * Answer an inline comment inside its thread.
+   *
+   * The reply endpoint hangs off the comment being answered, not the pull
+   * request, which is what puts the answer in that comment's thread rather than
+   * starting a new one.
+   */
+  async replyToPullRequestReviewComment(
+    input: ReplyPrReviewCommentInput
+  ): Promise<PullRequestReviewComment> {
+    const response = await this.request(
+      `${this.pullPath(input)}/comments/${String(input.commentId)}/replies`,
+      { method: 'POST', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toReviewComment(response, input)
+    if (!comment) throw new Error('The reply was posted but could not be read back')
+    return comment
+  }
+
+  /**
    * Hide a comment behind GitHub's "minimised" treatment.
    *
    * GitHub exposes no REST endpoint for this, only the GraphQL mutation, and the
@@ -609,12 +629,17 @@ export class GitHubProvider implements GitProvider {
     const id = this.readNumber(record, 'id')
     if (id <= 0) return null
     const line = this.readNumber(record, 'line')
+    const reviewId = this.readNumber(record, 'pull_request_review_id')
+    const inReplyToId = this.readNumber(record, 'in_reply_to_id')
     return {
       id,
       ...this.toAuthor(this.readRecord(record, 'user')),
       body: this.readString(record, 'body') ?? '',
       path: this.readString(record, 'path') ?? '',
       line: line > 0 ? line : null,
+      reviewId: reviewId > 0 ? reviewId : null,
+      inReplyToId: inReplyToId > 0 ? inReplyToId : null,
+      diffHunk: this.readString(record, 'diff_hunk'),
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at'),
       nodeId: this.readString(record, 'node_id'),

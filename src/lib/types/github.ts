@@ -301,6 +301,26 @@ export interface PullRequestReviewComment {
   path: string
   /** Line in the file the comment anchors to; null once outdated. */
   line: number | null
+  /**
+   * The review this comment was submitted with, or null when the provider did
+   * not attribute it. GitHub submits a review's inline comments and its summary
+   * together, so this is what keeps a review's threads next to its verdict
+   * instead of floating loose in the chronological stream.
+   */
+  reviewId: number | null
+  /**
+   * The comment this one answers, or null for the comment that opened the
+   * thread. GitHub nests a reply under its parent, so this is what decides
+   * whether a comment starts a thread or continues one.
+   */
+  inReplyToId: number | null
+  /**
+   * The diff GitHub showed when the comment was written, as a unified hunk
+   * header plus its lines. It is the code the reader has to see to judge the
+   * comment, and it survives the line going outdated, which the live file
+   * would not.
+   */
+  diffHunk: string | null
   createdAt: string
   updatedAt: string | null
   nodeId: string | null

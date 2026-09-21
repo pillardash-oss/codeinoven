@@ -1557,6 +1557,26 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle(
+    'pr:commentReply',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      commentId: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const id = validatePrCommentId(commentId)
+      const text = validatePrCommentBody(body)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.replyToPullRequestReviewComment({ ...target, commentId: id, body: text })
+      )
+    }
+  )
+
+  ipcMain.handle(
     'pr:commentMinimize',
     async (
       _,

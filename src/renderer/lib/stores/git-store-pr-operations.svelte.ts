@@ -387,6 +387,39 @@ export class GitPullRequestOperations {
   }
 
   /**
+   * Answer an inline review comment inside its thread.
+   *
+   * The reply joins the thread on GitHub rather than starting a new one, which is
+   * why the whole comment is addressed: GitHub files the answer under the comment
+   * it replies to. Returns whether the write landed; the caller refetches the
+   * bundle so the thread, counts, and avatars come from the server.
+   */
+  async replyToPrReviewComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    this.access.markBusy('pr-comment-reply', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke('pr:commentReply', projectId, owner, repo, pullNumber, commentId, body)
+        ) !== null
+      )
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'The reply could not be posted'))
+      return false
+    } finally {
+      this.access.markBusy('pr-comment-reply', false)
+    }
+  }
+
+  /**
    * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
    * its GraphQL node id, because GitHub exposes no REST endpoint for this.
    */

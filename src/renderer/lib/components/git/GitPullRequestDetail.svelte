@@ -917,7 +917,7 @@
       </div>
     {:else if tab === 'conversation'}
       <GitPullRequestDetailConversation
-        entries={conversation}
+        nodes={conversation}
         {projectId}
         {identity}
         {number}

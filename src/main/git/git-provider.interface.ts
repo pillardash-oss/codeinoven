@@ -90,6 +90,20 @@ export interface UpdatePrCommentInput extends PrCommentTarget {
 }
 
 /**
+ * Answer an inline review comment inside that comment's thread.
+ *
+ * A reply is not a new thread: GitHub files it under the comment it answers, so
+ * the id is the comment being replied to, root or reply alike, and the body
+ * carries only what the reply says. Conversation comments have no threading on
+ * GitHub at all, which is why this only exists for the inline collection.
+ */
+export interface ReplyPrReviewCommentInput extends PullRequestTarget {
+  /** The comment being answered. Its thread receives the reply. */
+  commentId: number
+  body: string
+}
+
+/**
  * Hide a comment behind GitHub's "minimised" treatment. GraphQL-only, so the
  * caller supplies the node id rather than the numeric one.
  */
@@ -144,6 +158,10 @@ export interface GitProvider {
   updatePullRequestReviewComment(input: UpdatePrCommentInput): Promise<PullRequestReviewComment>
   /** Permanently delete an inline diff comment. Only the author may do this. */
   deletePullRequestReviewComment(input: PrCommentTarget): Promise<void>
+  /** Answer an inline diff comment inside its thread. */
+  replyToPullRequestReviewComment(
+    input: ReplyPrReviewCommentInput
+  ): Promise<PullRequestReviewComment>
   /**
    * Hide a comment behind GitHub's minimised treatment. There is no equivalent
    * REST endpoint   only the GraphQL `minimizeComment` mutation.

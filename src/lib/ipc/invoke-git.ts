@@ -46,6 +46,7 @@ import type {
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
+  PullRequestReviewComment,
   PullRequestReviewResult,
   RepositoryMentionUser,
   ThreadSettings,
@@ -624,6 +625,21 @@ export const invokeGitContract = {
       commentId: number
     ],
     GitHubMutationResult<boolean>
+  >,
+  /**
+   * Answer an inline review comment, keeping the answer in that comment's thread.
+   * Only inline comments thread on GitHub, so this carries no `kind`.
+   */
+  'pr:commentReply': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      commentId: number,
+      body: string
+    ],
+    GitHubMutationResult<PullRequestReviewComment>
   >,
   /** Hide a comment behind GitHub's minimised treatment, by GraphQL node id. */
   'pr:commentMinimize': {} as Contract<

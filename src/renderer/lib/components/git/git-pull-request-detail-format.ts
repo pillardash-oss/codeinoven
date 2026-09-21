@@ -1,5 +1,12 @@
 import { Check, CircleDot, CircleSlash, X } from '@lucide/svelte'
-import type { PrCommentKind, PullRequestBundle, PullRequestCheck } from '$shared/types'
+import type {
+  PrCommentKind,
+  PullRequestBundle,
+  PullRequestCheck,
+  PullRequestFile,
+  PullRequestReview,
+  PullRequestReviewComment
+} from '$shared/types'
 import { githubDisplayLogin } from '$lib/format/github-login'
 
 export type ConversationEntryKind = 'description' | 'comment' | 'review' | 'inline'
@@ -23,8 +30,8 @@ export interface ConversationEntry {
   meta?: string
   /**
    * The unified diff hunk GitHub showed when an inline comment was written, or
-   * null for every other entry. It is the code the comment is talking about,
-   * and unlike the live file it still shows that code after the line has gone
+   * null for every other entry. It is the code the comment is talking about, and
+   * unlike the live file it still shows that code after the line has gone
    * outdated, which is exactly when a reader needs it.
    */
   diffHunk: string | null
@@ -46,116 +53,430 @@ export interface ConversationEntry {
 }
 
 /**
- * Conversation as one chronological stream: the PR description, issue
- * comments, submitted reviews, and inline code comments, the same context
- * GitHub shows, so a merge decision never needs the browser.
+ * One inline review thread: the comment that opened it and every answer to it,
+ * under the file and the diff GitHub showed when it was written.
+ *
+ * GitHub files a reply inside its parent's thread rather than beside it, and the
+ * thread is what a reader actually reasons about: the code, then the argument
+ * about it. Reading the same comments as a flat stream loses both halves, which
+ * is why the thread, not the comment, is the unit the reader renders.
+ */
+export interface ReviewThread {
+  key: string
+  path: string
+  /** Line in the file the thread anchors to; null once the thread is outdated. */
+  line: number | null
+  /** The comment that opened the thread, then its replies in arrival order. */
+  comments: ConversationEntry[]
+}
+
+/**
+ * The diff a thread is about, which is the hunk GitHub attached to the comment
+ * that opened it. Read from the thread rather than stored twice, so the code a
+ * thread shows and the code its comments were written against cannot disagree.
+ */
+export function threadDiffHunk(thread: ReviewThread): string | null {
+  return thread.comments[0]?.diffHunk ?? null
+}
+
+/**
+ * One unit of the conversation stream.
+ *
+ * A submitted review is one unit with its inline threads inside it: GitHub shows
+ * a review's summary beside the threads that review wrote, and splitting the two
+ * is what made the flat stream unreadable. Threads whose review the provider did
+ * not return still stay readable, which is what the `threads` unit is for.
+ */
+export type ConversationNode =
+  | { kind: 'description'; key: string; at: string; entry: ConversationEntry }
+  | { kind: 'comment'; key: string; at: string; entry: ConversationEntry }
+  | { kind: 'review'; key: string; at: string; entry: ConversationEntry; threads: ReviewThread[] }
+  | { kind: 'threads'; key: string; at: string; threads: ReviewThread[] }
+
+/**
+ * Conversation as GitHub organises it: the description, then a chronological
+ * stream in which each submitted review carries its own inline threads.
  *
  * Each entry also carries everything the per-comment actions need: the
  * provider's own permalink, the id and collection a mutation addresses, the
  * GraphQL node id hiding needs, and the author's declared picture. Assembling
- * that here means the menu and the row read one shape instead of each of them
+ * that here means the rows and the menus read one shape instead of each of them
  * reaching back into the bundle and guessing which provider field applies.
  */
-export function buildConversation(bundle: PullRequestBundle | undefined): ConversationEntry[] {
+export function buildConversation(bundle: PullRequestBundle | undefined): ConversationNode[] {
   if (!bundle) return []
-  const entries: ConversationEntry[] = []
+  const nodes: ConversationNode[] = []
   if (bundle.detail.body.trim()) {
-    entries.push({
-      key: 'body',
-      author: bundle.detail.authorLogin,
-      avatarUrl: bundle.detail.authorAvatarUrl ?? null,
-      isBot: bundle.detail.authorIsBot === true,
-      at: bundle.detail.createdAt,
-      updatedAt: null,
-      body: bundle.detail.body,
+    nodes.push({
       kind: 'description',
-      url: bundle.detail.url,
-      diffHunk: null,
-      commentId: null,
-      commentKind: 'issue',
-      nodeId: null
+      key: 'body',
+      at: bundle.detail.createdAt,
+      entry: {
+        key: 'body',
+        author: bundle.detail.authorLogin,
+        avatarUrl: bundle.detail.authorAvatarUrl ?? null,
+        isBot: bundle.detail.authorIsBot === true,
+        at: bundle.detail.createdAt,
+        updatedAt: null,
+        body: bundle.detail.body,
+        kind: 'description',
+        diffHunk: null,
+        url: bundle.detail.url,
+        commentId: null,
+        commentKind: 'issue',
+        nodeId: null
+      }
     })
   }
+
   for (const comment of bundle.comments) {
-    entries.push({
-      key: `c${comment.id}`,
-      author: comment.authorLogin,
-      avatarUrl: comment.authorAvatarUrl,
-      isBot: comment.authorIsBot,
-      at: comment.createdAt,
-      updatedAt: comment.updatedAt,
-      body: comment.body,
+    nodes.push({
       kind: 'comment',
-      url: comment.url,
-      diffHunk: null,
-      commentId: comment.id,
-      commentKind: 'issue',
-      nodeId: comment.nodeId
-    })
-  }
-  for (const review of bundle.reviews) {
-    entries.push({
-      key: `r${review.id}`,
-      author: review.authorLogin,
-      avatarUrl: review.authorAvatarUrl,
-      isBot: review.authorIsBot,
-      at: review.submittedAt,
-      updatedAt: null,
-      body: review.body,
-      kind: 'review',
-      meta: review.state.replace(/_/gu, ' ').toLowerCase(),
-      url: review.url,
-      diffHunk: null,
-      commentId: null,
-      commentKind: 'issue',
-      nodeId: review.nodeId
-    })
-  }
-  for (const comment of bundle.reviewComments) {
-    entries.push({
-      key: `rc${comment.id}`,
-      author: comment.authorLogin,
-      avatarUrl: comment.authorAvatarUrl,
-      isBot: comment.authorIsBot,
+      key: `c${comment.id}`,
       at: comment.createdAt,
-      updatedAt: comment.updatedAt,
-      body: comment.body,
-      kind: 'inline',
-      meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
-      url: comment.url,
-      diffHunk: comment.diffHunk,
-      commentId: comment.id,
-      commentKind: 'review',
-      nodeId: comment.nodeId
+      entry: {
+        key: `c${comment.id}`,
+        author: comment.authorLogin,
+        avatarUrl: comment.authorAvatarUrl,
+        isBot: comment.authorIsBot,
+        at: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        body: comment.body,
+        kind: 'comment',
+        diffHunk: null,
+        url: comment.url,
+        commentId: comment.id,
+        commentKind: 'issue',
+        nodeId: comment.nodeId
+      }
     })
   }
-  return entries
-    .filter((entry) => entry.body.trim() || entry.kind === 'review')
-    .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
+
+  const threads = buildThreads(bundle.reviewComments, bundle.files)
+  const threadsByReview = new Map<number, ReviewThread[]>()
+  const unclaimed: ReviewThread[] = []
+  for (const thread of threads) {
+    const reviewId = threadReviewId(thread, bundle.reviewComments)
+    if (reviewId === null || !bundle.reviews.some((review) => review.id === reviewId)) {
+      unclaimed.push(thread)
+      continue
+    }
+    const claimed = threadsByReview.get(reviewId)
+    if (claimed) claimed.push(thread)
+    else threadsByReview.set(reviewId, [thread])
+  }
+
+  for (const review of bundle.reviews) {
+    nodes.push({
+      kind: 'review',
+      key: `r${review.id}`,
+      at: review.submittedAt,
+      entry: reviewEntry(review),
+      threads: threadsByReview.get(review.id) ?? []
+    })
+  }
+  if (unclaimed.length > 0) {
+    nodes.push({
+      kind: 'threads',
+      key: 'threads',
+      at: earliestCommentAt(unclaimed),
+      threads: unclaimed
+    })
+  }
+
+  // The description is the pull request itself, so it stays at the top; every
+  // other unit reads in the order it happened. `sort` is stable, which keeps two
+  // units submitted in the same second in the order the provider listed them.
+  const [description, ...rest] = nodes
+  return [
+    ...(description ? [description] : []),
+    ...rest.sort((a, b) => parseAt(a.at) - parseAt(b.at))
+  ]
+}
+
+/**
+ * Group inline comments into threads: each opening comment with the answers
+ * below it, in the diff's own order.
+ *
+ * The diff order is the provider's file order, so threads read down the pull
+ * request the way its patch does rather than alphabetically, which is the order
+ * GitHub itself shows them in.
+ */
+function buildThreads(
+  comments: PullRequestReviewComment[],
+  files: PullRequestFile[]
+): ReviewThread[] {
+  const threadOf = new Map<number, ReviewThread>()
+  const roots: ReviewThread[] = []
+  for (const comment of comments) {
+    // A reply whose parent the provider did not return would otherwise be
+    // dropped; treating it as a thread root keeps every comment readable.
+    const parentId = comment.inReplyToId
+    if (parentId !== null && comments.some((candidate) => candidate.id === parentId)) continue
+    const thread: ReviewThread = {
+      key: `t${comment.id}`,
+      path: comment.path,
+      line: comment.line,
+      comments: [reviewCommentEntry(comment)]
+    }
+    threadOf.set(comment.id, thread)
+    roots.push(thread)
+  }
+
+  for (const comment of comments) {
+    const parentId = comment.inReplyToId
+    if (parentId === null) continue
+    const thread = threadOf.get(parentId) ?? threadOf.get(rootIdOf(parentId, comments))
+    if (!thread) continue
+    thread.comments.push(reviewCommentEntry(comment))
+    threadOf.set(comment.id, thread)
+  }
+
+  return roots.sort((a, b) => {
+    const aIndex = filePosition(a.path, files)
+    const bIndex = filePosition(b.path, files)
+    if (aIndex !== bIndex) return aIndex - bIndex
+    if (a.path !== b.path) return a.path.localeCompare(b.path)
+    return (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER)
+  })
+}
+
+/** Where a file sits in the pull request's patch, or last when it is not part of it. */
+function filePosition(path: string, files: PullRequestFile[]): number {
+  const index = files.findIndex((file) => file.path === path)
+  return index < 0 ? Number.MAX_SAFE_INTEGER : index
+}
+
+/** The thread's opening comment id; the key is that id with its `t` marker. */
+function threadRootId(thread: ReviewThread): number {
+  return Number(thread.key.slice(1))
+}
+
+/** The root a comment's thread starts from, walking up a chain of replies. */
+function rootIdOf(commentId: number, comments: PullRequestReviewComment[]): number {
+  let current = commentId
+  const seen = new Set<number>([current])
+  for (;;) {
+    const parent = comments.find((comment) => comment.id === current)?.inReplyToId ?? null
+    if (parent === null || seen.has(parent)) return current
+    seen.add(parent)
+    current = parent
+  }
+}
+
+/** The review a thread was submitted with, as its opening comment declares it. */
+function threadReviewId(thread: ReviewThread, comments: PullRequestReviewComment[]): number | null {
+  const rootId = threadRootId(thread)
+  return comments.find((comment) => comment.id === rootId)?.reviewId ?? null
+}
+
+/** When a set of threads first said anything, for its place in the stream. */
+function earliestCommentAt(threads: ReviewThread[]): string {
+  let earliest = ''
+  for (const thread of threads) {
+    for (const comment of thread.comments) {
+      if (!earliest || parseAt(comment.at) < parseAt(earliest)) earliest = comment.at
+    }
+  }
+  return earliest
+}
+
+/** Parse a provider timestamp, treating a missing one as the beginning of time. */
+function parseAt(value: string): number {
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function reviewEntry(review: PullRequestReview): ConversationEntry {
+  return {
+    key: `r${review.id}`,
+    author: review.authorLogin,
+    avatarUrl: review.authorAvatarUrl,
+    isBot: review.authorIsBot,
+    at: review.submittedAt,
+    updatedAt: null,
+    body: review.body,
+    kind: 'review',
+    meta: review.state.replace(/_/gu, ' ').toLowerCase(),
+    diffHunk: null,
+    url: review.url,
+    commentId: null,
+    commentKind: 'issue',
+    nodeId: review.nodeId
+  }
+}
+
+function reviewCommentEntry(comment: PullRequestReviewComment): ConversationEntry {
+  return {
+    key: `rc${comment.id}`,
+    author: comment.authorLogin,
+    avatarUrl: comment.authorAvatarUrl,
+    isBot: comment.authorIsBot,
+    at: comment.createdAt,
+    updatedAt: comment.updatedAt,
+    body: comment.body,
+    kind: 'inline',
+    meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
+    diffHunk: comment.diffHunk,
+    url: comment.url,
+    commentId: comment.id,
+    commentKind: 'review',
+    nodeId: comment.nodeId
+  }
+}
+
+/** How many comments the stream renders, for the view switcher's count. */
+export function conversationEntryCount(nodes: ConversationNode[]): number {
+  let count = 0
+  for (const node of nodes) {
+    if (node.kind === 'threads') {
+      count += countThreadComments(node.threads)
+      continue
+    }
+    if (node.kind === 'review') {
+      // A bare approval is still a verdict, and a review's threads count even
+      // when its own summary says nothing.
+      count += 1 + countThreadComments(node.threads)
+      continue
+    }
+    if (hasBody(node.entry)) count += 1
+  }
+  return count
+}
+
+function countThreadComments(threads: ReviewThread[]): number {
+  let count = 0
+  for (const thread of threads) count += thread.comments.filter(hasBody).length
+  return count
+}
+
+function hasBody(entry: ConversationEntry): boolean {
+  return entry.body.trim().length > 0
 }
 
 /** Human label for a conversation entry's badge. */
 export function conversationKindLabel(kind: ConversationEntryKind, meta?: string): string {
-  if (kind === 'description') return 'description'
-  if (kind === 'inline') return 'inline review'
-  if (kind === 'review') return meta ?? 'review'
-  return 'comment'
+  if (kind === 'description') return 'Description'
+  if (kind === 'inline') return 'Inline comment'
+  if (kind === 'review') return reviewVerdictLabel(meta ?? '')
+  return 'Comment'
 }
 
-/** Badge colour, approvals and change requests read at a glance. */
-export function conversationKindClass(kind: ConversationEntryKind, meta?: string): string {
-  if (kind === 'review' && meta === 'approved') return 'bg-success/10 text-success'
-  if (kind === 'review' && meta === 'changes requested') return 'bg-warning/10 text-warning'
-  if (kind === 'description') return 'bg-primary/10 text-primary'
+/**
+ * Wording for a review verdict.
+ *
+ * GitHub's `COMMENTED` is a review that only left notes, so it says what the
+ * reviewer did rather than pretending to be a verdict.
+ */
+export function reviewVerdictLabel(state: string): string {
+  if (state === 'approved') return 'Approved'
+  if (state === 'changes requested') return 'Changes requested'
+  if (state === 'dismissed') return 'Dismissed'
+  if (state === 'commented') return 'Reviewed'
+  return state || 'Review'
+}
+
+/** Badge colour for the pill that sits beside an author's name. */
+export function reviewBadgeClass(meta: string | undefined): string {
+  if (meta === 'approved') return 'bg-success/10 text-success'
+  if (meta === 'changes requested') return 'bg-warning/10 text-warning'
   return 'bg-elevated text-dimmed'
 }
 
-/** Matching left edge on the card so the stream scans vertically. */
-export function conversationAccentClass(kind: ConversationEntryKind, meta?: string): string {
-  if (kind === 'review' && meta === 'approved') return 'border-l-2 border-l-success'
-  if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
-  if (kind === 'description') return 'border-l-2 border-l-primary'
-  return ''
+/**
+ * The dot that marks one unit on the stream's rail, so the kind of each unit
+ * reads without reading its badge.
+ */
+export function conversationNodeDotClass(node: ConversationNode): string {
+  if (node.kind === 'description') return 'bg-primary'
+  if (node.kind === 'review' && node.entry.meta === 'approved') return 'bg-success'
+  if (node.kind === 'review' && node.entry.meta === 'changes requested') return 'bg-warning'
+  if (node.kind === 'threads') return 'bg-info'
+  if (node.kind === 'review') return 'bg-muted'
+  return 'bg-dimmed'
+}
+
+/** One rendered line of a diff hunk, with the file line it belongs to. */
+export interface HunkLine {
+  /** The line as the provider sent it, its `+`/`-`/space marker included. */
+  text: string
+  /** Line number in the file after the change; null for a removed or marker line. */
+  number: number | null
+  /** True for the line the comment is anchored to. */
+  anchor: boolean
+}
+
+/** The slice of a hunk a reader sees, with what was left above it. */
+export interface HunkWindow {
+  lines: HunkLine[]
+  /** Lines above the window the reader can still open. */
+  hiddenAbove: number
+}
+
+/** Lines of diff context a thread shows ahead of the anchored line by default. */
+export const HUNK_CONTEXT_ROWS = 5
+
+/**
+ * The part of a hunk worth showing under a comment.
+ *
+ * GitHub's hunk ends at the line the comment was written on, so the window ends
+ * there as well and reaches back for context: the reader sees the code directly
+ * before the line in question, which is the part that explains it. A `rows` of
+ * null removes the clamp, for a reader who asked for the whole hunk.
+ */
+export function hunkWindow(
+  hunk: string | null,
+  anchor: number | null,
+  rows: number | null = HUNK_CONTEXT_ROWS
+): HunkWindow {
+  const all = hunkLines(hunk)
+  if (all.length === 0) return { lines: [], hiddenAbove: 0 }
+  const isAnchor = (line: HunkLine): boolean => line.number !== null && line.number === anchor
+  // An outdated comment anchors to nothing, and a hunk with no anchor still has
+  // its tail worth reading, so both fall back to the end.
+  let end = anchor === null ? -1 : all.findLastIndex(isAnchor)
+  if (end < 0) end = all.length - 1
+  const start = rows === null ? 0 : Math.max(0, end - Math.max(rows, 1) + 1)
+  return {
+    lines: all.slice(start, end + 1).map((line) => ({ ...line, anchor: isAnchor(line) })),
+    hiddenAbove: start
+  }
+}
+
+/**
+ * Read a unified hunk into lines that know their own file line numbers.
+ *
+ * Context and added lines advance the new file's counter while removed lines do
+ * not, which is what makes the `+c,d` in the hunk header meaningful and what
+ * lets the reader be pointed at the exact line a comment is about.
+ */
+function hunkLines(hunk: string | null): HunkLine[] {
+  if (!hunk) return []
+  const lines: HunkLine[] = []
+  let number = 0
+  let inHunk = false
+  for (const text of hunk.split('\n')) {
+    if (text.startsWith('@@')) {
+      number = hunkFirstLineNumber(text)
+      inHunk = true
+      continue
+    }
+    // The header is the first thing GitHub sends; anything ahead of it is not code.
+    if (!inHunk) continue
+    if (text.startsWith('-') || text.startsWith('\\')) {
+      lines.push({ text, number: null, anchor: false })
+      continue
+    }
+    lines.push({ text, number, anchor: false })
+    number += 1
+  }
+  return lines
+}
+
+/** The first line number a hunk header claims for the file after the change. */
+function hunkFirstLineNumber(header: string): number {
+  const match = /^@@ -\d+(?:,\d+)? \+(\d+)/u.exec(header)
+  return match ? Number(match[1]) : 1
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   ShieldCheck
 } from '@lucide/svelte'
 import type { PrListFilter, PrListSort, PullRequestBundle, PullRequestChecks } from '$shared/types'
+import { buildConversation, conversationEntryCount } from './git-pull-request-detail-format'
 
 /** The views the pull request detail reader switches between. */
 export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
@@ -38,9 +39,8 @@ export const PR_DETAIL_VIEWS: Array<{
 
 /**
  * How many entries a view holds, for the switcher's counts. The conversation
- * count mirrors the reader's own stream: a description, a comment or an inline
- * note counts once it has something to read, and a review always counts, since a
- * bare approval is still part of the conversation.
+ * count comes from the same builder the reader renders, so a review's inline
+ * threads count the way the stream shows them rather than drifting from it.
  */
 export function prViewCount(
   view: PrDetailTabId,
@@ -52,12 +52,7 @@ export function prViewCount(
   if (view === 'files') return bundle.files.length
   if (view === 'checks') return bundle.checks.checks.length
   if (view === 'agent') return hasAgentReport ? 1 : 0
-  return (
-    (bundle.detail.body.trim() ? 1 : 0) +
-    bundle.comments.filter((comment) => comment.body.trim()).length +
-    bundle.reviews.length +
-    bundle.reviewComments.filter((comment) => comment.body.trim()).length
-  )
+  return conversationEntryCount(buildConversation(bundle))
 }
 
 /** Badge colour for a pull request's state pill. */

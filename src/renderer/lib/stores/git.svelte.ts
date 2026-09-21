@@ -1281,6 +1281,21 @@ export class GitState {
   }
 
   /**
+   * Answer an inline review comment inside its thread. Conversation comments have
+   * no threading on GitHub, so only inline ones can be answered this way.
+   */
+  replyToPrReviewComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    return this.prOps.replyToPrReviewComment(projectId, owner, repo, pullNumber, commentId, body)
+  }
+
+  /**
    * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
    * its GraphQL node id, because GitHub exposes no REST endpoint for this.
    */
