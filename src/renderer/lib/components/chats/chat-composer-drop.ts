@@ -35,7 +35,8 @@ export interface ComposerDropContext {
  * top of the conversation column, so a point inside the conversation may still
  * be an element the composer must not capture as an attachment.
  */
-const SELF_HANDLED_DROP_REGIONS = '[data-region="file-tree"], [data-drop-region="sidebar"]'
+const SELF_HANDLED_DROP_REGIONS =
+  '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"]'
 
 function hasFiles(dt: DataTransfer | null): boolean {
   if (!dt) return false
@@ -53,7 +54,10 @@ function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boo
   )
 }
 
-/** True when the pointer is inside a surface that handles the drop itself. */
+/** True when the pointer is inside a surface that handles the drop itself
+ *  (the request-files question card also registers here while it shows a
+ *  file-request question, so dropped files attach to the card instead of the
+ *  composer). */
 function overSelfHandledDropRegion(e: { clientX: number; clientY: number }): boolean {
   const regions = document.querySelectorAll<HTMLElement>(SELF_HANDLED_DROP_REGIONS)
   for (const region of regions) {

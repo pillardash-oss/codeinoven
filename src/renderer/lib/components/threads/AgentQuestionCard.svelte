@@ -271,6 +271,57 @@
     }
   }
 
+  // Whole-card drop target for file-request questions. The card claims the
+  // drop (and marks itself as a self-handled drop region, see
+  // chat-composer-drop.ts) so the conversation composer never also attaches
+  // the same files as message attachments.
+  let draggingFiles = $state(false)
+
+  function isFileDrag(e: DragEvent): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  }
+
+  function handleCardDragOver(e: DragEvent): void {
+    if (!question.fileRequest || working || !isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    draggingFiles = true
+  }
+
+  function handleCardDragLeave(e: DragEvent): void {
+    if (!question.fileRequest) return
+    const card = e.currentTarget
+    if (
+      card instanceof HTMLElement &&
+      e.relatedTarget instanceof Node &&
+      card.contains(e.relatedTarget)
+    ) {
+      return
+    }
+    draggingFiles = false
+  }
+
+  function handleCardDrop(e: DragEvent): void {
+    draggingFiles = false
+    if (!question.fileRequest || working) return
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const paths: string[] = []
+    for (const file of Array.from(files)) {
+      const path = window.api.getPathForFile(file)
+      if (path && !paths.includes(path)) paths.push(path)
+    }
+    if (paths.length === 0) return
+    const merged = [...currentAnswers]
+    for (const path of paths) if (!merged.includes(path)) merged.push(path)
+    markInteracted(currentIndex)
+    setAnswer(currentIndex, merged)
+    persistProgress(currentIndex, merged)
+  }
+
   function removeAttachedAnswer(path: string): void {
     if (working) return
     const updated = currentAnswers.filter((answer) => answer !== path)
@@ -344,9 +395,23 @@
 
 <section
   out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border bg-surface shadow-sm"
+  data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
+  class={['relative overflow-hidden rounded-xl border bg-surface shadow-sm', draggingFiles && 'border-primary']}
   aria-label="Agent question"
+  ondragover={handleCardDragOver}
+  ondragleave={handleCardDragLeave}
+  ondrop={handleCardDrop}
 >
+  {#if draggingFiles}
+    <div
+      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/5"
+    >
+      <p class="rounded-lg bg-surface px-3 py-1.5 text-xs font-medium text-primary shadow-sm">
+        Drop files to attach
+      </p>
+    </div>
+  {/if}
+
   <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
     <div class="min-w-0">
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
