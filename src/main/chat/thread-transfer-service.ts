@@ -22,33 +22,47 @@
 import type { ThreadTransferResult } from '../../lib/types'
 import type { Database } from '../database/database'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
-import { instanceHandoffBus } from '../system/instance-handoff-bus'
+import { InstanceHandoffBus, instanceHandoffBus } from '../system/instance-handoff-bus'
 import type { HandoffRequest } from '../system/instance-handoff-bus'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
 import type { ChatEngine } from './chat-engine'
 
 /**
- * Liveness probes, injectable so the two-sided rule can be exercised without a
- * second real app process. Defaults to the instance registry.
+ * The two chat-engine operations a transfer drives, one per side of the
+ * hand-off: the owner releases the run, the adopter resumes it.
+ */
+export type ThreadTransferEngine = Pick<
+  ChatEngine,
+  'releaseThreadForTransfer' | 'adoptTransferredThread'
+>
+
+/**
+ * Liveness probes and transport, injectable so the two-sided rule can be
+ * exercised without a second real app process. Defaults are the shared instance
+ * registry and the app's hand-off bus.
  */
 export interface ThreadTransferServiceOptions {
   /** Whether the process that recorded a turn is still running. */
   isRunOwnerAlive?: (pid: number) => boolean
+  /** The peer-to-peer bus this service asks for a release over. */
+  bus?: InstanceHandoffBus
 }
 
 export class ThreadTransferService {
   private stopRequestListener: (() => void) | null = null
   private started = false
   private readonly isRunOwnerAlive: (pid: number) => boolean
+  private readonly bus: InstanceHandoffBus
 
   constructor(
     private readonly db: Database,
-    private readonly chatEngine: ChatEngine,
+    private readonly chatEngine: ThreadTransferEngine,
     options: ThreadTransferServiceOptions = {}
   ) {
     this.isRunOwnerAlive =
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
+    this.bus = options.bus ?? instanceHandoffBus
   }
 
   /**
@@ -65,8 +79,8 @@ export class ThreadTransferService {
   start(): void {
     if (this.started) return
     this.started = true
-    instanceHandoffBus.start()
-    this.stopRequestListener = instanceHandoffBus.onRequest((request) => {
+    this.bus.start()
+    this.stopRequestListener = this.bus.onRequest((request) => {
       void this.handleRequest(request)
     })
   }
@@ -76,7 +90,7 @@ export class ThreadTransferService {
     this.stopRequestListener?.()
     this.stopRequestListener = null
     this.started = false
-    instanceHandoffBus.stop()
+    this.bus.stop()
     trustedIpcMain.removeHandler('thread:transferRun')
   }
 
@@ -90,14 +104,14 @@ export class ThreadTransferService {
   async transferToThisInstance(projectId: string, threadId: string): Promise<ThreadTransferResult> {
     try {
       const ownerPid = await this.ownerPidFor(projectId, threadId)
-      if (ownerPid === null || ownerPid === process.pid) return { ok: true }
+      if (ownerPid === null || ownerPid === this.bus.localPid) return { ok: true }
       if (!this.isRunOwnerAlive(ownerPid)) {
         return {
           ok: false,
           reason: 'The instance running this thread is no longer running.'
         }
       }
-      const ack = await instanceHandoffBus.request(ownerPid, projectId, threadId)
+      const ack = await this.bus.request(ownerPid, projectId, threadId)
       if (ack.status !== 'accepted') {
         return {
           ok: false,
@@ -113,20 +127,16 @@ export class ThreadTransferService {
 
   /** Answer a sibling that asked this process to release a thread. */
   private async handleRequest(request: HandoffRequest): Promise<void> {
-    if (request.targetPid !== process.pid) return
+    if (request.targetPid !== this.bus.localPid) return
     try {
       const result = await this.chatEngine.releaseThreadForTransfer(
         request.projectId,
         request.threadId
       )
-      await instanceHandoffBus.respond(
-        request,
-        result.released ? 'accepted' : 'refused',
-        result.reason
-      )
+      await this.bus.respond(request, result.released ? 'accepted' : 'refused', result.reason)
     } catch (error) {
       Logger.error('Cross-instance thread release failed:', error)
-      await instanceHandoffBus.respond(
+      await this.bus.respond(
         request,
         'refused',
         'The instance running this thread could not stop its run.'
