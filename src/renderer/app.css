@@ -462,6 +462,109 @@ body {
   font-weight: 600;
 }
 
+/* ─── Table controls (wrap, column resize) ──────────────────────────────── */
+/* Every table carries a small control rectangle at its top left. Both toggles
+   are opt-in and in memory only, so a wide table costs nothing until the reader
+   asks for one of them. */
+.markdown-body .md-table-block {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.markdown-body .md-table-controls {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-elevated);
+  padding: 0.0625rem;
+}
+
+.markdown-body .md-table-control {
+  display: flex;
+  align-items: center;
+  border-radius: 0.25rem;
+  color: var(--color-dimmed);
+  padding: 0.1875rem;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.markdown-body .md-table-control:hover {
+  background: var(--color-overlay);
+  color: var(--color-foreground);
+}
+
+.markdown-body .md-table-control:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* An engaged toggle stays readable rather than shouting: the icon keeps its
+   size, so switching wrap or the padlock never shifts the strip. */
+.markdown-body .md-table-control[aria-pressed='true'] {
+  color: var(--color-foreground);
+}
+
+/* Wrap mode: the table stops sizing to its content and takes the panel width,
+   so columns wrap instead of the table scrolling sideways. */
+.markdown-body .md-table-wrap.md-table-fit table {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Resize mode: the widths come from the dragged `<col>` elements, so the table
+   must neither fall back to content sizing nor be widened past them. */
+.markdown-body .md-table-wrap.md-table-resizable table {
+  table-layout: fixed;
+  min-width: 0;
+}
+
+/* A narrowed column truncates rather than wraps, which is what the drag
+   promises. Wrapping stays available through the wrap toggle. */
+.markdown-body .md-table-wrap.md-table-resizable:not(.md-table-fit) th,
+.markdown-body .md-table-wrap.md-table-resizable:not(.md-table-fit) td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-body .md-table-resizable th {
+  position: relative;
+}
+
+/* While a column is being dragged the whole table holds the resize cursor and
+   stops selecting text, so a fast drag never paints a text selection. */
+.markdown-body .md-table-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* The drag target sits over the column's right padding, ending exactly on the
+   border, so it is the border the reader grabs   and so the cell's own
+   `overflow: hidden` (resize mode) can never clip it. */
+.markdown-body .md-col-resizer {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  z-index: 1;
+  width: 0.5rem;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.markdown-body .md-col-resizer:hover,
+.markdown-body .md-col-resizer:focus-visible {
+  background: color-mix(in srgb, var(--color-primary) 30%, transparent);
+  outline: none;
+}
+
 .markdown-body hr {
   border: 0;
   border-top: 1px solid var(--color-border);

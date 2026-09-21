@@ -3,6 +3,7 @@
   import type { Token, Tokens } from 'marked'
   import CodeBlock from './CodeBlock.svelte'
   import LongTextBlock from './LongTextBlock.svelte'
+  import MarkdownTable from './MarkdownTable.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
   import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
@@ -423,13 +424,10 @@
         {@render renderNodes(nodesFor(node.token.tokens))}
       </blockquote>
     {:else if node.token.type === 'table'}
-      <!-- Tables need their own horizontal-scroll wrapper: the table sizes to
-           its content (min 100% of the container) so no column is ever
-           starved by a sibling column's long tokens. -->
-      <div class="md-table-wrap">
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-        {@html renderBlockHtml(node.token)}
-      </div>
+      <!-- Tables own their scroll wrapper (the table sizes to its content, min
+           100% of the container, so no column is starved by a sibling column's
+           long tokens) plus the per-table wrap and column-resize controls. -->
+      <MarkdownTable html={renderBlockHtml(node.token)} />
     {:else if node.token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
       {@html renderBlockHtml(node.token)}
