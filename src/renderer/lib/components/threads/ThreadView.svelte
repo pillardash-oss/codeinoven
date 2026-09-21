@@ -4383,61 +4383,101 @@
     return loadPromise
   }
 
-  function switchProject(targetProjectId: string): void {
+  /** True while a move is in flight. Choosing a second project before the first
+   *  create settles would otherwise leave an orphan thread behind in the project
+   *  the user skipped past. */
+  let switchingProject = false
+
+  /**
+   * Hand this not-yet-used thread to another project.
+   *
+   * A thread is owned by exactly one project, so handing it over is a create and
+   * a delete, in that order: the destination project gets a thread that inherits
+   * this one's provider, settings and title, the unsent draft moves across
+   * object-to-object (never through the clipboard), and only once the new thread
+   * owns the draft is the source thread deleted. The sidebar needs no special
+   * handling   opening the new thread puts its row in the list, and the
+   * `thread:deleted` broadcast removes the old row, exactly as they do for every
+   * other thread.
+   */
+  async function switchProject(targetProjectId: string): Promise<void> {
+    if (switchingProject) return
     const oldProjectId = thread.projectId
     const oldThreadId = thread.id
+    // Picking the project the thread already lives in is not a move: without this
+    // guard it would churn the thread id for nothing.
+    if (targetProjectId === oldProjectId) return
+
+    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
+    if (!targetProject) return
+
     const oldTitle = thread.title
+    const providerId = thread.providerId
+    const settings = thread.settings
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)
     const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
     const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
-    rendererRecovery.clearDraft(oldProjectId, oldThreadId)
-    publishDraftActivity(oldProjectId, oldThreadId, false)
+    const hasDraftContent =
+      draft.length > 0 ||
+      attachments.length > 0 ||
+      references.length > 0 ||
+      taskReferences.length > 0 ||
+      promptReferences.length > 0
 
-    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
-    if (!targetProject) return
+    switchingProject = true
+    try {
+      let newThread: Thread
+      try {
+        newThread = await invoke('thread:create', {
+          projectId: targetProjectId,
+          providerId,
+          title: oldTitle,
+          workingDirectory: targetProject.path,
+          settings,
+          scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+        })
+      } catch (error) {
+        // The source thread and its draft are untouched, so the composer still
+        // holds whatever the user had typed and the move can simply be retried.
+        reportError(error, 'The thread could not be moved.')
+        return
+      }
 
-    invoke('thread:create', {
-      projectId: targetProjectId,
-      providerId: thread.providerId,
-      title: oldTitle,
-      workingDirectory: targetProject.path,
-      settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        if (
-          draft ||
-          attachments.length > 0 ||
-          references.length > 0 ||
-          taskReferences.length > 0 ||
-          promptReferences.length > 0
-        ) {
-          rendererRecovery.setDraft(
-            targetProjectId,
-            newThread.id,
-            draft,
-            attachments,
-            references,
-            taskReferences,
-            promptReferences
-          )
-        }
-        workspaceState.requestMoveThread(oldThreadId, newThread)
-        invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
-        scopeState.removeThread(oldThreadId)
-        workspaceState.openThread(newThread, targetProject)
-        scopeState.updateThread(newThread)
-        scopeState.activeProjectId = targetProjectId
-        void scopeState.ensureBoardLoaded(targetProjectId)
-        invoke('project:getIcon', targetProjectId)
-          .then((url) => {
-            projectIconUrl = url
-          })
-          .catch(() => {})
-      })
-      .catch(() => {})
+      if (hasDraftContent) {
+        rendererRecovery.setDraft(
+          targetProjectId,
+          newThread.id,
+          draft,
+          attachments,
+          references,
+          taskReferences,
+          promptReferences
+        )
+      }
+      // Only now that the new thread owns the draft is the source cleared.
+      // Clearing it up front would silently destroy the user's unsent text
+      // whenever the create failed.
+      rendererRecovery.clearDraft(oldProjectId, oldThreadId)
+
+      // Fire-and-forget: main owns the outcome and toasts either way   it restores
+      // the row when the delete failed, and broadcasts `thread:deleted` when the row
+      // is gone, so this side never has to guess which state the thread is in.
+      invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
+      scopeState.removeThread(oldThreadId)
+      workspaceState.openThread(newThread, targetProject)
+      scopeState.updateThread(newThread)
+      scopeState.activeProjectId = targetProjectId
+      void scopeState.ensureBoardLoaded(targetProjectId)
+      invoke('project:getIcon', targetProjectId)
+        .then((url) => {
+          projectIconUrl = url
+        })
+        .catch(() => {})
+    } finally {
+      switchingProject = false
+    }
   }
 
   /** Retry after an error or a paused provider retry   replace the live turn first. */

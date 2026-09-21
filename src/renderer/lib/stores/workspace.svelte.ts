@@ -343,34 +343,6 @@ class WorkspaceState {
     return this.pendingProjectFileOpen
   }
 
-  /** Incremented to signal Workspace that a thread was moved to a different project. */
-  pendingMoveThreadId: string | null = $state(null)
-  pendingMoveThread: Thread | null = $state(null)
-  moveThreadCount = $state(0)
-  private consumedMoveThreadCount = 0
-
-  requestMoveThread(oldThreadId: string, newThread: Thread): void {
-    this.pendingMoveThreadId = oldThreadId
-    this.pendingMoveThread = newThread
-    this.moveThreadCount++
-  }
-
-  /**
-   * Hand the pending move to its one consumer exactly once.
-   *
-   * The consumer has to write the thread list it reads, so a request that stayed
-   * claimable would re-trigger it on every later list change and spin the flush
-   * until Svelte throws `effect_update_depth_exceeded`.
-   */
-  consumeMoveThreadRequest(): { oldThreadId: string; newThread: Thread } | null {
-    if (this.consumedMoveThreadCount === this.moveThreadCount) return null
-    const oldThreadId = this.pendingMoveThreadId
-    const newThread = this.pendingMoveThread
-    this.consumedMoveThreadCount = this.moveThreadCount
-    if (!oldThreadId || !newThread) return null
-    return { oldThreadId, newThread }
-  }
-
   /** Incremented to signal ProjectCreateControl to open the add-project dialog. */
   requestAddProjectCount = $state(0)
   private consumedAddProjectRequestCount = 0

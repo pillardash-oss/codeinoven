@@ -97,7 +97,7 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
 }
 
 /** Push permanent task deletion so every desktop and remote view drops it. */
-export function broadcastThreadDeleted(thread: Thread): void {
+export function broadcastThreadDeleted(thread: Pick<Thread, 'projectId' | 'id'>): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:deleted', thread.projectId, thread.id)
   }

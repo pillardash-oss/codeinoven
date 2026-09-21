@@ -265,6 +265,11 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
             validProjectId,
             validThreadId
           )
+          // The row is gone from the database, so the thread is deleted as far as
+          // every renderer is concerned   only its disk artifacts survived. The
+          // failing cleanup must not leave a phantom sidebar row behind (the
+          // branch above only restores a row that still exists).
+          broadcastThreadDeleted({ projectId: validProjectId, id: validThreadId })
         })
       }
     )
