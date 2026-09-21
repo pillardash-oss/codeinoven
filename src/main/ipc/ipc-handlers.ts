@@ -187,10 +187,10 @@ export function registerIpcHandlers(
     store: threadManager,
     onSettled: broadcastThreadBranchUpdated
   }
-  const vault = new SecretVault(storage)
+  const vault = options.vault ?? new SecretVault(storage)
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
-  const githubAuthService = new GitHubAuthService(vault)
+  const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>
     memoryService.auxiliaryUsageByFeature()
   )
@@ -389,6 +389,7 @@ export function registerIpcHandlers(
     vault,
     gitCredentialRef,
     githubAuthService,
+    skillUpdates: options.skillUpdates,
     diagnosticsService,
     memoryService,
     attachmentGrantRepo,

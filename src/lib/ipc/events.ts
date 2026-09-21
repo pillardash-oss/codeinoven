@@ -22,6 +22,7 @@ import type {
 } from './notifications'
 import type { RemoteModeStatus, RemotePendingStepUpApproval } from './remote'
 import type { UpdaterStatus } from './updater'
+import type { SkillUpdateStatus } from '../types/utility'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
@@ -112,6 +113,8 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  /** Background pass over the skills CodeInOven installed (progress and result). */
+  'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
   /**

@@ -47,6 +47,12 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.skillUpdateService?.stop()
+  } catch (error) {
+    Logger.error('Skill update service cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.ptyService?.destroyAll()
   } catch (error) {
     Logger.error('PTY cleanup failed during shutdown:', error)

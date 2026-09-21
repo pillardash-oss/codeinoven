@@ -16,6 +16,7 @@ import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-ser
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
 import type { UpdaterService } from '../notifications/updater-service'
+import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
@@ -70,6 +71,7 @@ export interface BootstrapState {
   computerUsePipService: ComputerUsePipService | null
   notificationService: NotificationService | null
   updaterService: UpdaterService | null
+  skillUpdateService: SkillUpdateService | null
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
@@ -129,6 +131,7 @@ export function createBootstrapState(): BootstrapState {
     computerUsePipService: null,
     notificationService: null,
     updaterService: null,
+    skillUpdateService: null,
     powerWakeService: null,
     retryScheduler: null,
     heartbeatScheduler: null,

@@ -7,18 +7,32 @@ const SKILLS_CLI_TIMEOUT_MS = 180_000
 /** Keeps the tail of the CLI output, which is where its errors and summary land. */
 const SKILLS_CLI_OUTPUT_LIMIT = 200_000
 
+/** Optional context for one CLI run. */
+export interface SkillsCliOptions {
+  /** GitHub token the CLI uses for private sources and to stay under rate limits. */
+  githubToken?: string | null
+}
+
 /**
  * Runs the Skills CLI (`skills`) through whichever package manager the machine
  * has, from `cwd`. The CLI owns the on-disk skill layout, so both install and
  * uninstall go through it instead of hand-rolling folder surgery. A non-zero
  * exit surfaces the CLI's own output, which is the only diagnostic it gives.
  */
-export function runSkillsCli(args: string[], cwd: string): Promise<string> {
+export function runSkillsCli(
+  args: string[],
+  cwd: string,
+  options: SkillsCliOptions = {}
+): Promise<string> {
   return new Promise((resolveRun, rejectRun) => {
     const launch = resolvePackageCommand('execute', 'skills', args, {
       ...process.env,
       DISABLE_TELEMETRY: '1',
-      DO_NOT_TRACK: '1'
+      DO_NOT_TRACK: '1',
+      // The CLI reads either name for its GitHub API and clone calls.
+      ...(options.githubToken
+        ? { GITHUB_TOKEN: options.githubToken, GH_TOKEN: options.githubToken }
+        : {})
     })
     const child = spawn(launch.command, launch.args, {
       cwd,

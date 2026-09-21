@@ -1,6 +1,7 @@
 import type { SkillUninstallReport } from '../../lib/types'
 import type { InstalledSkillScanProject } from './installed-skill-locations'
 import { listInstalledSkillLocations } from './installed-skill-locations'
+import { SkillInstallRecordStore } from './skill-install-records'
 import { runSkillsCli } from './skills-cli'
 import type { StorageEngine } from '../storage/storage-engine'
 import { UtilityRegistryService } from './utility-registry-service'
@@ -14,6 +15,9 @@ import { UtilityRegistryService } from './utility-registry-service'
  * run also drops the agent links and folders the CLI keeps for the other
  * harnesses, so an uninstall leaves nothing behind to be discovered later. A
  * project run is repeated in each project that still holds a copy.
+ *
+ * The install records go too: nothing left to keep fresh, and a later re-install
+ * starts from a clean baseline.
  */
 export async function uninstallMarketSkill(
   storage: StorageEngine,
@@ -50,6 +54,8 @@ export async function uninstallMarketSkill(
     await runSkillsCli(['remove', skillId, '--yes'], project.path)
     nativeScopes += 1
   }
+
+  await new SkillInstallRecordStore(storage).removeSkill(skillId)
 
   return { registryEntries, nativeScopes }
 }

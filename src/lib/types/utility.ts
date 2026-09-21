@@ -172,6 +172,74 @@ export interface UtilityCatalog {
   secureStorageAvailable: boolean
 }
 
+/**
+ * One skill copy CodeInOven itself installed, kept so the background updater can
+ * refresh exactly what the app placed and nothing else. A skill installed by
+ * hand with the `skills` CLI has no record here and is never rewritten.
+ */
+export interface SkillInstallRecord {
+  /** `manager:skillId:scope:projectId|all`   stable identity of one install. */
+  id: string
+  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  skillId: string
+  /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
+  manager: 'cio' | 'native'
+  /** Marketplace source the skill came from: `owner/repo`, or a domain. */
+  source: string
+  /** Which upstream API answers "has this changed": the GitHub tree API or a well-known index. */
+  sourceType: 'github' | 'well-known'
+  scope: 'global' | 'project' | 'harness'
+  projectId?: string
+  /** Harness scope only: the harnesses this copy was installed for. */
+  harnessIds?: string[]
+  /** CodeInOven-managed copies only: how the skill is exposed to a turn. */
+  activation?: UtilityActivation
+  /**
+   * Upstream identity of the skill as it was installed: the git tree sha of its
+   * folder for a GitHub source, the index digest for a well-known source. The
+   * background pass compares this against upstream to decide whether to
+   * re-install. Null until a baseline could be read.
+   */
+  upstreamHash: string | null
+  /** GitHub sources only: the skill's `SKILL.md` path inside the repository. */
+  skillPath: string | null
+  installedAt: number
+  /** Epoch ms of the last background check that looked at this copy. */
+  lastCheckedAt: number | null
+  /** Epoch ms of the last time this copy was rewritten from its source. */
+  lastUpdatedAt: number | null
+}
+
+/** What a background pass concluded about one installed skill copy. */
+export type SkillUpdateOutcome = 'updated' | 'current' | 'failed' | 'untracked'
+
+/** One skill's line in the background update report. */
+export interface SkillUpdateResult {
+  /** Install record this result belongs to. */
+  id: string
+  skillId: string
+  manager: 'cio' | 'native'
+  scope: 'global' | 'project' | 'harness'
+  projectId?: string
+  outcome: SkillUpdateOutcome
+  /** Why, for every outcome except `current`. */
+  detail?: string
+}
+
+/** Background skill-update state, rendered by the Utilities page. */
+export interface SkillUpdateStatus {
+  running: boolean
+  /** Skill copies CodeInOven owns and keeps fresh. */
+  tracked: number
+  lastCheckedAt: number | null
+  lastFinishedAt: number | null
+  /** Copies rewritten in the most recent pass. */
+  updated: number
+  results: SkillUpdateResult[]
+  /** Pass-level failure (offline, rate limited); per-skill failures stay in `results`. */
+  error?: string
+}
+
 /** Result of an explicit utility-setup turn run in a disposable agent session. */
 export interface UtilitySetupReport {
   taskId: string

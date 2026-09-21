@@ -75,7 +75,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { PrototypePreviewService },
     { DirectoryPreviewService },
     { ForeignRunService },
-    { ThreadTransferService }
+    { ThreadTransferService },
+    { SkillUpdateService },
+    { SecretVault },
+    { GitHubAuthService }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -95,7 +98,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../prototypes/prototype-preview-service'),
     import('../preview/directory-preview-service'),
     import('../chat/foreign-run-service'),
-    import('../chat/thread-transfer-service')
+    import('../chat/thread-transfer-service'),
+    import('../utilities/skill-updates'),
+    import('../storage/secret-vault'),
+    import('../git/github-auth-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -148,6 +154,32 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // One vault and one GitHub auth for the whole app: the skill updater reads the
+  // same token the IPC layer does, so a check is authenticated exactly like an
+  // install instead of running against the anonymous rate limit.
+  const vault = new SecretVault(storage)
+  const githubAuthService = new GitHubAuthService(vault)
+  const resolveProjectRoot = async (projectId: string): Promise<string> => {
+    const project = await projectManager.getProject(projectId)
+    if (!project?.path) throw new Error(`Project not found: ${projectId}`)
+    return project.path
+  }
+  // Installed skills ride the app-update check cycle: the same startup,
+  // six-hourly and explicit check that looks for a new build also keeps the
+  // marketplace skills CodeInOven placed up to date, in small batches.
+  const skillUpdateService = new SkillUpdateService({
+    install: {
+      storage,
+      home: app.getPath('home'),
+      resolveProjectPath: resolveProjectRoot,
+      githubToken: () => githubAuthService.resolveToken()
+    },
+    listProjectIds: async () => (await projectManager.listProjects()).map((project) => project.id)
+  })
+  state.skillUpdateService = skillUpdateService
+  state.updaterService.setCheckCycleHook((explicit) =>
+    skillUpdateService.scheduleCheck({ explicit })
+  )
   state.powerWakeService = new PowerWakeService(storage, database)
   state.retryScheduler = new RetrySchedulerService(storage)
   state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
@@ -258,6 +290,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
     projectManager,
     projectFilesService,
+    vault,
+    githubAuthService,
+    skillUpdates: skillUpdateService,
     directoryPreviewService: state.directoryPreviewService,
     powerWakeService: state.powerWakeService,
     retryScheduler: state.retryScheduler,

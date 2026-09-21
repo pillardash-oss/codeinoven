@@ -60,6 +60,11 @@ export class UpdaterService {
   private activeChannel: ReleaseChannel = 'stable'
   /** True while a download (seed or electron-updater) is in flight. */
   private downloadInFlight = false
+  /**
+   * Runs at the start of every update-check cycle (startup, periodic, explicit).
+   * Skill freshness rides this cadence instead of running a timer of its own.
+   */
+  private checkCycleHook: ((explicit: boolean) => void) | null = null
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -151,6 +156,15 @@ export class UpdaterService {
     this.activitySources.push(source)
   }
 
+  /**
+   * Observe every update-check cycle. Used by the skill updater so installed
+   * skills are looked at exactly when the user's "is there something newer"
+   * expectation is met, without a second scheduler.
+   */
+  setCheckCycleHook(hook: ((explicit: boolean) => void) | null): void {
+    this.checkCycleHook = hook
+  }
+
   get status(): UpdaterStatus {
     return { ...this._status }
   }
@@ -199,6 +213,15 @@ export class UpdaterService {
    * leaves a permanent error badge in the sidebar.
    */
   async checkForUpdates(explicit = false): Promise<UpdaterStatus> {
+    // The cycle is announced before the `canAutoUpdate` guard on purpose: that
+    // flag only gates the app's own binary feed (it is false in development and
+    // wherever the updater is inactive), while installed skills still need
+    // keeping fresh. The hook is fire-and-forget and never blocks the check.
+    try {
+      this.checkCycleHook?.(explicit)
+    } catch (error: unknown) {
+      Logger.error('Updater: check-cycle hook failed', error)
+    }
     if (!this._status.canAutoUpdate) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true

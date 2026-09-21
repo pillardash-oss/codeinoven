@@ -50,6 +50,10 @@ export async function handleFatalStartup(
         close: () => state.updaterService?.stop()
       },
       {
+        name: 'skillUpdateService',
+        close: () => state.skillUpdateService?.stop()
+      },
+      {
         name: 'notificationService',
         close: () => state.notificationService?.stop()
       },

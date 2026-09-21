@@ -13,6 +13,7 @@ import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -200,6 +201,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     .then((paths: OpenedPath[]) => deps.handleOpenedPaths(paths))
     .catch(() => undefined)
   updaterState.init()
+  // Background skill updates follow the same push channel as the app updater,
+  // so the Utilities page shows a pass that is already running at startup.
+  skillUpdateState.init()
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.
@@ -221,5 +225,6 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeHistoryForward()
     unsubscribeOpenedPaths()
     updaterState.destroy()
+    skillUpdateState.destroy()
   }
 }

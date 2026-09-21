@@ -20,6 +20,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
+  import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
   import {
     harnessGlobalSkillPath,
     SHARED_GLOBAL_SKILL_PATH,
@@ -268,6 +269,9 @@
       // The install changed the registry and the skill folders on disk, so the
       // shared installed-state read is refreshed before the button flips over.
       await installedSkillState.refresh()
+      // The install record is what the background updater owns, so its count is
+      // re-read here too.
+      void skillUpdateState.refresh()
       installedMessage = `${entry.name} installed.`
     } catch (installError) {
       error =
@@ -289,6 +293,7 @@
     try {
       await invoke('utilities:uninstallMarketSkill', entry.skillId)
       await installedSkillState.refresh()
+      void skillUpdateState.refresh()
       installedMessage = `${entry.name} uninstalled.`
     } catch (uninstallError) {
       error =

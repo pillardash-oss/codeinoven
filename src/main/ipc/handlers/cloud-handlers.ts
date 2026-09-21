@@ -1,17 +1,24 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { cp, mkdir } from 'fs/promises'
-import { dirname, join } from 'path'
 import { APP_NAME } from '../../../lib/brand'
-import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../../lib/native-skill-paths'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../../providers/base-url'
 import { resolveDeploymentProvider } from '../../providers/registry'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { listInstalledSkillLocations } from '../../utilities/installed-skill-locations'
-import { runSkillsCli } from '../../utilities/skills-cli'
 import { uninstallMarketSkill } from '../../utilities/skill-uninstall'
-import { listHarnesses } from '../../agents/harness-registry'
+import {
+  installMarketSkill,
+  isGithubSkillSource,
+  isWellKnownSkillSource,
+  type MarketSkillInstallContext
+} from '../../utilities/skill-install'
+import {
+  embeddedLeaderboard,
+  fetchSkillMarketPage,
+  loadSkillMarketDetail,
+  publicMarketEntry
+} from '../../utilities/skill-market'
+import { idleSkillUpdateStatus } from '../../utilities/skill-updates'
 import { Logger } from '../../system/logger'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
 import {
@@ -43,8 +50,7 @@ import type {
   CloudDeploymentProviderKind,
   CloudDeploymentStatus,
   PrComposeInput,
-  SkillMarketDetail,
-  UtilityDefinitionInput
+  UtilityActivation
 } from '../../../lib/types'
 import type { PullRequestComposeContext } from '../../git/git-service'
 import {
@@ -475,286 +481,7 @@ function prComposeRepairPrompt(response: AgentMessage, attempt: number): string 
   ].join('\n')
 }
 
-const CANONICAL_ONLY_GLOBAL_SKILL_AGENTS = new Set(['opencode', 'codex', 'antigravity'])
-
-/**
- * The Skills CLI classifies every agent whose skills folder is the canonical
- * `.agents/skills` as universal, and for a global install it writes the skill
- * straight into that canonical folder instead of linking it out to the agent's
- * own folder. Naming one universal agent is therefore how CodeInOven asks for
- * the global install the card promises: one folder in `~/.agents/skills` and
- * nothing else, rather than the CLI's `--agent '*'` fan-out, which drops a
- * symlink in every agent folder it knows about.
- */
-const CANONICAL_SKILL_AGENT = 'codex'
-
-/**
- * Skills CLI currently leaves universal agents in the canonical global folder
- * even for a named `--agent` install. Materialize the harness-advertised path
- * so OpenCode, Codex, and Antigravity can discover the selected skill there.
- */
-async function materializeHarnessGlobalSkill(
-  home: string,
-  skillId: string,
-  harnessId: string
-): Promise<void> {
-  if (!CANONICAL_ONLY_GLOBAL_SKILL_AGENTS.has(harnessId)) return
-  const displayPath = harnessGlobalSkillPath(harnessId)
-  if (!displayPath || displayPath === SHARED_GLOBAL_SKILL_PATH || !displayPath.startsWith('~/')) {
-    return
-  }
-  const canonicalSkill = join(home, SHARED_GLOBAL_SKILL_PATH.slice(2), skillId)
-  if (!existsSync(canonicalSkill)) return
-  const harnessSkill = join(home, displayPath.slice(2), skillId)
-  await mkdir(dirname(harnessSkill), { recursive: true })
-  await cp(canonicalSkill, harnessSkill, { recursive: true, force: true, dereference: true })
-}
-
 const SKILL_MARKET_VIEWS = new Set(['all-time', 'trending', 'hot'])
-
-interface EmbeddedSkillMarketEntry {
-  source: string
-  skillId: string
-  name: string
-  installs: number
-  weeklyInstalls?: number[]
-  installsYesterday?: number
-  change?: number
-  isOfficial?: boolean
-}
-
-function marketEntry(rawEntry: unknown): EmbeddedSkillMarketEntry | null {
-  if (!isRecord(rawEntry)) return null
-  const source = rawEntry['source']
-  const skillId = rawEntry['skillId']
-  const name = rawEntry['name']
-  const installs = rawEntry['installs']
-  if (
-    typeof source !== 'string' ||
-    typeof skillId !== 'string' ||
-    typeof name !== 'string' ||
-    typeof installs !== 'number'
-  ) {
-    return null
-  }
-  const weeklyInstalls = Array.isArray(rawEntry['weeklyInstalls'])
-    ? rawEntry['weeklyInstalls'].filter((value): value is number => typeof value === 'number')
-    : undefined
-  return {
-    source,
-    skillId,
-    name,
-    installs,
-    ...(weeklyInstalls?.length ? { weeklyInstalls } : {}),
-    ...(typeof rawEntry['installsYesterday'] === 'number'
-      ? { installsYesterday: rawEntry['installsYesterday'] }
-      : {}),
-    ...(typeof rawEntry['change'] === 'number' ? { change: rawEntry['change'] } : {}),
-    ...(rawEntry['isOfficial'] === true ? { isOfficial: true } : {})
-  }
-}
-
-function publicMarketEntry(entry: EmbeddedSkillMarketEntry) {
-  const id = `${entry.source}/${entry.skillId}`
-  return { id, ...entry, url: `https://www.skills.sh/${id}` }
-}
-
-async function fetchSkillMarketPage(pathname: string): Promise<string> {
-  const response = await fetch(`https://www.skills.sh${pathname}`, {
-    headers: { Accept: 'text/html', 'User-Agent': `${APP_NAME}/desktop` },
-    signal: AbortSignal.timeout(20_000)
-  })
-  if (!response.ok) throw new Error(`Skills market request failed (${response.status})`)
-  return response.text()
-}
-
-function embeddedLeaderboard(html: string): EmbeddedSkillMarketEntry[] {
-  const marker = 'initialSkills\\":'
-  const start = html.indexOf(marker)
-  const end = html.indexOf('],\\"totalSkills', start)
-  if (start < 0 || end < 0) throw new Error('Skills market returned an invalid leaderboard')
-  const encoded = html.slice(start + marker.length, end + 1)
-  const parsed: unknown = JSON.parse(encoded.replaceAll('\\"', '"').replaceAll('\\\\', '\\'))
-  if (!Array.isArray(parsed)) throw new Error('Skills market returned an invalid leaderboard')
-  return parsed.flatMap((entry) => {
-    const parsedEntry = marketEntry(entry)
-    return parsedEntry ? [parsedEntry] : []
-  })
-}
-
-function jsonLdSkill(html: string): { description: string; installs: number } | null {
-  for (const match of html.matchAll(/<script type="application\/ld\+json">([^<]+)<\/script>/gu)) {
-    try {
-      const value: unknown = JSON.parse(match[1] ?? '')
-      if (
-        isRecord(value) &&
-        value['@type'] === 'SoftwareApplication' &&
-        typeof value['description'] === 'string' &&
-        isRecord(value['interactionStatistic']) &&
-        typeof value['interactionStatistic']['userInteractionCount'] === 'number'
-      ) {
-        return {
-          description: value['description'],
-          installs: value['interactionStatistic']['userInteractionCount']
-        }
-      }
-    } catch {
-      // Ignore unrelated malformed structured data and continue looking.
-    }
-  }
-  return null
-}
-
-function skillDetailMetadata(html: string): {
-  firstSeen: string | null
-  audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }>
-} {
-  const firstSeen =
-    html.match(/children\\":\\"First Seen\\"[\s\S]{0,600}?children\\":\\"([^"\\]+)\\"/u)?.[1] ??
-    null
-  const auditStart = html.indexOf('Security Audits')
-  const auditText = auditStart >= 0 ? html.slice(auditStart, auditStart + 12_000) : ''
-  const audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }> = []
-  for (const match of auditText.matchAll(
-    /text-foreground truncate">([^<]+)<\/span>[\s\S]{0,600}?>(Pass|Warn|Fail)<\/span>/gu
-  )) {
-    const name = match[1]
-    const rawStatus = match[2]?.toLowerCase()
-    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
-    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
-  }
-  for (const match of auditText.matchAll(
-    /children\\":\\"([^"\\]+)\\"[\s\S]{0,500}?children\\":\\"(Pass|Warn|Fail)\\"/gu
-  )) {
-    const name = match[1]
-    const rawStatus = match[2]?.toLowerCase()
-    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
-    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
-  }
-  return { firstSeen, audits }
-}
-
-async function githubSkillMetadata(
-  source: string,
-  skillId: string
-): Promise<{ repositoryUrl: string; stars: number | null; markdown: string }> {
-  const repositoryUrl = `https://github.com/${source}`
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': `${APP_NAME}/desktop` }
-  try {
-    const [repositoryResponse, treeResponse] = await Promise.all([
-      fetch(`https://api.github.com/repos/${source}`, {
-        headers,
-        signal: AbortSignal.timeout(20_000)
-      }),
-      fetch(`https://api.github.com/repos/${source}/git/trees/HEAD?recursive=1`, {
-        headers,
-        signal: AbortSignal.timeout(20_000)
-      })
-    ])
-    const repositoryPayload: unknown = repositoryResponse.ok
-      ? await repositoryResponse.json()
-      : null
-    const treePayload: unknown = treeResponse.ok ? await treeResponse.json() : null
-    const stars =
-      isRecord(repositoryPayload) && typeof repositoryPayload['stargazers_count'] === 'number'
-        ? repositoryPayload['stargazers_count']
-        : null
-    const defaultBranch =
-      isRecord(repositoryPayload) && typeof repositoryPayload['default_branch'] === 'string'
-        ? repositoryPayload['default_branch']
-        : 'HEAD'
-    const tree =
-      isRecord(treePayload) && Array.isArray(treePayload['tree']) ? treePayload['tree'] : []
-    const skillPath = tree
-      .flatMap((entry) =>
-        isRecord(entry) && typeof entry['path'] === 'string' ? [entry['path']] : []
-      )
-      .find((path) => path === `${skillId}/SKILL.md` || path.endsWith(`/${skillId}/SKILL.md`))
-    let markdown = ''
-    if (skillPath) {
-      const rawResponse = await fetch(
-        `https://raw.githubusercontent.com/${source}/${defaultBranch}/${skillPath}`,
-        { headers: { 'User-Agent': `${APP_NAME}/desktop` }, signal: AbortSignal.timeout(20_000) }
-      )
-      if (rawResponse.ok) markdown = await rawResponse.text()
-    }
-    return { repositoryUrl, stars, markdown }
-  } catch {
-    return { repositoryUrl, stars: null, markdown: '' }
-  }
-}
-
-const SKILL_MARKET_DETAIL_TTL_MS = 15 * 60 * 1_000
-const SKILL_MARKET_DETAIL_CACHE_LIMIT = 100
-const skillMarketDetailCache = new Map<string, { detail: SkillMarketDetail; fetchedAt: number }>()
-const pendingSkillMarketDetails = new Map<string, Promise<SkillMarketDetail>>()
-
-function skillMarketIdentity(rawId: unknown): {
-  id: string
-  source: string
-  skillId: string
-  segments: string[]
-} {
-  const id = validateBoundedString(rawId, 'Skill market ID', 3, 500)
-  const segments = id.split('/').filter(Boolean)
-  if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/u.test(segment))) {
-    throw new TypeError('Skill market ID is invalid')
-  }
-  return {
-    id,
-    source: segments.slice(0, -1).join('/'),
-    skillId: segments.at(-1)!,
-    segments
-  }
-}
-
-async function loadSkillMarketDetail(rawId: unknown): Promise<SkillMarketDetail> {
-  const identity = skillMarketIdentity(rawId)
-  const cached = skillMarketDetailCache.get(identity.id)
-  if (cached && Date.now() - cached.fetchedAt < SKILL_MARKET_DETAIL_TTL_MS) {
-    return structuredClone(cached.detail)
-  }
-  const pending = pendingSkillMarketDetails.get(identity.id)
-  if (pending) return structuredClone(await pending)
-
-  const request = (async (): Promise<SkillMarketDetail> => {
-    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(identity.source)
-    const [html, github] = await Promise.all([
-      fetchSkillMarketPage(`/${identity.segments.map(encodeURIComponent).join('/')}`),
-      githubSource
-        ? githubSkillMetadata(identity.source, identity.skillId)
-        : Promise.resolve({ repositoryUrl: null, stars: null, markdown: '' })
-    ])
-    const structured = jsonLdSkill(html)
-    if (!structured) throw new Error('Skills market returned an invalid skill page')
-    const metadata = skillDetailMetadata(html)
-    const detail: SkillMarketDetail = {
-      ...publicMarketEntry({
-        source: identity.source,
-        skillId: identity.skillId,
-        name: identity.skillId,
-        installs: structured.installs
-      }),
-      description: structured.description,
-      repositoryUrl: github.repositoryUrl,
-      githubStars: github.stars,
-      firstSeen: metadata.firstSeen,
-      audits: metadata.audits,
-      skillMarkdown: github.markdown
-    }
-    if (
-      !skillMarketDetailCache.has(identity.id) &&
-      skillMarketDetailCache.size >= SKILL_MARKET_DETAIL_CACHE_LIMIT
-    ) {
-      const oldestId = skillMarketDetailCache.keys().next().value
-      if (oldestId) skillMarketDetailCache.delete(oldestId)
-    }
-    skillMarketDetailCache.set(identity.id, { detail, fetchedAt: Date.now() })
-    return detail
-  })().finally(() => pendingSkillMarketDetails.delete(identity.id))
-  pendingSkillMarketDetails.set(identity.id, request)
-  return structuredClone(await request)
-}
 
 function selectedIds(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
@@ -777,6 +504,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     vault,
     githubAuthService,
     privileged,
+    skillUpdates,
     resolveProjectPath,
     providerForProject,
     pullRequestTarget
@@ -1791,10 +1519,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     if (!isRecord(rawRequest)) throw new TypeError('Skill install request must be an object')
     const source = validateBoundedString(rawRequest['source'], 'Skill source', 3, 300)
     const skillId = validateEntityId(rawRequest['skillId'], 'Skill ID', 200)
-    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source)
-    const wellKnownSource = /^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/u.test(source)
-    if (!githubSource && !wellKnownSource) throw new TypeError('Skill source is invalid')
-    const installSource = githubSource ? `https://github.com/${source}` : `https://${source}`
+    if (!isGithubSkillSource(source) && !isWellKnownSkillSource(source)) {
+      throw new TypeError('Skill source is invalid')
+    }
     const manager = rawRequest['manager']
     if (manager !== 'cio' && manager !== 'native') {
       throw new TypeError('Select who should manage this skill')
@@ -1805,104 +1532,31 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     if (scopeKind !== 'global' && scopeKind !== 'projects' && scopeKind !== 'harnesses') {
       throw new TypeError('Select global, project, or harness installation')
     }
-    const projectIds =
-      scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : []
-    const projectPaths = new Map<string, string>()
-    for (const projectId of projectIds) {
-      projectPaths.set(projectId, await resolveProjectPath(projectId))
+    const rawActivation = rawRequest['activation']
+    if (manager === 'cio' && rawActivation !== 'always' && rawActivation !== 'on_demand') {
+      throw new TypeError('Select always available or on-demand activation')
     }
+    const activation: UtilityActivation | undefined =
+      rawActivation === 'always' || rawActivation === 'on_demand' ? rawActivation : undefined
+    // One install routine serves the card and the background updater, so both
+    // put the skill in exactly the destination the card advertises.
+    return installMarketSkill(skillInstallContext(), {
+      source,
+      skillId,
+      manager,
+      scope: scopeKind,
+      projectIds: scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : [],
+      harnessIds: scopeKind === 'harnesses' ? selectedIds(scope['harnessIds'], 'Harness IDs') : [],
+      ...(activation ? { activation } : {})
+    })
+  })
 
-    if (manager === 'cio') {
-      if (scopeKind === 'harnesses') {
-        throw new TypeError('CodeInOven-managed skills support global or project scope')
-      }
-      const activation = rawRequest['activation']
-      if (activation !== 'always' && activation !== 'on_demand') {
-        throw new TypeError('Select always available or on-demand activation')
-      }
-      const detail = await loadSkillMarketDetail(`${source}/${skillId}`)
-      if (!detail.skillMarkdown.trim()) {
-        throw new Error('This source does not expose a readable SKILL.md for CodeInOven to manage')
-      }
-      const scopes =
-        scopeKind === 'global'
-          ? [{ level: 'global' } as const]
-          : projectIds.map((projectId) => ({ level: 'project' as const, projectId }))
-      const definitions: UtilityDefinitionInput<'skill'>[] = scopes.map((utilityScope) => ({
-        kind: 'skill',
-        name: detail.name,
-        description: detail.description,
-        enabled: true,
-        activation,
-        scope: utilityScope,
-        config: { instructions: detail.skillMarkdown },
-        harnessBindings: [
-          {
-            harnessId: '*',
-            strategy: 'skill',
-            transportName: skillId
-          }
-        ]
-      }))
-      const registry = new UtilityRegistryService(storage)
-      // Reinstalling the same skill updates its entry and clears any extra copies,
-      // so the market cannot leave two entries competing for one name.
-      const outcomes = await registry.installMany(definitions, { consolidate: true })
-      const added = outcomes.filter((outcome) => outcome.action === 'installed').length
-      const updated = outcomes.length - added
-      const removed = outcomes.reduce((count, outcome) => count + outcome.removed.length, 0)
-      const skill = (count: number) => `skill${count === 1 ? '' : 's'}`
-      const parts = [
-        added > 0 ? `Added ${added} CodeInOven-managed ${skill(added)}` : '',
-        updated > 0 ? `updated ${updated} existing ${skill(updated)}` : '',
-        removed > 0 ? `removed ${removed} duplicate ${skill(removed)}` : ''
-      ].filter(Boolean)
-      return parts.join(', ')
-    }
-
-    const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    // Each scope installs into the destination the card advertises and nowhere
-    // else: a global install is the canonical `~/.agents/skills` folder, a
-    // project install is that project's own `.agents/skills` folder, and a
-    // harness install is the folders of the harnesses that were picked.
-    let agentTargets = [CANONICAL_SKILL_AGENT]
-    if (scopeKind === 'harnesses') {
-      agentTargets = selectedIds(scope['harnessIds'], 'Harness IDs')
-      if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
-        throw new TypeError('Select only supported harnesses')
-      }
-    }
-    const destinations =
-      scopeKind === 'projects'
-        ? projectIds.map((projectId) => projectPaths.get(projectId)!)
-        : [app.getPath('home')]
-    const outputs: string[] = []
-    for (const directory of destinations) {
-      for (const agentTarget of agentTargets) {
-        outputs.push(
-          await runSkillsCli(
-            [
-              'add',
-              installSource,
-              '--skill',
-              skillId,
-              '--agent',
-              agentTarget,
-              // Real folders instead of symlinks back to a canonical copy, so an
-              // uninstall can never leave a dangling link behind.
-              '--copy',
-              '-y',
-              ...(scopeKind === 'projects' ? [] : ['--global'])
-            ],
-            directory
-          )
-        )
-        if (scopeKind === 'harnesses') {
-          await materializeHarnessGlobalSkill(directory, skillId, agentTarget)
-        }
-      }
-    }
-    return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
+  /** Everything one marketplace install needs, wherever it is triggered from. */
+  const skillInstallContext = (): MarketSkillInstallContext => ({
+    storage,
+    home: app.getPath('home'),
+    resolveProjectPath,
+    githubToken: () => githubAuthService.resolveToken()
   })
 
   /** Projects a native skill scan can look into: local ones with a real path. */
@@ -1918,6 +1572,17 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('utilities:uninstallMarketSkill', async (_, rawSkillId: unknown) => {
     const skillId = validateEntityId(rawSkillId, 'Skill ID', 200)
     return uninstallMarketSkill(storage, skillId, await skillScanProjects(), app.getPath('home'))
+  })
+
+  // Background skill updates ride the app-update check cycle, so this layer only
+  // reads the current state and offers an explicit pass on demand.
+  ipcMain.handle('utilities:skillUpdateStatus', async () =>
+    skillUpdates ? await skillUpdates.status() : idleSkillUpdateStatus()
+  )
+
+  ipcMain.handle('utilities:checkSkillUpdates', async () => {
+    if (!skillUpdates) throw new Error('Skill updates are unavailable in this session')
+    return skillUpdates.checkNow()
   })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())

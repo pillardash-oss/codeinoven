@@ -34,6 +34,7 @@ import type {
   SkillMarketSearchResult,
   SkillMarketView,
   SkillUninstallReport,
+  SkillUpdateStatus,
   ThreadSettings,
   UtilityBundleInstallRequest,
   UtilityCatalog,
@@ -190,6 +191,8 @@ export const invokeProviderContract = {
   'utilities:installMarketSkill': {} as Contract<[request: SkillMarketInstallRequest], string>,
   'utilities:installedSkillLocations': {} as Contract<[], InstalledSkillLocation[]>,
   'utilities:uninstallMarketSkill': {} as Contract<[skillId: string], SkillUninstallReport>,
+  'utilities:skillUpdateStatus': {} as Contract<[], SkillUpdateStatus>,
+  'utilities:checkSkillUpdates': {} as Contract<[], SkillUpdateStatus>,
   'utilities:update': {} as Contract<
     [id: string, patch: UtilityDefinitionPatch],
     UtilityDefinition
