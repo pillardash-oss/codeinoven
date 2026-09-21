@@ -862,6 +862,35 @@
   }
 
   /**
+   * Take the branch trigger's dirty badge to the work it names: the Changes view
+   * with any commit that was open closed, so the click lands on the working tree
+   * instead of the commit sheet the view would otherwise still be showing. The
+   * click itself is left to bubble to the trigger, which closes a picker that
+   * was already open before the view beneath it changes.
+   */
+  function openWorkingChanges(): void {
+    clearSelectedCommit()
+    selectTab('changes')
+  }
+
+  /**
+   * The trigger opens the picker from the pointer events that start on it
+   * (`pointerdown` for a mouse, `pointerup` for touch), so the badge drawn
+   * inside it stops them before they reach the trigger and the picker stays shut.
+   */
+  function blockTriggerOpen(event: Event): void {
+    event.stopPropagation()
+  }
+
+  /** The badge is a control, so Enter and Space do what a click does. */
+  function activateWorkingChangesFromKeyboard(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    event.stopPropagation()
+    openWorkingChanges()
+  }
+
+  /**
    * Switch which pull requests the PR view lists. The filter is the panel's, so
    * the page it belonged to goes with it: page 4 of the closed list has nothing
    * to do with page 4 of the open one.
@@ -2350,9 +2379,17 @@
    * wrapper's inset is what lines their outer edge up with the rows above.
    */
   const paneClass = 'flex flex-col p-1'
+
+  /**
+   * The `dirty` chip, shared by the trigger's badge and the picker's own row
+   * mark so both read identically. It keeps the geometry of the 12px slot it
+   * sits in, which is tighter than the shared `StatusPill`.
+   */
+  const dirtyBadgeClass =
+    'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
 </script>
 
-{#snippet branchStatusIcon()}
+{#snippet branchStatusIcon(interactive: boolean)}
   {#if worktreeState === 'conflicted'}
     <TriangleAlert
       size={12}
@@ -2362,15 +2399,38 @@
       title="Conflicts to resolve"
     />
   {:else if worktreeState === 'dirty'}
-    <!--
-      A badge rather than a ring: at 12px an outlined circle reads as a bullet,
-      where the amber chip reads as the state it names. The same snippet marks the
-      dirty branch in the picker's own list.
-    -->
-    <span
-      class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
-      title="Uncommitted changes in this branch">dirty</span
-    >
+    {#if interactive}
+      <!--
+        In the trigger the chip is a control, not a mark: the state the user is
+        looking at is also the work they want, so one click on it opens the
+        Changes view. It swallows the pointer events the trigger opens the
+        picker with, which keeps the branch list out of the way unless the click
+        lands anywhere else on the trigger, and `data-status-action` is what
+        tells the picker that this click is not its own (`BranchPicker`).
+      -->
+      <span
+        class={[
+          dirtyBadgeClass,
+          'cursor-pointer transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
+        ]}
+        role="button"
+        tabindex="0"
+        data-status-action
+        title="Uncommitted changes in this branch. Open the Changes view"
+        aria-label="Open the Changes view for the uncommitted changes in this branch"
+        onpointerdown={blockTriggerOpen}
+        onpointerup={blockTriggerOpen}
+        onclick={openWorkingChanges}
+        onkeydown={activateWorkingChangesFromKeyboard}>dirty</span
+      >
+    {:else}
+      <!--
+        A badge rather than a ring: at 12px an outlined circle reads as a bullet,
+        where the amber chip reads as the state it names. The picker's own list
+        marks the dirty branch with the same chip.
+      -->
+      <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
+    {/if}
   {:else}
     <CircleCheck
       size={12}

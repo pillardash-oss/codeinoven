@@ -22,15 +22,19 @@
     /**
      * Leading glyph, drawn where the branch icon sits by default. The panel owns
      * it so the working-tree state (clean, dirty, conflicted) stays with the
-     * status it comes from.
+     * status it comes from. The trigger renders it interactive, where the dirty
+     * badge is a control that opens the panel's Changes view; the picker's own
+     * rows render it bare, where the badge stays a plain mark.
      */
-    statusIcon?: Snippet
+    statusIcon?: Snippet<[boolean]>
     /**
      * Badge for the branch that is checked out, drawn at the end of its row. The
      * panel owns it for the same reason it owns `statusIcon`: the working tree's
-     * state comes from the status, not from the branch list.
+     * state comes from the status, not from the branch list. Rendered without
+     * the interactive behaviour, since the row it marks is already the branch
+     * that is checked out.
      */
-    statusBadge?: Snippet
+    statusBadge?: Snippet<[boolean]>
   }
 
   let {
@@ -52,6 +56,13 @@
   let creating = $state(false)
   let newBranchName = $state('')
   let deleteTarget = $state<string | null>(null)
+
+  /**
+   * Marks a control the panel draws inside the trigger. Activating one is that
+   * control's own business, so the trigger must neither open the picker on the
+   * way through nor leave one open underneath it.
+   */
+  const STATUS_ACTION_SELECTOR = '[data-status-action]'
 
   const filtered = $derived(
     search.trim()
@@ -115,6 +126,21 @@
       handleCreate()
     }
   }
+
+  /**
+   * The dirty badge inside the trigger opens the Changes view, so a click that
+   * landed on it closes any picker that was already open instead of dragging it
+   * along to the next view. `preventDefault` is what keeps the trigger's own
+   * click handler out of the loop as well (bits-ui composes the two; it is what
+   * also covers the click a screen reader sends for the badge, which arrives
+   * with no keyboard event in front of it).
+   */
+  function handleTriggerClick(event: MouseEvent): void {
+    const target = event.target
+    if (!(target instanceof Element) || target.closest(STATUS_ACTION_SELECTOR) === null) return
+    open = false
+    event.preventDefault()
+  }
 </script>
 
 <DropdownMenu.Root
@@ -130,9 +156,10 @@
     disabled={isBusy}
     title={currentBranch ? `Switch branch (${currentBranch})` : 'Switch branch'}
     aria-label={currentBranch ? `Switch branch, currently ${currentBranch}` : 'Switch branch'}
+    onclick={handleTriggerClick}
   >
     {#if statusIcon}
-      {@render statusIcon()}
+      {@render statusIcon(true)}
     {:else}
       <GitBranch size={11} class="shrink-0" />
     {/if}
@@ -228,7 +255,7 @@
               {/if}
               {#if branch.current}
                 {#if statusBadge}
-                  {@render statusBadge()}
+                  {@render statusBadge(false)}
                 {/if}
                 <Check size={12} class="shrink-0 text-primary" />
               {:else if onDelete}
