@@ -83,15 +83,20 @@ for assistant scheduled runs. `StatusBadge.svelte` resolves it automatically.
 
 ## Missed-run surfaces
 
-A pending miss appears in all of these, and dismissing one clears only that
-entry:
+Missed runs are surfaced **per routine**: a routine's surfaces list every miss
+across its tasks, and a routine-less task lists only its own. Nothing appears
+until a run has actually been missed, so no tab or filter chrome exists by
+default:
 
-- the **Missed runs tab** in the how-to panel, rendered only when a miss exists
-  (`missedTabVisible`);
+- the **Missed runs tab** in the how-to panel, present only when the panel's
+  routine (or task) has a miss (`missedTabVisible`); until then the panel is a
+  single read-only how-to view;
 - the **missed badge** on the routine row (when any child task has a miss) and on
   the specific missed task row;
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
-  with per-entry **Dismiss** and **Run now** actions.
+  grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
+  Assistants tab exposes no sub-filter buttons; with no miss it shows only a
+  neutral empty state.
 
 The renderer state lives in `assistantRoutines`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
@@ -140,8 +145,8 @@ prompt"; the user-facing term is how-to.
   `/save-how-to`, which commits it to the routine.
 - The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
   how-to, the schedule, and the connections. Its tab strip only appears once a
-  scheduled run was actually missed, and the Missed runs tab lists each miss
-  with Dismiss and Run now.
+  scheduled run was actually missed, and the Missed runs tab lists each miss of
+  that routine with Dismiss and Run now.
 - When a routine lacks the utilities it needs, the agent checks the app utility
   library, researches compatible skills/MCPs/plugins, and asks the user to send
   `@cio-utility proceed` before anything is installed. No silent installs; the

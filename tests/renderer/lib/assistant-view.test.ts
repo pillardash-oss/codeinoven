@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  UNGROUPED_MISSED_RUNS,
+  groupMissedRunsByRoutine,
   missedTabVisible,
   taskHasMissed,
   taskRowIconKey,
@@ -10,14 +12,15 @@ import { STATUS_TONE_COLORS as STATUS_TONE_COLORS_VIA_SCOPE } from '$lib/stores/
 import { THREAD_STATUS_POLICY } from '$shared/thread-status-policy'
 import type { MissedRun } from '$shared/types'
 
-function missedRun(): MissedRun {
+function missedRun(overrides: Partial<MissedRun> = {}): MissedRun {
   return {
     id: 't1:123',
     threadId: 't1',
     dueAt: 123,
     detectedAt: 456,
     title: 'Task',
-    status: 'pending'
+    status: 'pending',
+    ...overrides
   }
 }
 
@@ -27,6 +30,38 @@ describe('assistant-view presentation helpers', () => {
     expect(missedTabVisible([missedRun()])).toBe(true)
     expect(taskHasMissed([])).toBe(false)
     expect(taskHasMissed([missedRun()])).toBe(true)
+  })
+
+  it('groups missed runs per routine, keeping routine-less runs separate', () => {
+    const runs = [
+      missedRun({ id: 'a:1', threadId: 'a', routineId: 'r1', title: 'A' }),
+      missedRun({ id: 'b:1', threadId: 'b', routineId: 'r2', title: 'B' }),
+      missedRun({ id: 'c:1', threadId: 'c', title: 'C' }),
+      missedRun({ id: 'a:2', threadId: 'a', routineId: 'r1', title: 'A again' })
+    ]
+    const groups = groupMissedRunsByRoutine(
+      runs,
+      new Map([
+        ['r1', 'Daily PR triage'],
+        ['r2', 'Morning inbox report']
+      ])
+    )
+    expect(groups.map((group) => group.key)).toEqual(['r1', 'r2', UNGROUPED_MISSED_RUNS])
+    expect(groups.map((group) => group.label)).toEqual([
+      'Daily PR triage',
+      'Morning inbox report',
+      'Tasks without a routine'
+    ])
+    // Runs of one routine stay together, in store order.
+    expect(groups[0].runs.map((run) => run.id)).toEqual(['a:1', 'a:2'])
+  })
+
+  it('falls back to a neutral routine label when the routine name is unknown', () => {
+    const [group] = groupMissedRunsByRoutine(
+      [missedRun({ id: 'x:1', threadId: 'x', routineId: 'missing' })],
+      new Map()
+    )
+    expect(group.label).toBe('Routine')
   })
 
   it('renders next-run first, then last-run, then Not scheduled', () => {

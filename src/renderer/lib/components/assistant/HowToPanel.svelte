@@ -1,14 +1,19 @@
 <script lang="ts">
   import { AlertTriangle, Plus, RotateCcw, ScrollText, X } from '@lucide/svelte'
-  import { SvelteSet } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { routineHowToComplete, type Routine, type RoutineSchedule, type UtilityCatalog } from '$shared/types'
+  import {
+    routineHowToComplete,
+    type Routine,
+    type RoutineSchedule,
+    type UtilityCatalog
+  } from '$shared/types'
   import AssistantHandoffControl from './AssistantHandoffControl.svelte'
   import ScheduleEditor from './ScheduleEditor.svelte'
+  import { missedTabVisible } from './assistant-view'
 
   interface Props {
     projectId: string
@@ -38,20 +43,19 @@
     return assistantRoutines.routines.find((candidate) => candidate.id === id) ?? null
   })
 
-  const missedRuns = $derived.by(() => {
-    const forTask = assistantRoutines.missedForTask(threadId)
-    const forRoutine = routine ? assistantRoutines.missedForRoutine(routine.id) : []
-    const ids = new SvelteSet<string>()
-    return [...forTask, ...forRoutine].filter((run) => {
-      if (ids.has(run.id)) return false
-      ids.add(run.id)
-      return true
-    })
-  })
+  /**
+   * Missed runs surface per routine: a routine's panel lists every miss across
+   * its tasks, while a routine-less task's panel lists only its own.
+   */
+  const missedRuns = $derived(
+    routine
+      ? assistantRoutines.missedForRoutine(routine.id)
+      : assistantRoutines.missedForTask(threadId)
+  )
 
   // The tab strip only exists once there is a missed run to surface; until then
   // the panel is a single read-only how-to view with no chrome.
-  const showMissedTab = $derived(missedRuns.length > 0)
+  const showMissedTab = $derived(missedTabVisible(missedRuns))
   let tab = $state<'how-to' | 'missed'>('how-to')
   const effectiveTab = $derived(tab === 'missed' && showMissedTab ? 'missed' : 'how-to')
 
@@ -191,7 +195,8 @@
           <div class="rounded-lg border border-border p-2.5">
             <div class="flex items-center gap-2">
               <AlertTriangle size={14} strokeWidth={1.8} style="color: var(--color-missed)" />
-              <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{run.title}</span>
+              <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{run.title}</span
+              >
             </div>
             <p class="mt-1 text-[0.625rem] text-dimmed">
               Was due {new Date(run.dueAt).toLocaleString()} while the app was closed.
@@ -245,8 +250,8 @@
             </div>
           {:else if routine}
             <p class="text-[0.75rem] leading-relaxed text-muted">
-              No how-to yet. Describe how this routine should run to the agent in its first
-              task, refine it together, then send <span class="text-foreground">/save-how-to</span>
+              No how-to yet. Describe how this routine should run to the agent in its first task,
+              refine it together, then send <span class="text-foreground">/save-how-to</span>
               to commit it.
             </p>
             {#if onOpenAuthoringTask}
@@ -341,7 +346,7 @@
 
         {#if task && onHandedOff}
           <section aria-label="Hand-off">
-            <AssistantHandoffControl {task} onHandedOff={onHandedOff} />
+            <AssistantHandoffControl {task} {onHandedOff} />
           </section>
         {/if}
       </div>

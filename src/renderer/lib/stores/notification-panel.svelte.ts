@@ -11,14 +11,10 @@ import { assistantRoutines } from './assistant-routines.svelte'
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
 
-/** Second-level filters shown under the active top tab. */
-export type NotificationSubFilter =
-  | 'all'
-  | 'done'
-  | 'attention'
-  | 'spec'
-  | 'issues'
-  | 'missed-runs'
+/** Second-level filters shown under the active top tab. The assistants tab
+ *  carries only missed runs, which are rendered straight from the assistant
+ *  store, so it exposes no sub-filters. */
+export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'issues'
 
 export interface InAppNotification {
   id: string
@@ -39,10 +35,7 @@ export interface InAppNotification {
   timestamp: number
 }
 
-const SUB_FILTER_KINDS: Record<
-  Exclude<NotificationSubFilter, 'all' | 'missed-runs'>,
-  InAppNotification['kind']
-> = {
+const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotification['kind']> = {
   done: 'completed',
   attention: 'attention',
   spec: 'spec',
@@ -61,7 +54,6 @@ class NotificationPanelState {
 
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
     if (sub === 'all') return items
-    if (sub === 'missed-runs') return []
     const kind = SUB_FILTER_KINDS[sub]
     return items.filter((n) => n.kind === kind)
   }
@@ -111,8 +103,7 @@ class NotificationPanelState {
   assistantCount(sub: NotificationSubFilter): number {
     // The assistants tab carries pending missed runs; the panel renders them
     // directly from the assistant store, so counts read that list here.
-    if (sub === 'all' || sub === 'missed-runs') return assistantRoutines.missedRuns.length
-    return 0
+    return sub === 'all' ? assistantRoutines.missedRuns.length : 0
   }
 
   get hasCompleted(): boolean {

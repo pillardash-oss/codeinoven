@@ -21,6 +21,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { groupMissedRunsByRoutine } from '$lib/components/assistant/assistant-view'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -49,8 +50,7 @@
     done: 'Done',
     attention: 'Attention',
     spec: 'Spec',
-    issues: 'Issues',
-    'missed-runs': 'Missed Runs'
+    issues: 'Issues'
   }
 
   function subFiltersFor(tab: NotificationTopTab): NotificationSubFilter[] {
@@ -59,8 +59,10 @@
         return ['all', 'done', 'attention', 'spec', 'issues']
       case 'chats':
         return ['all', 'done', 'attention', 'issues']
+      // Assistants carry only missed runs, rendered straight from the assistant
+      // store: no sub-filter tabs, and nothing at all until a run is missed.
       case 'assistants':
-        return ['all', 'done', 'attention', 'issues', 'missed-runs']
+        return []
       case 'app-errors':
         return []
     }
@@ -123,6 +125,16 @@
       : showingAssistants
         ? assistantRoutines.missedRuns.length > 0
         : notificationPanelState.visible.length > 0
+  )
+
+  // Missed runs are surfaced per routine: one group per owning routine, plus a
+  // single group for routine-less tasks. Both the groups and the panel's tab
+  // chrome exist only once at least one run has actually been missed.
+  let missedGroups = $derived(
+    groupMissedRunsByRoutine(
+      assistantRoutines.missedRuns,
+      new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
+    )
   )
 
   async function navigateToNotification(n: InAppNotification): Promise<void> {
@@ -471,61 +483,70 @@
           <p class="text-xs text-muted">No missed runs</p>
         </div>
       {:else}
-        <div class="space-y-px p-1.5" aria-label="Missed runs">
-          {#each assistantRoutines.missedRuns as run (run.id)}
-            {@const active = busyId === run.id}
+        {#each missedGroups as group (group.key)}
+          <div class="pb-1.5">
             <div
-              class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 {active
-                ? 'opacity-60 pointer-events-none'
-                : ''}"
-              style="border-color: var(--color-missed)"
+              class="px-3 pt-2 pb-1 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
             >
-              <div class="flex w-2 shrink-0 pt-1">
-                <StatusBadge tone="missed" title="Missed run" />
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                    >{run.title}</span
-                  >
-                  <span class="shrink-0 text-[0.625rem] text-dimmed"
-                    >{formatTime(run.dueAt)}</span
-                  >
-                </div>
-                <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
-                  A scheduled run was due while the app was closed.
-                </p>
-              </div>
-              <div class="flex shrink-0 items-center gap-1">
-                <button
-                  class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
-                  aria-label="Dismiss missed run"
-                  title="Dismiss"
-                  onclick={() => void dismissMissedRun(run.id)}
-                >
-                  Dismiss
-                </button>
-                <button
-                  class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
-                  aria-label="Run missed task now"
-                  title="Run now"
-                  onclick={() => void runMissedRunNow(run.id)}
-                >
-                  <RotateCcw size={11} strokeWidth={1.8} />
-                  Run now
-                </button>
-                <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                  aria-label="Open task"
-                  title="Open task"
-                  onclick={() => void openMissedRun(run.threadId)}
-                >
-                  <Bot size={11} />
-                </button>
-              </div>
+              {group.label}
             </div>
-          {/each}
-        </div>
+            <div class="space-y-px" aria-label={`${group.label} missed runs`}>
+              {#each group.runs as run (run.id)}
+                {@const active = busyId === run.id}
+                <div
+                  class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 {active
+                    ? 'opacity-60 pointer-events-none'
+                    : ''}"
+                  style="border-color: var(--color-missed)"
+                >
+                  <div class="flex w-2 shrink-0 pt-1">
+                    <StatusBadge tone="missed" title="Missed run" />
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                        >{run.title}</span
+                      >
+                      <span class="shrink-0 text-[0.625rem] text-dimmed"
+                        >{formatTime(run.dueAt)}</span
+                      >
+                    </div>
+                    <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
+                      A scheduled run was due while the app was closed.
+                    </p>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-1">
+                    <button
+                      class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
+                      aria-label="Dismiss missed run"
+                      title="Dismiss"
+                      onclick={() => void dismissMissedRun(run.id)}
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+                      aria-label="Run missed task now"
+                      title="Run now"
+                      onclick={() => void runMissedRunNow(run.id)}
+                    >
+                      <RotateCcw size={11} strokeWidth={1.8} />
+                      Run now
+                    </button>
+                    <button
+                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                      aria-label="Open task"
+                      title="Open task"
+                      onclick={() => void openMissedRun(run.threadId)}
+                    >
+                      <Bot size={11} />
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/each}
       {/if}
     {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">

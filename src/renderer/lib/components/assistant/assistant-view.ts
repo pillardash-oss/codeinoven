@@ -10,6 +10,46 @@ export function missedTabVisible(runs: readonly MissedRun[]): boolean {
   return runs.length > 0
 }
 
+/** Group key for missed runs whose task belongs to no routine. */
+export const UNGROUPED_MISSED_RUNS = '__ungrouped__'
+
+/** One routine's pending missed runs. */
+export interface MissedRunGroup {
+  /** Routine id, or `UNGROUPED_MISSED_RUNS` for routine-less tasks. */
+  key: string
+  /** Routine name, or the neutral label used for routine-less tasks. */
+  label: string
+  runs: MissedRun[]
+}
+
+/**
+ * Missed runs are surfaced per routine: one group per owning routine, plus a
+ * single group for routine-less tasks. Group order follows first appearance,
+ * which is the store's due-time order.
+ */
+export function groupMissedRunsByRoutine(
+  runs: readonly MissedRun[],
+  routineNameById: ReadonlyMap<string, string>
+): MissedRunGroup[] {
+  const groups = new Map<string, MissedRunGroup>()
+  for (const run of runs) {
+    const key = run.routineId ?? UNGROUPED_MISSED_RUNS
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: run.routineId
+          ? (routineNameById.get(run.routineId) ?? 'Routine')
+          : 'Tasks without a routine',
+        runs: []
+      }
+      groups.set(key, group)
+    }
+    group.runs.push(run)
+  }
+  return [...groups.values()]
+}
+
 /** Whether a task row shows the missed badge. */
 export function taskHasMissed(runs: readonly MissedRun[]): boolean {
   return runs.length > 0
