@@ -260,54 +260,57 @@
   {/if}
 
   <!--
-    Resolve stays reachable while the thread is folded: it is the state the merge
-    is gated on, so it must not need the thread opened to be settled.
+    The composer takes the whole width of the unit on a row of its own, and the
+    thread's own actions sit under it: resolution is the state the merge is gated
+    on, so it stays reachable while the thread is folded, but it must never share
+    a row with the composer, where it would float halfway up the reply's height.
   -->
-  <div class="flex items-center gap-1.5 pt-0.5">
-    {#if !collapsed}
-      {#if replyTo}
-        <div class="min-w-0 flex-1">
-          <PrReplyBox
-            recipient={githubDisplayLogin(replyTo.author)}
-            hint="Posts this reply into the thread"
-            {busy}
-            onSubmit={submitReply}
-            onCancel={() => (replyTo = null)}
-          />
-        </div>
-      {:else}
+  <div class="flex flex-col gap-2 pt-0.5">
+    {#if !collapsed && replyTo}
+      <PrReplyBox
+        recipient={githubDisplayLogin(replyTo.author)}
+        hint="Posts this reply into the thread"
+        {busy}
+        onSubmit={submitReply}
+        onCancel={() => (replyTo = null)}
+      />
+    {/if}
+    <div class="flex items-center justify-between gap-1.5">
+      <div>
+        {#if !collapsed && !replyTo}
+          <button
+            type="button"
+            class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
+            title="Reply to this thread"
+            onclick={() => openReply()}
+          >
+            <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+            Reply
+          </button>
+        {/if}
+      </div>
+      {#if thread.threadNodeId}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
-          title="Reply to this thread"
-          onclick={() => openReply()}
+          class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] disabled:opacity-40 {thread.resolved
+            ? 'border-border text-muted hover:bg-elevated hover:text-foreground'
+            : 'border-success/40 bg-success/10 text-success hover:bg-success/20'}"
+          title={thread.resolved ? 'Reopen this thread' : 'Resolve this thread'}
+          disabled={resolving}
+          onclick={() => void toggleResolved()}
         >
-          <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
-          Reply
+          {#if resolving}
+            <Loader2 size={12} class="shrink-0 animate-spin" />
+            Saving…
+          {:else if thread.resolved}
+            <RotateCcw size={12} class="shrink-0" />
+            Reopen
+          {:else}
+            <CheckCircle2 size={12} class="shrink-0" />
+            Resolve
+          {/if}
         </button>
       {/if}
-    {/if}
-    {#if thread.threadNodeId}
-      <button
-        type="button"
-        class="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] disabled:opacity-40 {thread.resolved
-          ? 'border-border text-muted hover:bg-elevated hover:text-foreground'
-          : 'border-success/40 bg-success/10 text-success hover:bg-success/20'}"
-        title={thread.resolved ? 'Reopen this thread' : 'Resolve this thread'}
-        disabled={resolving}
-        onclick={() => void toggleResolved()}
-      >
-        {#if resolving}
-          <Loader2 size={12} class="shrink-0 animate-spin" />
-          Saving…
-        {:else if thread.resolved}
-          <RotateCcw size={12} class="shrink-0" />
-          Reopen
-        {:else}
-          <CheckCircle2 size={12} class="shrink-0" />
-          Resolve
-        {/if}
-      </button>
-    {/if}
+    </div>
   </div>
 </section>
