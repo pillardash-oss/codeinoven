@@ -276,6 +276,10 @@
   }
 
   async function loadAccounts(targetHarnessId: string, force = false): Promise<void> {
+    // Callers without a harness yet (e.g. the PR compose picker before any
+    // model is chosen) have no account list to fetch, and the main-process
+    // validation rejects an empty harness id outright.
+    if (!targetHarnessId) return
     const generation = ++accountLoadGeneration
     accountLoading = true
     try {
