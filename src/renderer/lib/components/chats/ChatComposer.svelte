@@ -1072,6 +1072,9 @@
     const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
     clearStartAfterThreads()
     onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
+    // The draft just left the composer, so the long-form writing surface has
+    // nothing left to hold: settle back to the compact composer.
+    expansion.collapse()
   }
 
   function handleComposerValueChange(nextValue: string): void {

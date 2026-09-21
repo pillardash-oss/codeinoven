@@ -11,8 +11,8 @@ export interface ComposerExpansionOptions {
 }
 
 /**
- * The composer's maximize control: one boolean for the UI to toggle plus the
- * measured width of the expanded composer.
+ * The composer's maximize control: one boolean the UI toggles (and that a send
+ * resets) plus the measured width of the expanded composer.
  *
  * The width is written straight onto the composer as the
  * `--composer-expanded-width` custom property rather than held as state, so
@@ -65,10 +65,17 @@ export function createComposerExpansion(options: ComposerExpansionOptions) {
     maximized = !maximized
   }
 
+  /** Return to the compact composer. Idempotent, so callers that hand the
+   *  draft off (a send) can collapse without checking the current state. */
+  function collapse(): void {
+    maximized = false
+  }
+
   return {
     get maximized(): boolean {
       return maximized
     },
-    toggle
+    toggle,
+    collapse
   }
 }
