@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import { TriangleAlert } from '@lucide/svelte'
   import {
     terminalSessions,
     terminalSpawnScopes,
@@ -21,12 +21,28 @@
   /**
    * Scope root the *live shell* was started in, from the session manager: the
    * panel's own `scopeBucketId` prop is what it would spawn in now. While the
-   * two differ this panel is showing another thread's checkout, and the notice
-   * below says so. Attaching (a panel toggle, a dock move, fullscreen) restarts
-   * the shell in the prop's scope, which clears it.
+   * two differ this panel is showing another thread's checkout. The shell is
+   * left running: navigation never kills it. The notice below offers an
+   * explicit restart into the open thread's scope, and a respawn (shell exit,
+   * Ctrl-D) lands there on its own.
    */
   let spawnedScope = $derived(terminalSpawnScopes.get(terminalId) ?? null)
   let scopeStale = $derived(spawnedScope !== null && spawnedScope !== (scopeBucketId ?? null))
+  let restarting = $state(false)
+
+  /** Explicit, user-requested restart of the live shell in the scope this
+   *  panel wants. Never called by navigation: only this button kills a shell. */
+  async function restartInScope(): Promise<void> {
+    if (restarting) return
+    const session = terminalSessions.getSession(terminalId)
+    if (!session) return
+    restarting = true
+    try {
+      await terminalSessions.restartInBoundScope(session)
+    } finally {
+      restarting = false
+    }
+  }
 
   let terminalError: string | undefined = $state(undefined)
   let loading = $state(true)
@@ -93,7 +109,25 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-terminal-background">
-  <StalePanelNotice stale={scopeStale} />
+  {#if scopeStale}
+    <div
+      class="flex w-full shrink-0 items-center gap-1.5 border-b border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning"
+      role="status"
+    >
+      <TriangleAlert size={12} class="shrink-0" aria-hidden="true" />
+      <span class="min-w-0 truncate">Panel info is stale, toggle for latest info</span>
+      <button
+        type="button"
+        class="ml-auto shrink-0 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning hover:bg-warning/20 disabled:opacity-50"
+        title="Stop this shell and start a new one in the open thread's scope"
+        aria-label="Restart the shell in the open thread's scope"
+        disabled={restarting}
+        onclick={restartInScope}
+      >
+        Restart in this scope
+      </button>
+    </div>
+  {/if}
   <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
     <div
       class="h-full w-full overflow-hidden py-1 pl-2"
