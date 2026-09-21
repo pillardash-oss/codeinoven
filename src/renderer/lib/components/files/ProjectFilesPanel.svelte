@@ -45,6 +45,7 @@
   import GoToLine from './GoToLine.svelte'
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
+  import FileInfoDialog from './FileInfoDialog.svelte'
   import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
@@ -57,7 +58,7 @@
     previewKindLabel as previewKindLabelFor
   } from './project-files-panel-preview'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
-  import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
   import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -284,6 +285,7 @@
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
   let deleteTargetPath = $state<string | null>(null)
+  let info = $state<ProjectFileInfo | null>(null)
   let mutationPending = $state(false)
   let goToLineOpen = $state(false)
   let goToLineFocusTrigger = $state(0)
@@ -294,6 +296,17 @@
   function openFullscreen(): void {
     projectFilesWorkspace.requestFullscreen(projectId)
     fullscreenOpen = true
+  }
+
+  /** Show the File info dialog (the same one the file tree's context menu
+   *  opens) for the active file. */
+  async function showActiveFileInfo(): Promise<void> {
+    if (!activeTab) return
+    try {
+      info = await projectFilesWorkspace.fileInfo(projectId, activeTab.path)
+    } catch (error) {
+      reportError(error, 'File information is unavailable')
+    }
   }
 
   function closeFullscreen(): void {
@@ -703,6 +716,8 @@
             : 'Save file (Cmd/Ctrl+S)'}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          onInfo={() => void showActiveFileInfo()}
+          infoDisabled={deletedAtCheckpoint}
           onUndo={() => requestEdit('undo')}
           onRedo={() => requestEdit('redo')}
           onReload={reloadSelected}
@@ -1058,6 +1073,8 @@
               saveLabel=""
               fullscreen
               onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+              onInfo={() => void showActiveFileInfo()}
+              infoDisabled={deletedAtCheckpoint}
               onUndo={() => requestEdit('undo')}
               onRedo={() => requestEdit('redo')}
               onReload={reloadSelected}
@@ -1207,3 +1224,5 @@
   onClearDeleteTarget={() => (deleteTargetPath = null)}
   onConfirmDelete={() => void deleteSelected()}
 />
+
+<FileInfoDialog {info} onClear={() => (info = null)} />
