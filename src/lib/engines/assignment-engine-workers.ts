@@ -67,25 +67,6 @@ export class AssignmentWorkerSelection {
     return candidate
   }
 
-  async auditorName(plan: AssignmentPlan): Promise<string> {
-    const names = await this.storage.getWorkerNames()
-    const used = new Set(
-      (await this.threads.listThreads(plan.projectId))
-        .map((thread) => thread.title.match(/^audit-([^:]+):/u)?.[1])
-        .filter((name): name is string => name !== undefined)
-    )
-    const available = names.filter((name) => !used.has(name))
-    const pool = available.length > 0 ? available : names
-    const base = pool[this.randomIndex(pool.length)]
-    let candidate = `audit-${base}`
-    let suffix = 2
-    while (used.has(candidate.slice('audit-'.length))) {
-      candidate = `audit-${base}-${suffix}`
-      suffix += 1
-    }
-    return candidate
-  }
-
   async workerSettings(
     plan: AssignmentPlan,
     task: AssignmentTask,

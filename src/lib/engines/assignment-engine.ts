@@ -654,6 +654,8 @@ export class AssignmentEngine {
         'An Assignment auditor is available only after the Assignment completes'
       )
     }
+    const coordinator = await this.threads.getThread(projectId, coordinatorThreadId)
+    if (!coordinator) throw new AssignmentEngineError('not_found', 'Coordinator not found')
     if (active.auditorThreadId) {
       const existing = await this.threads.getThread(projectId, active.auditorThreadId)
       if (
@@ -662,13 +664,19 @@ export class AssignmentEngine {
         existing.coordinatorThreadId === coordinatorThreadId &&
         existing.assignmentRole === undefined
       ) {
+        // The auditor shares the Sr. Engineer's thread title; re-sync it so a
+        // renamed coordinator never leaves the auditor on a stale title.
+        if (existing.title !== coordinator.title) {
+          return (
+            (await this.threads.updateThread(projectId, existing.id, {
+              title: coordinator.title
+            })) ?? existing
+          )
+        }
         return existing
       }
     }
 
-    const coordinator = await this.threads.getThread(projectId, coordinatorThreadId)
-    if (!coordinator) throw new AssignmentEngineError('not_found', 'Coordinator not found')
-    const auditorName = await this.workers.auditorName(active)
     const auditorSettings: ThreadSettings = {
       ...settings,
       permissionLevel: 'auto_review',
@@ -679,7 +687,7 @@ export class AssignmentEngine {
     const auditor = await this.threads.createThread({
       projectId,
       providerId: auditorSettings.providerId,
-      title: `${auditorName}: ${active.content.title}`,
+      title: coordinator.title,
       titleSource: 'manual',
       settings: auditorSettings,
       featureSlug: coordinator.featureSlug,

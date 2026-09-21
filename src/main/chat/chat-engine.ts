@@ -4,7 +4,7 @@ import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
+import { createHash, randomBytes, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { Logger } from '../system/logger'
@@ -14763,12 +14763,10 @@ export class ChatEngine {
         ) ?? null
     }
     if (!auditor) {
-      const names = await this.storage.getWorkerNames()
-      const name = names[randomInt(names.length)]
       auditor = await this.threadManager.createThread({
         projectId,
         providerId: auditorSettings.providerId,
-        title: `audit-${name}: ${coordinator.title}`,
+        title: coordinator.title,
         titleSource: 'manual',
         settings: auditorSettings,
         featureSlug: coordinator.featureSlug,
@@ -14790,6 +14788,9 @@ export class ChatEngine {
     }
     await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.threadManager.updateThread(projectId, auditor.id, {
+      // The auditor shares the Sr. Engineer's thread title; re-sync it so a
+      // renamed coordinator never leaves the auditor on a stale title.
+      title: coordinator.title,
       achievementRole: 'auditor',
       coordinatorThreadId,
       scopeBucketId: coordinator.scopeBucketId,
@@ -14989,12 +14990,10 @@ export class ChatEngine {
       coordinator
     )
     if (!auditor) {
-      const names = await this.storage.getWorkerNames()
-      const name = names[randomInt(names.length)]
       auditor = await this.threadManager.createThread({
         projectId,
         providerId: auditorSettings.providerId,
-        title: `audit-${name}: ${coordinator.title}`,
+        title: coordinator.title,
         titleSource: 'manual',
         settings: auditorSettings,
         featureSlug: coordinator.featureSlug,
@@ -15016,6 +15015,9 @@ export class ChatEngine {
     }
     await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.threadManager.updateThread(projectId, auditor.id, {
+      // The auditor shares the Sr. Engineer's thread title; re-sync it so a
+      // renamed coordinator never leaves the auditor on a stale title.
+      title: coordinator.title,
       achievementRole: 'auditor',
       coordinatorThreadId,
       scopeBucketId: coordinator.scopeBucketId,
@@ -15399,12 +15401,10 @@ export class ChatEngine {
         ) ?? null
     }
     if (!auditor) {
-      const names = await this.storage.getWorkerNames()
-      const name = names[randomInt(names.length)]
       auditor = await this.threadManager.createThread({
         projectId,
         providerId: auditorSettings.providerId,
-        title: `audit-${name}: ${scopedCoordinator.title}`,
+        title: scopedCoordinator.title,
         titleSource: 'manual',
         settings: auditorSettings,
         featureSlug: scopedCoordinator.featureSlug,
@@ -15426,6 +15426,9 @@ export class ChatEngine {
     }
     await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.threadManager.updateThread(projectId, auditor.id, {
+      // The auditor shares the Sr. Engineer's thread title; re-sync it so a
+      // renamed coordinator never leaves the auditor on a stale title.
+      title: scopedCoordinator.title,
       achievementRole: 'auditor',
       coordinatorThreadId,
       scopeBucketId: scopedCoordinator.scopeBucketId,
