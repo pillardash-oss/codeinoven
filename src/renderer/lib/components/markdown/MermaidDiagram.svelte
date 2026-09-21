@@ -1,19 +1,10 @@
 <script lang="ts">
-  import {
-    Check,
-    Code2,
-    Copy,
-    Expand,
-    MessageSquarePlus,
-    RotateCcw,
-    X,
-    ZoomIn,
-    ZoomOut
-  } from '@lucide/svelte'
+  import { Check, Code2, Copy, Expand, MessageSquarePlus, X } from '@lucide/svelte'
   import { Dialog } from 'bits-ui'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import { PanZoom } from '$lib/pan-zoom.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -171,44 +162,7 @@
     {/if}
 
     {#if fullscreen && svg}
-      <div
-        class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
-      >
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Zoom out"
-          title="Zoom out"
-          disabled={panZoom.zoom <= panZoom.min}
-          onclick={() => panZoom.zoomByButton(1 / 1.4, fullscreenViewport)}
-        >
-          <ZoomOut size={14} />
-        </button>
-        <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
-          {Math.round(panZoom.zoom * 100)}%
-        </span>
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Zoom in"
-          title="Zoom in"
-          disabled={panZoom.zoom >= panZoom.max}
-          onclick={() => panZoom.zoomByButton(1.4, fullscreenViewport)}
-        >
-          <ZoomIn size={14} />
-        </button>
-        <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Reset zoom and pan"
-          title="Reset zoom and pan"
-          disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
-          onclick={() => panZoom.reset()}
-        >
-          <RotateCcw size={14} />
-        </button>
-      </div>
+      <PanZoomToolbar {panZoom} viewport={fullscreenViewport} class="absolute right-3 bottom-3" />
     {/if}
   </div>
 {/snippet}
@@ -276,7 +230,10 @@
         <div class="min-w-0">
           <p>{error}</p>
           {#if errorDetail}
-            <p class="mt-0.5 break-words font-mono text-[0.625rem] text-danger/70" title={errorDetail}>
+            <p
+              class="mt-0.5 break-words font-mono text-[0.625rem] text-danger/70"
+              title={errorDetail}
+            >
               {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
             </p>
           {/if}

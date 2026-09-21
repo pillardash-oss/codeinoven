@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { Loader2 } from '@lucide/svelte'
+  import { PanZoom } from '$lib/pan-zoom.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
 
   interface Props {
     src: string | null
@@ -61,15 +63,38 @@
   onDestroy(() => {
     if (retryTimer) clearTimeout(retryTimer)
   })
+
+  const panZoom = new PanZoom()
+  // Switching files must not carry over the previous zoom/pan.
+  $effect(() => {
+    void src
+    panZoom.reset()
+  })
 </script>
 
-<div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
+<div
+  role="group"
+  aria-label={`Zoomable preview of ${alt}`}
+  class={[
+    'relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden p-6',
+    panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+  ]}
+  onwheel={src ? panZoom.onWheel : undefined}
+  onpointerdown={panZoom.onPointerDown}
+  onpointermove={panZoom.onPointerMove}
+  onpointerup={panZoom.onPointerUp}
+  onpointercancel={panZoom.onPointerUp}
+  ondblclick={() => panZoom.reset()}
+>
   {#if src}
     {#key `${src}|${retryAttempt}`}
       <img
+        {@attach panZoom.bindTarget}
         {src}
         {alt}
+        draggable="false"
         class="max-h-full max-w-full object-contain"
+        style={panZoom.transform}
         onload={handleLoad}
         onerror={handleError}
       />
@@ -77,6 +102,7 @@
     {#if loadFailed}
       <p class="text-xs font-medium text-danger">This image could not be loaded</p>
     {/if}
+    <PanZoomToolbar {panZoom} class="absolute right-3 bottom-3" />
   {:else if failed}
     <p class="text-xs font-medium text-danger">This image could not be loaded</p>
   {:else}

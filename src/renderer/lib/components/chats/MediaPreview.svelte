@@ -3,6 +3,8 @@
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { PanZoom } from '$lib/pan-zoom.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
 
   interface Props {
     src: string
@@ -36,6 +38,21 @@
   function mediaError(event: Event): void {
     onLoadError?.(event.currentTarget as HTMLMediaElement)
   }
+
+  const panZoom = new PanZoom()
+  let imageViewport = $state<HTMLDivElement>()
+  const imageViewportAttachment = (node: HTMLDivElement): (() => void) => {
+    imageViewport = node
+    return () => {
+      if (imageViewport === node) imageViewport = undefined
+    }
+  }
+  // A reused overlay showing a different image must not inherit the previous
+  // zoom/pan, so reset whenever the media source changes.
+  $effect(() => {
+    void src
+    panZoom.reset()
+  })
 </script>
 
 <svelte:window
@@ -76,16 +93,38 @@
         onerror={mediaError}
       ></audio>
     {:else}
-      <img
-        {src}
-        alt={filename}
-        class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
-      />
+      <div
+        {@attach imageViewportAttachment}
+        role="group"
+        aria-label={`Zoomable preview of ${filename}`}
+        class={[
+          'flex touch-none items-center justify-center overflow-hidden',
+          panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+        ]}
+        onwheel={panZoom.onWheel}
+        onpointerdown={panZoom.onPointerDown}
+        onpointermove={panZoom.onPointerMove}
+        onpointerup={panZoom.onPointerUp}
+        onpointercancel={panZoom.onPointerUp}
+        ondblclick={() => panZoom.reset()}
+      >
+        <img
+          {@attach panZoom.bindTarget}
+          {src}
+          alt={filename}
+          draggable="false"
+          class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
+          style={panZoom.transform}
+        />
+      </div>
     {/if}
     <div class="mt-3 flex items-center gap-3">
       <span class="text-xs text-white/70">{filename}</span>
     </div>
   </div>
+  {#if kind === 'image'}
+    <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-4 bottom-4" />
+  {/if}
   <button
     type="button"
     class="absolute right-4 top-4 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
