@@ -195,8 +195,10 @@ export class GitState {
     scopeFor: (projectId) => this.scopeFor(projectId),
     refreshConflictIndicators: (projectId, force) =>
       void this.refreshPrConflictIndicators(projectId, force),
-    updateDraftState: (owner, repo, pullNumber, draft) =>
-      this.prs.updateDraftState(owner, repo, pullNumber, draft)
+    patchPullRequest: (owner, repo, pullNumber, patch) =>
+      this.prs.patchPullRequest(owner, repo, pullNumber, patch),
+    applyPullRequestState: (owner, repo, pullNumber, state) =>
+      this.prs.applyPullRequestState(owner, repo, pullNumber, state)
   })
 
   /** GitHub account auth calls. */
@@ -1068,6 +1070,59 @@ export class GitState {
     return this.prOps.closePullRequest(projectId, owner, repo, pullNumber)
   }
 
+  /** Close a batch, one at a time, reporting what succeeded and what did not. */
+  closePullRequests(projectId: string, owner: string, repo: string, numbers: number[]) {
+    return this.prOps.closePullRequests(projectId, owner, repo, numbers)
+  }
+
+  /** Reopen a batch, one at a time, reporting what succeeded and what did not. */
+  reopenPullRequests(projectId: string, owner: string, repo: string, numbers: number[]) {
+    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers)
+  }
+
+  /** Replace the labels a pull request carries, from the label picker. */
+  setPullRequestLabels(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    labels: string[]
+  ) {
+    return this.prOps.setPullRequestLabels(projectId, owner, repo, pullNumber, labels)
+  }
+
+  /** Replace a pull request's assignees, from the assignee picker. */
+  setPullRequestAssignees(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    logins: string[]
+  ) {
+    return this.prOps.setPullRequestAssignees(projectId, owner, repo, pullNumber, logins)
+  }
+
+  /** Attach or clear a pull request's milestone. */
+  setPullRequestMilestone(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    milestone: number | null
+  ) {
+    return this.prOps.setPullRequestMilestone(projectId, owner, repo, pullNumber, milestone)
+  }
+
+  /** The repository's label catalog, for the label picker. */
+  repositoryLabels(projectId: string, owner: string, repo: string) {
+    return this.prs.repositoryLabels(projectId, owner, repo)
+  }
+
+  /** The repository's open milestones, for the milestone picker. */
+  repositoryMilestones(projectId: string, owner: string, repo: string) {
+    return this.prs.repositoryMilestones(projectId, owner, repo)
+  }
+
   updatePullRequest(
     projectId: string,
     owner: string,
@@ -1296,6 +1351,29 @@ export class GitState {
   }
 
   /**
+   * Settle or reopen one inline review thread. The thread is addressed by its
+   * GraphQL node id, because GitHub keeps resolution on the thread and only
+   * exposes it there.
+   */
+  setPrReviewThreadResolved(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    threadNodeId: string,
+    resolved: boolean
+  ): Promise<boolean> {
+    return this.prOps.setPrReviewThreadResolved(
+      projectId,
+      owner,
+      repo,
+      pullNumber,
+      threadNodeId,
+      resolved
+    )
+  }
+
+  /**
    * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
    * its GraphQL node id, because GitHub exposes no REST endpoint for this.
    */
@@ -1343,26 +1421,3 @@ export class GitState {
 }
 
 export const gitState = new GitState()
-  /**
-   * Settle or reopen one inline review thread. The thread is addressed by its
-   * GraphQL node id, because GitHub keeps resolution on the thread and only
-   * exposes it there.
-   */
-  setPrReviewThreadResolved(
-    projectId: string,
-    owner: string,
-    repo: string,
-    pullNumber: number,
-    threadNodeId: string,
-    resolved: boolean
-  ): Promise<boolean> {
-    return this.prOps.setPrReviewThreadResolved(
-      projectId,
-      owner,
-      repo,
-      pullNumber,
-      threadNodeId,
-      resolved
-    )
-  }
-

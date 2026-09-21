@@ -101,6 +101,61 @@ export function prCommentExplainPrompt(comment: PrCommentChatSubject): string {
   ].join('\n')
 }
 
+/**
+ * The pinned context a temporary chat opened on a pull request from the list is
+ * anchored with.
+ *
+ * The list holds a summary and nothing else: the body, the diff, and the checks
+ * all live behind the detail bundle, which opening this chat deliberately does not
+ * pay for. So the context names what the row itself knows, and the explain brief
+ * says plainly that the diff was not supplied rather than letting the agent assume
+ * it was.
+ */
+export function prSummaryChatContext(pr: PullRequestSummary, repository: string): string {
+  const labels = (pr.labels ?? []).map((label) => label.name)
+  const assignees = (pr.assignees ?? []).map((entry) => `@${entry.login}`)
+  return [
+    'The user opened this pull request from the list and is asking about it. Everything below is read-only context for that question.',
+    `Pull request: #${pr.number} "${pr.title}" in ${repository} (${pr.headRef} \u2192 ${pr.baseRef})`,
+    `State: ${pr.state}${pr.draft ? ' (draft)' : ''}, opened ${pr.createdAt || 'at an unknown time'} by @${pr.authorLogin}`,
+    `Pull request link: ${pr.url}`,
+    ...(labels.length > 0 ? [`Labels: ${labels.join(', ')}`] : []),
+    ...(assignees.length > 0 ? [`Assigned to: ${assignees.join(', ')}`] : []),
+    ...(pr.milestone ? [`Milestone: ${pr.milestone.title}`] : []),
+    'The pull request description, diff, and checks are not part of this context: they were never fetched from the provider.',
+    'The visible row text is attached to this chat as the selection.'
+  ].join('\n')
+}
+
+/**
+ * The instruction a temporary explain chat receives when it is opened from a
+ * pull request in the list.
+ *
+ * Same contract as the comment brief: ground every claim in code actually read,
+ * and treat the remote copy as something the user authorizes rather than something
+ * the agent reaches for. The difference is what is missing here, which is the whole
+ * pull request, so the agent is told that and asked to say what it needs.
+ */
+export function prSummaryExplainPrompt(pr: PullRequestSummary): string {
+  return [
+    'Explain the attached pull request (its link is in the context above).',
+    '',
+    'The diff was not supplied, so work from what you can read and be explicit about the rest:',
+    `- Start in the current working tree. Look for the branch \`${pr.headRef}\`, files or symbols this pull request is likely to touch, and cite the exact project-relative path and line you read.`,
+    ...(pr.baseRef
+      ? [
+          `- The pull request targets \`${pr.baseRef}\`, so anything you claim about behaviour is a claim about that branch plus the head, not about whatever is checked out now.`
+        ]
+      : []),
+    '- If the head branch is not in the working tree, say plainly that it is missing here and name what is missing.',
+    '- Do not fetch the remote copy on your own. When grounding needs the diff or a file as it exists on the head, state exactly what you would fetch and ask the user first. Only after the user agrees, read it with the web fetch tool: the changed files are on the pull request at the link above, and a file as it exists on the head lives at `https://raw.githubusercontent.com/<owner>/<repo>/<headRef>/<path>` (repository and head are in the context above).',
+    '- Never describe a change, file, or line number you have not read.',
+    '',
+    'Then explain in everyday language what this pull request appears to change, what it is for, and what a reviewer should look at first. Where the list row does not tell you something, say so instead of filling the gap.',
+    'Stay read-only: do not modify files, commit, push, or run mutating commands.'
+  ].join('\n')
+}
+
 /** The first message the review agent receives   explicit about isolation and output. */
 export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
   return [

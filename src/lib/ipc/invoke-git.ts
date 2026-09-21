@@ -44,6 +44,8 @@ import type {
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestPage,
   PullRequestReference,
   PullRequestReviewComment,
@@ -347,6 +349,38 @@ export const invokeGitContract = {
   'pr:close': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
     GitHubMutationResult<PullRequestReference>
+  >,
+  /**
+   * Replace the labels a pull request carries, returning the labels it now has.
+   * One write for the whole set rather than an add or a remove per label, so a
+   * picker that toggles several chips costs one round trip and its result is the
+   * server's own answer instead of a locally reconstructed guess.
+   */
+  'pr:setLabels': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, labels: string[]],
+    GitHubMutationResult<PullRequestLabel[]>
+  >,
+  /** Replace a pull request's assignees, returning the accounts it now has. */
+  'pr:setAssignees': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, logins: string[]],
+    GitHubMutationResult<RepositoryMentionUser[]>
+  >,
+  /**
+   * Attach or clear a pull request's milestone.
+   *
+   * `null` clears it, because a milestone is an issue field on GitHub and the
+   * issues endpoint reads an explicit null as "detach".
+   */
+  'pr:setMilestone': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, milestone: number | null],
+    GitHubMutationResult<PullRequestMilestone | null>
+  >,
+  /** The repository's own label catalog, for the label picker. */
+  'pr:labels': {} as Contract<[projectId: string, owner: string, repo: string], PullRequestLabel[]>,
+  /** The repository's open milestones, for the milestone picker. */
+  'pr:milestones': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    PullRequestMilestone[]
   >,
   'pr:update': {} as Contract<
     [
@@ -653,6 +687,22 @@ export const invokeGitContract = {
     ],
     GitHubMutationResult<boolean>
   >,
+  /**
+   * Settle or reopen one inline thread. GitHub keeps resolution on the thread
+   * rather than on its comments, and only GraphQL can read or write it, so the
+   * caller passes the thread's node id.
+   */
+  'pr:threadResolve': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      threadNodeId: string,
+      resolved: boolean
+    ],
+    GitHubMutationResult<boolean>
+  >,
   'pr:review': {} as Contract<
     [
       projectId: string,
@@ -687,22 +737,6 @@ export const invokeGitContract = {
   /**
    * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
    * image hosts). Each account carries the URL its provider declared, which wins
-  /**
-   * Settle or reopen one inline thread. GitHub keeps resolution on the thread
-   * rather than on its comments, and only GraphQL can read or write it, so the
-   * caller passes the thread's node id.
-   */
-  'pr:threadResolve': {} as Contract<
-    [
-      projectId: string,
-      owner: string,
-      repo: string,
-      pullNumber: number,
-      threadNodeId: string,
-      resolved: boolean
-    ],
-    GitHubMutationResult<boolean>
-  >,
    * over the login-derived guess: a bot account's login alone resolves to
    * GitHub's generated identicon rather than the app's real picture. A login
    * GitHub has no picture for comes back as null, which the UI draws as its

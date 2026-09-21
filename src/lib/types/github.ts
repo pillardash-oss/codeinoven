@@ -117,6 +117,18 @@ export interface PullRequestSummary {
   /** Labels in GitHub's own order. Absent when the payload did not carry them. */
   labels?: PullRequestLabel[]
   /**
+   * Accounts assigned to the pull request, in the provider's order. Same shape as
+   * the mention directory's accounts on purpose: GitHub answers both from the same
+   * assignable-accounts collection, so a person is described the same way whether
+   * they are being assigned or @-mentioned, and one picker renders both.
+   */
+  assignees?: RepositoryMentionUser[]
+  /**
+   * The milestone the pull request belongs to, or null when it has none. Absent
+   * for a summary built outside a listing, the same as `labels`.
+   */
+  milestone?: PullRequestMilestone | null
+  /**
    * Rolled-up check state for the head commit, with the counts behind it. Absent
    * for a summary built outside a listing: the detail fetches its own checks.
    */
@@ -341,18 +353,6 @@ export interface PullRequestReviewComment {
   url: string
 }
 
-/** One CI check or commit status on the PR head. */
-export interface PullRequestCheck {
-  name: string
-  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
-  conclusion:
-    | 'success'
-    | 'failure'
-    | 'neutral'
-    | 'cancelled'
-    | 'timed_out'
-    | 'action_required'
-    | 'skipped'
 /**
  * One review thread's GitHub-side state.
  *
@@ -371,6 +371,18 @@ export interface PullRequestReviewThread {
   commentIds: number[]
 }
 
+/** One CI check or commit status on the PR head. */
+export interface PullRequestCheck {
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'timed_out'
+    | 'action_required'
+    | 'skipped'
     | null
   /** Provider page for the run, when one exists. */
   url: string | null
@@ -411,6 +423,30 @@ export interface PullRequestLabel {
   name: string
   /** Six hex digits without `#`, which is exactly what a chip's colour needs. */
   color: string
+  /**
+   * The label's own description from the repository catalog. Only the catalog
+   * read fills this in: a label carried on a pull request payload has no room for
+   * it, and a chip never draws it.
+   */
+  description?: string | null
+}
+
+/**
+ * One milestone a repository exposes, for a picker and for what a pull request
+ * reports it is attached to.
+ *
+ * A milestone is an issue field on GitHub, not a pull request field, so both the
+ * catalog and the assignment travel through the issues endpoints.
+ */
+export interface PullRequestMilestone {
+  number: number
+  title: string
+  /** `open` for a milestone still accepting work, `closed` once it is finished. */
+  state: 'open' | 'closed'
+  /** The milestone's own description, when it publishes one. */
+  description: string | null
+  /** Due date as the provider declares it, or null when none is set. */
+  dueOn: string | null
 }
 
 /**
@@ -425,6 +461,8 @@ export interface PullRequestBundle {
   comments: PullRequestComment[]
   reviews: PullRequestReview[]
   reviewComments: PullRequestReviewComment[]
+  /** Resolution state per inline thread, which only GraphQL reports. */
+  reviewThreads: PullRequestReviewThread[]
   files: PullRequestFile[]
   checks: PullRequestChecks
   /** Epoch ms this bundle was fetched, for cache staleness display. */
@@ -461,8 +499,6 @@ export interface PrComposeInput {
   currentDescription?: string
 }
 
-  /** Resolution state per inline thread, which only GraphQL reports. */
-  reviewThreads: PullRequestReviewThread[]
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
 export interface GitRepositoryIdentity {
   owner: string

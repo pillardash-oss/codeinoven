@@ -14,7 +14,14 @@ import {
   MessagesSquare,
   ShieldCheck
 } from '@lucide/svelte'
-import type { PrListFilter, PrListSort, PullRequestBundle, PullRequestChecks } from '$shared/types'
+import type {
+  PrListFilter,
+  PrListSort,
+  PrMergeMethod,
+  PullRequestBundle,
+  PullRequestChecks,
+  PullRequestSummary
+} from '$shared/types'
 import { buildConversation, conversationEntryCount } from './git-pull-request-detail-format'
 
 /** The views the pull request detail reader switches between. */
@@ -54,6 +61,40 @@ export function prViewCount(
   if (view === 'agent') return hasAgentReport ? 1 : 0
   return conversationEntryCount(buildConversation(bundle))
 }
+
+/**
+ * Which piece of pull request metadata a picker edits.
+ *
+ * The members are also the action kinds the list emits, so a row menu cannot offer
+ * a picker that has no implementation and the picker cannot address metadata the row
+ * menu never names.
+ */
+export type PrMetadataMode = 'labels' | 'assignees' | 'milestone'
+
+/**
+ * One action a pull request list row offers, already resolved to the rows it applies
+ * to.
+ *
+ * The scope travels inside the action rather than alongside it so no caller can
+ * dispatch one without saying what it acts on: a batch close of a selection and a
+ * batch close of one row are the same call with a different list, which is what
+ * keeps the two surfaces that draw the list from disagreeing about the difference.
+ */
+export type PrListAction =
+  | { kind: 'open'; targets: PullRequestSummary[] }
+  | { kind: 'open-in-browser'; targets: PullRequestSummary[] }
+  | { kind: 'copy-links'; targets: PullRequestSummary[] }
+  | { kind: 'copy-branches'; targets: PullRequestSummary[] }
+  | { kind: 'close'; targets: PullRequestSummary[] }
+  | { kind: 'reopen'; targets: PullRequestSummary[] }
+  | { kind: 'explain'; targets: PullRequestSummary[] }
+  | { kind: 'quick-chat'; targets: PullRequestSummary[] }
+  | { kind: 'agent-review'; targets: PullRequestSummary[] }
+  | { kind: 'merge'; targets: PullRequestSummary[]; method: PrMergeMethod }
+  | { kind: 'mark-ready'; targets: PullRequestSummary[] }
+  | { kind: 'labels'; targets: PullRequestSummary[] }
+  | { kind: 'assignees'; targets: PullRequestSummary[] }
+  | { kind: 'milestone'; targets: PullRequestSummary[] }
 
 /** Badge colour for a pull request's state pill. */
 export function prStateBadgeClass(state: string): string {

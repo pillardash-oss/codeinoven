@@ -18,11 +18,13 @@ import type {
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestReview,
   PullRequestReviewComment,
+  PullRequestReviewThread,
   PullRequestPage,
   PullRequestReference,
-  PullRequestReviewThread,
   RepositoryMentionUser,
   WorkflowRerunMode
 } from '../../lib/types'
@@ -115,8 +117,6 @@ export interface MinimizePrCommentInput {
   reason: PrMinimizeReason
 }
 
-/** Submit a review verdict on a pull request. */
-export interface CreatePrReviewInput extends PullRequestTarget {
 /**
  * Settle or reopen one inline thread.
  *
@@ -129,6 +129,8 @@ export interface ResolvePrReviewThreadInput {
   resolved: boolean
 }
 
+/** Submit a review verdict on a pull request. */
+export interface CreatePrReviewInput extends PullRequestTarget {
   event: PrReviewEvent
   body: string
 }
@@ -183,8 +185,6 @@ export interface GitProvider {
    */
   minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void>
   createPullRequestReview(input: CreatePrReviewInput): Promise<void>
-  listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
-  listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   /**
    * Resolution state for each inline thread on the pull request.
    *
@@ -194,6 +194,8 @@ export interface GitProvider {
   listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]>
   /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
   setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
+  listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
+  listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
   getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks>
   getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>
@@ -202,6 +204,29 @@ export interface GitProvider {
     owner: string
     repo: string
   }): Promise<RepositoryMentionUser[]>
+  /**
+   * Replace the labels a pull request carries, returning the labels it now has.
+   * One write for the whole set rather than an add or a remove per label, so a
+   * picker that toggles several chips costs one round trip and the result is the
+   * provider's own answer instead of a locally reconstructed guess.
+   */
+  setPullRequestLabels(input: PullRequestTarget & { labels: string[] }): Promise<PullRequestLabel[]>
+  /** Replace a pull request's assignees, returning the accounts it now has. */
+  setPullRequestAssignees(
+    input: PullRequestTarget & { logins: string[] }
+  ): Promise<RepositoryMentionUser[]>
+  /**
+   * Attach or clear a pull request's milestone. A milestone is an issue field on
+   * GitHub rather than a pull request field, which is why both the catalog and the
+   * assignment travel through the issues endpoints.
+   */
+  setPullRequestMilestone(
+    input: PullRequestTarget & { milestone: number | null }
+  ): Promise<PullRequestMilestone | null>
+  /** The repository's own label catalog, for a label picker. */
+  listRepositoryLabels(input: { owner: string; repo: string }): Promise<PullRequestLabel[]>
+  /** The repository's open milestones, for a milestone picker. */
+  listRepositoryMilestones(input: { owner: string; repo: string }): Promise<PullRequestMilestone[]>
   /** Recent workflow runs and deployments for read-only repository monitoring. */
   getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
   /** Rich in-app deployment detail: status history, linked run, jobs/steps. */

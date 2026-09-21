@@ -46,6 +46,8 @@ export type GitOperation =
   | 'pr-reopen'
   | 'pr-close'
   | 'pr-update'
+  | 'pr-metadata'
+  | 'pr-catalog'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -61,6 +63,14 @@ export const PR_CACHE_TTL_MS = 60_000
  * popover instant on every later mention.
  */
 export const MENTION_USERS_TTL_MS = 10 * 60_000
+/**
+ * How long a repository's label and milestone catalogs stay fresh. The same clock
+ * as the mention directory, for the same reason: labels and milestones change far
+ * more slowly than the pull requests carrying them, and every catalog read is one
+ * a picker makes only when it opens.
+ */
+export const REPO_CATALOG_TTL_MS = 5 * 60_000
+
 /**
  * How long a failed mention-directory lookup is remembered. Short, because the
  * failure is usually a transient network blip, but long enough that a token

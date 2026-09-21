@@ -12,10 +12,44 @@ import type {
   PrState,
   PullRequestComment,
   PullRequestCompare,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestReference,
+  RepositoryMentionUser,
   ThreadSettings
 } from '$shared/types'
 import { errorMessage, type GitOperation } from './git-store-helpers'
+import type { CachedPullRequestPatch } from './git-store-pull-requests.svelte'
+
+/**
+ * One pull request a batch could not act on, with the reason the provider gave.
+ *
+ * The reason travels with the number because a batch that sweeps a backlog has to
+ * say which ones survived and why. Dropping either half is how "17 of 20 closed"
+ * becomes indistinguishable from "20 closed".
+ */
+export interface PrBatchFailure {
+  number: number
+  message: string
+}
+
+/** What a lifecycle batch actually did. */
+export interface PrBatchResult {
+  succeeded: number[]
+  failed: PrBatchFailure[]
+  /**
+   * Pull requests the batch never reached, because it stopped on a failure that
+   * would repeat for every one of them (missing App access, most often). Listed
+   * so the count in the result cannot imply more attempts than were made.
+   */
+  skipped: number[]
+  /** Why the batch stopped early, or null when it ran to the end. */
+  stoppedBy: string | null
+}
+
+/** One metadata write's outcome: what the provider stored, or why it did not. */
+export type PrMetadataOutcome<T> =
+  { status: 'saved'; value: T } | { status: 'failed'; message: string }
 
 /** The store services the PR operations need, so the class stays decoupled. */
 export interface GitPrOperationAccess {
@@ -24,7 +58,20 @@ export interface GitPrOperationAccess {
   setGitHubPermission(permission: GitHubPermissionRequired | null): void
   scopeFor(projectId: string): string | undefined
   refreshConflictIndicators(projectId: string, force?: boolean): void
-  updateDraftState(owner: string, repo: string, pullNumber: number, draft: boolean): void
+  /** Rewrite a cached row after a successful write, so the list shows the truth. */
+  patchPullRequest(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    patch: CachedPullRequestPatch
+  ): void
+  /** Record a lifecycle change across the cached listings. */
+  applyPullRequestState(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    state: 'open' | 'closed' | 'merged'
+  ): void
 }
 
 /** Online pull request operations, backed by the store's shared state. */
@@ -89,7 +136,9 @@ export class GitPullRequestOperations {
           commitMessage
         )
       )
-      // Merging removes the PR from the open set - refresh the indicator.
+      // Merging removes the PR from the open set: refresh the indicator, and record
+      // the new state so the list behind the reader stops listing it as open.
+      if (reference) this.access.applyPullRequestState(owner, repo, pullNumber, 'merged')
       this.access.refreshConflictIndicators(projectId, true)
       return reference
     } catch (reason) {
@@ -114,7 +163,9 @@ export class GitPullRequestOperations {
       const reference = this.resolveMutation(
         await invoke('pr:ready', projectId, owner, repo, pullNumber)
       )
-      if (reference) this.access.updateDraftState(owner, repo, pullNumber, false)
+      if (reference) {
+        this.access.patchPullRequest(owner, repo, pullNumber, { draft: false })
+      }
       return reference
     } catch (reason) {
       this.access.setError(
@@ -189,7 +240,9 @@ export class GitPullRequestOperations {
       const reference = this.resolveMutation(
         await invoke('pr:reopen', projectId, owner, repo, pullNumber)
       )
-      // A reopened PR may conflict again - refresh the indicator.
+      // A reopened PR may conflict again, and it has left the closed listing it was
+      // read from. Refresh the indicator once and record where the row now belongs.
+      if (reference) this.access.applyPullRequestState(owner, repo, pullNumber, 'open')
       this.access.refreshConflictIndicators(projectId, true)
       return reference
     } catch (reason) {
@@ -214,7 +267,10 @@ export class GitPullRequestOperations {
       const reference = this.resolveMutation(
         await invoke('pr:close', projectId, owner, repo, pullNumber)
       )
-      // Closing removes the PR from the open set - refresh the indicator.
+      // Closing removes the PR from the open set: refresh the indicator, and record
+      // the new state so the list drains the row instead of listing it as open until
+      // the page cache ages out.
+      if (reference) this.access.applyPullRequestState(owner, repo, pullNumber, 'closed')
       this.access.refreshConflictIndicators(projectId, true)
       return reference
     } catch (reason) {
@@ -246,6 +302,183 @@ export class GitPullRequestOperations {
       return null
     } finally {
       this.access.markBusy('pr-update', false)
+    }
+  }
+
+  /**
+   * Close every pull request in a batch, one at a time.
+   *
+   * Sequential on purpose. Each single close refreshes the open-PR conflict
+   * indicator, and that refresh lists the repository's open pull requests and then
+   * probes the mergeability of each one GitHub has not computed yet. Twenty closes
+   * fired together would be twenty listings and twenty probe sets stacked on twenty
+   * writes: a secondary rate limit, and a panel competing with itself for one
+   * window. So this closes one, then the next, and refreshes the indicator once at
+   * the end.
+   *
+   * Nothing here sets the store's error. A batch's failures belong to the batch, so
+   * they come back in the result and are reported next to the count the user
+   * confirmed, rather than in a banner that names no pull request.
+   */
+  async closePullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[]
+  ): Promise<PrBatchResult> {
+    return this.runLifecycleBatch(
+      projectId,
+      owner,
+      repo,
+      numbers,
+      'pr-close',
+      'closed',
+      'Pull request could not be closed'
+    )
+  }
+
+  /** Reopen every pull request in a batch, one at a time, for the same reasons. */
+  async reopenPullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[]
+  ): Promise<PrBatchResult> {
+    return this.runLifecycleBatch(
+      projectId,
+      owner,
+      repo,
+      numbers,
+      'pr-reopen',
+      'open',
+      'Pull request could not be reopened'
+    )
+  }
+
+  private async runLifecycleBatch(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[],
+    operation: 'pr-close' | 'pr-reopen',
+    nextState: 'open' | 'closed',
+    failureFallback: string
+  ): Promise<PrBatchResult> {
+    const succeeded: number[] = []
+    const failed: PrBatchFailure[] = []
+    const skipped: number[] = []
+    let stoppedBy: string | null = null
+    this.access.markBusy(operation, true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      for (const [index, pullNumber] of numbers.entries()) {
+        try {
+          const result =
+            operation === 'pr-close'
+              ? await invoke('pr:close', projectId, owner, repo, pullNumber)
+              : await invoke('pr:reopen', projectId, owner, repo, pullNumber)
+          if (result.status === 'permission_required') {
+            // Missing App access fails identically for every remaining pull
+            // request, so the batch stops instead of spending one round trip per
+            // row to collect the same answer nineteen more times.
+            this.access.setGitHubPermission(result)
+            failed.push({ number: pullNumber, message: result.message })
+            skipped.push(...numbers.slice(index + 1))
+            stoppedBy = result.message
+            break
+          }
+          succeeded.push(pullNumber)
+          this.access.applyPullRequestState(owner, repo, pullNumber, nextState)
+        } catch (reason) {
+          failed.push({ number: pullNumber, message: errorMessage(reason, failureFallback) })
+        }
+      }
+    } finally {
+      this.access.markBusy(operation, false)
+    }
+    // One check for the whole batch: the indicator is a property of the open set,
+    // and the open set only changed once, however many rows changed it.
+    if (succeeded.length > 0) this.access.refreshConflictIndicators(projectId, true)
+    return { succeeded, failed, skipped, stoppedBy }
+  }
+
+  /**
+   * Replace the labels a pull request carries.
+   *
+   * The whole set travels at once, and the cached row is rewritten from the
+   * provider's own answer rather than from the caller's intent, so a label the
+   * repository renamed, or one it refused, cannot end up on screen as applied.
+   */
+  async setPullRequestLabels(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    labels: string[]
+  ): Promise<PrMetadataOutcome<PullRequestLabel[]>> {
+    return this.writeMetadata(
+      () => invoke('pr:setLabels', projectId, owner, repo, pullNumber, labels),
+      'The labels could not be saved',
+      (value) => this.access.patchPullRequest(owner, repo, pullNumber, { labels: value })
+    )
+  }
+
+  /** Replace a pull request's assignees, caching the accounts the provider stored. */
+  async setPullRequestAssignees(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    logins: string[]
+  ): Promise<PrMetadataOutcome<RepositoryMentionUser[]>> {
+    return this.writeMetadata(
+      () => invoke('pr:setAssignees', projectId, owner, repo, pullNumber, logins),
+      'The assignees could not be saved',
+      (value) => this.access.patchPullRequest(owner, repo, pullNumber, { assignees: value })
+    )
+  }
+
+  /**
+   * Attach a milestone to a pull request, or clear it with `null`.
+   *
+   * A cleared milestone is a successful write whose value is null, which is why the
+   * outcome carries a status rather than leaning on a null return.
+   */
+  async setPullRequestMilestone(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    milestone: number | null
+  ): Promise<PrMetadataOutcome<PullRequestMilestone | null>> {
+    return this.writeMetadata(
+      () => invoke('pr:setMilestone', projectId, owner, repo, pullNumber, milestone),
+      'The milestone could not be saved',
+      (value) => this.access.patchPullRequest(owner, repo, pullNumber, { milestone: value })
+    )
+  }
+
+  private async writeMetadata<T>(
+    write: () => Promise<GitHubMutationResult<T>>,
+    failureFallback: string,
+    apply: (value: T) => void
+  ): Promise<PrMetadataOutcome<T>> {
+    this.access.markBusy('pr-metadata', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      const result = await write()
+      if (result.status === 'permission_required') {
+        this.access.setGitHubPermission(result)
+        return { status: 'failed', message: result.message }
+      }
+      apply(result.value)
+      return { status: 'saved', value: result.value }
+    } catch (reason) {
+      return { status: 'failed', message: errorMessage(reason, failureFallback) }
+    } finally {
+      this.access.markBusy('pr-metadata', false)
     }
   }
 
@@ -420,49 +653,6 @@ export class GitPullRequestOperations {
   }
 
   /**
-   * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
-   * its GraphQL node id, because GitHub exposes no REST endpoint for this.
-   */
-  async minimizePrComment(
-    projectId: string,
-    owner: string,
-    repo: string,
-    pullNumber: number,
-    nodeId: string,
-    reason: PrMinimizeReason
-  ): Promise<boolean> {
-    this.access.markBusy('pr-comment-hide', true)
-    this.access.setError(null)
-    this.access.setGitHubPermission(null)
-    try {
-      return (
-        this.resolveMutation(
-          await invoke('pr:commentMinimize', projectId, owner, repo, pullNumber, nodeId, reason)
-        ) === true
-      )
-    } catch (error) {
-      this.access.setError(errorMessage(error, 'The comment could not be hidden'))
-      return false
-    } finally {
-      this.access.markBusy('pr-comment-hide', false)
-    }
-  }
-
-  /** Create `.cio/git/pr/<number>/` so an agent has somewhere to write its report. */
-  async createPrReviewWorkspace(
-    projectId: string,
-    pullNumber: number,
-    threadId?: string
-  ): Promise<string | null> {
-    try {
-      return await invoke('pr:reviewWorkspace', projectId, pullNumber, threadId)
-    } catch (reason) {
-      this.access.setError(errorMessage(reason, 'The review workspace could not be created'))
-      return null
-    }
-  }
-}
-  /**
    * Settle or reopen one inline thread.
    *
    * Resolution belongs to the thread and lives on GraphQL, so this addresses the
@@ -508,3 +698,46 @@ export class GitPullRequestOperations {
     }
   }
 
+  /**
+   * Hide a comment behind GitHub's minimised treatment. Addresses the comment by
+   * its GraphQL node id, because GitHub exposes no REST endpoint for this.
+   */
+  async minimizePrComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    reason: PrMinimizeReason
+  ): Promise<boolean> {
+    this.access.markBusy('pr-comment-hide', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke('pr:commentMinimize', projectId, owner, repo, pullNumber, nodeId, reason)
+        ) === true
+      )
+    } catch (error) {
+      this.access.setError(errorMessage(error, 'The comment could not be hidden'))
+      return false
+    } finally {
+      this.access.markBusy('pr-comment-hide', false)
+    }
+  }
+
+  /** Create `.cio/git/pr/<number>/` so an agent has somewhere to write its report. */
+  async createPrReviewWorkspace(
+    projectId: string,
+    pullNumber: number,
+    threadId?: string
+  ): Promise<string | null> {
+    try {
+      return await invoke('pr:reviewWorkspace', projectId, pullNumber, threadId)
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'The review workspace could not be created'))
+      return null
+    }
+  }
+}

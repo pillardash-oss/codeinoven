@@ -122,6 +122,60 @@ export function validatePrNumber(value: unknown): number {
   return validateBoundedInteger(value, 'Pull request number', 1, MAX_GITHUB_NUMERIC_ID)
 }
 
+/**
+ * Validate the label names one write replaces a pull request's set with.
+ *
+ * GitHub caps a label name at 50 characters and the list is bounded well below
+ * its own per-issue limit, because a longer list is a caller bug rather than a
+ * user choice. Duplicates are dropped instead of rejected: the result is a set,
+ * so sending one twice cannot mean anything different from sending it once.
+ */
+export function validatePrLabelNames(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Label names must be an array')
+  if (value.length > 50) throw new TypeError('Label names must be 50 at most')
+  const seen = new Set<string>()
+  const labels: string[] = []
+  value.forEach((entry, index) => {
+    const name = validateBoundedString(entry, `Label name[${index}]`, 1, 50)
+    const key = name.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    labels.push(name)
+  })
+  return labels
+}
+
+/**
+ * Validate the logins one write replaces a pull request's assignees with.
+ *
+ * Ten is GitHub's own cap on how many accounts one issue may carry, and the
+ * alphabet check keeps an arbitrary string out of the request body: a login is
+ * always letters, digits and dashes, plus the bracketed `[bot]` suffix app
+ * accounts use.
+ */
+export function validatePrAssigneeLogins(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Assignee logins must be an array')
+  if (value.length > 10) throw new TypeError('A pull request can carry 10 assignees at most')
+  const seen = new Set<string>()
+  const logins: string[] = []
+  value.forEach((entry, index) => {
+    const login = validateBoundedString(entry, `Assignee login[${index}]`, 1, 64)
+    if (!/^[A-Za-z0-9-]+(?:\[bot\])?$/u.test(login)) {
+      throw new TypeError(`Invalid assignee login[${index}]`)
+    }
+    const key = login.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    logins.push(login)
+  })
+  return logins
+}
+
+/** Validate the milestone number a pull request is attached to. */
+export function validatePrMilestoneNumber(value: unknown): number {
+  return validateBoundedInteger(value, 'Milestone number', 1, MAX_GITHUB_NUMERIC_ID)
+}
+
 /** Validate a merge/rebase target branch or ref. */
 export function validateMergeTarget(value: unknown): string {
   return validateBranchName(value, 'Merge target')

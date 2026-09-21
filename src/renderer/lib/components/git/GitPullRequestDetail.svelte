@@ -42,6 +42,7 @@
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
   import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
+  import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
   import {
     buildConversation,
     conversationKindLabel,
@@ -918,8 +919,8 @@
     {:else if tab === 'conversation'}
       <GitPullRequestDetailConversation
         nodes={conversation}
-        {projectId}
         files={bundle?.files ?? []}
+        {projectId}
         {identity}
         {number}
         authorLogin={summary.authorLogin}
@@ -1231,15 +1232,21 @@
 <GitPullRequestDetailMergeDialogs
   {number}
   {summary}
-  {method}
-  checksFailure={checks?.state === 'failure'}
-  {mergeFieldSuffix}
-  bind:mergeOpen={mergeConfirm}
   bind:closeOpen={closeConfirm}
   bind:resolveOpen={resolveConfirm}
-  bind:commitTitle
-  bind:commitMessage
-  onMerge={() => void merge()}
   onResolveLocally={() => onResolveLocally?.(summary)}
   onClosePullRequest={() => void closePullRequest()}
+/>
+
+<PrMergeConfirmDialog
+  {number}
+  {summary}
+  {method}
+  checksFailure={checks?.state === 'failure'}
+  fieldSuffix={mergeFieldSuffix}
+  busy={merging}
+  bind:open={mergeConfirm}
+  bind:commitTitle
+  bind:commitMessage
+  onConfirm={() => void merge()}
 />

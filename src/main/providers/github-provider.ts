@@ -21,10 +21,11 @@ import type {
   PullRequestDetail,
   PullRequestFile,
   PullRequestLabel,
+  PullRequestMilestone,
   PullRequestReview,
   PullRequestReviewComment,
-  PullRequestPage,
   PullRequestReviewThread,
+  PullRequestPage,
   PullRequestReference,
   PullRequestSummary,
   RepositoryMentionUser,
@@ -42,8 +43,8 @@ import type {
   PrCommentTarget,
   PullRequestTarget,
   ReplyPrReviewCommentInput,
-  UpdatePrCommentInput
   ResolvePrReviewThreadInput,
+  UpdatePrCommentInput
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
 
@@ -132,6 +133,20 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
             name
             color
           }
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            name
+            avatarUrl
+          }
+        }
+        milestone {
+          number
+          title
+          state
+          description
+          dueOn
         }
         totalCommentsCount
         commits(last: 1) {
@@ -616,21 +631,6 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  /** Build the permalink GitHub's own site uses for a pull request conversation. */
-  private pullPermalink(input: PullRequestTarget): string {
-    return `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pullNumber)}`
-  }
-
-  /** Map an inline diff comment. GitHub's site links these with `#discussion_r<id>`. */
-  private toReviewComment(
-    payload: unknown,
-    input: PullRequestTarget
-  ): PullRequestReviewComment | null {
-    if (typeof payload !== 'object' || payload === null) return null
-    const record = payload as Record<string, unknown>
-    const id = this.readNumber(record, 'id')
-    if (id <= 0) return null
-    const line = this.readNumber(record, 'line')
   /**
    * Resolution state for each inline thread.
    *
@@ -688,6 +688,21 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
+  /** Build the permalink GitHub's own site uses for a pull request conversation. */
+  private pullPermalink(input: PullRequestTarget): string {
+    return `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pullNumber)}`
+  }
+
+  /** Map an inline diff comment. GitHub's site links these with `#discussion_r<id>`. */
+  private toReviewComment(
+    payload: unknown,
+    input: PullRequestTarget
+  ): PullRequestReviewComment | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const line = this.readNumber(record, 'line')
     const reviewId = this.readNumber(record, 'pull_request_review_id')
     const inReplyToId = this.readNumber(record, 'in_reply_to_id')
     const side = this.readString(record, 'side')
@@ -821,6 +836,73 @@ export class GitHubProvider implements GitProvider {
           bot: this.readString(record, 'type') === 'Bot' || login.endsWith('[bot]')
         }
       ]
+    })
+  }
+
+  /** Replace the labels a pull request carries, answering with the labels it now has. */
+  async setPullRequestLabels(
+    input: PullRequestTarget & { labels: string[] }
+  ): Promise<PullRequestLabel[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/issues/${input.pullNumber}/labels`,
+      { method: 'PUT', body: JSON.stringify({ labels: input.labels }) }
+    )
+    return this.toLabels(response)
+  }
+
+  /**
+   * Replace a pull request's assignees.
+   *
+   * The issues endpoint rather than the pulls one: assignees are an issue field,
+   * and it is also the only shape that answers with the resulting accounts, so the
+   * caller never has to reconstruct what the provider decided.
+   */
+  async setPullRequestAssignees(
+    input: PullRequestTarget & { logins: string[] }
+  ): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/issues/${input.pullNumber}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ assignees: input.logins })
+    })
+    const record = Array.isArray(response) ? {} : response
+    return this.toAssignees(record)
+  }
+
+  /** Attach or clear a pull request's milestone. An explicit null detaches it. */
+  async setPullRequestMilestone(
+    input: PullRequestTarget & { milestone: number | null }
+  ): Promise<PullRequestMilestone | null> {
+    const response = await this.request(`${this.repoPath(input)}/issues/${input.pullNumber}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ milestone: input.milestone })
+    })
+    const record = Array.isArray(response) ? {} : response
+    return this.toMilestone(record['milestone'])
+  }
+
+  /** The repository's own label catalog, which a label picker draws its chips from. */
+  async listRepositoryLabels(input: { owner: string; repo: string }): Promise<PullRequestLabel[]> {
+    const response = await this.request(`${this.repoPath(input)}/labels?per_page=100`, {
+      method: 'GET'
+    })
+    return this.toLabels(response)
+  }
+
+  /** The repository's open milestones. Closed ones are history, not a choice. */
+  async listRepositoryMilestones(input: {
+    owner: string
+    repo: string
+  }): Promise<PullRequestMilestone[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/milestones?state=open&per_page=100`,
+      {
+        method: 'GET'
+      }
+    )
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestMilestone[] => {
+      const milestone = this.toMilestone(item)
+      return milestone ? [milestone] : []
     })
   }
 
@@ -1446,9 +1528,53 @@ export class GitHubProvider implements GitProvider {
       updatedAt: this.readString(record, 'updatedAt') ?? '',
       comments: this.readNumber(record, 'totalCommentsCount'),
       labels: this.readLabels(record),
+      assignees: this.readGraphqlAssignees(record),
+      milestone: this.readGraphqlMilestone(record),
       ...(checks ? { checks } : {}),
       mergeable: this.readMergeable(record),
       mergeableState: mergeStateStatus ? mergeStateStatus.toLowerCase() : null
+    }
+  }
+
+  /**
+   * Assigned accounts from the GraphQL listing.
+   *
+   * The listing's `assignees` connection is typed as users, so the app-account
+   * signal is the `[bot]` login suffix here rather than the user `type` REST
+   * exposes.
+   */
+  private readGraphqlAssignees(record: Record<string, unknown>): RepositoryMentionUser[] {
+    const connection = this.readRecord(record, 'assignees')
+    const nodes: unknown[] =
+      connection && Array.isArray(connection['nodes']) ? connection['nodes'] : []
+    return nodes.flatMap((node): RepositoryMentionUser[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const entry = node as Record<string, unknown>
+      const login = this.readString(entry, 'login')?.trim()
+      if (!login) return []
+      return [
+        {
+          login,
+          name: this.readString(entry, 'name'),
+          avatarUrl: this.readString(entry, 'avatarUrl'),
+          bot: login.endsWith('[bot]')
+        }
+      ]
+    })
+  }
+
+  /** The milestone a GraphQL listing node reports, or null when it has none. */
+  private readGraphqlMilestone(record: Record<string, unknown>): PullRequestMilestone | null {
+    const milestone = this.readRecord(record, 'milestone')
+    if (!milestone) return null
+    const number = this.readNumber(milestone, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      title: this.readString(milestone, 'title') ?? `Milestone ${number}`,
+      state: this.readString(milestone, 'state') === 'CLOSED' ? 'closed' : 'open',
+      description: this.readString(milestone, 'description'),
+      dueOn: this.readString(milestone, 'dueOn')
     }
   }
 
@@ -1470,6 +1596,86 @@ export class GitHubProvider implements GitProvider {
       const name = this.readString(entry, 'name')
       if (!name) return []
       return [{ name, color: this.readString(entry, 'color') ?? '' }]
+    })
+  }
+
+  /**
+   * Map a label list from either REST shape.
+   *
+   * The label endpoints answer with label objects while older payloads answer
+   * with the bare names, so both are read here and a name that is not a usable
+   * chip is dropped rather than drawn as an empty one.
+   */
+  private toLabels(payload: unknown): PullRequestLabel[] {
+    if (!Array.isArray(payload)) return []
+    const seen = new Set<string>()
+    const labels: PullRequestLabel[] = []
+    for (const entry of payload) {
+      const label = this.toLabel(entry)
+      if (!label) continue
+      const key = label.name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      labels.push(label)
+    }
+    return labels
+  }
+
+  /** One label from either REST shape, or null when it carries no usable name. */
+  private toLabel(entry: unknown): PullRequestLabel | null {
+    if (typeof entry === 'string') {
+      const name = entry.trim()
+      return name ? { name, color: '', description: null } : null
+    }
+    if (typeof entry !== 'object' || entry === null) return null
+    const record = entry as Record<string, unknown>
+    const name = this.readString(record, 'name')?.trim()
+    if (!name) return null
+    return {
+      name,
+      color: this.readString(record, 'color') ?? '',
+      description: this.readString(record, 'description')
+    }
+  }
+
+  /** Map one milestone payload, or null when it is not a usable milestone. */
+  private toMilestone(payload: unknown): PullRequestMilestone | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Milestone ${number}`,
+      state: this.readString(record, 'state') === 'closed' ? 'closed' : 'open',
+      description: this.readString(record, 'description'),
+      dueOn: this.readString(record, 'due_on')
+    }
+  }
+
+  /** Assigned accounts from an issue payload, deduplicated by login. */
+  private toAssignees(record: Record<string, unknown>): RepositoryMentionUser[] {
+    const raw: unknown[] = Array.isArray(record['assignees'])
+      ? (record['assignees'] as unknown[])
+      : []
+    const seen = new Set<string>()
+    return raw.flatMap((entry): RepositoryMentionUser[] => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const user = entry as Record<string, unknown>
+      const login = this.readString(user, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(user, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(user, 'avatar_url'),
+          bot: this.readString(user, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
     })
   }
 
@@ -1552,6 +1758,9 @@ export class GitHubProvider implements GitProvider {
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at') ?? '',
       comments: this.readNumber(record, 'comments'),
+      labels: this.toLabels(record['labels']),
+      assignees: this.toAssignees(record),
+      milestone: this.toMilestone(record['milestone']),
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       mergeableState: mergeableStateRaw || null
     }
