@@ -367,270 +367,281 @@
     {/if}
 
     <!--
-      The selection bar names what a batch would act on and offers only the actions
-      that apply to every row picked, so a mixed selection of open and closed pull
-      requests still says exactly how many of each it will touch.
+      The rows scroll behind the selection bar rather than above it: the bar rides
+      on the bottom edge of the list, so picking a row never pushes twenty rows down
+      the panel. This is the one surface a user sweeps repeatedly, and a list that
+      moves under the pointer while it is being swept is the worst possible feedback
+      there. Its wrapper ignores the pointer so the row behind the bar's own margins
+      stays clickable, and the scroller is given room to lift its last row clear of
+      the bar.
     -->
-    {#if selectedItems.length > 0}
-      <div
-        class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-elevated/50 px-2 py-1.5"
-      >
-        <span class="text-[0.625rem] font-medium tabular-nums text-foreground">
-          {selectedItems.length} selected
-        </span>
-        <span class="flex-1"></span>
-        {#if closableSelection.length > 0}
-          <button
-            type="button"
-            class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
-            title={`Close ${closableSelection.length} selected ${
-              closableSelection.length === 1 ? 'pull request' : 'pull requests'
-            } without merging`}
-            onclick={() => onAction({ kind: 'close', targets: closableSelection })}
-          >
-            <X size={11} />
-            Close {closableSelection.length}
-          </button>
-        {/if}
-        {#if reopenableSelection.length > 0}
-          <button
-            type="button"
-            class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title={`Reopen ${reopenableSelection.length} selected ${
-              reopenableSelection.length === 1 ? 'pull request' : 'pull requests'
-            }`}
-            onclick={() => onAction({ kind: 'reopen', targets: reopenableSelection })}
-          >
-            <RotateCcw size={11} />
-            Reopen {reopenableSelection.length}
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Clear the selection"
-          onclick={clearSelection}
-        >
-          Clear
-        </button>
-      </div>
-    {/if}
-
-    <div class="min-h-0 flex-1 overflow-y-auto">
-      {#if loading && items.length === 0}
-        <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
-          Loading pull requests…
-        </div>
-      {:else if accessError}
-        <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
-          <GitPullRequestClosed size={18} class="text-danger" />
-          <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
-          <button
-            type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            data-external-url={githubAppInstallUrl()}
-            onclick={() => void openInBrowser(githubAppInstallUrl())}
-          >
-            Install GitHub App
-          </button>
-        </div>
-      {:else if items.length === 0}
-        <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-          <GitPullRequest size={18} class="text-dimmed" />
-          <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-            No {state === 'all' ? '' : state} pull requests.
-          </p>
-          {#if filter !== 'all'}
-            <!--
+    <div class="relative min-h-0 flex-1">
+      <div class="h-full overflow-y-auto {selectedItems.length > 0 ? 'pb-11' : ''}">
+        {#if loading && items.length === 0}
+          <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
+            <Loader2 size={13} class="animate-spin" />
+            Loading pull requests…
+          </div>
+        {:else if accessError}
+          <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
+            <GitPullRequestClosed size={18} class="text-danger" />
+            <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
+            <button
+              type="button"
+              class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              data-external-url={githubAppInstallUrl()}
+              onclick={() => void openInBrowser(githubAppInstallUrl())}
+            >
+              Install GitHub App
+            </button>
+          </div>
+        {:else if items.length === 0}
+          <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+            <GitPullRequest size={18} class="text-dimmed" />
+            <p class="text-[0.6875rem] leading-relaxed text-dimmed">
+              No {state === 'all' ? '' : state} pull requests.
+            </p>
+            {#if filter !== 'all'}
+              <!--
               An empty list under a filter is the one case where "there are none"
               and "you are not looking at all of them" look identical, so the
               narrowing choice is named rather than left to the menu's tint.
             -->
-            <p class="text-[0.5625rem] leading-relaxed text-dimmed">
-              The {prListFilterLabel(filter)} filter is on.
-            </p>
-          {/if}
-        </div>
-      {:else}
-        {#each items as pr, index (pr.number)}
-          {@const hasIssue = identity
-            ? gitState.hasPrIssue(identity.owner, identity.repo, pr.number)
-            : false}
-          {@const Icon = icon(pr)}
-          {@const labels = pr.labels ?? []}
-          {@const shownLabels = labels.slice(0, VISIBLE_LABELS)}
-          {@const hiddenLabels = labels.slice(VISIBLE_LABELS)}
-          {@const checksState = pr.checks?.state ?? 'none'}
-          {@const ChecksIcon = prChecksStateIcon(checksState)}
-          {@const rowSelected = selected[pr.number] === true}
-          <PrRowContextMenu
-            {pr}
-            targets={targetsFor(pr)}
-            onOpen={(target) => onAction({ kind: 'open', targets: [target] })}
-            onOpenInBrowser={(target) => onAction({ kind: 'open-in-browser', targets: [target] })}
-            onCopyLinks={(targets) => onAction({ kind: 'copy-links', targets })}
-            onCopyBranches={(targets) => onAction({ kind: 'copy-branches', targets })}
-            onClosePullRequests={(targets) => onAction({ kind: 'close', targets })}
-            onReopenPullRequests={(targets) => onAction({ kind: 'reopen', targets })}
-            onExplain={(target) => onAction({ kind: 'explain', targets: [target] })}
-            onQuickChat={(target) => onAction({ kind: 'quick-chat', targets: [target] })}
-            onAgentReview={(target) => onAction({ kind: 'agent-review', targets: [target] })}
-            onMerge={(target, method) => onAction({ kind: 'merge', targets: [target], method })}
-            onMarkReady={(target) => onAction({ kind: 'mark-ready', targets: [target] })}
-            onEditLabels={(target) => onAction({ kind: 'labels', targets: [target] })}
-            onEditAssignees={(target) => onAction({ kind: 'assignees', targets: [target] })}
-            onEditMilestone={(target) => onAction({ kind: 'milestone', targets: [target] })}
-            onSelectAll={selectEveryRow}
-            onClearSelection={clearSelection}
-          >
-            <div
-              class="group flex w-full cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-2 text-left transition-colors {rowSelected
-                ? 'bg-primary/10'
-                : 'hover:bg-elevated'}"
-              role="button"
-              tabindex="0"
-              aria-pressed={rowSelected}
-              onpointerenter={() => warmEntry(pr)}
-              onfocus={() => warmEntry(pr)}
-              oncontextmenu={() => {
-                if (!rowSelected) selectRow(pr, index, { additive: false, range: false })
-              }}
-              onclick={(event: MouseEvent) => {
-                if (event.metaKey || event.ctrlKey || event.shiftKey) {
-                  event.preventDefault()
-                  selectRow(pr, index, {
-                    additive: event.metaKey || event.ctrlKey,
-                    range: event.shiftKey
-                  })
-                  return
-                }
-                onOpen(pr)
-              }}
-              onkeydown={(event: KeyboardEvent) => {
-                if (event.key === 'Enter') onOpen(pr)
-              }}
+              <p class="text-[0.5625rem] leading-relaxed text-dimmed">
+                The {prListFilterLabel(filter)} filter is on.
+              </p>
+            {/if}
+          </div>
+        {:else}
+          {#each items as pr, index (pr.number)}
+            {@const hasIssue = identity
+              ? gitState.hasPrIssue(identity.owner, identity.repo, pr.number)
+              : false}
+            {@const Icon = icon(pr)}
+            {@const labels = pr.labels ?? []}
+            {@const shownLabels = labels.slice(0, VISIBLE_LABELS)}
+            {@const hiddenLabels = labels.slice(VISIBLE_LABELS)}
+            {@const checksState = pr.checks?.state ?? 'none'}
+            {@const ChecksIcon = prChecksStateIcon(checksState)}
+            {@const rowSelected = selected[pr.number] === true}
+            <PrRowContextMenu
+              {pr}
+              targets={targetsFor(pr)}
+              onOpen={(target) => onAction({ kind: 'open', targets: [target] })}
+              onOpenInBrowser={(target) => onAction({ kind: 'open-in-browser', targets: [target] })}
+              onCopyLinks={(targets) => onAction({ kind: 'copy-links', targets })}
+              onCopyBranches={(targets) => onAction({ kind: 'copy-branches', targets })}
+              onClosePullRequests={(targets) => onAction({ kind: 'close', targets })}
+              onReopenPullRequests={(targets) => onAction({ kind: 'reopen', targets })}
+              onExplain={(target) => onAction({ kind: 'explain', targets: [target] })}
+              onQuickChat={(target) => onAction({ kind: 'quick-chat', targets: [target] })}
+              onAgentReview={(target) => onAction({ kind: 'agent-review', targets: [target] })}
+              onMerge={(target, method) => onAction({ kind: 'merge', targets: [target], method })}
+              onMarkReady={(target) => onAction({ kind: 'mark-ready', targets: [target] })}
+              onEditLabels={(target) => onAction({ kind: 'labels', targets: [target] })}
+              onEditAssignees={(target) => onAction({ kind: 'assignees', targets: [target] })}
+              onEditMilestone={(target) => onAction({ kind: 'milestone', targets: [target] })}
+              onSelectAll={selectEveryRow}
+              onClearSelection={clearSelection}
             >
-              <span
-                class="mt-0.5 shrink-0"
-                role="presentation"
-                onclick={(event: MouseEvent) => {
-                  event.stopPropagation()
-                  event.preventDefault()
+              <div
+                class="group flex w-full cursor-pointer items-start gap-2 border-b border-border/50 px-3 py-2 text-left transition-colors {rowSelected
+                  ? 'bg-primary/10'
+                  : 'hover:bg-elevated'}"
+                role="button"
+                tabindex="0"
+                aria-pressed={rowSelected}
+                onpointerenter={() => warmEntry(pr)}
+                onfocus={() => warmEntry(pr)}
+                oncontextmenu={() => {
+                  if (!rowSelected) selectRow(pr, index, { additive: false, range: false })
                 }}
-                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+                onclick={(event: MouseEvent) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                    event.preventDefault()
+                    selectRow(pr, index, {
+                      additive: event.metaKey || event.ctrlKey,
+                      range: event.shiftKey
+                    })
+                    return
+                  }
+                  onOpen(pr)
+                }}
+                onkeydown={(event: KeyboardEvent) => {
+                  if (event.key === 'Enter') onOpen(pr)
+                }}
               >
-                <Switch
-                  checked={rowSelected}
-                  onchange={() => selectRow(pr, index, { additive: true, range: false })}
-                  title={rowSelected
-                    ? `Deselect pull request #${pr.number}`
-                    : `Select pull request #${pr.number}`}
-                  aria-label={rowSelected
-                    ? `Deselect pull request #${pr.number}`
-                    : `Select pull request #${pr.number}`}
-                  activeClass="border-primary bg-primary"
-                />
-              </span>
-              <Icon size={13} class="mt-0.5 shrink-0 {stateClass(pr)}" />
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[0.6875rem] font-medium text-foreground">{pr.title}</p>
-                {#if labels.length > 0}
-                  <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
-                    {#each shownLabels as label (label.name)}
-                      <span
-                        class="max-w-[9ch] truncate rounded-full px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
-                        style={prLabelStyle(label.color)}
-                        title={label.name}
-                      >
-                        {label.name}
-                      </span>
-                    {/each}
-                    {#if hiddenLabels.length > 0}
-                      <span
-                        class="shrink-0 text-[0.5rem] tabular-nums text-dimmed"
-                        title={hiddenLabels.map((label) => label.name).join(', ')}
-                      >
-                        +{hiddenLabels.length}
-                      </span>
-                    {/if}
-                  </span>
-                {/if}
-                <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-                  <span class="truncate">#{pr.number} by {githubDisplayLogin(pr.authorLogin)}</span>
-                  {#if pr.authorIsBot}
-                    <BotBadge />
+                <span
+                  class="mt-0.5 shrink-0"
+                  role="presentation"
+                  onclick={(event: MouseEvent) => {
+                    event.stopPropagation()
+                    event.preventDefault()
+                  }}
+                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+                >
+                  <Switch
+                    checked={rowSelected}
+                    onchange={() => selectRow(pr, index, { additive: true, range: false })}
+                    title={rowSelected
+                      ? `Deselect pull request #${pr.number}`
+                      : `Select pull request #${pr.number}`}
+                    aria-label={rowSelected
+                      ? `Deselect pull request #${pr.number}`
+                      : `Select pull request #${pr.number}`}
+                    activeClass="border-primary bg-primary"
+                  />
+                </span>
+                <Icon size={13} class="mt-0.5 shrink-0 {stateClass(pr)}" />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{pr.title}</p>
+                  {#if labels.length > 0}
+                    <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
+                      {#each shownLabels as label (label.name)}
+                        <span
+                          class="max-w-[9ch] truncate rounded-full px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
+                          style={prLabelStyle(label.color)}
+                          title={label.name}
+                        >
+                          {label.name}
+                        </span>
+                      {/each}
+                      {#if hiddenLabels.length > 0}
+                        <span
+                          class="shrink-0 text-[0.5rem] tabular-nums text-dimmed"
+                          title={hiddenLabels.map((label) => label.name).join(', ')}
+                        >
+                          +{hiddenLabels.length}
+                        </span>
+                      {/if}
+                    </span>
                   {/if}
-                  <span class="shrink-0">· {relativeTime(pr.updatedAt)}</span>
-                </p>
-                <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
-                  {pr.headRef} → {pr.baseRef}
-                </p>
-                {#if pr.assignees && pr.assignees.length > 0}
-                  <!--
+                  <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
+                    <span class="truncate"
+                      >#{pr.number} by {githubDisplayLogin(pr.authorLogin)}</span
+                    >
+                    {#if pr.authorIsBot}
+                      <BotBadge />
+                    {/if}
+                    <span class="shrink-0">· {relativeTime(pr.updatedAt)}</span>
+                  </p>
+                  <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
+                    {pr.headRef} → {pr.baseRef}
+                  </p>
+                  {#if pr.assignees && pr.assignees.length > 0}
+                    <!--
                     Assignees and the milestone are one line of plain reports, not
                     controls: a row has two lines of room for chips before the
                     sidebar starts hiding the title, and the menu is where they are
                     changed.
                   -->
-                  <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-                    <span class="truncate"
-                      >{pr.assignees
-                        .map((assignee) => githubDisplayLogin(assignee.login))
-                        .join(', ')}</span
-                    >
-                    {#if pr.milestone}
-                      <span class="shrink-0">· {pr.milestone.title}</span>
-                    {/if}
-                  </p>
-                {:else if pr.milestone}
-                  <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">{pr.milestone.title}</p>
-                {/if}
-              </div>
-              <!--
+                    <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
+                      <span class="truncate"
+                        >{pr.assignees
+                          .map((assignee) => githubDisplayLogin(assignee.login))
+                          .join(', ')}</span
+                      >
+                      {#if pr.milestone}
+                        <span class="shrink-0">· {pr.milestone.title}</span>
+                      {/if}
+                    </p>
+                  {:else if pr.milestone}
+                    <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">{pr.milestone.title}</p>
+                  {/if}
+                </div>
+                <!--
                 The row's right edge carries the review signals GitHub puts there,
                 stacked so a labelled pull request with checks and comments still
                 fits a sidebar width. Each one is a report, not a control: the row
                 is the button, so the signals carry no hover of their own.
               -->
-              <div class="flex shrink-0 flex-col items-end gap-1">
-                {#if hasIssue}
-                  <span
-                    class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"
-                    title="This pull request has merge conflicts and needs resolution"
-                  >
-                    <TriangleAlert size={9} />
-                    Conflicts
-                  </span>
-                {/if}
-                {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
-                  <span
-                    class="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
-                      pr.checks.state
-                    )}"
-                    title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
-                      .total}"
-                  >
-                    <ChecksIcon
-                      size={9}
-                      class={prChecksStateSpinning(pr.checks.state) ? 'animate-spin' : ''}
-                    />
-                    {pr.checks.passed}/{pr.checks.total}
-                  </span>
-                {/if}
-                {#if pr.comments > 0}
-                  <span
-                    class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
-                    title={commentLabel(pr.comments)}
-                  >
-                    <MessageSquare size={10} />
-                    {pr.comments}
-                  </span>
-                {/if}
+                <div class="flex shrink-0 flex-col items-end gap-1">
+                  {#if hasIssue}
+                    <span
+                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"
+                      title="This pull request has merge conflicts and needs resolution"
+                    >
+                      <TriangleAlert size={9} />
+                      Conflicts
+                    </span>
+                  {/if}
+                  {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
+                    <span
+                      class="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
+                        pr.checks.state
+                      )}"
+                      title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
+                        .total}"
+                    >
+                      <ChecksIcon
+                        size={9}
+                        class={prChecksStateSpinning(pr.checks.state) ? 'animate-spin' : ''}
+                      />
+                      {pr.checks.passed}/{pr.checks.total}
+                    </span>
+                  {/if}
+                  {#if pr.comments > 0}
+                    <span
+                      class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
+                      title={commentLabel(pr.comments)}
+                    >
+                      <MessageSquare size={10} />
+                      {pr.comments}
+                    </span>
+                  {/if}
+                </div>
               </div>
-            </div>
-          </PrRowContextMenu>
-        {/each}
+            </PrRowContextMenu>
+          {/each}
+        {/if}
+      </div>
+
+      {#if selectedItems.length > 0}
+        <div
+          class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-2 pb-2"
+        >
+          <div
+            class="selection-bar pointer-events-auto flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-surface/95 px-2 py-1.5 shadow-lg"
+          >
+            <span class="px-0.5 text-[0.625rem] font-medium tabular-nums text-foreground">
+              {selectedItems.length} selected
+            </span>
+            {#if closableSelection.length > 0}
+              <button
+                type="button"
+                class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
+                title={`Close ${closableSelection.length} selected ${
+                  closableSelection.length === 1 ? 'pull request' : 'pull requests'
+                } without merging`}
+                onclick={() => onAction({ kind: 'close', targets: closableSelection })}
+              >
+                <X size={11} />
+                Close {closableSelection.length}
+              </button>
+            {/if}
+            {#if reopenableSelection.length > 0}
+              <button
+                type="button"
+                class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                title={`Reopen ${reopenableSelection.length} selected ${
+                  reopenableSelection.length === 1 ? 'pull request' : 'pull requests'
+                }`}
+                onclick={() => onAction({ kind: 'reopen', targets: reopenableSelection })}
+              >
+                <RotateCcw size={11} />
+                Reopen {reopenableSelection.length}
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              title="Clear the selection"
+              onclick={clearSelection}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
       {/if}
     </div>
 
@@ -661,3 +672,31 @@
     {/if}
   {/if}
 </div>
+
+<style>
+  /*
+    The bar rises the short distance from the edge it lives on, so it reads as
+    arriving over the list rather than as the list making room for it. Compositor
+    only, and 140ms, because this is feedback for a click and not an event.
+  */
+  .selection-bar {
+    animation: pr-selection-bar-enter 140ms ease-out;
+  }
+
+  @keyframes pr-selection-bar-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.375rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .selection-bar {
+      animation: none;
+    }
+  }
+</style>
