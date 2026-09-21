@@ -39,6 +39,7 @@
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
+  import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -10058,6 +10059,13 @@
    *  Activity-only user messages are transparent to the turn span. */
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
 
+  /** What "find in conversation" reads: every message plus the composer's own
+   *  draft, so a word can be located in what was said and in what is being
+   *  written. The draft lives in the bottom chrome rather than the transcript
+   *  scroller, which is why the surface is searched as a whole instead of just
+   *  its scrolling message list. */
+  const CONVERSATION_FIND_SELECTOR = `[data-conversation-searchable], ${COMPOSER_DRAFT_SELECTOR}`
+
   function closeFind(): void {
     findNavState.closeConversationFind()
   }
@@ -10495,9 +10503,9 @@
   {:else}
     {#if showFind}
       <FindInSurface
-        container={scrollEl ?? null}
+        container={threadViewElement}
         focusTrigger={findNavState.conversationFindFocusTrigger}
-        searchSelector="[data-conversation-searchable]"
+        searchSelector={CONVERSATION_FIND_SELECTOR}
         placeholder="Find in conversation…"
         label="Find in conversation"
         onClose={closeFind}

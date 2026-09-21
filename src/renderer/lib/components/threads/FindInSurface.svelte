@@ -11,9 +11,17 @@
   }
 
   interface Props {
+    /** The search scope: everything this find covers. It must contain every
+     *  surface a match may sit in, because the container is both what gets
+     *  searched and what gets watched for changes   the conversation therefore
+     *  passes the whole thread view, not just its scrolling transcript, so the
+     *  composer draft is included. */
     container: HTMLElement | null
     focusTrigger: number
     onClose: () => void
+    /** When set, only the container's descendants matching it are read, which
+     *  is how a surface picks the user content inside it (message bubbles, the
+     *  composer draft) and leaves its own chrome out. */
     searchSelector?: string
     placeholder?: string
     label?: string
@@ -31,6 +39,13 @@
   let query = $state('')
   let activeIndex = $state(0)
   let matches = $state.raw<SurfaceMatch[]>([])
+
+  /** A scan walks every searchable root and republishes the match state, so a
+   *  mutation burst is coalesced rather than answered change by change: a
+   *  streaming turn, or typing into the draft the composer now contributes to
+   *  this surface, would otherwise force a full scan per character. */
+  const SCAN_COALESCE_MS = 120
+  let scanTimer: ReturnType<typeof setTimeout> | null = null
 
   function clearHighlights(): void {
     CSS.highlights?.delete(MATCH_HIGHLIGHT)
@@ -98,9 +113,24 @@
     renderHighlights()
   }
 
+  function cancelScheduledScan(): void {
+    if (scanTimer === null) return
+    clearTimeout(scanTimer)
+    scanTimer = null
+  }
+
+  function scheduleScan(): void {
+    if (scanTimer !== null) return
+    scanTimer = setTimeout(() => {
+      scanTimer = null
+      refreshMatches()
+    }, SCAN_COALESCE_MS)
+  }
+
   async function handleQueryChange(value: string): Promise<void> {
     query = value
     activeIndex = 0
+    cancelScheduledScan()
     await tick()
     refreshMatches()
     scrollToCurrent()
@@ -130,6 +160,7 @@
     query = ''
     activeIndex = 0
     matches = []
+    cancelScheduledScan()
     clearHighlights()
     onClose()
   }
@@ -144,13 +175,19 @@
         return target !== null && target.closest('[data-find-exclude]') !== null
       })
       if (onlyFindBarChanged) return
-      void tick().then(refreshMatches)
+      scheduleScan()
     })
     observer.observe(surface, { childList: true, characterData: true, subtree: true })
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      cancelScheduledScan()
+    }
   })
 
-  onDestroy(clearHighlights)
+  onDestroy(() => {
+    cancelScheduledScan()
+    clearHighlights()
+  })
 </script>
 
 <FindInBar

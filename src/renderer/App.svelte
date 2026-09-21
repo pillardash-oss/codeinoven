@@ -36,6 +36,7 @@
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
+  import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -509,8 +510,7 @@
     if (
       !(active instanceof HTMLElement) ||
       !active.isContentEditable ||
-      !active.classList.contains('rich-markdown-editor') ||
-      !active.id.startsWith('chat-composer-')
+      !active.matches(COMPOSER_DRAFT_SELECTOR)
     ) {
       paletteFocusBookmark = null
       return
