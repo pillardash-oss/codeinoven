@@ -12,7 +12,8 @@
     Loader2,
     ShieldCheck,
     SquareTerminal,
-    Star
+    Star,
+    Trash2
   } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -32,11 +33,11 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import type {
-    InstalledSkillLocation,
     Project,
     SkillMarketDetail,
     SkillMarketEntry,
@@ -72,6 +73,8 @@
   let detail = $state<SkillMarketDetail | null>(null)
   let loading = $state(true)
   let installing = $state(false)
+  let uninstalling = $state(false)
+  let confirmingUninstall = $state(false)
   let error = $state('')
   let installedMessage = $state('')
   let manager = $state<InstallManager>('native')
@@ -196,18 +199,6 @@
     )
   })
 
-  /** Stable identity for one install location, so each list row is keyed. */
-  function installedLocationKey(location: InstalledSkillLocation): string {
-    return `${location.manager}:${location.scope}:${location.projectId ?? location.harnessId ?? 'all'}`
-  }
-
-  /** Where one installed copy lives, in the words the install card uses. */
-  function installedLocationSummary(location: InstalledSkillLocation): string {
-    if (location.path) return `${location.label} · ${location.path}`
-    const availability = location.activation === 'always' ? 'always available' : 'loaded on demand'
-    return `${APP_NAME} utility · ${location.label} · ${availability}`
-  }
-
   function auditClass(status: SkillMarketDetail['audits'][number]['status']): string {
     if (status === 'pass') return 'bg-success/10 text-success'
     if (status === 'warn') return 'bg-warning/10 text-warning'
@@ -277,12 +268,36 @@
       // The install changed the registry and the skill folders on disk, so the
       // shared installed-state read is refreshed before the button flips over.
       await installedSkillState.refresh()
-      installedMessage = `${entry.name} installed successfully · ${destinationSummary}`
+      installedMessage = `${entry.name} installed.`
     } catch (installError) {
       error =
         installError instanceof Error ? installError.message : 'The skill could not be installed.'
     } finally {
       installing = false
+    }
+  }
+
+  /**
+   * Removes the skill from every place it was installed: main drops all the
+   * CodeInOven entries that manage it and hands the native copies to the Skills
+   * CLI, so one action clears global, harness, and project copies alike.
+   */
+  async function uninstallSkill(): Promise<void> {
+    uninstalling = true
+    error = ''
+    installedMessage = ''
+    try {
+      await invoke('utilities:uninstallMarketSkill', entry.skillId)
+      await installedSkillState.refresh()
+      installedMessage = `${entry.name} uninstalled.`
+    } catch (uninstallError) {
+      error =
+        uninstallError instanceof Error
+          ? uninstallError.message
+          : 'The skill could not be uninstalled.'
+    } finally {
+      uninstalling = false
+      confirmingUninstall = false
     }
   }
 
@@ -312,13 +327,12 @@
 
 <!--
   One scope destination per row: they are independent choices, so a shared row
-  made them read as one segmented selector. The trailing hint says what each
-  destination actually covers.
+  made them read as one segmented selector.
 -->
-{#snippet scopeOption(id: InstallScope, label: string, hint: string, Icon: typeof Globe2)}
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Globe2)}
   <button
     type="button"
-    class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {scope ===
+    class="flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {scope ===
     id
       ? 'border-primary bg-primary/10 text-primary'
       : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -327,7 +341,6 @@
   >
     <Icon size={13} />
     {label}
-    <span class="ml-auto text-[0.625rem] font-normal text-dimmed">{hint}</span>
   </button>
 {/snippet}
 
@@ -492,20 +505,10 @@
           <!-- One destination per row: each scope is a separate decision, and
                side-by-side chips read as one shared choice. -->
           <div class="grid gap-2">
-            {@render scopeOption('global', 'Global', 'Every harness and project', Globe2)}
-            {@render scopeOption(
-              'projects',
-              'Projects',
-              'Only the projects you pick',
-              FolderKanban
-            )}
+            {@render scopeOption('global', 'Global', Globe2)}
+            {@render scopeOption('projects', 'Projects', FolderKanban)}
             {#if manager === 'native'}
-              {@render scopeOption(
-                'harnesses',
-                'Harnesses',
-                'Only the harnesses you pick',
-                SquareTerminal
-              )}
+              {@render scopeOption('harnesses', 'Harnesses', SquareTerminal)}
             {/if}
           </div>
           {#if scope === 'projects'}
@@ -601,16 +604,17 @@
         </button>
 
         {#if installedLocations.length > 0}
-          <div class="mt-3 space-y-1 rounded-lg bg-success/10 px-2.5 py-2">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-success">
-              Installed
-            </p>
-            {#each installedLocations as location (installedLocationKey(location))}
-              <p class="break-all text-[0.625rem] leading-relaxed text-success">
-                {installedLocationSummary(location)}
-              </p>
-            {/each}
-          </div>
+          <button
+            class="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-danger/40 px-4 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            type="button"
+            disabled={uninstalling}
+            onclick={() => (confirmingUninstall = true)}
+          >
+            {#if uninstalling}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+                size={13}
+              />{/if}
+            {uninstalling ? 'Uninstalling…' : 'Uninstall'}
+          </button>
         {/if}
       </section>
 
@@ -699,3 +703,20 @@
     </aside>
   </div>
 </div>
+
+<ConfirmDialog
+  open={confirmingUninstall}
+  title="Uninstall skill"
+  confirmLabel="Uninstall"
+  note="This cannot be undone."
+  busy={uninstalling}
+  onCancel={() => (confirmingUninstall = false)}
+  onConfirm={uninstallSkill}
+>
+  <p>
+    Remove <strong class="text-foreground">{entry.name}</strong> from every place it is installed?
+  </p>
+  <p class="mt-2">
+    This deletes the skill files on disk and every {APP_NAME} entry that manages it.
+  </p>
+</ConfirmDialog>

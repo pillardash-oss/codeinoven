@@ -217,6 +217,17 @@ export interface InstalledSkillLocation {
   activation?: UtilityActivation
 }
 
+/**
+ * What one marketplace skill uninstall removed, so the caller can report it.
+ * Native copies are removed by the Skills CLI, which owns that on-disk layout.
+ */
+export interface SkillUninstallReport {
+  /** Registry entries removed, across every scope the skill was installed in. */
+  registryEntries: number
+  /** Native scopes cleaned: the user-level layout plus one per project. */
+  nativeScopes: number
+}
+
 export type SkillMarketView = 'all-time' | 'trending' | 'hot'
 
 export interface SkillMarketLeaderboard {

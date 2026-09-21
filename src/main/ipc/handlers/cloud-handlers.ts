@@ -1,16 +1,16 @@
 import { app } from 'electron'
-import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { cp, mkdir, readFile, stat, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { APP_NAME } from '../../../lib/brand'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../../lib/native-skill-paths'
-import { resolvePackageCommand } from '../../drivers/cli-environment'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../../providers/base-url'
 import { resolveDeploymentProvider } from '../../providers/registry'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { listInstalledSkillLocations } from '../../utilities/installed-skill-locations'
+import { runSkillsCli } from '../../utilities/skills-cli'
+import { uninstallMarketSkill } from '../../utilities/skill-uninstall'
 import { listHarnesses } from '../../agents/harness-registry'
 import { Logger } from '../../system/logger'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
@@ -467,41 +467,18 @@ function prComposeRepairPrompt(response: AgentMessage, attempt: number): string 
   ].join('\n')
 }
 
-/** Reduce local/tracking ref spellings to the branch name GitHub expects. */
-
-function installSkillWithPackageManager(args: string[], cwd: string): Promise<string> {
-  return new Promise((resolveInstall, rejectInstall) => {
-    const launch = resolvePackageCommand('execute', 'skills', args, {
-      ...process.env,
-      DISABLE_TELEMETRY: '1',
-      DO_NOT_TRACK: '1'
-    })
-    const child = spawn(launch.command, launch.args, {
-      cwd,
-      env: launch.env,
-      shell: launch.shell,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    let output = ''
-    const append = (chunk: Buffer): void => {
-      output = `${output}${chunk.toString('utf-8')}`.slice(-200_000)
-    }
-    child.stdout.on('data', append)
-    child.stderr.on('data', append)
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 180_000)
-    child.once('error', (error) => {
-      clearTimeout(timeout)
-      rejectInstall(error)
-    })
-    child.once('close', (code) => {
-      clearTimeout(timeout)
-      if (code === 0) resolveInstall(output.trim())
-      else rejectInstall(new Error(output.trim() || `Skills CLI exited with code ${code ?? -1}`))
-    })
-  })
-}
-
 const CANONICAL_ONLY_GLOBAL_SKILL_AGENTS = new Set(['opencode', 'codex', 'antigravity'])
+
+/**
+ * The Skills CLI classifies every agent whose skills folder is the canonical
+ * `.agents/skills` as universal, and for a global install it writes the skill
+ * straight into that canonical folder instead of linking it out to the agent's
+ * own folder. Naming one universal agent is therefore how CodeInOven asks for
+ * the global install the card promises: one folder in `~/.agents/skills` and
+ * nothing else, rather than the CLI's `--agent '*'` fan-out, which drops a
+ * symlink in every agent folder it knows about.
+ */
+const CANONICAL_SKILL_AGENT = 'codex'
 
 /**
  * Skills CLI currently leaves universal agents in the canonical global folder
@@ -1857,7 +1834,11 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
 
     const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    let agentTargets = ['*']
+    // Each scope installs into the destination the card advertises and nowhere
+    // else: a global install is the canonical `~/.agents/skills` folder, a
+    // project install is that project's own `.agents/skills` folder, and a
+    // harness install is the folders of the harnesses that were picked.
+    let agentTargets = [CANONICAL_SKILL_AGENT]
     if (scopeKind === 'harnesses') {
       agentTargets = selectedIds(scope['harnessIds'], 'Harness IDs')
       if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
@@ -1872,7 +1853,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     for (const directory of destinations) {
       for (const agentTarget of agentTargets) {
         outputs.push(
-          await installSkillWithPackageManager(
+          await runSkillsCli(
             [
               'add',
               installSource,
@@ -1880,6 +1861,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
               skillId,
               '--agent',
               agentTarget,
+              // Real folders instead of symlinks back to a canonical copy, so an
+              // uninstall can never leave a dangling link behind.
+              '--copy',
               '-y',
               ...(scopeKind === 'projects' ? [] : ['--global'])
             ],
@@ -1894,11 +1878,19 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
   })
 
-  ipcMain.handle('utilities:installedSkillLocations', async () => {
-    const projects = (await projectManager.listProjects())
+  /** Projects a native skill scan can look into: local ones with a real path. */
+  const skillScanProjects = async (): Promise<Array<{ id: string; name: string; path: string }>> =>
+    (await projectManager.listProjects())
       .filter((project) => project.source !== 'ssh' && Boolean(project.path))
       .map((project) => ({ id: project.id, name: project.name, path: project.path }))
-    return listInstalledSkillLocations(storage, projects)
+
+  ipcMain.handle('utilities:installedSkillLocations', async () =>
+    listInstalledSkillLocations(storage, await skillScanProjects())
+  )
+
+  ipcMain.handle('utilities:uninstallMarketSkill', async (_, rawSkillId: unknown) => {
+    const skillId = validateEntityId(rawSkillId, 'Skill ID', 200)
+    return uninstallMarketSkill(storage, skillId, await skillScanProjects(), app.getPath('home'))
   })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
