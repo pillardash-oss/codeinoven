@@ -16,6 +16,7 @@ import { Logger } from '../../system/logger'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
 import {
   validateBoundedString,
+  validateBoolean,
   validateBranchName,
   validateEntityId,
   validatePrCommentBody,
@@ -1372,13 +1373,16 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       // Fetched together so the sidebar renders one complete view, not six
       // staggered ones. Optional surfaces degrade to empty rather than failing
       // the whole bundle (e.g. a repo with checks disabled).
-      const [detail, commits, comments, reviews, reviewComments, files, checks] = await Promise.all(
-        [
+      const [detail, commits, comments, reviews, reviewComments, reviewThreads, files, checks] =
+        await Promise.all([
           provider.getPullRequest(target),
           provider.listPullRequestCommits(target).catch(() => []),
           provider.listPullRequestComments(target).catch(() => []),
           provider.listPullRequestReviews(target).catch(() => []),
           provider.listPullRequestReviewComments(target).catch(() => []),
+          // Resolution is GraphQL-only and optional: a thread the read could not
+          // reach must not cost the reader the comments themselves.
+          provider.listPullRequestReviewThreads(target).catch(() => []),
           provider.listPullRequestFiles(target).catch(() => []),
           provider
             .getPullRequestChecks(target)

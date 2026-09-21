@@ -919,6 +919,7 @@
       <GitPullRequestDetailConversation
         nodes={conversation}
         {projectId}
+        files={bundle?.files ?? []}
         {identity}
         {number}
         authorLogin={summary.authorLogin}

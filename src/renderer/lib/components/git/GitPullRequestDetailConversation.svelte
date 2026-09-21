@@ -4,8 +4,9 @@
    *
    * Each unit of the stream is one thing that happened: the description, a
    * comment, or a submitted review together with the inline threads that review
-   * wrote. The rail on the left is what makes the order readable, and a unit's
-   * dot carries its kind so the stream scans without reading every badge.
+   * wrote. Top-level units are peers, so they simply follow each other with room
+   * between them; the tree belongs to a unit that has children, which is a review
+   * over the threads it wrote and a thread over the replies to it.
    *
    * Replying is deliberately two different acts, because GitHub treats them
    * differently: an inline thread takes a real reply through the review-comment
@@ -15,14 +16,15 @@
   import { MessageSquareReply, MessagesSquare } from '@lucide/svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
+  import type { PullRequestFile } from '$shared/types'
   import PrCommentCard from './PrCommentCard.svelte'
   import PrReplyBox from './PrReplyBox.svelte'
   import PrReviewThread from './PrReviewThread.svelte'
   import GitPullRequestDetailCommentDialogs from './GitPullRequestDetailCommentDialogs.svelte'
   import {
     conversationKindLabel,
-    conversationNodeDotClass,
     conversationQuoteBlock,
+    filePatchFor,
     reviewBadgeClass,
     type ConversationEntry,
     type ConversationNode,
@@ -31,6 +33,8 @@
 
   interface Props {
     nodes: ConversationNode[]
+    /** Changed files, so a thread can read the patch its line lives in. */
+    files: PullRequestFile[]
     projectId: string
     identity: { owner: string; repo: string }
     number: number
@@ -49,6 +53,7 @@
 
   let {
     nodes,
+    files,
     projectId,
     identity,
     number,
@@ -128,20 +133,23 @@
 {/snippet}
 
 {#snippet reviewThreads(threads: ReviewThread[])}
-  {#each threads as thread (thread.key)}
-    <PrReviewThread
-      {thread}
-      {projectId}
-      {identity}
-      {number}
-      {authorLogin}
-      {onQuote}
-      {onCommentChat}
-      onDelete={(entry) => (deletingEntry = entry)}
-      {onNotice}
-      {onRefresh}
-    />
-  {/each}
+  <div class="flex min-w-0 flex-col gap-3">
+    {#each threads as thread (thread.key)}
+      <PrReviewThread
+        {thread}
+        patch={filePatchFor(files, thread.path)}
+        {projectId}
+        {identity}
+        {number}
+        {authorLogin}
+        {onQuote}
+        {onCommentChat}
+        onDelete={(entry) => (deletingEntry = entry)}
+        {onNotice}
+        {onRefresh}
+      />
+    {/each}
+  </div>
 {/snippet}
 
 {#if nodes.length === 0}
@@ -150,74 +158,59 @@
     <p class="text-[0.6875rem] leading-relaxed text-dimmed">Nothing has been said yet.</p>
   </div>
 {:else}
-  <div class="flex flex-col p-2">
-    {#each nodes as node, index (node.key)}
-      <!--
-        The rail is decoration around the stream's order: the dot marks where a
-        unit starts and the line joins it to the next one, so a long review and a
-        one-line comment read as the same sequence.
-      -->
-      <div class="flex gap-1.5">
-        <div class="relative w-3.5 shrink-0" aria-hidden="true">
-          {#if index > 0}
-            <span class="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-border"></span>
-          {/if}
-          {#if index < nodes.length - 1}
-            <span class="absolute bottom-0 left-1/2 top-3 w-px -translate-x-1/2 bg-border"></span>
-          {/if}
-          <span
-            class="absolute left-1/2 top-3 size-2 -translate-x-1/2 rounded-full {conversationNodeDotClass(
-              node
-            )}"
-          ></span>
-        </div>
-        <div class="min-w-0 flex-1 pb-2.5">
-          {#if node.kind === 'description' || node.kind === 'comment'}
-            <PrCommentCard
-              entry={node.entry}
-              badge={nodeBadge(node)}
-              {projectId}
-              {identity}
-              {number}
-              {authorLogin}
-              {onQuote}
-              {onCommentChat}
-              onReply={(entry) => (replyEntry = entry)}
-              onDelete={(entry) => (deletingEntry = entry)}
-              {onNotice}
-              {onRefresh}
-              footer={replyFooter}
-            />
-          {:else if node.kind === 'review'}
-            <!-- A review and the threads it wrote are one unit: the summary says
-                 what the reviewer concluded, and the threads below it are the
-                 evidence for that conclusion. -->
-            <div class="overflow-hidden rounded-lg border border-border bg-surface">
-              <PrCommentCard
-                entry={node.entry}
-                badge={nodeBadge(node)}
-                framed={false}
-                {projectId}
-                {identity}
-                {number}
-                {authorLogin}
-                {onQuote}
-                {onCommentChat}
-                onReply={(entry) => (replyEntry = entry)}
-                onDelete={(entry) => (deletingEntry = entry)}
-                {onNotice}
-                {onRefresh}
-                footer={replyFooter}
-              />
-              {@render reviewThreads(node.threads)}
-            </div>
-          {:else}
-            <div class="overflow-hidden rounded-lg border border-border bg-surface">
+  <!--
+    Peers with room between them, not a rail: the order is the reading order, and
+    a unit that owns children draws their tree itself.
+  -->
+  <div class="flex flex-col gap-3 p-2.5">
+    {#each nodes as node (node.key)}
+      {#if node.kind === 'description' || node.kind === 'comment'}
+        <PrCommentCard
+          entry={node.entry}
+          badge={nodeBadge(node)}
+          {projectId}
+          {identity}
+          {number}
+          {authorLogin}
+          {onQuote}
+          {onCommentChat}
+          onReply={(entry) => (replyEntry = entry)}
+          onDelete={(entry) => (deletingEntry = entry)}
+          {onNotice}
+          {onRefresh}
+          footer={replyFooter}
+        />
+      {:else if node.kind === 'review'}
+        <!--
+          A review and the threads it wrote are one unit: the summary says what the
+          reviewer concluded, and the threads are the evidence for that conclusion,
+          so they step in under it rather than reading as separate comments.
+        -->
+        <div class="flex min-w-0 flex-col gap-2">
+          <PrCommentCard
+            entry={node.entry}
+            badge={nodeBadge(node)}
+            {projectId}
+            {identity}
+            {number}
+            {authorLogin}
+            {onQuote}
+            {onCommentChat}
+            onReply={(entry) => (replyEntry = entry)}
+            onDelete={(entry) => (deletingEntry = entry)}
+            {onNotice}
+            {onRefresh}
+            footer={replyFooter}
+          />
+          {#if node.threads.length > 0}
+            <div class="ml-3 border-l-2 border-border/60 pl-3">
               {@render reviewThreads(node.threads)}
             </div>
           {/if}
         </div>
-      </div>
+      {:else}
+        {@render reviewThreads(node.threads)}
+      {/if}
     {/each}
   </div>
 {/if}

@@ -56,11 +56,11 @@
       </button>
       {#if expandedFile === fileKey}
         {#if file.patch}
-          <!-- The same hunk renderer an inline thread uses, unclamped: a file's
-               patch is the whole story, so there is nothing to window. -->
+          <!-- The same code renderer an inline thread uses, unwindowed: a file's
+               patch is the whole story, so there is no anchor to centre on. -->
           <PrDiffHunk
-            hunk={file.patch}
-            rows={null}
+            patch={file.patch}
+            context={null}
             class="border-t border-border/40 bg-elevated/20 py-1"
           />
         {:else}

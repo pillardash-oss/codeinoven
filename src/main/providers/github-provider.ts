@@ -24,6 +24,7 @@ import type {
   PullRequestReview,
   PullRequestReviewComment,
   PullRequestPage,
+  PullRequestReviewThread,
   PullRequestReference,
   PullRequestSummary,
   RepositoryMentionUser,
@@ -42,6 +43,7 @@ import type {
   PullRequestTarget,
   ReplyPrReviewCommentInput,
   UpdatePrCommentInput
+  ResolvePrReviewThreadInput,
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
 
@@ -629,6 +631,63 @@ export class GitHubProvider implements GitProvider {
     const id = this.readNumber(record, 'id')
     if (id <= 0) return null
     const line = this.readNumber(record, 'line')
+  /**
+   * Resolution state for each inline thread.
+   *
+   * The comments themselves are REST, but GitHub keeps whether a thread is
+   * settled on the GraphQL thread node, so this reads through the pull
+   * request's `reviewThreads` connection instead. A failure here must not cost
+   * the reader the comments they can still see, which is why the caller treats
+   * it as optional.
+   */
+  async listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]> {
+    const data = await this.runGraphql(
+      'query ReviewThreads($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id isResolved isOutdated comments(first: 100) { nodes { databaseId } } } } } } }',
+      { owner: input.owner, name: input.repo, number: input.pullNumber }
+    )
+    const repository = this.readRecord(data, 'repository')
+    const pullRequest = repository ? this.readRecord(repository, 'pullRequest') : null
+    const connection = pullRequest ? this.readRecord(pullRequest, 'reviewThreads') : null
+    const nodes = connection ? connection['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): PullRequestReviewThread[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const record = node as Record<string, unknown>
+      const nodeId = this.readString(record, 'id')
+      if (!nodeId) return []
+      return [
+        {
+          nodeId,
+          isResolved: record['isResolved'] === true,
+          isOutdated: record['isOutdated'] === true,
+          commentIds: this.readDatabaseIds(record)
+        }
+      ]
+    })
+  }
+
+  /** Settle or reopen one thread through the mutation GraphQL keeps it behind. */
+  async setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void> {
+    await this.runGraphql(
+      input.resolved
+        ? 'mutation ResolveReviewThread($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }'
+        : 'mutation UnresolveReviewThread($threadId: ID!) { unresolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }',
+      { threadId: input.nodeId }
+    )
+  }
+
+  /** The numeric comment ids a GraphQL thread node holds, in thread order. */
+  private readDatabaseIds(thread: Record<string, unknown>): number[] {
+    const comments = this.readRecord(thread, 'comments')
+    const nodes = comments ? comments['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): number[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const id = this.readNumber(node as Record<string, unknown>, 'databaseId')
+      return id > 0 ? [id] : []
+    })
+  }
+
     const reviewId = this.readNumber(record, 'pull_request_review_id')
     const inReplyToId = this.readNumber(record, 'in_reply_to_id')
     const side = this.readString(record, 'side')

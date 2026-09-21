@@ -22,6 +22,7 @@ import type {
   PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
+  PullRequestReviewThread,
   RepositoryMentionUser,
   WorkflowRerunMode
 } from '../../lib/types'
@@ -116,6 +117,18 @@ export interface MinimizePrCommentInput {
 
 /** Submit a review verdict on a pull request. */
 export interface CreatePrReviewInput extends PullRequestTarget {
+/**
+ * Settle or reopen one inline thread.
+ *
+ * Resolution belongs to the thread rather than to any comment in it, and GitHub
+ * exposes the transition only through GraphQL, so the caller supplies the
+ * thread's node id as the read reported it.
+ */
+export interface ResolvePrReviewThreadInput {
+  nodeId: string
+  resolved: boolean
+}
+
   event: PrReviewEvent
   body: string
 }
@@ -172,6 +185,15 @@ export interface GitProvider {
   createPullRequestReview(input: CreatePrReviewInput): Promise<void>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
+  /**
+   * Resolution state for each inline thread on the pull request.
+   *
+   * Kept apart from `listPullRequestReviewComments` because GitHub splits them:
+   * the comments are REST and the threads they hang in are GraphQL-only.
+   */
+  listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]>
+  /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
+  setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
   getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks>
   getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>

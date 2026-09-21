@@ -687,6 +687,22 @@ export const invokeGitContract = {
   /**
    * Resolve account avatars, as `data:` URLs (the renderer's CSP blocks remote
    * image hosts). Each account carries the URL its provider declared, which wins
+  /**
+   * Settle or reopen one inline thread. GitHub keeps resolution on the thread
+   * rather than on its comments, and only GraphQL can read or write it, so the
+   * caller passes the thread's node id.
+   */
+  'pr:threadResolve': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      threadNodeId: string,
+      resolved: boolean
+    ],
+    GitHubMutationResult<boolean>
+  >,
    * over the login-derived guess: a bot account's login alone resolves to
    * GitHub's generated identicon rather than the app's real picture. A login
    * GitHub has no picture for comes back as null, which the UI draws as its

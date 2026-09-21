@@ -6,7 +6,8 @@ import type {
   PullRequestCheck,
   PullRequestFile,
   PullRequestReview,
-  PullRequestReviewComment
+  PullRequestReviewComment,
+  PullRequestReviewThread
 } from '$shared/types'
 import { githubDisplayLogin } from '$lib/format/github-login'
 
@@ -81,6 +82,14 @@ export interface ReviewThread {
   side: PrCommentSide | null
   /** The comment that opened the thread, then its replies in arrival order. */
   comments: ConversationEntry[]
+  /**
+   * GraphQL node id of the thread itself, or null when the read did not reach
+   * GitHub's `reviewThreads`. Without it the thread cannot be settled, so the
+   * reader hides the action rather than offering one that cannot land.
+   */
+  threadNodeId: string | null
+  /** True once the thread is settled, which only GitHub's thread node reports. */
+  resolved: boolean
 }
 
 /**
@@ -173,7 +182,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
     })
   }
 
-  const threads = buildThreads(bundle.reviewComments, bundle.files)
+  const threads = buildThreads(bundle.reviewComments, bundle.files, bundle.reviewThreads)
   const threadsByReview = new Map<number, ReviewThread[]>()
   const unclaimed: ReviewThread[] = []
   for (const thread of threads) {
@@ -221,7 +230,8 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
  */
 function buildThreads(
   comments: PullRequestReviewComment[],
-  files: PullRequestFile[]
+  files: PullRequestFile[],
+  threadStates: PullRequestReviewThread[]
 ): ReviewThread[] {
   const threadOf = new Map<number, ReviewThread>()
   const roots: ReviewThread[] = []
@@ -235,7 +245,9 @@ function buildThreads(
       path: comment.path,
       line: comment.line,
       side: comment.side,
-      comments: [reviewCommentEntry(comment)]
+      comments: [reviewCommentEntry(comment)],
+      threadNodeId: null,
+      resolved: false
     }
     threadOf.set(comment.id, thread)
     roots.push(thread)
@@ -258,6 +270,18 @@ function buildThreads(
     const [root, ...replies] = thread.comments
     if (!root) continue
     thread.comments = [root, ...replies.sort((a, b) => parseAt(a.at) - parseAt(b.at))]
+    // Resolution is attached by the comment ids the thread holds, because the
+    // thread's node id is the only thing GitHub's mutation accepts and the
+    // comments are the only thing the two reads share.
+    const state = threadStates.find((candidate) =>
+      thread.comments.some(
+        (comment) => comment.commentId !== null && candidate.commentIds.includes(comment.commentId)
+      )
+    )
+    if (state) {
+      thread.threadNodeId = state.nodeId
+      thread.resolved = state.isResolved
+    }
   }
 
   return roots.sort((a, b) => {
@@ -416,22 +440,9 @@ export function reviewBadgeClass(meta: string | undefined): string {
   return 'bg-elevated text-dimmed'
 }
 
-/**
- * The dot that marks one unit on the stream's rail, so the kind of each unit
- * reads without reading its badge.
- */
-export function conversationNodeDotClass(node: ConversationNode): string {
-  if (node.kind === 'description') return 'bg-primary'
-  if (node.kind === 'review' && node.entry.meta === 'approved') return 'bg-success'
-  if (node.kind === 'review' && node.entry.meta === 'changes requested') return 'bg-warning'
-  if (node.kind === 'threads') return 'bg-info'
-  if (node.kind === 'review') return 'bg-muted'
-  return 'bg-dimmed'
-}
-
-/** One rendered line of a diff hunk, with the file lines it exists at. */
+/** One rendered line of a diff, with the file lines it exists at. */
 export interface HunkLine {
-  /** The line as the provider sent it, its `+`/`-`/space marker included. */
+  /** The line as the provider sent it, its `+`/`-`/`space` marker included. */
   text: string
   /** Line in the file before the change; null for a line only the new file has. */
   oldNumber: number | null
@@ -439,70 +450,151 @@ export interface HunkLine {
   newNumber: number | null
   /** True for the line the comment is anchored to. */
   anchor: boolean
+  /**
+   * True for the marker row standing in for lines the window skipped. Without it
+   * two hunks would read as if they were adjacent in the file.
+   */
+  gap: boolean
 }
 
-/** The slice of a hunk a reader sees, with what was left above it. */
-export interface HunkWindow {
+/** The slice of a diff a reader sees, and where its lines were read from. */
+export interface DiffContext {
   lines: HunkLine[]
-  /** Lines above the window the reader can still open. */
-  hiddenAbove: number
+  /**
+   * True when the lines came from the file's own patch rather than from the hunk
+   * GitHub attached to the comment. The patch is what carries the lines after the
+   * commented one, which GitHub's `diff_hunk` never does.
+   */
+  fromPatch: boolean
 }
 
-/** Lines of diff context a thread shows ahead of the anchored line by default. */
-export const HUNK_CONTEXT_ROWS = 5
+/** Lines of context shown above and below an anchored line. */
+export const DIFF_CONTEXT_LINES = 4
+
+/** The file's own patch, which is where lines after an anchored line come from. */
+export function filePatchFor(files: PullRequestFile[], path: string): string | null {
+  return files.find((file) => file.path === path)?.patch ?? null
+}
 
 /**
- * The part of a hunk worth showing under a comment.
+ * The code a comment is about: the lines around its anchor, read from the file's
+ * own patch when the surface has one and from GitHub's comment hunk when it does
+ * not.
  *
- * GitHub's hunk ends at the line the comment was written on, so the window ends
- * there as well and reaches back for context: the reader sees the code directly
- * before the line in question, which is the part that explains it. A `rows` of
- * null removes the clamp, for a reader who asked for the whole hunk.
+ * The hunk GitHub attaches to an inline comment ends on the commented line, so on
+ * its own it can only ever show what came before. The file's patch is the same
+ * change with the later lines intact, which is why it is preferred: the reader
+ * gets the code either side of the line instead of a window that stops there.
+ *
+ * A `context` of null removes the window entirely, which is what the Files view
+ * asks for when it renders a whole patch.
  */
-export function hunkWindow(
-  hunk: string | null,
-  anchor: number | null,
-  rows: number | null = HUNK_CONTEXT_ROWS,
-  side: PrCommentSide | null = 'right'
-): HunkWindow {
-  const all = hunkLines(hunk)
-  if (all.length === 0) return { lines: [], hiddenAbove: 0 }
-  // A comment on a removal numbers the file before the change, and that number
-  // can exist on both sides of the same hunk, so the side is what decides which
-  // of the two lines the comment actually meant.
-  const anchorNumber = (line: HunkLine): number | null =>
-    side === 'left' ? line.oldNumber : line.newNumber
-  const isAnchor = (line: HunkLine): boolean =>
-    anchorNumber(line) !== null && anchorNumber(line) === anchor
-  // An outdated comment anchors to nothing, and a hunk with no anchor still has
-  // its tail worth reading, so both fall back to the end.
-  let end = anchor === null ? -1 : all.findLastIndex(isAnchor)
-  if (end < 0) end = all.length - 1
-  const start = rows === null ? 0 : Math.max(0, end - Math.max(rows, 1) + 1)
-  return {
-    lines: all.slice(start, end + 1).map((line) => ({ ...line, anchor: isAnchor(line) })),
-    hiddenAbove: start
+export function diffContext(input: {
+  /** The file's whole patch, when the surface has it. */
+  patch?: string | null
+  /** The hunk GitHub attached to a comment, the fallback when the patch cannot place the anchor. */
+  hunk?: string | null
+  anchor?: number | null
+  side?: PrCommentSide | null
+  /** Lines shown each side of the anchor; null shows everything. */
+  context?: number | null
+}): DiffContext {
+  const {
+    patch = null,
+    hunk = null,
+    anchor = null,
+    side = 'right',
+    context = DIFF_CONTEXT_LINES
+  } = input
+  const patchDiff = parseDiff(patch)
+  const hunkDiff = parseDiff(hunk)
+
+  // Nothing to point at. The Files view wants everything it was given; an inline
+  // comment whose line went outdated keeps the tail of its hunk, which ends on
+  // the line it was written about.
+  if (anchor === null) {
+    if (context === null) {
+      return patchDiff.lines.length > 0
+        ? { lines: patchDiff.lines, fromPatch: true }
+        : { lines: hunkDiff.lines, fromPatch: false }
+    }
+    return { lines: tail(hunkDiff.lines, context * 2 + 1), fromPatch: false }
   }
+
+  const fromPatch = windowAround(patchDiff, anchor, side, context)
+  if (fromPatch) return { lines: fromPatch, fromPatch: true }
+  const fromHunk = windowAround(hunkDiff, anchor, side, context)
+  return { lines: fromHunk ?? [], fromPatch: false }
 }
 
 /**
- * Read a unified hunk into lines that know their own file line numbers.
+ * The window around one anchored line, or null when the text cannot place it.
+ *
+ * A skipped stretch of file is marked with a gap row rather than silently joined,
+ * so the reader never reads two unrelated regions as consecutive lines.
+ */
+function windowAround(
+  diff: ParsedDiff,
+  anchor: number,
+  side: PrCommentSide | null,
+  context: number | null
+): HunkLine[] | null {
+  const anchorIndex = diff.lines.findLastIndex((line) => lineNumber(line, side) === anchor)
+  if (anchorIndex < 0) return null
+  const reach = Math.max(context ?? 0, 0)
+  const first = context === null ? 0 : Math.max(0, anchorIndex - reach)
+  const last =
+    context === null ? diff.lines.length - 1 : Math.min(diff.lines.length - 1, anchorIndex + reach)
+  const window: HunkLine[] = []
+  for (let index = first; index <= last; index += 1) {
+    const line = diff.lines[index]
+    if (!line) continue
+    if (window.length > 0 && diff.hunkOf[index] !== diff.hunkOf[index - 1]) {
+      window.push({ text: '', oldNumber: null, newNumber: null, anchor: false, gap: true })
+    }
+    window.push(line)
+  }
+  return window.map((line) => ({ ...line, anchor: !line.gap && lineNumber(line, side) === anchor }))
+}
+
+/** The last `count` lines, for a comment whose anchor has left the diff. */
+function tail(lines: HunkLine[], count: number): HunkLine[] {
+  return lines.slice(Math.max(0, lines.length - Math.max(count, 1)))
+}
+
+/** The number a line is known by on the side the comment anchored to. */
+function lineNumber(line: HunkLine, side: PrCommentSide | null): number | null {
+  return side === 'left' ? line.oldNumber : line.newNumber
+}
+
+/** A diff read into numbered lines, with the hunk each line came from. */
+interface ParsedDiff {
+  lines: HunkLine[]
+  /** Index of the hunk each line belongs to, so a window can mark a jump. */
+  hunkOf: number[]
+}
+
+/**
+ * Read a unified diff into lines that know their own file line numbers.
  *
  * Context and added lines advance the new file's counter while removed lines do
- * not, which is what makes the `+c,d` in the hunk header meaningful and what
- * lets the reader be pointed at the exact line a comment is about.
+ * not, which is what makes the `+c,d` in a hunk header meaningful and what lets
+ * the reader be pointed at the exact line a comment is about.
  */
-function hunkLines(hunk: string | null): HunkLine[] {
-  if (!hunk) return []
+function parseDiff(text: string | null): ParsedDiff {
+  if (!text) return { lines: [], hunkOf: [] }
   const lines: HunkLine[] = []
+  const hunkOf: number[] = []
   let oldNumber = 0
   let newNumber = 0
+  let hunkIndex = -1
   let inHunk = false
-  for (const text of hunk.split('\n')) {
-    if (text.startsWith('@@')) {
-      const start = hunkStartLineNumbers(text)
+  for (const row of text.split('\n')) {
+    if (row.startsWith('@@')) {
+      const start = hunkStartLineNumbers(row)
       oldNumber = start.old
       newNumber = start.new
+      hunkIndex += 1
       inHunk = true
       continue
     }
@@ -510,27 +602,31 @@ function hunkLines(hunk: string | null): HunkLine[] {
     if (!inHunk) continue
     // The `\ No newline at end of file` marker belongs to the line above it and
     // has a number of its own on neither side.
-    if (text.startsWith('\\')) {
-      lines.push({ text, oldNumber: null, newNumber: null, anchor: false })
+    if (row.startsWith('\\')) {
+      lines.push({ text: row, oldNumber: null, newNumber: null, anchor: false, gap: false })
+      hunkOf.push(hunkIndex)
       continue
     }
-    if (text.startsWith('-')) {
-      lines.push({ text, oldNumber, newNumber: null, anchor: false })
+    if (row.startsWith('-')) {
+      lines.push({ text: row, oldNumber, newNumber: null, anchor: false, gap: false })
+      hunkOf.push(hunkIndex)
       oldNumber += 1
       continue
     }
-    if (text.startsWith('+')) {
-      lines.push({ text, oldNumber: null, newNumber, anchor: false })
+    if (row.startsWith('+')) {
+      lines.push({ text: row, oldNumber: null, newNumber, anchor: false, gap: false })
+      hunkOf.push(hunkIndex)
       newNumber += 1
       continue
     }
     // Context exists in both files, and the two counters only stay level while
     // nothing has been added or removed ahead of it.
-    lines.push({ text, oldNumber, newNumber, anchor: false })
+    lines.push({ text: row, oldNumber, newNumber, anchor: false, gap: false })
+    hunkOf.push(hunkIndex)
     oldNumber += 1
     newNumber += 1
   }
-  return lines
+  return { lines, hunkOf }
 }
 
 /** The line numbers a hunk header starts at, one per side of the change. */

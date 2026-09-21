@@ -1343,3 +1343,26 @@ export class GitState {
 }
 
 export const gitState = new GitState()
+  /**
+   * Settle or reopen one inline review thread. The thread is addressed by its
+   * GraphQL node id, because GitHub keeps resolution on the thread and only
+   * exposes it there.
+   */
+  setPrReviewThreadResolved(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    threadNodeId: string,
+    resolved: boolean
+  ): Promise<boolean> {
+    return this.prOps.setPrReviewThreadResolved(
+      projectId,
+      owner,
+      repo,
+      pullNumber,
+      threadNodeId,
+      resolved
+    )
+  }
+

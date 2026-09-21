@@ -353,6 +353,24 @@ export interface PullRequestCheck {
     | 'timed_out'
     | 'action_required'
     | 'skipped'
+/**
+ * One review thread's GitHub-side state.
+ *
+ * GitHub hangs resolution on the thread rather than on any of its comments, and
+ * exposes it only through GraphQL, so the REST comment list cannot say whether a
+ * thread is settled. This carries that state beside the comments the reader
+ * renders, which is what lets a thread be resolved without leaving the app.
+ */
+export interface PullRequestReviewThread {
+  /** GraphQL global id, the only handle resolve and unresolve accept. */
+  nodeId: string
+  isResolved: boolean
+  /** True once the line the thread was written about has left the diff. */
+  isOutdated: boolean
+  /** Ids of the comments in the thread, which is how a built thread finds it. */
+  commentIds: number[]
+}
+
     | null
   /** Provider page for the run, when one exists. */
   url: string | null
@@ -443,6 +461,8 @@ export interface PrComposeInput {
   currentDescription?: string
 }
 
+  /** Resolution state per inline thread, which only GraphQL reports. */
+  reviewThreads: PullRequestReviewThread[]
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
 export interface GitRepositoryIdentity {
   owner: string

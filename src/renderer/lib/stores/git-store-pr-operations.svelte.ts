@@ -462,3 +462,49 @@ export class GitPullRequestOperations {
     }
   }
 }
+  /**
+   * Settle or reopen one inline thread.
+   *
+   * Resolution belongs to the thread and lives on GraphQL, so this addresses the
+   * thread's node id. Returns whether the write landed; the caller refetches the
+   * bundle, which is what keeps the reader's thread list and its resolved marks
+   * consistent with the server.
+   */
+  async setPrReviewThreadResolved(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    threadNodeId: string,
+    resolved: boolean
+  ): Promise<boolean> {
+    this.access.markBusy('pr-thread-resolve', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(
+          await invoke(
+            'pr:threadResolve',
+            projectId,
+            owner,
+            repo,
+            pullNumber,
+            threadNodeId,
+            resolved
+          )
+        ) !== null
+      )
+    } catch (reason) {
+      this.access.setError(
+        errorMessage(
+          reason,
+          resolved ? 'The thread could not be resolved' : 'The thread could not be reopened'
+        )
+      )
+      return false
+    } finally {
+      this.access.markBusy('pr-thread-resolve', false)
+    }
+  }
+
