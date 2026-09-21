@@ -234,6 +234,7 @@ import type {
   ThreadStatus,
   Thread,
   ThreadSettings,
+  ThreadTransferResult,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
   TurnStreamPartsChange,
@@ -450,6 +451,8 @@ import {
   SPEC_MEMORY_MAX_LESSONS,
   SYSTEM_LAYER_RESERVE_TOKENS,
   TOOL_CATALOG_TTL_MS,
+  TRANSFER_SETTLE_POLL_MS,
+  TRANSFER_SETTLE_TIMEOUT_MS,
   USAGE_RESET_FALLBACK_RETRY_MS,
   USER_TERMINAL_SETTLE_MS,
   assertHarnessRequestCapabilities,
@@ -10560,15 +10563,29 @@ export class ChatEngine {
     return computePromptBudget({ contextWindow }).availableInputTokens
   }
 
-  /** Abort the thread's running session. */
-  async abort(projectId: string, threadId: string): Promise<void> {
+  /**
+   * Abort the thread's running session.
+   *
+   * `reason: 'transfer'` is the cross-instance hand-off stop: it tears the run
+   * down exactly like a user Stop, except it never latches the user-stop flag,
+   * because the run is not ending   it is moving to the instance that asked for
+   * it, and that instance must be able to resume it automatically.
+   */
+  async abort(
+    projectId: string,
+    threadId: string,
+    options: { reason?: 'user' | 'transfer' } = {}
+  ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     // Latch the stop immediately so a failure that arrives mid-teardown cannot
-    // re-track an auto-retry between this point and the status write below.
-    await this.threadManager.markStoppedByUser(projectId, threadId)
+    // re-track an auto-retry between this point and the status write below. A
+    // transfer deliberately skips the latch: the run continues elsewhere.
+    if (options.reason !== 'transfer') {
+      await this.threadManager.markStoppedByUser(projectId, threadId)
+    }
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     if (activeBrainstorm) {
@@ -10702,6 +10719,122 @@ export class ChatEngine {
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     clearNotificationAborting(projectId, threadId)
+  }
+
+  /**
+   * Stop this process's run for a thread another instance asked to take over.
+   *
+   * Nothing here is inferred: the shared `active_turns` ledger already names
+   * this process as the owner, so the release is a deliberate stop (the same
+   * teardown a user Stop performs, minus the user-stop latch) followed by a
+   * deterministic settle of the turn. The turn must be fully settled before the
+   * caller acks, because the adopting instance writes its own ledger row the
+   * moment it resumes   a late settle event from this process would delete it.
+   */
+  async releaseThreadForTransfer(
+    projectId: string,
+    threadId: string
+  ): Promise<{ released: boolean; reason?: string }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { released: false, reason: 'The thread no longer exists.' }
+    if (!thread.sessionId || !thread.settings) {
+      return { released: false, reason: 'This thread has no resumable session to transfer.' }
+    }
+    if (
+      thread.assignmentRole === 'coordinator' ||
+      thread.achievementRole === 'coordinator' ||
+      isOrchestrationChildThread(thread)
+    ) {
+      return {
+        released: false,
+        reason: 'This thread belongs to a coordinated workflow and cannot be moved while it runs.'
+      }
+    }
+    const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+    if (ownerPid !== process.pid) {
+      return { released: false, reason: 'This instance is no longer running that thread.' }
+    }
+    await this.abort(projectId, threadId, { reason: 'transfer' })
+    await this.settleThreadTurnForTransfer(projectId, threadId)
+    instanceRegistry.publishTurnActivity()
+    return { released: true }
+  }
+
+  /**
+   * Resume a thread whose run just arrived from another instance.
+   *
+   * The departing instance already stopped its harness and settled the turn, so
+   * this process continues the persisted session exactly as restart recovery
+   * would, with the busy probe and stop latch bypassed because the hand-off is
+   * explicit and this process cannot see the sibling's harness.
+   */
+  async adoptTransferredThread(projectId: string, threadId: string): Promise<ThreadTransferResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { ok: false, reason: 'The thread no longer exists.' }
+    if (!thread.sessionId || !thread.settings) {
+      return { ok: false, reason: 'This thread has no resumable session.' }
+    }
+    try {
+      let resumed = await this.resumeThreadFromPersistedSession(thread, { force: true })
+      if (!resumed && thread.settings.loopMode === true) {
+        // An Achievement loop resumes through its own driver, not a plain
+        // Continue; mirror the loop branch restart recovery uses.
+        const activeSpec = await this.getActiveSpec(projectId, threadId)
+        if (activeSpec?.status === 'approved') {
+          void this.continueLoop(projectId, threadId)
+          resumed = true
+        }
+      }
+      if (!resumed) {
+        return { ok: false, reason: 'This thread cannot be resumed on this instance.' }
+      }
+      instanceRegistry.publishTurnActivity()
+      return { ok: true }
+    } catch (error) {
+      Logger.error('Transferred thread resume failed:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        ok: false,
+        reason: `The transfer could not resume this run: ${rawErrorMessage(error)}`
+      }
+    }
+  }
+
+  /**
+   * Wait for the aborted turn to release the shared ledger row, forcing the
+   * release if the harness never reported its terminal settle, then detach this
+   * process's turn bookkeeping so no late event can touch the row again.
+   */
+  private async settleThreadTurnForTransfer(projectId: string, threadId: string): Promise<void> {
+    const deadline = Date.now() + TRANSFER_SETTLE_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if ((await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)) === null) break
+      await new Promise((resolve) => setTimeout(resolve, TRANSFER_SETTLE_POLL_MS))
+    }
+    await this.checkpointManager.markActiveInterrupted(projectId, threadId)
+    this.detachThreadTurnBookkeeping(projectId, threadId)
+  }
+
+  /** Drop this process's in-flight turn state for a thread it just handed off. */
+  private detachThreadTurnBookkeeping(projectId: string, threadId: string): void {
+    for (const info of this.sessionRegistry.values()) {
+      if (info.projectId !== projectId || info.threadId !== threadId) continue
+      info.activeTurnId = undefined
+      info.activeTurnUserMessageId = undefined
+      info.changedPaths = undefined
+      info.preciseChangedPaths = undefined
+      info.userTouchedPaths = undefined
+      info.openUnboundedTools = undefined
+      info.unboundedToolObserved = undefined
+      info.unboundedWindowStart = undefined
+    }
   }
 
   /**
@@ -17178,61 +17311,7 @@ export class ChatEngine {
     if (config.resumeWorkOnRestart === false) return
     for (const thread of recovered) {
       try {
-        if (thread.archived) continue
-        if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
-          continue
-        }
-        if (isOrchestrationChildThread(thread)) continue
-        if (!thread.settings || !thread.sessionId) continue
-        // A deliberate user stop before the restart vetoes the hidden Continue;
-        // the user can still resume by hand (Retry or any prompt).
-        if (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id)) {
-          Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
-            projectId: thread.projectId,
-            threadId: thread.id
-          })
-          continue
-        }
-        const current = this.sessionStatuses.get(thread.sessionId)
-        if (current?.state === 'working' || current?.state === 'waiting') continue
-        // The in-memory status map is empty right after a restart, but the
-        // harness process may have survived it and still be running the
-        // pre-restart turn. Resuming a live session spawns a second concurrent
-        // run that interleaves outputs and derails both turns, so probe the
-        // driver first and leave genuinely-busy sessions alone (their events
-        // keep flowing and will complete the turn normally).
-        if (thread.sessionHarnessId) {
-          try {
-            const driver = await this.resolve(thread.projectId, thread.sessionHarnessId, thread.id)
-            if (
-              driver.driver.isSessionBusy &&
-              (await driver.driver.isSessionBusy(driver.projectPath, thread.sessionId))
-            ) {
-              continue
-            }
-          } catch (error) {
-            // Driver unavailable or probe failed   resume anyway (legacy path).
-            Logger.dev('Recovered-thread busy probe skipped:', {
-              threadId: thread.id,
-              error: rawErrorMessage(error)
-            })
-          }
-        }
-        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
-        const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
-        await this.sendPrompt(
-          thread.projectId,
-          thread.id,
-          validateThreadSettings(thread.settings),
-          resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
-          [],
-          resumesSpecContract ? 'implement' : undefined,
-          createMessageId(),
-          undefined,
-          undefined,
-          undefined,
-          'internal'
-        )
+        await this.resumeThreadFromPersistedSession(thread)
       } catch (error) {
         // Leave the thread in its interrupted state; the user can still Retry manually.
         Logger.error('Recovered thread resume failed (non-fatal):', {
@@ -17242,6 +17321,83 @@ export class ChatEngine {
         })
       }
     }
+  }
+
+  /**
+   * Continue one thread's persisted harness session through the normal
+   * sendPrompt pipeline.
+   *
+   * This is the single resumption path shared by restart recovery and a
+   * cross-instance transfer, so the two can never drift apart in what they
+   * skip or how they resume. It returns whether a prompt was actually
+   * dispatched, which lets a caller that must not silently do nothing (a
+   * transfer) report the refusal instead of leaving the thread interrupted.
+   *
+   * `force` is set by a transfer: the owning instance has already stopped the
+   * run and released the thread, so this process's own busy probe cannot see it
+   * and a stale user-stop latch must not veto the explicit hand-off.
+   */
+  private async resumeThreadFromPersistedSession(
+    thread: Thread,
+    options: { force?: boolean } = {}
+  ): Promise<boolean> {
+    const force = options.force === true
+    if (thread.archived) return false
+    if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
+      return false
+    }
+    if (isOrchestrationChildThread(thread)) return false
+    if (!thread.settings || !thread.sessionId) return false
+    // A deliberate user stop before the restart vetoes the hidden Continue;
+    // the user can still resume by hand (Retry or any prompt).
+    if (!force && (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id))) {
+      Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      })
+      return false
+    }
+    const current = this.sessionStatuses.get(thread.sessionId)
+    if (current?.state === 'working' || current?.state === 'waiting') return false
+    // The in-memory status map is empty right after a restart, but the
+    // harness process may have survived it and still be running the
+    // pre-restart turn. Resuming a live session spawns a second concurrent
+    // run that interleaves outputs and derails both turns, so probe the
+    // driver first and leave genuinely-busy sessions alone (their events
+    // keep flowing and will complete the turn normally).
+    if (!force && thread.sessionHarnessId) {
+      try {
+        const driver = await this.resolve(thread.projectId, thread.sessionHarnessId, thread.id)
+        if (
+          driver.driver.isSessionBusy &&
+          (await driver.driver.isSessionBusy(driver.projectPath, thread.sessionId))
+        ) {
+          return false
+        }
+      } catch (error) {
+        // Driver unavailable or probe failed   resume anyway (legacy path).
+        Logger.dev('Recovered-thread busy probe skipped:', {
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+    const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+    const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+    await this.sendPrompt(
+      thread.projectId,
+      thread.id,
+      validateThreadSettings(thread.settings),
+      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
+      [],
+      resumesSpecContract ? 'implement' : undefined,
+      createMessageId(),
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
+    return true
   }
 
   /** Repair specifications persisted before their ready lifecycle finished. */

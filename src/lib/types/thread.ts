@@ -301,6 +301,15 @@ export interface ForeignRunNotice {
   threadId: string
 }
 
+/**
+ * Outcome of moving a foreign run to this instance.
+ *
+ * `ok: false` always carries a user-facing reason, because the only caller is a
+ * window asking to take over a run it cannot see, and a silent failure would
+ * leave the transfer card stuck with no explanation.
+ */
+export type ThreadTransferResult = { ok: true } | { ok: false; reason: string }
+
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'tool'
 
 export interface ToolCall {

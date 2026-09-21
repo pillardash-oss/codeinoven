@@ -58,6 +58,13 @@ export const RETRY_FIRE_GRACE_MS = 90 * 1000
 
 export const LOOP_MAX_ITERATIONS = 8
 
+/** How long a transferring instance waits for the departing instance's aborted
+ *  turn to release the shared `active_turns` row before forcing the release. */
+export const TRANSFER_SETTLE_TIMEOUT_MS = 6_000
+
+/** Poll interval for that bounded wait. */
+export const TRANSFER_SETTLE_POLL_MS = 100
+
 export const ACTIONABLE_AUDIT_SEVERITIES = new Set(['critical', 'high', 'medium', 'low'])
 
 export const DEFAULT_QUESTION_TIMEOUT_MS = 300_000

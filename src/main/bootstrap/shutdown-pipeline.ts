@@ -137,6 +137,9 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   state.foreignRuns?.dispose()
   state.foreignRuns = null
 
+  state.threadTransfer?.dispose()
+  state.threadTransfer = null
+
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.
   try {

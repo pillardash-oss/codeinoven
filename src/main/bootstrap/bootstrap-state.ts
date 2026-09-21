@@ -11,6 +11,7 @@ import type { BrowserWindow } from 'electron'
 import type { BrowserService } from '../browser/browser-service'
 import type { ChatEngine } from '../chat/chat-engine'
 import type { ForeignRunService } from '../chat/foreign-run-service'
+import type { ThreadTransferService } from '../chat/thread-transfer-service'
 import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
@@ -79,6 +80,8 @@ export interface BootstrapState {
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
   foreignRuns: ForeignRunService | null
+  /** Cross-instance thread transfer: releases and adopts running threads. */
+  threadTransfer: ThreadTransferService | null
   remoteOwnershipPromise: Promise<void> | null
   remoteOwnershipReconcilePending: boolean
   modelPricingService: ModelPricingService | null
@@ -134,6 +137,7 @@ export function createBootstrapState(): BootstrapState {
     stopRemoteOwnershipListener: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
+    threadTransfer: null,
     remoteOwnershipPromise: null,
     remoteOwnershipReconcilePending: false,
     modelPricingService: null,

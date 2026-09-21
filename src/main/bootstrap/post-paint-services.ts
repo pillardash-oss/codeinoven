@@ -74,7 +74,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { registerSpeechIpc },
     { PrototypePreviewService },
     { DirectoryPreviewService },
-    { ForeignRunService }
+    { ForeignRunService },
+    { ThreadTransferService }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -93,7 +94,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../ipc/speech-ipc'),
     import('../prototypes/prototype-preview-service'),
     import('../preview/directory-preview-service'),
-    import('../chat/foreign-run-service')
+    import('../chat/foreign-run-service'),
+    import('../chat/thread-transfer-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -278,6 +280,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
+  state.threadTransfer = new ThreadTransferService(database, state.chatEngine)
+  state.threadTransfer.registerIpc()
+  state.threadTransfer.start()
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
   context.onFeaturesReady()
