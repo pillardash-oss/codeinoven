@@ -42,13 +42,14 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  /** Register the attachment-editor full-window surface while the fullscreen
-   *  editor is mounted, clearing it on teardown so native surfaces are never
-   *  suppressed after the editor closes. */
-  function editorSurfaceAttachment(_node: HTMLElement): () => void {
-    const release = browserVisibility.hideWhile('attachment-editor', 'fullscreen-surface', true)
-    return () => release()
-  }
+  // The browser's native view floats above every DOM surface (see
+  // browserVisibility.hideWhile), so both branches of this preview, the modal
+  // media viewer and the fullscreen text editor, must suppress it while mounted.
+  // Registering the block only for the editor branch left the modal preview
+  // (image, video, audio, PDF, document) painting underneath a live browser tab.
+  // Keyed per instance so two previews open at once cannot clear each other.
+  const suppressionKey = `attachment-preview-${Math.random().toString(36).slice(2)}`
+  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', true))
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
   // svelte-ignore state_referenced_locally
@@ -144,10 +145,7 @@
 />
 
 {#if editableText}
-  <div
-    {@attach editorSurfaceAttachment}
-    class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-  >
+  <div class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl">
     <div
       class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
       style={trafficLightInsetStyle()}
