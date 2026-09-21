@@ -58,9 +58,9 @@
   let deleteTarget = $state<string | null>(null)
 
   /**
-   * Marks a control the panel draws inside the trigger. Activating one is that
-   * control's own business, so the trigger must neither open the picker on the
-   * way through nor leave one open underneath it.
+   * The panel's own control inside the trigger, marked by the panel. Activating
+   * one is that control's business: the trigger must neither open the picker on
+   * the way through nor leave one open underneath it.
    */
   const STATUS_ACTION_SELECTOR = '[data-status-action]'
 
@@ -128,18 +128,41 @@
   }
 
   /**
+   * The trigger opens the picker from its own pointer events   a mouse toggles
+   * on `pointerdown`, touch on `pointerup`   so a gesture that starts on the
+   * panel's control cancels the one it would toggle on, and the branch list
+   * stays shut unless the gesture lands anywhere else on the trigger.
+   *
+   * Cancelled rather than stopped on purpose. bits-ui composes its own handlers
+   * with these and skips its own once the event is cancelled, while a stopped
+   * event would never reach the layers that dismiss the menus around this one,
+   * leaving a stray open menu behind when the badge takes the user elsewhere.
+   */
+  function guardStatusActionPointer(event: PointerEvent): void {
+    if (!isStatusActionEvent(event)) return
+    if (event.type === 'pointerup' && event.pointerType !== 'touch') return
+    event.preventDefault()
+  }
+
+  /**
    * The dirty badge inside the trigger opens the Changes view, so a click that
-   * landed on it closes any picker that was already open instead of dragging it
-   * along to the next view. `preventDefault` is what keeps the trigger's own
-   * click handler out of the loop as well (bits-ui composes the two; it is what
-   * also covers the click a screen reader sends for the badge, which arrives
-   * with no keyboard event in front of it).
+   * landed on it closes the picker instead of dragging it along to the next view.
+   * `preventDefault` keeps the trigger's own click handler out of the loop (it is
+   * what also covers the click a screen reader sends for the badge, which arrives
+   * with no keyboard event in front of it); the click is left to bubble, so every
+   * other layer still sees the interaction and no focus is lost by the click
+   * being cancelled.
    */
   function handleTriggerClick(event: MouseEvent): void {
-    const target = event.target
-    if (!(target instanceof Element) || target.closest(STATUS_ACTION_SELECTOR) === null) return
+    if (!isStatusActionEvent(event)) return
     open = false
     event.preventDefault()
+  }
+
+  /** Whether an event is the panel's own control inside the trigger acting, rather than the trigger itself. */
+  function isStatusActionEvent(event: Event): boolean {
+    const target = event.target
+    return target instanceof Element && target.closest(STATUS_ACTION_SELECTOR) !== null
   }
 </script>
 
@@ -156,6 +179,8 @@
     disabled={isBusy}
     title={currentBranch ? `Switch branch (${currentBranch})` : 'Switch branch'}
     aria-label={currentBranch ? `Switch branch, currently ${currentBranch}` : 'Switch branch'}
+    onpointerdown={guardStatusActionPointer}
+    onpointerup={guardStatusActionPointer}
     onclick={handleTriggerClick}
   >
     {#if statusIcon}
