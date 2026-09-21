@@ -40,6 +40,8 @@
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     /** Open a forked task thread in its project after an assistant hand-off. */
     onHandedOffTask?: (forked: Thread) => void
+    /** Bring a routine's authoring task on screen from the how-to panel. */
+    onOpenAssistantTask?: (threadId: string) => void
   }
 
   let {
@@ -54,7 +56,8 @@
     onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent,
-    onHandedOffTask
+    onHandedOffTask,
+    onOpenAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -158,6 +161,7 @@
         threadId={activeContextTab.threadId}
         routineId={activeContextTab.routineId}
         onHandedOff={onHandedOffTask}
+        onOpenAuthoringTask={onOpenAssistantTask}
       />
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}

@@ -260,6 +260,9 @@
           <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
+      </span>
+      <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate">{taskCount === 1 ? '1 task' : `${taskCount} tasks`}</span>
         {#if incomplete}
           <span
             class="flex shrink-0 items-center"
@@ -268,7 +271,7 @@
             aria-label="This routine has no how-to yet"
             title="Incomplete: this routine has no how-to yet"
           >
-            <AlertTriangle size={12} />
+            <AlertTriangle size={11} />
           </span>
         {/if}
         {#if missed}
@@ -279,12 +282,9 @@
             aria-label="A scheduled run was missed"
             title="A scheduled run was missed"
           >
-            <AlertTriangle size={12} />
+            <AlertTriangle size={11} />
           </span>
         {/if}
-      </span>
-      <span class="mt-0.5 block truncate text-[0.5625rem] text-dimmed">
-        {taskCount === 1 ? '1 task' : `${taskCount} tasks`}
       </span>
     </span>
   </button>

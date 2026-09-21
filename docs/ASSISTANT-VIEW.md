@@ -33,7 +33,7 @@ flowchart LR
 1. Core view + how-to panel (`src/renderer/lib/components/assistant/`).
 2. Main-process scheduler with missed-run detection
    (`src/main/scheduler/routine-scheduler-service.ts`).
-3. Agent-authored how-to flow (`ComposeWithAgentCard.svelte`).
+3. Agent-authored how-to flow (in-thread authoring, `/save-how-to`).
 4. Fork hand-off to a project (`AssistantHandoffControl.svelte`).
 
 ### Explicitly deferred
@@ -117,8 +117,10 @@ task dragged onto a routine is grouped into it. Hovering a routine reveals a
 popover with its status, schedule type, next run, task count, and a how-to
 preview (`AssistantRoutineHoverPopover.svelte`).
 
-The how-to panel opens in the right context sidebar when a routine's task is
-selected or its **How to** menu item is used.
+The how-to panel opens in the right context sidebar from the rail's **How to**
+toggle or a routine's **How to** menu item. The assistant rail is deliberately
+minimal: for an assistant thread it carries only **History** and **How to**,
+never terminal, actions, files, memory, or cloud tools.
 
 ## How-to authoring
 
@@ -128,11 +130,18 @@ prompt"; the user-facing term is how-to.
 - A routine with an empty how-to shows an amber **Incomplete** icon
   (`AlertTriangle`, `--color-warning`) whose meaning is revealed on hover
   (`routineHowToComplete`); the missed state uses the same icon in
-  `--color-missed`. Routine rows never carry the state as text.
-- The how-to lives in the context sidebar (`HowToPanel.svelte`), following the
-  `AssignmentCoordinatorPanel` shell. The user always prompts the agent to write
-  it via the **compose with agent** card (`ComposeWithAgentCard.svelte`), then
-  may edit the result and the schedule/connection fields manually.
+  `--color-missed`. Routine rows never carry the state as text, and the badge
+  shares the second row with the task count.
+- The how-to is authored conservatively in the routine's task thread, never in
+  a panel. The first task's head start asks *how the routine should happen* and
+  the user describes it; the agent works out what it needs, asks about anything
+  missing, and drafts the how-to with them. Only once both agree does the agent
+  present the final how-to in a fenced `how-to` block and ask the user to send
+  `/save-how-to`, which commits it to the routine.
+- The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
+  how-to, the schedule, and the connections. Its tab strip only appears once a
+  scheduled run was actually missed, and the Missed runs tab lists each miss
+  with Dismiss and Run now.
 - When a routine lacks the utilities it needs, the agent checks the app utility
   library, researches compatible skills/MCPs/plugins, and asks the user to send
   `@cio-utility proceed` before anything is installed. No silent installs; the

@@ -782,6 +782,9 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev)   never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+    // Assistant tasks are conversations too: their rail is just history plus
+    // the how-to panel   no terminal, actions, files, memory, or cloud tools.
+    const isAssistantThread = selectedThread.projectId === ASSISTANT_SPACE_ID
 
     // The message-history counter leads the rail so it reads first, like a
     // running tally of the conversation   click to jump to any past message.
@@ -801,6 +804,24 @@
         onSelect: () => (showHistoryMenu = !showHistoryMenu)
       }
     ]
+
+    if (isAssistantThread) {
+      return [
+        history,
+        [
+          {
+            id: 'assistant-how-to',
+            label: 'How to',
+            icon: BotMessageSquare,
+            active: dockKindActive('assistant-how-to'),
+            onSelect: () =>
+              toggleDockPanel('assistant-how-to', () =>
+                openAssistantHowToForTask(selectedThread)
+              )
+          }
+        ]
+      ]
+    }
 
     const workspaceTools: ContextDockItem[] = []
     // Chats surface their own per-thread artifact directory as the file tree.
@@ -2882,6 +2903,12 @@
     workspaceState.openThread(task, assistantProject)
   }
 
+  /** Open a routine's authoring task from the how-to panel. */
+  function openAssistantTaskById(threadId: string): void {
+    const task = allThreads.find((thread) => thread.id === threadId)
+    if (task) openAssistantTask(task)
+  }
+
   /** Create a routine-less task and open it (header New Task). */
   async function createAssistantTask(): Promise<void> {
     if (!assistantProject) return
@@ -3320,6 +3347,7 @@
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
             onHandedOffTask={handleAssistantHandoff}
+            onOpenAssistantTask={openAssistantTaskById}
           />
         {/snippet}
         <div

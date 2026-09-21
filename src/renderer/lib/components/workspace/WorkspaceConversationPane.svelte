@@ -19,6 +19,8 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { chatEffectiveSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { routineHowToComplete } from '$shared/types'
   import {
     INBOX_PROJECT_ID,
     type AgentHarnessUsage,
@@ -67,6 +69,15 @@
   }: Props = $props()
 
   let chatsComposer: ChatComposer | undefined = $state(undefined)
+
+  /** Assistant mode reuses the chat thread renderer, but a routine's task
+   *  authors its how-to conversationally, so the view needs the routine. */
+  let assistantRoutineId = $derived(mode === 'assistant' ? (selectedThread?.routineId ?? null) : null)
+  let assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((routine) => routine.id === assistantRoutineId) ?? null)
+      : null
+  )
 
   const chatSuggestedPrompts = [
     'Research a question using my device',
@@ -170,6 +181,12 @@
             thread={selectedThread}
             {active}
             chatMode={mode === 'chats' || mode === 'assistant'}
+            assistantMode={mode === 'assistant'}
+            {assistantRoutineId}
+            assistantRoutineName={assistantRoutine?.name ?? null}
+            assistantHowToComplete={assistantRoutine
+              ? routineHowToComplete(assistantRoutine)
+              : false}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||

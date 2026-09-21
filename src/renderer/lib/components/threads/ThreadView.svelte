@@ -139,6 +139,7 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -314,6 +315,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
+    /** True in Assistant View   the thread authors a routine's how-to. */
+    assistantMode?: boolean
+    /** Routine the assistant task belongs to, when any. */
+    assistantRoutineId?: string | null
+    /** Routine name, shown in the authoring head start. */
+    assistantRoutineName?: string | null
+    /** Whether the routine already has a saved how-to. */
+    assistantHowToComplete?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -354,6 +363,10 @@
   let {
     thread: threadProp,
     chatMode = false,
+    assistantMode = false,
+    assistantRoutineId = null,
+    assistantRoutineName = null,
+    assistantHowToComplete = false,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -1415,6 +1428,22 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // and tells the user to commit it with this action, which persists the
+    // agreed draft   the user never hand-writes the how-to in a panel.
+    if (assistantMode && assistantRoutineId && !assistantHowToComplete) {
+      actions.push({
+        id: 'command:save-how-to',
+        title: '/save-how-to',
+        description: 'Save the how-to the agent drafted for this routine',
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant'],
+        slashCommand: true,
+        ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
+
     // Skills the thread's harness can see but does not expose as native slash
     // commands: global-layer skills and CodeInOven-registered skills. Harness-
     // reported skills are skipped   they are already listed above.
@@ -2089,6 +2118,20 @@
     presentation?: UserMessagePresentation
   }
 
+  /**
+   * Assistant authoring contract: while a routine has no how-to yet, every turn
+   * in its task threads is a how-to conversation, not a task run.
+   */
+  function assistantAuthoringContext(): string | undefined {
+    if (!assistantMode || !assistantRoutineId || assistantHowToComplete) return undefined
+    const routineName = assistantRoutineName ?? 'this routine'
+    return [
+      `You are authoring the how-to for the routine "${routineName}". Help the user turn their intent into a concrete, step-by-step how-to that every task in this routine will follow.`,
+      'Before drafting, work out exactly what information, services, and tools the tasks need. Check the app utility library for a matching skill, MCP server, or plugin. If one is missing, research whether a compatible option exists and explain plainly what it is and how to set it up. Never install anything without the user consent; when a compatible utility can be installed, tell the user to send "@cio-utility proceed" to arm it. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
+      'Go back and forth with the user until you agree. Only once they agree, present the final how-to inside one fenced code block whose opening fence says how-to, and tell them to send /save-how-to to commit it. The block must contain the exact instruction set the routine will run, not a summary of the conversation.'
+    ].join('\n')
+  }
+
   function sendComposerMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -2118,7 +2161,9 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
-    const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
+    const promptContext = [responseReferenceContext(), taskContext, assistantAuthoringContext()]
+      .filter(Boolean)
+      .join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
     // The centered head start must never return for this thread once a real
@@ -5852,8 +5897,50 @@
     requestSkillUse(skill.name, args)
   }
 
+  /**
+   * The how-to the agent last drafted for this routine, taken from the newest
+   * ```how-to fenced block in an assistant message. The authoring contract tells
+   * the model to present the agreed how-to in exactly that block.
+   */
+  function latestHowToDraft(): string | null {
+    const fence = /```(?:how-?to)\s*\n([\s\S]*?)```/giu
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'assistant') continue
+      const text = messageText(message)
+      let match: RegExpExecArray | null
+      let found: string | null = null
+      fence.lastIndex = 0
+      while ((match = fence.exec(text)) !== null) {
+        if (match[1]?.trim()) found = match[1].trim()
+      }
+      if (found) return found
+    }
+    return null
+  }
+
+  /** Commit the agent-drafted how-to to the routine after the user agrees. */
+  async function saveRoutineHowTo(): Promise<void> {
+    if (!assistantRoutineId) return
+    const draft = latestHowToDraft()
+    if (!draft) {
+      errorMessage = `The agent has not drafted a how-to yet. Ask it to write one, then send /save-how-to again.`
+      return
+    }
+    try {
+      await assistantRoutines.updateRoutine(assistantRoutineId, { howTo: draft })
+      toast.success('How-to saved')
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+    }
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:save-how-to') {
+      await saveRoutineHowTo()
+      return
+    }
     if (commandId === 'command:cio-utility') {
       triggerCioUtilityTurn(args)
       return
@@ -11659,26 +11746,50 @@
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
-              <div class="mb-5 text-center">
-                <h1
-                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
-                >
-                  {#if centeredProjectIconUrl}
-                    <img
-                      src={centeredProjectIconUrl}
-                      alt=""
-                      aria-hidden="true"
-                      class="size-7 rounded-[0.375rem] object-cover"
-                    />
-                  {/if}
-                  {project?.name ?? 'New thread'}
-                </h1>
-                <p class="mt-1 text-[0.875rem] text-muted">
-                  {centeredModelName
-                    ? `What should ${centeredModelName} work on?`
-                    : 'How can CIO serve you today?'}
-                </p>
-              </div>
+              {#if assistantMode}
+                <div class="mb-5 text-center">
+                  <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
+                    {assistantRoutineName ?? thread.title}
+                  </h1>
+                  <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
+                    {#if assistantRoutineName && !assistantHowToComplete}
+                      How should this routine happen? Describe it properly for the agent. Say what
+                      it should do, how often, and where the information comes from. The agent works
+                      out what it needs, asks about anything missing, and drafts the how-to with you
+                      until you agree. Then send <span class="text-foreground">/save-how-to</span> to
+                      commit it.
+                    {:else if assistantRoutineName}
+                      This task follows the <span class="text-foreground"
+                        >{assistantRoutineName}</span
+                      >
+                      how-to. Send a message to run it now, or adjust anything in How to.
+                    {:else}
+                      Describe what this task should do and the agent will take it from there.
+                    {/if}
+                  </p>
+                </div>
+              {:else}
+                <div class="mb-5 text-center">
+                  <h1
+                    class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                  >
+                    {#if centeredProjectIconUrl}
+                      <img
+                        src={centeredProjectIconUrl}
+                        alt=""
+                        aria-hidden="true"
+                        class="size-7 rounded-[0.375rem] object-cover"
+                      />
+                    {/if}
+                    {project?.name ?? 'New thread'}
+                  </h1>
+                  <p class="mt-1 text-[0.875rem] text-muted">
+                    {centeredModelName
+                      ? `What should ${centeredModelName} work on?`
+                      : 'How can CIO serve you today?'}
+                  </p>
+                </div>
+              {/if}
             {/if}
             {#if aiAccountPromptVisible}
               <div class="mb-2">
@@ -12128,19 +12239,21 @@
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}
-                      placeholder={activePlanningEntry === 'brainstorm'
-                        ? 'Add details to the Brainstorm discussion…'
-                        : activePlanningEntry === 'spec'
-                          ? 'Sr. Engineer is preparing the specification…'
-                          : assignmentFormulating
-                            ? 'Sr. Engineer is preparing the Assignment…'
-                            : specFormulating
-                              ? 'Formulating specification…'
-                              : delegatedWorkBusy
-                                ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                : busy
-                                  ? `${APP_NAME} is working   type to queue a message`
-                                  : 'Send a message...'}
+                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
+                        ? 'Describe how this routine should run…'
+                        : activePlanningEntry === 'brainstorm'
+                          ? 'Add details to the Brainstorm discussion…'
+                          : activePlanningEntry === 'spec'
+                            ? 'Sr. Engineer is preparing the specification…'
+                            : assignmentFormulating
+                              ? 'Sr. Engineer is preparing the Assignment…'
+                              : specFormulating
+                                ? 'Formulating specification…'
+                                : delegatedWorkBusy
+                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                  : busy
+                                    ? `${APP_NAME} is working   type to queue a message`
+                                    : 'Send a message...'}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}
@@ -12311,7 +12424,7 @@
                       onImageDescriptorDefaultChange={setImageDescriptorDefault}
                       onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                     />
-                    {#if centeredComposer}
+                    {#if centeredComposer && !assistantMode}
                       <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
                         {#each suggestedPrompts as prompt (prompt)}
                           <button
