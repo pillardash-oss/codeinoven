@@ -1394,14 +1394,14 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
           provider
             .getPullRequestChecks(target)
             .catch(() => ({ state: 'none' as const, checks: [] }))
-        ]
-      )
+        ])
       return {
         detail,
         commits,
         comments,
         reviews,
         reviewComments,
+        reviewThreads,
         files,
         checks,
         fetchedAt: Date.now()
