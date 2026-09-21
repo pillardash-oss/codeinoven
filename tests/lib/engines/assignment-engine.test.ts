@@ -506,7 +506,7 @@ describe('AssignmentEngine', () => {
     const completed = engine.getActive('project-1', coordinatorId)
 
     expect(first.id).toBe(second.id)
-    expect(first.title).toBe('Sparkling water website')
+    expect(first.title).toBe('audit-aaron: Sparkling water website')
     expect(first.assignmentId).toBe('assignment-1')
     expect(first.assignmentRole).toBeUndefined()
     expect(first.coordinatorThreadId).toBe(coordinatorId)
