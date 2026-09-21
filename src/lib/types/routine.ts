@@ -28,6 +28,10 @@ export interface Routine {
   howToUpdatedAt?: number
   /** Connections picked from the app-level utility library. */
   connections: RoutineConnection[]
+  /** Pinned routines sort above the rest and render a pin indicator. */
+  pinned?: boolean
+  /** When the routine was pinned; newest pins sort first. */
+  pinnedAt?: number
   /** Position for manual ordering; items without sortOrder fall back to updatedAt. */
   sortOrder?: number
   createdAt: number

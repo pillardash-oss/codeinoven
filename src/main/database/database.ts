@@ -740,6 +740,7 @@ export class Database {
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
       this.migrateAssignmentSpecNullable(connection)
       this.migrateThreadPinnedAt(connection)
+      this.migrateRoutinePinned(connection)
     })()
   }
 
@@ -762,6 +763,33 @@ export class Database {
       .prepare(
         `UPDATE threads
             SET pinned_at = COALESCE(updated_at, last_activity, created_at)
+          WHERE pinned = 1 AND pinned_at IS NULL`
+      )
+      .run()
+  }
+
+  /**
+   * Add the routine pin columns to databases created before routines could be
+   * pinned, then backfill a pin timestamp for any pinned row (matching the
+   * thread pin behaviour). Fresh databases already carry both columns, and the
+   * guarded `ALTER TABLE` makes this idempotent.
+   */
+  private migrateRoutinePinned(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('pinned')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!columns.has('pinned_at')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN pinned_at INTEGER')
+    }
+    connection
+      .prepare(
+        `UPDATE routines
+            SET pinned_at = COALESCE(updated_at, created_at)
           WHERE pinned = 1 AND pinned_at IS NULL`
       )
       .run()

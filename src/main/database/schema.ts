@@ -876,12 +876,14 @@ CREATE TABLE IF NOT EXISTS routines (
   how_to              TEXT NOT NULL DEFAULT '',
   how_to_updated_at   INTEGER,
   connections         TEXT NOT NULL DEFAULT '[]',
+  pinned              INTEGER NOT NULL DEFAULT 0,
+  pinned_at           INTEGER,
   sort_order          INTEGER,
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(sort_order, updated_at DESC);`
+CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [

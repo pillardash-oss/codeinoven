@@ -8,6 +8,7 @@
     Plus,
     SquarePen,
     Bot,
+    BotMessageSquare,
     BrainCircuit,
     Bug,
     Cloud,
@@ -48,6 +49,8 @@
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
   import AssistantSidebar from '../assistant/AssistantSidebar.svelte'
+  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
+  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -1815,6 +1818,32 @@
         }
       ]
       viewActions.set('scoped-threads', scopedActions)
+    } else if (mode === 'assistant') {
+      const assistantActions: ViewActionItem[] = [
+        {
+          id: 'search',
+          component: AssistantSearchControl as unknown as ViewActionItem['component'],
+          props: {
+            routines: assistantRoutineList,
+            tasks: assistantTasks,
+            onOpenTask: openAssistantTask,
+            onOpenRoutine: (routine: Routine) => void openAssistantHowToForRoutine(routine)
+          }
+        },
+        {
+          id: 'new-routine',
+          component: RoutineCreateControl as unknown as ViewActionItem['component'],
+          props: { onCreate: createAssistantRoutine }
+        },
+        {
+          id: 'new-task',
+          icon: BotMessageSquare,
+          ariaLabel: 'New task',
+          title: 'New task',
+          run: () => void createAssistantTask()
+        }
+      ]
+      viewActions.set('assistant', assistantActions)
     } else {
       const projectActions: ViewActionItem[] = [
         {
@@ -2853,23 +2882,78 @@
     workspaceState.openThread(task, assistantProject)
   }
 
-  /** Create a routine-less task; a non-empty title is applied once persisted. */
-  async function createAssistantTask(title: string): Promise<void> {
+  /** Create a routine-less task and open it (header New Task). */
+  async function createAssistantTask(): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject)
+  }
+
+  /** Create a routine and seed its first task, then open the how-to panel. */
+  async function createAssistantRoutine(name: string): Promise<void> {
+    if (!assistantProject) return
+    const routine = await assistantRoutines.createRoutine({ name })
+    await createThreadInProject(assistantProject)
+    const created = workspaceState.selectedThread
+    if (created && created.projectId === ASSISTANT_SPACE_ID) {
+      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
+      upsertThreadInList(grouped)
+      workspaceState.updateThread(grouped)
+    }
+    await openAssistantHowToForRoutine(routine)
+  }
+
+  /** Create a task inside a routine and open its how-to panel. */
+  async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
     if (!assistantProject) return
     await createThreadInProject(assistantProject)
     const created = workspaceState.selectedThread
-    const trimmed = title.trim()
-    if (!created || trimmed.length === 0) return
-    try {
-      const updated = await invoke('thread:update', created.projectId, created.id, {
-        title: trimmed,
-        titleSource: 'manual'
-      })
-      upsertThreadInList(updated)
-      workspaceState.updateThread(updated)
-    } catch (error) {
-      reportError(error, 'Could not name the new task')
+    if (created && created.projectId === ASSISTANT_SPACE_ID) {
+      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
+      upsertThreadInList(grouped)
+      workspaceState.updateThread(grouped)
     }
+    await openAssistantHowToForRoutine(routine)
+  }
+
+  async function renameAssistantRoutine(routineId: string, name: string): Promise<void> {
+    await assistantRoutines.updateRoutine(routineId, { name })
+  }
+
+  /** Remove a routine; its tasks survive as routine-less tasks. */
+  async function deleteAssistantRoutine(routineId: string): Promise<void> {
+    const affected = allThreads.filter((thread) => thread.routineId === routineId)
+    await assistantRoutines.deleteRoutine(routineId)
+    for (const thread of affected) {
+      upsertThreadInList({ ...thread, routineId: undefined })
+    }
+  }
+
+  async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
+    await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
+  }
+
+  /** Reorder routines by drag: move the dragged routine around its drop target. */
+  async function moveAssistantRoutine(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    if (draggedId === targetId) return
+    const list = [...assistantRoutines.routines]
+    const from = list.findIndex((routine) => routine.id === draggedId)
+    if (from < 0) return
+    const [moved] = list.splice(from, 1)
+    const targetIndex = list.findIndex((routine) => routine.id === targetId)
+    if (targetIndex < 0) return
+    list.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, moved)
+    await assistantRoutines.reorderRoutines(list.map((routine) => routine.id))
+  }
+
+  /** Group a dragged task into a routine. */
+  async function assignAssistantTask(taskId: string, routineId: string): Promise<void> {
+    const updated = await assistantRoutines.setTaskRoutine(taskId, routineId)
+    upsertThreadInList(updated)
+    workspaceState.updateThread(updated)
   }
 
   function openAssistantHowToForTask(task: Thread): void {
@@ -3132,10 +3216,18 @@
       routines={assistantRoutineList}
       tasks={assistantTasks}
       selectedThreadId={activeThreadRowId(selectedThread)}
+      {active}
+      {navigate}
       onOpenTask={openAssistantTask}
-      onCreateTask={(title) => void createAssistantTask(title)}
-      onOpenHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
       onOpenTaskHowTo={openAssistantHowToForTask}
+      onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
+      onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+      onRenameRoutine={renameAssistantRoutine}
+      onDeleteRoutine={deleteAssistantRoutine}
+      onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
+      onMoveRoutine={(draggedId, targetId, position) =>
+        void moveAssistantRoutine(draggedId, targetId, position)}
+      onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
     />
   {:else}
     <WorkspaceSidebar

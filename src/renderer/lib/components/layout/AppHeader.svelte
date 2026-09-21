@@ -46,8 +46,8 @@
 
   let onScope = $derived(activeView === 'scope')
 
-  /** Chats must feel like chat   no editor, spec, or terminal controls. */
-  let chatMode = $derived(activeView === 'chats')
+  /** Chats and Assistant must feel like chat   no editor, spec, or terminal controls. */
+  let chatMode = $derived(activeView === 'chats' || activeView === 'assistant')
 
   /** Git controls and polling exist only for local projects configured for Git tracking. */
   let gitAvailable = $derived.by(() => {

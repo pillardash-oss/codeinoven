@@ -11,6 +11,8 @@ interface RoutineRow {
   how_to: string
   how_to_updated_at: number | null
   connections: string
+  pinned: number
+  pinned_at: number | null
   sort_order: number | null
   created_at: number
   updated_at: number
@@ -53,6 +55,8 @@ function rowToRoutine(row: RoutineRow): Routine {
     howTo: row.how_to ?? '',
     howToUpdatedAt: row.how_to_updated_at ?? undefined,
     connections: parseConnections(row.connections),
+    pinned: row.pinned === 1,
+    pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -66,8 +70,8 @@ export class RoutineRepo {
     this.db.run(
       `INSERT INTO routines(
         id, name, color, icon, icon_type, schedule, how_to, how_to_updated_at,
-        connections, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        connections, pinned, pinned_at, sort_order, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         color = excluded.color,
@@ -77,6 +81,8 @@ export class RoutineRepo {
         how_to = excluded.how_to,
         how_to_updated_at = excluded.how_to_updated_at,
         connections = excluded.connections,
+        pinned = excluded.pinned,
+        pinned_at = excluded.pinned_at,
         sort_order = excluded.sort_order,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at`,
@@ -89,6 +95,8 @@ export class RoutineRepo {
       routine.howTo ?? '',
       routine.howToUpdatedAt ?? null,
       JSON.stringify(routine.connections ?? []),
+      routine.pinned ? 1 : 0,
+      routine.pinnedAt ?? null,
       routine.sortOrder ?? null,
       routine.createdAt,
       routine.updatedAt
@@ -102,7 +110,9 @@ export class RoutineRepo {
 
   list(): Routine[] {
     return this.db
-      .all<RoutineRow>('SELECT * FROM routines ORDER BY sort_order ASC, updated_at DESC')
+      .all<RoutineRow>(
+        'SELECT * FROM routines ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, updated_at DESC'
+      )
       .map(rowToRoutine)
   }
 

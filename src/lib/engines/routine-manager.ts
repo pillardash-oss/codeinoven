@@ -85,6 +85,20 @@ export class RoutineManager {
     this.routineRepo.delete(routineId)
   }
 
+  /** Pin or unpin a routine. Pinning records the time so newest pins sort first. */
+  setPinned(routineId: string, pinned: boolean): Routine {
+    const existing = this.routineRepo.get(routineId)
+    if (!existing) throw new Error(`Routine not found: ${routineId}`)
+    const updated: Routine = {
+      ...existing,
+      pinned,
+      pinnedAt: pinned ? Date.now() : undefined,
+      updatedAt: Date.now()
+    }
+    this.routineRepo.upsert(updated)
+    return updated
+  }
+
   reorderRoutines(orderedIds: string[]): Routine[] {
     const result: Routine[] = []
     for (let index = 0; index < orderedIds.length; index++) {

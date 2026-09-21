@@ -115,6 +115,17 @@ class AssistantRoutinesState {
     await this.refresh()
   }
 
+  async setRoutinePinned(routineId: string, pinned: boolean): Promise<Routine> {
+    const routine = await invoke('routine:setPinned', routineId, pinned)
+    await this.refresh()
+    return routine
+  }
+
+  async reorderRoutines(orderedIds: string[]): Promise<void> {
+    await invoke('routine:reorder', orderedIds)
+    await this.refresh()
+  }
+
   async setTaskRoutine(threadId: string, routineId: string | null): Promise<Thread> {
     return invoke('assistant:setTaskRoutine', threadId, routineId)
   }

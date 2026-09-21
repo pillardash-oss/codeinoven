@@ -25,6 +25,8 @@ export const invokeAssistantContract = {
   'routine:update': {} as Contract<[routineId: string, input: UpdateRoutineInput], Routine>,
   'routine:delete': {} as Contract<[routineId: string], void>,
   'routine:reorder': {} as Contract<[orderedIds: string[]], Routine[]>,
+  /** Pin or unpin a routine so it sorts above the rest. */
+  'routine:setPinned': {} as Contract<[routineId: string, pinned: boolean], Routine>,
   /** Group a task into a routine, or ungroup it with `null`. */
   'assistant:setTaskRoutine': {} as Contract<[threadId: string, routineId: string | null], Thread>,
   /** Set or clear a task's per-task schedule override. */

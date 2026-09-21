@@ -155,6 +155,13 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return routines
   })
 
+  ipcMain.handle('routine:setPinned', (_, routineId: unknown, pinned: unknown) => {
+    if (typeof pinned !== 'boolean') throw new TypeError('Routine pin state must be a boolean')
+    const routine = routineManager.setPinned(validateEntityId(routineId, 'Routine ID'), pinned)
+    broadcastRoutines()
+    return routine
+  })
+
   ipcMain.handle('assistant:setTaskRoutine', (_, threadId: unknown, routineId: unknown) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     const safeRoutineId = routineId === null ? null : validateEntityId(routineId, 'Routine ID')

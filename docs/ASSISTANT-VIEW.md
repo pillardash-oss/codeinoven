@@ -40,8 +40,8 @@ flowchart LR
 
 Thread-per-run, automatic catch-up of missed schedules, a standalone Task
 entity, a new `threadKind` flag, hand-off by move (not fork), and a permanent
-general assistant chat. A composer at the top of the sidebar creates a
-routine-less task instead.
+general assistant chat. The header's **New task** action creates a routine-less
+task instead, and creates it with no extra naming step.
 
 ## Scheduler contract
 
@@ -97,13 +97,38 @@ The renderer state lives in `assistantRoutines`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
 `routine:changed` and `assistant:missedRunsChanged` events.
 
+## Assistant sidebar
+
+The left sidebar shows only routines and their tasks, with no title header and
+no composer. Everything the view offers lives on the app header, registered by
+the workspace through `viewActions`:
+
+- **Search** (`AssistantSearchControl.svelte`) filters routines and tasks.
+- **New routine** (`RoutineCreateControl.svelte`) names a routine and
+  immediately seeds its first task, exactly as adding a project opens a first
+  thread; the how-to panel opens next.
+- **New task** creates a routine-less task.
+
+Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
+icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
+a new-task button, and an ellipsis menu (also opened by right-clicking the row)
+with How to, Rename, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
+task dragged onto a routine is grouped into it. Hovering a routine reveals a
+popover with its status, schedule type, next run, task count, and a how-to
+preview (`AssistantRoutineHoverPopover.svelte`).
+
+The how-to panel opens in the right context sidebar when a routine's task is
+selected or its **How to** menu item is used.
+
 ## How-to authoring
 
 Every routine has a required how-to. The UI **never** uses the term "system
 prompt"; the user-facing term is how-to.
 
-- A routine with an empty how-to shows an amber **Incomplete** badge
-  (`routineHowToComplete`).
+- A routine with an empty how-to shows an amber **Incomplete** icon
+  (`AlertTriangle`, `--color-warning`) whose meaning is revealed on hover
+  (`routineHowToComplete`); the missed state uses the same icon in
+  `--color-missed`. Routine rows never carry the state as text.
 - The how-to lives in the context sidebar (`HowToPanel.svelte`), following the
   `AssignmentCoordinatorPanel` shell. The user always prompts the agent to write
   it via the **compose with agent** card (`ComposeWithAgentCard.svelte`), then

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BotMessageSquare } from '@lucide/svelte'
+  import { AlertTriangle, BotMessageSquare } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -16,10 +16,14 @@
     missed: boolean
     /** Next intended fire (epoch ms) when the task is scheduled, else null. */
     nextRunAt: number | null
+    /** Human-readable schedule label (schedule override or owning routine). */
+    scheduleLabel?: string | null
     onSelect: (task: Thread) => void
   }
 
-  let { task, active, color, missed, nextRunAt, onSelect }: Props = $props()
+  let { task, active, color, missed, nextRunAt, scheduleLabel = null, onSelect }: Props = $props()
+
+  const TASK_DRAG_TYPE = 'application/x-assistant-task'
 
   /** Coarse clock so relative run lines stay current without a render storm. */
   const subscribeMinute = createSubscriber((update) => {
@@ -39,6 +43,20 @@
 
   const statusTone = $derived(threadStatusPolicy(task.status).tone)
   const title = $derived(`Open task: ${task.title}`)
+
+  function handleDragStart(event: DragEvent): void {
+    if (!event.dataTransfer) return
+    event.dataTransfer.setData(TASK_DRAG_TYPE, task.id)
+    event.dataTransfer.setData('text/plain', task.id)
+    event.dataTransfer.effectAllowed = 'move'
+    const ghost = document.createElement('div')
+    ghost.textContent = task.title
+    ghost.style.cssText =
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+    document.body.appendChild(ghost)
+    event.dataTransfer.setDragImage(ghost, 0, 0)
+    requestAnimationFrame(() => document.body.removeChild(ghost))
+  }
 </script>
 
 <button
@@ -48,6 +66,8 @@
     ? 'bg-selected'
     : 'hover:bg-elevated'}"
   {title}
+  draggable="true"
+  ondragstart={handleDragStart}
   aria-current={active ? 'true' : undefined}
   onclick={() => onSelect(task)}
 >
@@ -66,12 +86,13 @@
       </span>
       {#if missed}
         <span
-          class="shrink-0 rounded px-1 py-px text-[0.5625rem] font-medium"
-          style="color: var(--color-missed); background: color-mix(in srgb, var(--color-missed) 16%, transparent)"
-          title="A scheduled run was missed"
+          class="flex shrink-0 items-center"
+          style="color: var(--color-missed)"
+          role="img"
           aria-label="A scheduled run was missed"
+          title="A scheduled run was missed"
         >
-          Missed
+          <AlertTriangle size={12} />
         </span>
       {/if}
     </span>
@@ -81,7 +102,9 @@
         size="sm"
         title={missed ? 'Missed run' : task.status}
       />
-      <span class="truncate text-[0.625rem] text-dimmed">{runLine}</span>
+      <span class="truncate text-[0.625rem] text-dimmed" title={scheduleLabel ?? undefined}>
+        {runLine}
+      </span>
     </span>
   </span>
 </button>

@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { SvelteSet } from 'svelte/reactivity'
-  import { Plus, Search, Workflow } from '@lucide/svelte'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import { Workflow } from '@lucide/svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import SidebarAccountControls from '$lib/components/workspace/SidebarAccountControls.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { threadStatusPolicy } from '$shared/thread-status-policy'
   import type { Routine, Thread } from '$shared/types'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
@@ -14,12 +18,19 @@
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
+    active: boolean
+    navigate: (view: MainView) => void
     onOpenTask: (task: Thread) => void
-    /** Create a routine-less task; the title seeds the new thread when given. */
-    onCreateTask: (title: string) => void
-    /** Open a routine's or a task's how-to panel in the context sidebar. */
-    onOpenHowTo: (routine: Routine) => void
     onOpenTaskHowTo: (task: Thread) => void
+    onOpenRoutineHowTo: (routine: Routine) => void
+    /** Create a new task inside a routine (the row's plus action). */
+    onCreateTaskInRoutine: (routine: Routine) => void
+    onRenameRoutine: (routineId: string, name: string) => Promise<void>
+    onDeleteRoutine: (routineId: string) => Promise<void>
+    onTogglePinRoutine: (routine: Routine) => void
+    onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
+    /** Group a dragged task into a routine. */
+    onAssignTask: (taskId: string, routineId: string) => void
   }
 
   let {
@@ -27,16 +38,42 @@
     tasks,
     selectedThreadId,
     scroller = $bindable(null),
+    active,
+    navigate,
     onOpenTask,
-    onCreateTask,
-    onOpenHowTo,
-    onOpenTaskHowTo
+    onOpenTaskHowTo,
+    onOpenRoutineHowTo,
+    onCreateTaskInRoutine,
+    onRenameRoutine,
+    onDeleteRoutine,
+    onTogglePinRoutine,
+    onMoveRoutine,
+    onAssignTask
   }: Props = $props()
 
   const expanded = new SvelteSet<string>()
-  let composerText = $state('')
-  let createRoutineOpen = $state(false)
-  let newRoutineName = $state('')
+  const routineSearchOpen = new SvelteSet<string>()
+  const routineSearchQueries = new SvelteMap<string, string>()
+
+  let renameTarget = $state<Routine | null>(null)
+  let renameDraft = $state('')
+  let renameBusy = $state(false)
+  let deleteTarget = $state<Routine | null>(null)
+  let deleteBusy = $state(false)
+
+  /** Pinned routines first, then manual sort order, then most recently updated. */
+  const orderedRoutines = $derived(
+    [...routines].sort((a, b) => {
+      const aPinned = a.pinned ? 1 : 0
+      const bPinned = b.pinned ? 1 : 0
+      if (aPinned !== bPinned) return bPinned - aPinned
+      if (aPinned && bPinned) return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0)
+      const aOrder = a.sortOrder ?? Number.MAX_SAFE_INTEGER
+      const bOrder = b.sortOrder ?? Number.MAX_SAFE_INTEGER
+      if (aOrder !== bOrder) return aOrder - bOrder
+      return b.updatedAt - a.updatedAt
+    })
+  )
 
   /** Routine-less tasks, most recently active first. */
   const standaloneTasks = $derived(
@@ -46,7 +83,24 @@
   )
 
   function routineTasks(routineId: string): Thread[] {
-    return tasks.filter((task) => task.routineId === routineId)
+    return tasks
+      .filter((task) => task.routineId === routineId)
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  }
+
+  function routineWorking(routineId: string): boolean {
+    return routineTasks(routineId).some(
+      (task) => threadStatusPolicy(task.status).tone === 'working'
+    )
+  }
+
+  function routineNextRun(routineId: string): number | null {
+    let earliest: number | null = null
+    for (const task of routineTasks(routineId)) {
+      const next = assistantRoutines.nextRunForTask(task)
+      if (next !== null && (earliest === null || next < earliest)) earliest = next
+    }
+    return earliest
   }
 
   function toggleRoutine(routine: Routine): void {
@@ -54,103 +108,119 @@
     else expanded.add(routine.id)
   }
 
-  /** Expand the routine that owns a task and reveal it. */
-  function revealTask(task: Thread): void {
-    if (task.routineId) expanded.add(task.routineId)
-  }
-
-  function submitComposer(): void {
-    const text = composerText.trim()
-    onCreateTask(text)
-    composerText = ''
-  }
-
-  async function createRoutine(): Promise<void> {
-    const name = newRoutineName.trim()
-    if (!name) return
-    const routine = await assistantRoutines.createRoutine({ name })
-    createRoutineOpen = false
-    newRoutineName = ''
+  function openRoutineSearch(routine: Routine): void {
+    routineSearchOpen.add(routine.id)
     expanded.add(routine.id)
-    onOpenHowTo(routine)
+  }
+
+  function closeRoutineSearch(routine: Routine): void {
+    routineSearchOpen.delete(routine.id)
+    routineSearchQueries.delete(routine.id)
+  }
+
+  function filteredRoutineTasks(routine: Routine): Thread[] {
+    const query = (routineSearchQueries.get(routine.id) ?? '').trim().toLowerCase()
+    const list = routineTasks(routine.id)
+    if (!routineSearchOpen.has(routine.id) || query.length === 0) return list
+    return list.filter((task) => task.title.toLowerCase().includes(query))
+  }
+
+  function startRename(routine: Routine): void {
+    renameTarget = routine
+    renameDraft = routine.name
+  }
+
+  async function submitRename(): Promise<void> {
+    const target = renameTarget
+    const name = renameDraft.trim()
+    if (!target || name.length === 0) return
+    renameBusy = true
+    try {
+      await onRenameRoutine(target.id, name)
+      renameTarget = null
+    } finally {
+      renameBusy = false
+    }
+  }
+
+  async function submitDelete(): Promise<void> {
+    const target = deleteTarget
+    if (!target) return
+    deleteBusy = true
+    try {
+      await onDeleteRoutine(target.id)
+      deleteTarget = null
+    } finally {
+      deleteBusy = false
+    }
   }
 </script>
 
-<CollapsibleSidebar title="Assistant" bind:scroller>
-  <div class="flex h-full min-h-0 flex-col">
-    <!-- Top composer: creates a routine-less task, groupable afterwards. -->
-    <div class="shrink-0 border-b border-border p-2">
-      <div class="flex items-center gap-1">
-        <input
-          class="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1.5 text-[0.75rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-          placeholder="Ask for a new task…"
-          aria-label="New assistant task"
-          bind:value={composerText}
-          onkeydown={(event) => {
-            if (event.key === 'Enter' && !event.isComposing) {
-              event.preventDefault()
-              submitComposer()
-            }
-          }}
-        />
-        <button
-          type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title="Create task"
-          aria-label="Create task"
-          onclick={submitComposer}
-        >
-          <Plus size={15} strokeWidth={1.8} />
-        </button>
-      </div>
-      <button
-        type="button"
-        class="mt-1.5 flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Create a routine"
-        aria-label="Create a routine"
-        onclick={() => (createRoutineOpen = true)}
-      >
-        <Workflow size={13} strokeWidth={1.8} />
-        <span>New routine</span>
-      </button>
-    </div>
+<CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
+  {#snippet footer()}
+    <SidebarAccountControls {active} {navigate} />
+  {/snippet}
 
+  <div class="flex h-full min-h-0 flex-col">
     <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5" role="list" aria-label="Routines and tasks">
-      {#if routines.length === 0 && standaloneTasks.length === 0}
+      {#if orderedRoutines.length === 0 && standaloneTasks.length === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-          <Search size={18} class="text-dimmed" />
+          <Workflow size={18} class="text-dimmed" />
           <p class="text-[0.6875rem] text-dimmed">
-            No routines or tasks yet. Ask for a task above, or create a routine.
+            No routines or tasks yet. Create a routine or a task from the header.
           </p>
         </div>
       {:else}
-        {#each routines as routine (routine.id)}
+        {#each orderedRoutines as routine (routine.id)}
+          {@const routineTaskList = routineTasks(routine.id)}
+          {@const visibleTasks = filteredRoutineTasks(routine)}
+          {@const searching = routineSearchOpen.has(routine.id)}
+          {@const query = routineSearchQueries.get(routine.id) ?? ''}
+          {@const holdsSelected = routineTaskList.some(
+            (task) => task.id === selectedThreadId
+          )}
           <AssistantRoutineRow
             {routine}
-            expanded={expanded.has(routine.id)}
-            active={false}
+            expanded={expanded.has(routine.id) || searching || holdsSelected}
+            working={routineWorking(routine.id)}
             missed={assistantRoutines.hasMissedForRoutine(routine.id)}
-            taskCount={routineTasks(routine.id).length}
+            taskCount={routineTaskList.length}
+            nextRunAt={routineNextRun(routine.id)}
+            searchOpen={searching}
+            searchQuery={query}
             onToggle={toggleRoutine}
-            onOpenHowTo={onOpenHowTo}
+            onSearchOpenChange={(r, open) => (open ? openRoutineSearch(r) : closeRoutineSearch(r))}
+            onSearchQueryChange={(r, value) => routineSearchQueries.set(r.id, value)}
+            onCreateTask={onCreateTaskInRoutine}
+            onOpenHowTo={onOpenRoutineHowTo}
+            onRename={startRename}
+            onTogglePin={onTogglePinRoutine}
+            onDelete={(r) => (deleteTarget = r)}
+            {onMoveRoutine}
+            onDropTask={onAssignTask}
           />
-          {#if expanded.has(routine.id)}
+          {#if expanded.has(routine.id) || searching || holdsSelected}
             <div class="mb-1 ml-2 border-l border-border pl-1.5">
-              {#each routineTasks(routine.id) as task (task.id)}
-                <AssistantTaskRow
-                  {task}
-                  active={task.id === selectedThreadId}
-                  color={routine.color}
-                  missed={assistantRoutines.missedForTask(task.id).length > 0}
-                  nextRunAt={assistantRoutines.nextRunForTask(task)}
-                  onSelect={(selected) => {
-                    revealTask(selected)
-                    onOpenTask(selected)
-                  }}
-                />
+              {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
+                <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
               {:else}
-                <p class="px-2 py-1 text-[0.625rem] text-dimmed">No tasks in this routine yet.</p>
-              {/each}
+                {#each visibleTasks as task (task.id)}
+                  <AssistantTaskRow
+                    {task}
+                    active={task.id === selectedThreadId}
+                    color={routine.color}
+                    missed={assistantRoutines.missedForTask(task.id).length > 0}
+                    nextRunAt={assistantRoutines.nextRunForTask(task)}
+                    onSelect={(selected) => {
+                      expanded.add(routine.id)
+                      onOpenTask(selected)
+                      onOpenRoutineHowTo(routine)
+                    }}
+                  />
+                {:else}
+                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">No tasks in this routine yet.</p>
+                {/each}
+              {/if}
             </div>
           {/if}
         {/each}
@@ -178,22 +248,19 @@
 </CollapsibleSidebar>
 
 <Modal
-  open={createRoutineOpen}
-  title="New routine"
-  onClose={() => (createRoutineOpen = false)}
+  open={renameTarget !== null}
+  title="Rename routine"
+  onClose={() => (renameTarget = null)}
 >
-  <p class="mb-3 text-[0.75rem] text-muted">
-    A routine groups tasks under one how-to. You will write the how-to with the agent next.
-  </p>
   <input
     class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-    placeholder="e.g. Triage CodeInOven PRs daily, 9am and 5pm"
+    placeholder="Routine name"
     aria-label="Routine name"
-    bind:value={newRoutineName}
+    bind:value={renameDraft}
     onkeydown={(event) => {
       if (event.key === 'Enter' && !event.isComposing) {
         event.preventDefault()
-        void createRoutine()
+        void submitRename()
       }
     }}
   />
@@ -202,18 +269,32 @@
       <button
         type="button"
         class="rounded-md px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        onclick={() => (createRoutineOpen = false)}
+        onclick={() => (renameTarget = null)}
       >
         Cancel
       </button>
       <button
         type="button"
         class="rounded-md bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={newRoutineName.trim().length === 0}
-        onclick={() => void createRoutine()}
+        disabled={renameDraft.trim().length === 0 || renameBusy}
+        onclick={() => void submitRename()}
       >
-        Create routine
+        Save
       </button>
     </div>
   {/snippet}
 </Modal>
+
+<ConfirmDialog
+  open={deleteTarget !== null}
+  title="Remove routine"
+  confirmLabel="Remove routine"
+  busy={deleteBusy}
+  onCancel={() => (deleteTarget = null)}
+  onConfirm={submitDelete}
+>
+  <p>
+    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Its tasks survive as
+    routine-less tasks.
+  </p>
+</ConfirmDialog>

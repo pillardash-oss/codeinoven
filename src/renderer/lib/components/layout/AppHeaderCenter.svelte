@@ -37,7 +37,8 @@
     'settings-profile': 'Profile',
     settings: 'Settings',
     scope: 'Scope Board',
-    threads: 'Threads'
+    threads: 'Threads',
+    assistant: 'Assistant'
   }
 
   /** Settings takes over the header   no thread title or thread controls. */
