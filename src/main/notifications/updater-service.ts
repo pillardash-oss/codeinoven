@@ -6,10 +6,11 @@ import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
-  buildUpdateDownloadSources,
-  resolveUpdateArtifact,
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
+  selectUpdateArtifact,
+  updateDownloadSources,
+  type ResolvedUpdateArtifact,
   type UpdateArtifactInfo
 } from './updater-download'
 
@@ -350,9 +351,10 @@ export class UpdaterService {
    * (sha512) and skips the network entirely. A dropped connection then resumes
    * from the received byte offset instead of restarting from zero.
    *
-   * The bytes come from the CodeInOven download mirror first, with GitHub
-   * Releases as the fallback (see `buildUpdateDownloadSources`), so an update
-   * is served from our own origin without ever depending on it being up.
+   * The bytes come from the CodeInOven download mirror when the mirror proves it
+   * holds the same artifact as the update feed, and from GitHub Releases
+   * otherwise or as the fallback (see `updateDownloadSources`), so an update is
+   * served from our own origin without ever depending on it being up.
    *
    * Returns true when the cache is seeded, false when seeding could not be
    * set up (no artifact resolved, no cache dir). The caller always finishes
@@ -364,20 +366,20 @@ export class UpdaterService {
   private async seedResumableDownload(): Promise<boolean> {
     const info = this.pendingUpdateInfo
     if (info === null) return false
-    const artifact = resolveUpdateArtifact(
-      info,
-      process.platform,
-      process.arch,
-      buildUpdateDownloadSources({
-        version: info.version,
-        channel: this.activeChannel,
-        githubBase: GITHUB_RELEASES_DOWNLOAD_URL
-      })
-    )
-    const cacheLocation = artifact === null ? null : resolveUpdaterCacheLocation()
-    if (artifact === null || cacheLocation === null) {
+    const selection = selectUpdateArtifact(info, process.platform, process.arch)
+    const cacheLocation = selection === null ? null : resolveUpdaterCacheLocation()
+    if (selection === null || cacheLocation === null) {
       Logger.dev('Updater: resumable seed not available, using electron-updater download')
       return false
+    }
+    const artifact: ResolvedUpdateArtifact = {
+      ...selection,
+      sources: await updateDownloadSources({
+        version: info.version,
+        channel: this.activeChannel,
+        githubBase: GITHUB_RELEASES_DOWNLOAD_URL,
+        artifact: selection
+      })
     }
     const seedProgress = (receivedBytes: number, totalBytes: number): void => {
       if (totalBytes <= 0) return

@@ -6,8 +6,10 @@ name: Download mirror
 # Nothing is rebuilt here: the job downloads the assets GitHub already
 # published, verifies every installer against the release's own SHA256SUMS.txt,
 # uploads them with their update feeds and a RELEASE.json manifest, HEAD-checks
-# what the origin actually serves, and prunes releases older than the newest
-# few. See scripts/publish-release-mirror.ts and docs/DOWNLOAD-MIRROR.md.
+# what the origin actually serves, and deletes the previous release of that
+# channel, so the bucket holds only the release it serves (GitHub Releases is
+# the archive). See scripts/publish-release-mirror.ts and
+# docs/DOWNLOAD-MIRROR.md.
 #
 # Requires (repo settings):
 #   variables DOWNLOAD_MIRROR_S3_ENDPOINT, DOWNLOAD_MIRROR_S3_BUCKET
@@ -35,7 +37,11 @@ on:
         default: auto
       keep:
         description: Releases retained per channel (0 keeps every release)
-        default: '3'
+        default: '1'
+      allow_downgrade:
+        description: Mirror an older release even though that deletes the newer one
+        type: boolean
+        default: false
       dry_run:
         description: Plan only, upload nothing
         type: boolean
@@ -44,8 +50,10 @@ on:
 permissions:
   contents: read
 
+# One mirror job at a time: runs share a bucket, and each one sweeps the channel
+# it published to, so overlapping runs must not delete each other's objects.
 concurrency:
-  group: download-mirror-${{ github.event.release.tag_name || inputs.tag }}
+  group: download-mirror
   cancel-in-progress: false
 
 jobs:
@@ -63,7 +71,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       CHANNEL: ${{ (github.event_name == 'release' && (github.event.release.prerelease && 'nightly' || 'stable')) || inputs.channel }}
-      KEEP: ${{ inputs.keep || '3' }}
+      KEEP: ${{ inputs.keep || '1' }}
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade || false }}
       DRY_RUN: ${{ inputs.dry_run || false }}
 
     steps:
@@ -80,6 +89,9 @@ jobs:
       - name: Mirror the release
         run: |
           args=(--tag "$TAG" --channel "$CHANNEL" --keep "$KEEP")
+          if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+            args+=(--allow-downgrade)
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi

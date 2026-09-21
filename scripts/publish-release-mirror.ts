@@ -21,8 +21,12 @@
  *
  * Upload order matters: artifacts first, the feed and manifest last, so a
  * consumer never sees a feed pointing at a file that is not there yet. Every
- * uploaded key is then HEAD-verified for size, and versions older than
- * `--keep` (default 3) are pruned from the channel.
+ * uploaded key is then HEAD-verified for size, and the previous release is
+ * deleted from the channel: with the default `--keep 1` a channel holds exactly
+ * the release it serves, because GitHub Releases is the archive. Publishing a
+ * release older than the one the channel serves is refused unless
+ * `--allow-downgrade` is passed, so a mis-typed backfill cannot replace the live
+ * download with a stale one.
  *
  * Run this from CI. A release is about 970 MB of multipart uploads, which a home
  * uplink turns into an hour-long job; an interrupted run leaves orphaned upload
@@ -41,11 +45,17 @@
  *   --artifacts-dir <dir>    Use release assets already on disk instead of
  *                            downloading them with `gh` (default:
  *                            .cio/tmp/download-mirror/<tag>).
- *   --keep <n>               Releases retained per channel (default 3, 0 keeps
- *                            every release ever mirrored).
+ *   --keep <n>               Releases retained per channel (default 1: only the
+ *                            release the channel is serving; 0 keeps every
+ *                            release ever mirrored, which is never needed on R2
+ *                            because GitHub Releases is the archive).
+ *   --allow-downgrade        Mirror a release older than the one the channel
+ *                            currently serves. Without it the run refuses,
+ *                            because the sweep would delete the newer release.
  *   --public-base <url>      Public mirror origin for the manifest URLs
  *                            (default https://dl.codeinoven.com).
- *   --dry-run                Print the plan and upload nothing.
+ *   --dry-run                Print the plan, including what the sweep would
+ *                            delete, and upload nothing.
  *
  * Environment (required unless --dry-run):
  *   DOWNLOAD_MIRROR_S3_ENDPOINT         e.g. https://<account>.r2.cloudflarestorage.com
@@ -55,7 +65,8 @@
  *   DOWNLOAD_MIRROR_S3_REGION           optional, default `auto` (Cloudflare R2)
  *
  * Exit codes: 0 on success (including --dry-run), 1 on bad flags, missing
- * configuration, a release that is not published, or a verification failure.
+ * configuration, a release that is not published, a release older than the one
+ * the channel serves, or a verification failure.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -67,6 +78,7 @@ import {
   MIRROR_CHECKSUMS_FILE,
   MIRROR_FEED_FILES,
   MIRROR_MANIFEST_FILE,
+  MIRROR_MANIFEST_SCHEMA_VERSION,
   mirrorArtifactUrl,
   mirrorChannelUrl,
   type MirrorFeedPlatform,
@@ -75,7 +87,7 @@ import {
   type ReleaseManifestArtifact
 } from '../src/lib/download-mirror'
 
-const DEFAULT_KEEP = 3
+const DEFAULT_KEEP = 1
 const DEFAULT_ARTIFACTS_DIR_ROOT = '.cio/tmp/download-mirror'
 
 /** Installer file names produced by electron-builder's `artifactName` templates. */
@@ -135,6 +147,7 @@ interface CliFlags {
   keep: number
   publicBase: string
   dryRun: boolean
+  allowDowngrade: boolean
 }
 
 interface MirrorConfig {
@@ -165,6 +178,8 @@ export interface ClassifiedArtifact {
 interface VerifiedArtifact extends ClassifiedArtifact {
   bytes: number
   sha256: string
+  /** Base64 sha512, the encoding the release's update feed reports. */
+  sha512: string
 }
 
 interface PlannedUpload {
@@ -197,6 +212,10 @@ function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export function parseFlags(argv: string[]): CliFlags {
   const values = new Map<string, string>()
   const known = new Set([
@@ -205,7 +224,8 @@ export function parseFlags(argv: string[]): CliFlags {
     '--artifacts-dir',
     '--keep',
     '--public-base',
-    '--dry-run'
+    '--dry-run',
+    '--allow-downgrade'
   ])
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]!
@@ -213,7 +233,7 @@ export function parseFlags(argv: string[]): CliFlags {
       ? [argument.slice(0, argument.indexOf('=')), argument.slice(argument.indexOf('=') + 1)]
       : [argument, null]
     if (!known.has(name)) throw new Error(`Unknown flag: ${name}`)
-    if (name === '--dry-run') {
+    if (name === '--dry-run' || name === '--allow-downgrade') {
       values.set(name, 'true')
       continue
     }
@@ -243,7 +263,8 @@ export function parseFlags(argv: string[]): CliFlags {
     artifactsDir: values.get('--artifacts-dir') ?? null,
     keep,
     publicBase: values.get('--public-base') ?? DOWNLOAD_MIRROR_URL,
-    dryRun: values.get('--dry-run') === 'true'
+    dryRun: values.get('--dry-run') === 'true',
+    allowDowngrade: values.get('--allow-downgrade') === 'true'
   }
 }
 
@@ -319,10 +340,16 @@ export function parseChecksums(text: string): Map<string, string> {
   return checksums
 }
 
-async function sha256OfFile(file: string): Promise<string> {
-  const hasher = new Bun.CryptoHasher('sha256')
-  for await (const chunk of Bun.file(file).stream()) hasher.update(chunk)
-  return hasher.digest('hex')
+/** sha256 (hex, for `SHA256SUMS.txt` and the manifest) and sha512 (base64, the
+ * encoding the release's update feed and the mirror trust check use). */
+async function digestsOfFile(file: string): Promise<{ sha256: string; sha512: string }> {
+  const sha256 = new Bun.CryptoHasher('sha256')
+  const sha512 = new Bun.CryptoHasher('sha512')
+  for await (const chunk of Bun.file(file).stream()) {
+    sha256.update(chunk)
+    sha512.update(chunk)
+  }
+  return { sha256: sha256.digest('hex'), sha512: sha512.digest('base64') }
 }
 
 async function fileBytes(file: string): Promise<number> {
@@ -353,22 +380,68 @@ function splitVersion(version: string): [string, number | null] {
 }
 
 /**
- * Keys to delete from a channel directory: everything belonging to a version
- * outside the newest `keep`. Feed files, checksums, the manifest and anything
- * unrecognized are never pruned.
+ * Classified release artifacts in a channel listing whose version is newer than
+ * `version`: the objects a publish must never take away from the channel, because
+ * they are (or include) the release it currently serves.
  */
-export function pruneTargets(keys: readonly string[], keep: number): string[] {
+export function newerArtifacts(keys: readonly string[], version: string): string[] {
+  return keys.filter((key) => {
+    const classified = classifyArtifact(path.basename(key))
+    return classified !== null && compareVersions(classified.version, version) > 0
+  })
+}
+
+/**
+ * Keys to delete from a channel directory once a publish has been uploaded and
+ * verified: installers and blockmaps belonging to a release the channel no
+ * longer retains. The release being published is always retained, plus the
+ * `keep - 1` newest versions already in the channel, so with the default
+ * `keep` of 1 the channel ends up holding exactly the release it serves, which
+ * is the point of the sweep: GitHub Releases is the archive, R2 is the current
+ * download.
+ *
+ * Feeds, checksums, the manifest and anything unrecognized are never deleted, so
+ * a sweep can neither break the channel nor leave it feedless; unrecognized
+ * objects are reported instead of removed.
+ */
+export function pruneTargets(
+  keys: readonly string[],
+  keep: number,
+  retainVersion: string | null = null
+): string[] {
   if (keep <= 0) return []
-  const byVersion = new Map<string, string[]>()
+  const older = [...new Set(versionsIn(keys))]
+    .filter((version) => version !== retainVersion)
+    .sort((left, right) => compareVersions(right, left))
+  const retained = new Set(retainVersion === null ? [] : [retainVersion])
+  for (const version of older.slice(0, Math.max(0, keep - retained.size))) retained.add(version)
+  return keys.filter((key) => {
+    const classified = classifyArtifact(path.basename(key))
+    return classified !== null && !retained.has(classified.version)
+  })
+}
+
+/** Versions of the installers and blockmaps present in a set of channel keys. */
+function versionsIn(keys: readonly string[]): string[] {
+  const versions: string[] = []
   for (const key of keys) {
     const classified = classifyArtifact(path.basename(key))
-    if (classified === null) continue
-    const bucket = byVersion.get(classified.version) ?? []
-    bucket.push(key)
-    byVersion.set(classified.version, bucket)
+    if (classified !== null) versions.push(classified.version)
   }
-  const versions = [...byVersion.keys()].sort((left, right) => compareVersions(right, left))
-  return versions.slice(keep).flatMap((version) => byVersion.get(version) ?? [])
+  return versions
+}
+
+/**
+ * Channel objects that are neither a release artifact nor one of the files a
+ * publish writes (feeds, checksums, manifest); leftovers worth reporting.
+ */
+export function unrecognizedKeys(keys: readonly string[], channel: ReleaseChannel): string[] {
+  const ownKeys = new Set([
+    ...Object.values(MIRROR_FEED_FILES).map((name) => `${channel}/${name}`),
+    `${channel}/${MIRROR_CHECKSUMS_FILE}`,
+    `${channel}/${MIRROR_MANIFEST_FILE}`
+  ])
+  return keys.filter((key) => classifyArtifact(path.basename(key)) === null && !ownKeys.has(key))
 }
 
 function fetchReleaseInfo(tag: string): ReleaseInfo {
@@ -460,11 +533,12 @@ function buildManifest(input: {
       kind: artifact.kind,
       sizeBytes: artifact.bytes,
       sha256: artifact.sha256,
+      sha512: artifact.sha512,
       url: mirrorArtifactUrl(artifact.name, input.channel, input.publicBase)
     }))
     .sort((left, right) => left.name.localeCompare(right.name))
   return {
-    schemaVersion: 1,
+    schemaVersion: MIRROR_MANIFEST_SCHEMA_VERSION,
     channel: input.channel,
     version: input.version,
     tag: input.release.tag,
@@ -568,16 +642,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (expected === undefined) {
       return fail(`${installer.name} is not listed in ${MIRROR_CHECKSUMS_FILE}`)
     }
-    const actual = await sha256OfFile(path.join(artifactsDir, installer.name))
-    if (actual !== expected) {
+    const digests = await digestsOfFile(path.join(artifactsDir, installer.name))
+    if (digests.sha256 !== expected) {
       return fail(
-        `Checksum mismatch for ${installer.name}: expected ${expected}, computed ${actual}`
+        `Checksum mismatch for ${installer.name}: expected ${expected}, computed ${digests.sha256}`
       )
     }
     verified.push({
       ...installer,
       bytes: await fileBytes(path.join(artifactsDir, installer.name)),
-      sha256: actual
+      sha256: digests.sha256,
+      sha512: digests.sha512
     })
   }
   say(`Verified ${verified.length} installers against ${MIRROR_CHECKSUMS_FILE}`)
@@ -665,20 +740,64 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   say('')
   say(`Plan (${plan.length} objects, ${megabytes(totalBytes)}):`)
   for (const item of plan) say(`  ${item.role.padEnd(9)} ${item.key}  ${megabytes(item.bytes)}`)
-  if (flags.keep > 0) {
-    say(`Prune: keeping the newest ${flags.keep} releases in ${channel}/`)
+
+  // --- what the channel gives up for this release --------------------------
+  // The channel listing happens before the upload, so a sweep that would break
+  // the channel stops the run while nothing has been written yet.
+  const bucket = config === null ? null : createBucket(config)
+  const listed =
+    bucket === null
+      ? null
+      : await listChannel(bucket, channel).then(
+          (keys) => ({ keys, error: null as unknown }),
+          (error: unknown) => ({ keys: null, error })
+        )
+  const listError = listed?.error ?? null
+  const sweep =
+    listed?.keys === null || listed?.keys === undefined
+      ? null
+      : pruneTargets(listed.keys, flags.keep, version)
+  say('')
+  if (flags.keep === 0) {
+    say('Sweep: disabled (--keep 0); the channel keeps every release it is given')
+  } else if (sweep === null) {
+    say(
+      `Sweep: keeps the newest ${flags.keep} release(s) in ${channel}/; the deletion list is computed after the upload`
+    )
+  } else if (sweep.length === 0) {
+    say(`Sweep: nothing to delete; ${channel}/ already serves only this release`)
   } else {
-    say('Prune: disabled (--keep 0)')
+    say(`Sweep: deletes ${sweep.length} object(s) ${channel}/ no longer serves:`)
+    for (const key of sweep.slice(0, 8)) say(`  - ${key}`)
+    if (sweep.length > 8) say(`  and ${sweep.length - 8} more`)
+  }
+  if (listError !== null) {
+    annotate(
+      'warning',
+      `Download mirror: could not list ${channel}/ on the origin (${reasonOf(listError)}); the sweep will be computed after the upload`
+    )
   }
 
-  if (flags.dryRun || config === null) {
+  // Refuse to replace a newer release the channel already serves with an older
+  // one: the sweep would delete the live download, and GitHub is only the
+  // fallback. This reads the channel listing, not the sweep, so `--keep` cannot
+  // hide a downgrade, and the deletion step applies the same protection again to
+  // the post-upload listing in case the listing above failed or a newer release
+  // appeared while this run was uploading.
+  const newerTargets = newerArtifacts(listed?.keys ?? [], version)
+  if (newerTargets.length > 0 && !flags.allowDowngrade) {
+    return fail(
+      `${channel}/ serves a newer release than ${release.tag}: mirroring it would replace the live download and delete ${newerTargets.length} object(s) of that release. Pass --allow-downgrade to mirror it anyway.`
+    )
+  }
+
+  if (flags.dryRun || bucket === null) {
     say('')
     say(flags.dryRun ? 'Dry run: nothing was uploaded.' : 'Dry run: no configuration.')
     return 0
   }
 
   // --- upload, artifacts first so the feed never points at a missing file ---
-  const bucket = createBucket(config)
   say('')
   say('Uploading...')
   let uploadedBytes = 0
@@ -686,9 +805,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     try {
       await upload(bucket, item)
     } catch (error) {
-      return fail(
-        `Upload of ${item.key} failed: ${error instanceof Error ? error.message : String(error)}`
-      )
+      return fail(`Upload of ${item.key} failed: ${reasonOf(error)}`)
     }
     uploadedBytes += item.bytes
   }
@@ -708,24 +825,47 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   say(`Verified ${plan.length} objects (${megabytes(uploadedBytes)})`)
 
-  // --- prune older releases ------------------------------------------------
-  let pruned = 0
+  // --- delete the release the channel no longer serves ---------------------
+  let deleted = 0
   if (flags.keep > 0) {
-    const keys = await listChannel(bucket, channel)
-    const targets = pruneTargets(keys, flags.keep)
-    for (const key of targets) {
-      await bucket.file(key).delete()
-      pruned += 1
-      say(`  pruned ${key}`)
+    const keys = await listChannel(bucket, channel).catch(() => null)
+    if (keys === null) {
+      return fail(
+        `Uploaded ${plan.length} objects but could not list ${channel}/ to delete the previous release; re-run the job to finish the sweep`
+      )
     }
-    say(pruned === 0 ? 'Nothing to prune' : `Pruned ${pruned} objects`)
-    const unrecognized = keys.filter(
-      (key) => classifyArtifact(path.basename(key)) === null && !key.endsWith('.yml')
-    )
-    for (const key of unrecognized) {
-      if (key.endsWith(`/${MIRROR_CHECKSUMS_FILE}`) || key.endsWith(`/${MIRROR_MANIFEST_FILE}`))
-        continue
+    for (const key of unrecognizedKeys(keys, channel)) {
       annotate('warning', `Download mirror: unexpected object ${key} in ${channel}/`)
+    }
+    // A release newer than this one can be in the channel even though the
+    // pre-upload listing did not show it: that listing may have failed, or
+    // another run may have published while this one was uploading. Its objects
+    // are the live download, so they are left in place unless --allow-downgrade
+    // asked for exactly that replacement.
+    const protectedKeys = new Set(flags.allowDowngrade ? [] : newerArtifacts(keys, version))
+    for (const key of pruneTargets(keys, flags.keep, version)) {
+      if (protectedKeys.has(key)) continue
+      try {
+        await bucket.file(key).delete()
+      } catch (error) {
+        return fail(`Could not delete ${key}: ${reasonOf(error)}`)
+      }
+      deleted += 1
+      say(`  deleted ${key}`)
+    }
+    if (protectedKeys.size > 0) {
+      const message = `${channel}/ holds ${protectedKeys.size} object(s) of a release newer than ${release.tag}; left in place. Run the mirror job for that release, or pass --allow-downgrade to replace it.`
+      say(`Warning: ${message}`)
+      annotate('warning', `Download mirror: ${message}`)
+    }
+    if (deleted === 0) {
+      say(
+        protectedKeys.size === 0
+          ? `Nothing to delete; ${channel}/ serves only ${release.tag}`
+          : `Nothing deleted; ${channel}/ also holds a newer release's objects`
+      )
+    } else {
+      say(`Deleted ${deleted} object(s) from earlier releases`)
     }
   }
 

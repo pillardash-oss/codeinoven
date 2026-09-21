@@ -5,14 +5,22 @@ published release is therefore copied to our own Cloudflare R2 origin and served
 `https://dl.codeinoven.com`. Nothing is rebuilt: the job copies exactly the bytes GitHub
 already published, after verifying them against the release's own `SHA256SUMS.txt`.
 
-GitHub Releases stays the feed and the fallback, so the mirror can never break a download:
+R2 is a cache of the release the channel currently serves, not an archive. Each channel
+directory holds one release, and publishing the next release deletes the previous one, so
+the bucket never grows. GitHub Releases is the archive and the fallback.
 
-| Consumer            | Source                                                                                     |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| Update metadata     | GitHub Releases (`latest*.yml`, a few KB)                                                  |
-| Update bytes        | Mirror first, GitHub when the mirror is unreachable or lacks the file                       |
-| Manual download     | Mirror links, with the [GitHub release](https://github.com/pillardash-oss/codeinoven/releases) as the archive |
-| Verification        | sha512 from the update feed; `SHA256SUMS.txt` and `RELEASE.json` per channel                |
+The mirror is used only when it provably holds the same bytes GitHub published: the app
+stays on GitHub for update metadata, then compares the `sha512` the mirror publishes for
+that file with the `sha512` in GitHub's feed. Equal means download from the mirror;
+anything else (a stale mirror, an unreachable mirror, a release that has not been mirrored
+yet) means download from GitHub.
+
+| Consumer        | Source                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------- |
+| Update metadata | GitHub Releases (`latest*.yml`, a few KB)                                                                     |
+| Update bytes    | Mirror once its manifest publishes the feed's `sha512` for that file, else GitHub                             |
+| Manual download | Mirror links, with the [GitHub release](https://github.com/pillardash-oss/codeinoven/releases) as the archive |
+| Verification    | Mirror manifest `sha512` / `sha256`, then the feed's `sha512` on the downloaded bytes                         |
 
 ## Layout
 
@@ -27,15 +35,16 @@ https://dl.codeinoven.com/nightly/   same shape, nightly versions
 ```
 
 Each directory is a self-contained update-feed root: the feed and the artifacts it points at
-sit side by side. Nightly feed assets (`nightly-mac.yml`, `nightly.yml`, `nightly-linux.yml`)
-are stored as `latest-*.yml`, because the channel is the directory. `RELEASE.json` records
-that mapping in its `feeds` array.
+sit side by side, and both describe the same, single release. Nightly feed assets
+(`nightly-mac.yml`, `nightly.yml`, `nightly-linux.yml`) are stored as `latest-*.yml`,
+because the channel is the directory. `RELEASE.json` records that mapping in its `feeds`
+array.
 
-`RELEASE.json` is the contract for download pages:
+`RELEASE.json` is the contract for download pages and for the updater's trust check:
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "channel": "stable",
   "version": "0.5.56", // full version, nightlies included: 0.5.57-nightly.5
   "tag": "v0.5.56",
@@ -49,6 +58,7 @@ that mapping in its `feeds` array.
       "kind": "dmg", // dmg | zip | installer | appimage | deb
       "sizeBytes": 234487204,
       "sha256": "…",
+      "sha512": "…", // base64, identical to the value in the channel's update feed
       "url": "https://dl.codeinoven.com/stable/codeinoven-0.5.56-arm64.dmg"
     }
   ],
@@ -56,23 +66,35 @@ that mapping in its `feeds` array.
 }
 ```
 
+`sha512` is base64, the same encoding the update feeds use, and it is what the app compares
+before it downloads anything from the mirror.
+
 ## How the app uses it
 
-`src/lib/download-mirror.ts` holds the origin and the URL builders.
-`src/main/notifications/updater-download.ts` builds the ordered sources (mirror, then
-GitHub) and pre-downloads the update into electron-updater's pending cache, where it is
-validated against the feed's sha512 before electron-updater is asked to install it. That
-pre-download is resumable over HTTP Range requests, so a dropped connection continues
-instead of restarting.
+`src/lib/download-mirror.ts` holds the origin, the URL builders and the trust check.
+`src/main/notifications/updater-download.ts` selects the artifact GitHub's feed points at,
+fetches the channel's `RELEASE.json`, and offers the mirror only when the manifest lists
+that exact file name with the same `sha512` (and size) as the feed. The chosen source list
+is then pre-downloaded into electron-updater's pending cache, where the bytes are validated
+against the feed's sha512 before electron-updater is asked to install it. That pre-download
+is resumable over HTTP Range requests, so a dropped connection continues instead of
+restarting.
 
-Fallback is deliberate and automatic:
+Falling back to GitHub is deliberate and automatic:
 
-- mirror returns 404 (an older release that has been pruned, or one mirrored before this
-  mechanism existed) → GitHub;
+- the mirror has not been updated for this release, its manifest is unreachable or
+  unreadable, or it lists a different hash or size → GitHub, without a single byte being
+  requested from the mirror;
+- mirror returns 404 (a backfilled release that was mirrored before this mechanism, or an
+  object deleted mid-run) → GitHub;
 - mirror serves bytes that do not match the feed's sha512 → the bytes are discarded and
   GitHub is used;
-- mirror never answers → the response deadline (15 s) fires and GitHub is used, so a dead
-  mirror costs a few seconds, never a stuck update.
+- mirror never answers → the manifest budget (8 s) plus the artifact response deadline (15 s)
+  expire and GitHub is used, so a dead mirror costs seconds, never a stuck update.
+
+Because the check happens before the download, a bucket holding a stale or foreign release
+can never serve an update. The worst case for a black-holed origin is about 23 seconds (both
+deadlines run one after the other), and only when an update is actually available.
 
 ## One-time setup
 
@@ -139,8 +161,12 @@ automatic mirror runs are **skipped** instead of failing every release.
 (stable and nightly), and can be run by hand to backfill:
 
 ```bash
-# Mirror an already-published release (workflow_dispatch inputs: tag, channel, keep, dry_run)
+# Mirror an already-published release (workflow_dispatch inputs: tag, channel, keep,
+# allow_downgrade, dry_run)
 gh workflow run download-mirror.yml -f tag=v0.5.56 -f channel=stable
+
+# Backfill a release older than the one the channel serves (deletes the newer one)
+gh workflow run download-mirror.yml -f tag=v0.5.55 -f channel=stable -f allow_downgrade=true
 
 # Same job locally, using your own R2 credentials from .env
 bun run release:mirror --tag v0.5.56 --channel stable --dry-run
@@ -156,8 +182,19 @@ The script (`scripts/publish-release-mirror.ts`):
 3. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
    feed never points at a file that is not there yet;
 4. HEAD-verifies every uploaded key's size against the local file;
-5. prunes releases older than `--keep` (default 3) per channel, never touching feeds,
-   checksums or the manifest.
+5. deletes the release the channel no longer serves (with the default `--keep 1`, everything
+   except the release just uploaded), never touching feeds, checksums or the manifest.
+
+Two guards keep the sweep from taking away the release the channel is serving:
+
+- publishing a release _older_ than one already in the channel is refused before anything is
+  uploaded, unless `--allow-downgrade` is passed, because the sweep would delete the live
+  download;
+- the deletion list is recomputed from a fresh listing after the upload and verified
+  objects, and objects belonging to a release newer than the one just published are left in
+  place (with a warning) unless `--allow-downgrade` was passed. That covers a listing that
+  failed before the upload and a second mirror run publishing concurrently. The workflow
+  serializes mirror runs (`concurrency: download-mirror`) so this stays a safety net.
 
 Upload the release from CI, not from a laptop. A release is about 970 MB, so a home uplink
 turns that into an hour-long job (measured 0.12 MiB/s up on a constrained connection), while
@@ -175,18 +212,36 @@ curl -s -o /dev/null -w '%{http_code}\n' -r 0-1023 \
   "https://dl.codeinoven.com/stable/$(curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq -r '.artifacts[0].name')"
 ```
 
-An installer URL downloaded from the mirror must hash to the `sha256` in `RELEASE.json`.
+An installer URL downloaded from the mirror must hash to the `sha256` in `RELEASE.json`. To
+confirm the mirror is currently trustworthy for an installed app, compare its `sha512` with
+the one GitHub's feed publishes for the same file:
+
+```bash
+file=$(curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq -r '.artifacts[0].name')
+mirror_sha=$(curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | \
+  jq -r --arg f "$file" '.artifacts[] | select(.name == $f) | .sha512')
+github_sha=$(curl -fsS https://github.com/pillardash-oss/codeinoven/releases/latest/download/latest-mac.yml | \
+  awk -v f="$file" '$0 ~ "url: " f {found=1} found && /sha512:/ {print $2; exit}')
+[ "$mirror_sha" = "$github_sha" ] && echo "mirror is trusted for $file" || echo "app would use GitHub"
+```
+
+Equal values mean the next update download comes from `dl.codeinoven.com`. Different values
+mean the app silently uses GitHub instead; re-run the mirror job for that release.
 
 ## Retention and cost
 
 A full release is ~970 MB across the five installers plus a few MB of blockmaps
-(measured on the `v0.5.56` assets). With the default `--keep 3`, each channel holds about
-3 GB. R2 storage is $0.015/GB-month with no egress fees
-([R2 pricing](https://developers.cloudflare.com/r2/pricing/)), so both channels together cost
-well under $1/month. Raise or lower retention with `--keep` (0 keeps everything).
+(measured on the `v0.5.56` assets). With the default `--keep 1` each channel holds exactly
+the release it serves, so the bucket stays at ~970 MB per channel (~1.9 GB for both) and
+does not grow: publishing the next release deletes the previous one. R2 storage is
+$0.015/GB-month with no egress fees
+([R2 pricing](https://developers.cloudflare.com/r2/pricing/)), so the whole mirror costs
+cents per month. `--keep 0` disables deletion if you ever want the bucket to accumulate.
 
-Pruning is safe: the app only ever downloads the version its update feed points at, and an
-older version that has been pruned falls back to GitHub.
+Deletion is safe because the app never asks the mirror for anything but the version its
+GitHub feed points at, and the hash check refuses anything else. A release that is not in
+the bucket at all (never mirrored, deleted by the sweep, or published while the mirror job
+was skipped) is served from GitHub.
 
 ## Disabling the mirror
 

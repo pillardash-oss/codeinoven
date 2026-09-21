@@ -6,7 +6,9 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   DOWNLOAD_MIRROR_URL,
+  fetchMirrorManifestArtifacts,
   mirrorArtifactUrl,
+  mirrorManifestHoldsArtifact,
   type ReleaseChannel
 } from '../../lib/download-mirror'
 import { Logger } from '../system/logger'
@@ -38,12 +40,19 @@ export interface UpdateArtifactInfo {
   }[]
 }
 
-export interface ResolvedUpdateArtifact {
+export interface ResolvedUpdateArtifact extends SelectedUpdateArtifact {
   /**
    * Ordered download URLs of the same artifact, fastest source first with the
    * fallback last. The file name, sha512 and size are identical for all of them.
    */
-  sources: readonly { label: string; url: string }[]
+  sources: readonly ResolvedDownloadSource[]
+}
+
+/**
+ * The one artifact an update feed points at for this platform and architecture,
+ * before any download source is attached to it.
+ */
+export interface SelectedUpdateArtifact {
   /** File name electron-updater expects inside its pending-update cache dir. */
   fileName: string
   /** Base64-encoded sha512 digest from the update feed. */
@@ -53,12 +62,12 @@ export interface ResolvedUpdateArtifact {
   isAdminRightsRequired: boolean
 }
 
-/** One origin an update artifact can be downloaded from. */
-export interface UpdateDownloadSource {
+/** One concrete origin an artifact can be downloaded from. */
+export interface ResolvedDownloadSource {
   /** Short human label used in logs, e.g. `download mirror`. */
   label: string
-  /** Absolute download URL of an artifact file name inside this source. */
-  urlFor: (fileName: string) => string
+  /** Absolute download URL of the artifact. */
+  url: string
 }
 
 export interface UpdaterCacheLocation {
@@ -117,45 +126,68 @@ function pickEntry<T extends { name: string }>(
 }
 
 /**
- * Where an update artifact can come from, in the order it should be tried: the
- * CodeInOven download mirror first (fast, own origin) and GitHub Releases last
- * as the always-available fallback, so a mirror that is down, stale or missing
- * the file never blocks an update.
+ * The download sources for one artifact, in the order they should be tried: the
+ * CodeInOven download mirror first, GitHub Releases always last as the
+ * fallback.
+ *
+ * The mirror is offered only when it proves it holds the same bytes: its channel
+ * manifest must list this exact file name with the sha512 (and size) the update
+ * feed reports. A mirror that lags behind the feed, mirrors a different build,
+ * is unreachable, or answers with something that is not a manifest therefore
+ * never serves an update; the bytes come from GitHub instead. GitHub also stays
+ * the last source behind every manifest-approved mirror, so a mirror that goes
+ * bad mid-download cannot block an update either.
  */
-export function buildUpdateDownloadSources(options: {
+export async function updateDownloadSources(options: {
   version: string
   channel: ReleaseChannel
   /** GitHub release download base, e.g. `https://github.com/owner/repo/releases/download`. */
   githubBase: string
+  /** The artifact the feed selected, whose published hash gates the mirror. */
+  artifact: Pick<SelectedUpdateArtifact, 'fileName' | 'sha512' | 'size'>
   /** Mirror origin override (tests, staging); defaults to the published mirror. */
   mirrorBase?: string
-}): UpdateDownloadSource[] {
-  const { version, channel, githubBase, mirrorBase = DOWNLOAD_MIRROR_URL } = options
+  /** Manifest transport override (tests). */
+  fetchImpl?: typeof fetch
+}): Promise<ResolvedDownloadSource[]> {
+  const { version, channel, githubBase, artifact, mirrorBase = DOWNLOAD_MIRROR_URL } = options
+  const github: ResolvedDownloadSource = {
+    label: 'GitHub Releases',
+    url: `${githubBase}/v${version}/${artifact.fileName}`
+  }
+  const manifest = await fetchMirrorManifestArtifacts({
+    channel,
+    base: mirrorBase,
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl })
+  })
+  if (manifest === null) {
+    Logger.dev('Updater: could not read the download mirror manifest; downloading from GitHub')
+    return [github]
+  }
+  if (!mirrorManifestHoldsArtifact(manifest, artifact)) {
+    Logger.dev(
+      `Updater: the download mirror does not publish ${artifact.fileName} with the feed's hash; downloading from GitHub`
+    )
+    return [github]
+  }
   return [
-    {
-      label: 'download mirror',
-      urlFor: (fileName) => mirrorArtifactUrl(fileName, channel, mirrorBase)
-    },
-    {
-      label: 'GitHub Releases',
-      urlFor: (fileName) => `${githubBase}/v${version}/${fileName}`
-    }
+    { label: 'download mirror', url: mirrorArtifactUrl(artifact.fileName, channel, mirrorBase) },
+    github
   ]
 }
 
 /**
- * Resolve the single update artifact electron-updater would download for this
- * platform and architecture, replicating its per-updater file selection:
- * macOS zip (arm64-aware, pkg/dmg fallback), Windows NSIS exe, Linux AppImage.
- * Returns null when the feed has no usable entry, letting the caller fall
- * back to electron-updater's own download path.
+ * The single artifact electron-updater would download for this platform and
+ * architecture, replicating its per-updater file selection: macOS zip
+ * (arm64-aware, pkg/dmg fallback), Windows NSIS exe, Linux AppImage. Returns
+ * null when the feed has no usable entry, letting the caller fall back to
+ * electron-updater's own download path.
  */
-export function resolveUpdateArtifact(
+export function selectUpdateArtifact(
   info: UpdateArtifactInfo,
   platform: NodeJS.Platform,
-  arch: string,
-  sources: readonly UpdateDownloadSource[]
-): ResolvedUpdateArtifact | null {
+  arch: string
+): SelectedUpdateArtifact | null {
   const candidates: Array<{
     name: string
     entry: UpdateArtifactInfo['files'][number]
@@ -187,7 +219,6 @@ export function resolveUpdateArtifact(
       ? picked.entry.size
       : 0
   return {
-    sources: sources.map((source) => ({ label: source.label, url: source.urlFor(picked.name) })),
     fileName: picked.name,
     sha512,
     size,
@@ -235,8 +266,20 @@ export function resolveUpdaterCacheLocation(
   return { cacheDir, pendingDir: path.join(cacheDir, 'pending') }
 }
 
+/**
+ * Checksum of the feed's sha512 for a resumable download. The update feeds
+ * electron-builder writes are base64, which is also what the mirror manifest
+ * publishes; a 128-character hex digest of the same value is accepted too, so
+ * the encoding the trust check normalises cannot disagree with the encoding the
+ * download verifies against.
+ */
 function checksumOf(sha512: string): DownloadChecksum {
-  return { algorithm: 'sha512', encoding: 'base64', digest: sha512 }
+  const digest = sha512.trim()
+  return {
+    algorithm: 'sha512',
+    encoding: /^[0-9a-f]{128}$/i.test(digest) ? 'hex' : 'base64',
+    digest
+  }
 }
 
 /** Bytes already on disk for `file`; `0` when it does not exist. */
@@ -269,10 +312,11 @@ function hashExistingFile(file: string, checksum: DownloadChecksum): Promise<str
  * the next attempt (or launch) resumes instead of restarting. Bytes that do not
  * match the feed (checksum or size violation) are removed rather than cached.
  *
- * Sources are tried in order (mirror first, GitHub last). A source that fails
- *   unreachable, missing the file, serving bytes that do not match the feed's
- * sha512   hands over to the next one with whatever already reached the disk,
- * so the update still completes from GitHub when the mirror cannot serve it.
+ * Sources are tried in order (an approved mirror first, GitHub last). A source
+ * that fails (unreachable, missing the file, serving bytes that do not match the
+ * feed's sha512) hands over to the next one with whatever already reached the
+ * disk, so the update still completes from GitHub when the mirror cannot serve
+ * it.
  */
 export async function seedUpdaterCache(
   artifact: ResolvedUpdateArtifact,
