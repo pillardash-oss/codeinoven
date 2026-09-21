@@ -196,6 +196,14 @@ export function safeBasename(value: string): string {
   return base
 }
 
+/** Like `validateBrowserUrl`, but an absent value means "no URL": a blank tab
+ *  is created without an address and must not fail the show handshake. Any
+ *  value that is present goes through the full validation. */
+export function validateOptionalBrowserUrl(value: unknown): string {
+  if (value === undefined || value === null || value === '') return ''
+  return validateBrowserUrl(value)
+}
+
 export function validateBrowserUrl(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_BROWSER_URL_LENGTH) {
     throw new TypeError('Browser URL must be a string of at most 8192 characters')

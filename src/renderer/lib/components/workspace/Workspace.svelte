@@ -490,10 +490,9 @@
   }
 
   function openNewBrowser(): string | null {
-    const activeTab = contextSidebarState.sidebarActiveTab
-    return contextSidebarState.openBrowser(
-      activeTab?.kind === 'browser' ? activeTab.url : 'http://localhost:3000/'
-    )
+    // A new tab starts blank: no URL is loaded, the address bar stays empty,
+    // and the page only loads once the user types an address.
+    return contextSidebarState.openBrowser('')
   }
 
   function openDebugger(): void {

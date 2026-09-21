@@ -131,13 +131,15 @@ export class SidebarBrowserTabs {
       }
       return id
     }
-    let title = 'Browser'
-    try {
-      // eslint-disable-next-line svelte/prefer-svelte-reactivity
-      const parsed = new URL(url)
-      title = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
-    } catch {
-      // The main-process browser boundary reports malformed custom URLs.
+    let title = url === '' ? 'New Tab' : 'Browser'
+    if (url !== '') {
+      try {
+        // eslint-disable-next-line svelte/prefer-svelte-reactivity
+        const parsed = new URL(url)
+        title = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
+      } catch {
+        // The main-process browser boundary reports malformed custom URLs.
+      }
     }
     this.tabs = [...this.tabs, { id, kind: 'browser', title, projectId, threadId, url }]
     this.persist()

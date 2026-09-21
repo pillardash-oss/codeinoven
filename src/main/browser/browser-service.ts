@@ -60,6 +60,7 @@ import {
   validateBoundedHost,
   validateBrowserUrl,
   validateDownloadId,
+  validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
   validateProjectId,
@@ -168,7 +169,7 @@ export class BrowserService {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
-        const initialUrl = validateBrowserUrl(rawInitialUrl)
+        const initialUrl = validateOptionalBrowserUrl(rawInitialUrl)
         const bounds = validateBounds(rawBounds)
         const tab = this.ensureTab(tabId, projectId, threadId)
 
@@ -191,7 +192,9 @@ export class BrowserService {
         this.injectDialogContext(tabId)
         if (!tab.initialNavigationStarted) {
           tab.initialNavigationStarted = true
-          this.load(tabId, initialUrl)
+          // A blank tab has no address yet: nothing to load, and the tab must
+          // not spin. A later show still reports the live page state.
+          if (initialUrl) this.load(tabId, initialUrl)
         }
         return this.stateFor(tabId, tab)
       }

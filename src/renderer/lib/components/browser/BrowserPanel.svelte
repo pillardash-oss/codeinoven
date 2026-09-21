@@ -60,7 +60,9 @@
       url: tabInitialUrl,
       title: tabInitialTitle,
       favicon: null,
-      loading: true,
+      // A blank tab has no address yet and loads nothing, so it does not start
+      // in the loading state; every real address does until main reports back.
+      loading: tabInitialUrl !== '',
       canGoBack: false,
       canGoForward: false,
       audible: false,
@@ -332,21 +334,23 @@
     </button>
     <div class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
-      <button
-        type="button"
-        class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title={secure ? 'Site settings' : 'Connection is not secure'}
-        aria-label={secure ? 'Site settings' : 'Connection is not secure'}
-        aria-haspopup="menu"
-        aria-expanded={siteMenuOpen}
-        onclick={openSiteMenu}
-      >
-        {#if secure}
-          <Lock size={13} />
-        {:else}
-          <LockOpen size={13} />
-        {/if}
-      </button>
+      {#if pageState.url !== ''}
+        <button
+          type="button"
+          class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title={secure ? 'Site settings' : 'Connection is not secure'}
+          aria-label={secure ? 'Site settings' : 'Connection is not secure'}
+          aria-haspopup="menu"
+          aria-expanded={siteMenuOpen}
+          onclick={openSiteMenu}
+        >
+          {#if secure}
+            <Lock size={13} />
+          {:else}
+            <LockOpen size={13} />
+          {/if}
+        </button>
+      {/if}
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}
