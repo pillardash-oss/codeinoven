@@ -61,7 +61,8 @@
     "package:win": "bun run harness:build-pi && bun run build:production && electron-builder --win --x64 -c.forceCodeSigning=false -c.npmRebuild=false",
     "release:mac": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run verify:release && electron-builder --mac",
     "deploy:nightly": "bash scripts/deploy-nightly.sh",
-    "deploy:main": "bash scripts/deploy-main.sh"
+    "deploy:main": "bash scripts/deploy-main.sh",
+    "release:mirror": "bun scripts/publish-release-mirror.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

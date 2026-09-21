@@ -5,10 +5,24 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  DOWNLOAD_MIRROR_URL,
+  mirrorArtifactUrl,
+  type ReleaseChannel
+} from '../../lib/download-mirror'
+import { Logger } from '../system/logger'
+import {
   downloadFileResumable,
+  DownloadSourceError,
   PermanentDownloadError,
   type DownloadChecksum
 } from '../util/resumable-download'
+
+/**
+ * How long a source may take to produce response headers before it is written
+ * off as dead. The download mirror is tried first, so a black-holed mirror must
+ * not make an update wait: it fails inside this window and GitHub takes over.
+ */
+const SOURCE_RESPONSE_TIMEOUT_MS = 15_000
 
 /**
  * The subset of electron-updater's `UpdateInfo` the resumable pre-download
@@ -25,8 +39,11 @@ export interface UpdateArtifactInfo {
 }
 
 export interface ResolvedUpdateArtifact {
-  /** Absolute download URL of the platform update artifact. */
-  url: string
+  /**
+   * Ordered download URLs of the same artifact, fastest source first with the
+   * fallback last. The file name, sha512 and size are identical for all of them.
+   */
+  sources: readonly { label: string; url: string }[]
   /** File name electron-updater expects inside its pending-update cache dir. */
   fileName: string
   /** Base64-encoded sha512 digest from the update feed. */
@@ -34,6 +51,14 @@ export interface ResolvedUpdateArtifact {
   /** Expected byte count from the update feed; `0` when unknown. */
   size: number
   isAdminRightsRequired: boolean
+}
+
+/** One origin an update artifact can be downloaded from. */
+export interface UpdateDownloadSource {
+  /** Short human label used in logs, e.g. `download mirror`. */
+  label: string
+  /** Absolute download URL of an artifact file name inside this source. */
+  urlFor: (fileName: string) => string
 }
 
 export interface UpdaterCacheLocation {
@@ -92,6 +117,33 @@ function pickEntry<T extends { name: string }>(
 }
 
 /**
+ * Where an update artifact can come from, in the order it should be tried: the
+ * CodeInOven download mirror first (fast, own origin) and GitHub Releases last
+ * as the always-available fallback, so a mirror that is down, stale or missing
+ * the file never blocks an update.
+ */
+export function buildUpdateDownloadSources(options: {
+  version: string
+  channel: ReleaseChannel
+  /** GitHub release download base, e.g. `https://github.com/owner/repo/releases/download`. */
+  githubBase: string
+  /** Mirror origin override (tests, staging); defaults to the published mirror. */
+  mirrorBase?: string
+}): UpdateDownloadSource[] {
+  const { version, channel, githubBase, mirrorBase = DOWNLOAD_MIRROR_URL } = options
+  return [
+    {
+      label: 'download mirror',
+      urlFor: (fileName) => mirrorArtifactUrl(fileName, channel, mirrorBase)
+    },
+    {
+      label: 'GitHub Releases',
+      urlFor: (fileName) => `${githubBase}/v${version}/${fileName}`
+    }
+  ]
+}
+
+/**
  * Resolve the single update artifact electron-updater would download for this
  * platform and architecture, replicating its per-updater file selection:
  * macOS zip (arm64-aware, pkg/dmg fallback), Windows NSIS exe, Linux AppImage.
@@ -102,7 +154,7 @@ export function resolveUpdateArtifact(
   info: UpdateArtifactInfo,
   platform: NodeJS.Platform,
   arch: string,
-  downloadBase: string
+  sources: readonly UpdateDownloadSource[]
 ): ResolvedUpdateArtifact | null {
   const candidates: Array<{
     name: string
@@ -135,7 +187,7 @@ export function resolveUpdateArtifact(
       ? picked.entry.size
       : 0
   return {
-    url: `${downloadBase}/v${info.version}/${picked.name}`,
+    sources: sources.map((source) => ({ label: source.label, url: source.urlFor(picked.name) })),
     fileName: picked.name,
     sha512,
     size,
@@ -187,6 +239,13 @@ function checksumOf(sha512: string): DownloadChecksum {
   return { algorithm: 'sha512', encoding: 'base64', digest: sha512 }
 }
 
+/** Bytes already on disk for `file`; `0` when it does not exist. */
+async function existingBytes(file: string): Promise<number> {
+  return stat(file)
+    .then((info) => (info.isFile() ? info.size : 0))
+    .catch(() => 0)
+}
+
 /** Streaming sha512-base64 digest of a fully written file. */
 function hashExistingFile(file: string, checksum: DownloadChecksum): Promise<string | null> {
   return new Promise((resolve) => {
@@ -207,8 +266,13 @@ function hashExistingFile(file: string, checksum: DownloadChecksum): Promise<str
  * and write the `update-info.json` marker electron-updater validates before it
  * accepts a cached file. The marker is written only after the full file's
  * sha512 verifies, so a crash mid-download leaves an unmarked partial that
- * the next attempt (or launch) resumes instead of restarting. Corrupt data
- * (checksum mismatch, unexpected HTTP status) is removed rather than cached.
+ * the next attempt (or launch) resumes instead of restarting. Bytes that do not
+ * match the feed (checksum or size violation) are removed rather than cached.
+ *
+ * Sources are tried in order (mirror first, GitHub last). A source that fails
+ *   unreachable, missing the file, serving bytes that do not match the feed's
+ * sha512   hands over to the next one with whatever already reached the disk,
+ * so the update still completes from GitHub when the mirror cannot serve it.
  */
 export async function seedUpdaterCache(
   artifact: ResolvedUpdateArtifact,
@@ -219,9 +283,7 @@ export async function seedUpdaterCache(
   await mkdir(pendingDir, { recursive: true })
   const destination = path.join(pendingDir, artifact.fileName)
   const checksum = checksumOf(artifact.sha512)
-  let resumeFromBytes = await stat(destination)
-    .then((info) => (info.isFile() ? info.size : 0))
-    .catch(() => 0)
+  let resumeFromBytes = await existingBytes(destination)
   const writeMarker = async (): Promise<void> => {
     // Same shape electron-updater writes after its own successful download;
     // it is what makes `validateDownloadedPath` accept the cached file.
@@ -252,24 +314,45 @@ export async function seedUpdaterCache(
     await rm(destination, { force: true })
     resumeFromBytes = 0
   }
-  try {
-    const received = await downloadFileResumable({
-      url: artifact.url,
-      destination,
-      expectedBytes: artifact.size,
-      checksum,
-      signal,
-      resumeFromBytes,
-      onProgress: onProgress === undefined ? undefined : (bytes) => onProgress(bytes, artifact.size)
-    })
-    if (artifact.size === 0) onProgress?.(received, received)
-    await writeMarker()
-  } catch (cause) {
-    if (cause instanceof PermanentDownloadError) {
-      // A checksum mismatch or HTTP-status failure means the bytes on disk
-      // (fresh or resumed) are unusable; never cache them for future resumes.
-      await rm(destination, { force: true })
+  let lastCause: unknown = new Error('The update artifact has no download source.')
+  for (const [index, source] of artifact.sources.entries()) {
+    const isLastSource = index === artifact.sources.length - 1
+    try {
+      const received = await downloadFileResumable({
+        url: source.url,
+        destination,
+        expectedBytes: artifact.size,
+        checksum,
+        signal,
+        resumeFromBytes,
+        responseTimeoutMs: SOURCE_RESPONSE_TIMEOUT_MS,
+        onProgress:
+          onProgress === undefined ? undefined : (bytes) => onProgress(bytes, artifact.size)
+      })
+      if (artifact.size === 0) onProgress?.(received, received)
+      await writeMarker()
+      return
+    } catch (cause) {
+      lastCause = cause
+      // Bytes are suspect only when the transfer completed but did not match the
+      // feed (checksum or size violation): those must never be cached or resumed.
+      // A source that could not serve the file leaves what reached the disk
+      // intact, so the next source resumes from the received offset instead of
+      // restarting the download from zero.
+      const bytesAreSuspect =
+        cause instanceof PermanentDownloadError && !(cause instanceof DownloadSourceError)
+      if (bytesAreSuspect) {
+        await rm(destination, { force: true })
+        resumeFromBytes = 0
+      } else {
+        resumeFromBytes = await existingBytes(destination)
+      }
+      if (isLastSource) break
+      Logger.dev(
+        `Updater: update download from ${source.label} failed; trying the next source`,
+        cause
+      )
     }
-    throw cause
   }
+  throw lastCause
 }

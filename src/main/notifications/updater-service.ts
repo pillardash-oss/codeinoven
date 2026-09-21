@@ -2,9 +2,11 @@ import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import { Logger } from '../system/logger'
 import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
+import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
+  buildUpdateDownloadSources,
   resolveUpdateArtifact,
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
@@ -53,6 +55,8 @@ export class UpdaterService {
   private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
+  /** Channel the last check resolved, so the seed picks the matching mirror directory. */
+  private activeChannel: ReleaseChannel = 'stable'
   /** True while a download (seed or electron-updater) is in flight. */
   private downloadInFlight = false
 
@@ -245,6 +249,7 @@ export class UpdaterService {
       const config = await this.storage.getConfig()
       const nightly = config.updateChannel === 'nightly'
       const channel = nightly ? 'nightly' : null
+      this.activeChannel = nightly ? 'nightly' : 'stable'
       if (autoUpdater.channel !== channel) {
         autoUpdater.channel = channel
         Logger.dev('Updater: channel set to', channel ?? 'latest')
@@ -345,6 +350,10 @@ export class UpdaterService {
    * (sha512) and skips the network entirely. A dropped connection then resumes
    * from the received byte offset instead of restarting from zero.
    *
+   * The bytes come from the CodeInOven download mirror first, with GitHub
+   * Releases as the fallback (see `buildUpdateDownloadSources`), so an update
+   * is served from our own origin without ever depending on it being up.
+   *
    * Returns true when the cache is seeded, false when seeding could not be
    * set up (no artifact resolved, no cache dir). The caller always finishes
    * with `autoUpdater.downloadUpdate()`, which on a seeded cache validates it
@@ -359,7 +368,11 @@ export class UpdaterService {
       info,
       process.platform,
       process.arch,
-      GITHUB_RELEASES_DOWNLOAD_URL
+      buildUpdateDownloadSources({
+        version: info.version,
+        channel: this.activeChannel,
+        githubBase: GITHUB_RELEASES_DOWNLOAD_URL
+      })
     )
     const cacheLocation = artifact === null ? null : resolveUpdaterCacheLocation()
     if (artifact === null || cacheLocation === null) {

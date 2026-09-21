@@ -49,6 +49,8 @@ Control who can merge, what must pass, and what runs automatically.
 - [x] **Enable GitHub secret scanning & push protection** on the repo (repo Settings → Security).
 - [x] **Environment branches created and protected**: `dev` (PR review + quality checks + linear history) and `nightly` (PR review + quality checks) exist and are protected; CI runs on all three (`main`/`dev`/`nightly`).
 - [x] **Nightly build workflow** (`.github/workflows/nightly.yml`): scheduled daily build from `nightly` branch publishing a `nightly` prerelease with checksums.
+- [x] **Mirror releases to our own download origin** (`.github/workflows/download-mirror.yml` + `scripts/publish-release-mirror.ts`): after a release is published, the same verified artifacts are copied to Cloudflare R2 and served from `dl.codeinoven.com`, which is what the app downloads updates from (GitHub stays the fallback). Setup and verification: `docs/DOWNLOAD-MIRROR.md`.
+- [ ] **Set the mirror repository variables/secrets** (`DOWNLOAD_MIRROR_S3_ENDPOINT`, `DOWNLOAD_MIRROR_S3_BUCKET`, `DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID`, `DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY`) so the mirror job runs instead of being skipped; see `docs/SECRETS.md` § 1.
 - [ ] **Require signed/verified commits** for maintainer pushes (optional but recommended for auditability).
 
 ## 3. Secrets security
@@ -108,6 +110,7 @@ The public-facing cutover.
 - [ ] **Tag and release `v0.5.0`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.
 - [x] **Verify the auto-update feed** points at the OSS GitHub Releases (README/`electron-builder.yml` now reference `pillardash-oss`). Resolution of `latest.yml`/`latest-mac.yml` is only testable after the first release is published   pending.
 - [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing.
+- [ ] **Verify the download mirror** after a release: `curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq .version` reports the version just released, and an installer downloaded from the mirror hashes to the `sha256` in that manifest (commands in `docs/DOWNLOAD-MIRROR.md`).
 - [ ] **Post-launch hygiene**: enable discussions, announce on X/Twitter and relevant communities, and pin a "first contribution" issue.
 - [x] **Document the security model publicly** (README privacy section already covers data & privacy; add a short "Security" note pointing to `SECURITY.md`).
 - [x] **Set expectations for response time** so you don't get worn out: `SECURITY.md` SLA, Discussions for questions, Issues triaged weekly.
@@ -136,6 +139,9 @@ The public-facing cutover.
 | `.github/workflows/security.yml`   | Gitleaks + `bun audit`                      |
 | `.github/workflows/stale.yml`      | Stale issue/PR cleanup                      |
 | `.github/workflows/nightly.yml`    | Scheduled nightly prerelease build          |
+| `.github/workflows/download-mirror.yml` | Copies each release to `dl.codeinoven.com` |
+| `scripts/publish-release-mirror.ts` | Verifies and uploads a release to the mirror |
+| `docs/DOWNLOAD-MIRROR.md`          | Download-mirror setup, layout, verification |
 | `docs/SECRETS.md`                  | Where to get and store every secret         |
 
 ## Quick reference: files fixed
