@@ -95,15 +95,23 @@ for development only; serve production traffic through the custom domain.
 Objects are uploaded through the S3 API, which cannot attach `Cache-Control`, so the zone
 decides caching. Create two Cache Rules (**Rules → Cache Rules**), in this order:
 
-1. **Feeds stay fresh** — when the hostname is `dl.codeinoven.com` and the path matches
-   `*/latest-*.yml`, `*/RELEASE.json` or `*/SHA256SUMS.txt`: bypass cache (or a very short
-   edge TTL). These files change on every release.
-2. **Artifacts are immutable** — when the hostname is `dl.codeinoven.com`: cache eligible,
-   edge TTL one year, browser TTL one year. Artifact names embed the version, so a cached
-   copy is never stale.
+1. **Feeds stay fresh.** When the hostname is `dl.codeinoven.com` and the path matches
+   `*/latest-*.yml`, `*/RELEASE.json` or `*/SHA256SUMS.txt`, bypass cache (or use a very
+   short edge TTL). These files change on every release.
+2. **Artifacts are immutable.** When the hostname is `dl.codeinoven.com`, mark the response
+   cache eligible with an edge TTL of one year and a browser TTL of one year. Artifact names
+   embed the version, so a cached copy is never stale.
 
 Skipping this step still works (objects are served straight from R2, which has no egress
 fees), but downloads are then not edge-cached.
+
+### 3b. Abort incomplete multipart uploads
+
+Artifacts are larger than S3's single-request limit, so each one is a multipart upload. An
+upload that is interrupted (a cancelled workflow, a closed laptop) leaves its parts behind,
+and R2 bills those parts as stored data even though the object never appears in a listing.
+Bucket, **Settings**, **Object lifecycle rules**, **Add rule**: condition **Abort incomplete
+multipart uploads**, 1 day after initiation. Finished objects are untouched by this rule.
 
 ### 4. CORS (only for browser-side fetches)
 
@@ -144,12 +152,18 @@ The script (`scripts/publish-release-mirror.ts`):
 1. reads the release with `gh` and refuses a channel that contradicts the release's
    prerelease flag;
 2. downloads the release assets (or uses `--artifacts-dir`) and **verifies every installer
-   against `SHA256SUMS.txt`** — a mismatch aborts before anything is uploaded;
+   against `SHA256SUMS.txt`** before uploading anything: a mismatch aborts the run;
 3. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
    feed never points at a file that is not there yet;
 4. HEAD-verifies every uploaded key's size against the local file;
 5. prunes releases older than `--keep` (default 3) per channel, never touching feeds,
    checksums or the manifest.
+
+Upload the release from CI, not from a laptop. A release is about 970 MB, so a home uplink
+turns that into an hour-long job (measured 0.12 MiB/s up on a constrained connection), while
+the GitHub runner that published the release finishes it in a minute or two. A local run is
+for backfills on a fast connection, and for `--dry-run`, which needs no credentials and
+uploads nothing.
 
 ## Verifying a mirror
 

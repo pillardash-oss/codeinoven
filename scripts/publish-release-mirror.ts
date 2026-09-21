@@ -24,6 +24,10 @@
  * uploaded key is then HEAD-verified for size, and versions older than
  * `--keep` (default 3) are pruned from the channel.
  *
+ * Run this from CI. A release is about 970 MB of multipart uploads, which a home
+ * uplink turns into an hour-long job; an interrupted run leaves orphaned upload
+ * parts until the bucket's lifecycle rule aborts them (docs/DOWNLOAD-MIRROR.md).
+ *
  * Usage:
  *   bun scripts/publish-release-mirror.ts --tag v0.5.57
  *   bun scripts/publish-release-mirror.ts --tag v0.5.57-nightly.5 --channel nightly
