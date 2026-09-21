@@ -345,12 +345,20 @@ export class CuaBridgeService {
     const checkedAt = stringValue(payload.checked_at)
     const releaseNotesUrl = stringValue(payload.release_notes_url)
     const installCommand = stringValue(payload.install_command)
+    // The driver's verdict is the contract: it is channel-aware and strictly
+    // newer-or-not, so a bare mismatch between the two strings must never turn
+    // into an offer to install an older release (a retracted one, or a build
+    // newer than the channel's published latest).
+    const driverVerdict = payload.update_available
     return {
       currentVersion,
       latestVersion,
-      // A driver that predates the check has no opinion; the version pair is the
-      // contract, and `update_available` only confirms what we can see anyway.
-      updateAvailable: payload.update_available === true || currentVersion !== latestVersion,
+      // Only a driver that predates the field has no verdict, and then the
+      // version pair decides: strictly newer, never merely different.
+      updateAvailable:
+        typeof driverVerdict === 'boolean'
+          ? driverVerdict
+          : compareVersions(latestVersion, currentVersion) > 0,
       cached: payload.cache_hit === true,
       ...(channel ? { channel } : {}),
       ...(checkedAt ? { checkedAt } : {}),
