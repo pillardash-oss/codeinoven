@@ -33,6 +33,19 @@ export interface PrCommentChatSubject {
 }
 
 /**
+ * A fence a body cannot close early.
+ *
+ * A comment that quotes code carries its own triple backticks, and a fixed fence
+ * would end the quote at the first line of the example, leaving the rest of the
+ * comment loose in the brief. So the fence is one backtick longer than anything the
+ * text already contains.
+ */
+function fenceFor(text: string): string {
+  const longest = /`{3,}/gu.exec(text)?.[0].length ?? 0
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
+/**
  * The pinned context a temporary chat opened on a pull request comment is
  * anchored with.
  *
@@ -57,9 +70,9 @@ export function prCommentChatContext(
       ? [
           '',
           'The diff GitHub showed with this comment, which is the code the comment was written against:',
-          '```diff',
+          `${fenceFor(comment.diffHunk)}diff`,
           comment.diffHunk.trim(),
-          '```'
+          fenceFor(comment.diffHunk)
         ]
       : []),
     'The comment body is attached to this chat as the selection.'
@@ -156,11 +169,22 @@ export function prSummaryExplainPrompt(pr: PullRequestSummary): string {
   ].join('\n')
 }
 
-/** The first message the review agent receives   explicit about isolation and output. */
-export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
+/**
+ * The work order every agent assignment shares.
+ *
+ * An assignment is a thread with a mandate and a report file, whether it was opened
+ * from a pull request or from one comment on it. The isolation, the testing
+ * judgement, the report, and the stop before anything irreversible are the same in
+ * both cases, so they are written once here and the two briefs differ only in what
+ * they ask the agent to work out.
+ */
+function agentAssignmentPrompt(
+  pr: PullRequestSummary,
+  reportPath: string,
+  mandate: string[]
+): string {
   return [
-    `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
-    `PR URL: ${pr.url}`,
+    ...mandate,
     '',
     'Work in isolation so my current working tree is never touched. I am asking you for that, so',
     'set up an app-managed worktree scope: it is deliberately not in your tool list, so call',
@@ -170,18 +194,101 @@ export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: strin
     'branch, health and threads.',
     `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
     `2. \`${APP_SCOPE_UTILITY_ID}\` operation "create" with input`,
-    `   { "title": "Review PR #${pr.number}", "baseBranch": "pr-${pr.number}" } so the scope owns`,
+    `   { "title": "Agent on PR #${pr.number}", "baseBranch": "pr-${pr.number}" } so the scope owns`,
     '   the checkout and this thread moves into it.',
-    `3. Review the diff against \`${pr.baseRef}\` inside that scope   correctness, edge cases,`,
-    '   security, test coverage, and anything that would break existing behavior.',
-    '4. Run the project checks/tests that are relevant to the changed files.',
+    `3. Read the diff against \`${pr.baseRef}\` inside that scope.`,
+    '4. Test when the change warrants it. That judgement is yours: run the project checks that cover',
+    '   the changed files, and if you decide testing is not warranted, say why in the report.',
     '',
-    `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
-    'ordered most severe first with file:line references and concrete failure scenarios.',
+    `Write your findings to \`${reportPath}\`. That file is what I read and approve from, so it has`,
+    'to stand on its own:',
+    '- A verdict line first: what this change is, and what you recommend I do with it.',
+    '- Then the evidence, most important first, with file:line references you actually read.',
+    '- Then the risk: what could break, and what you could not verify.',
+    '- End with the exact next action you recommend, so I can approve it or send you back.',
+    '',
+    'Stop there. Do not push, merge, close, or comment on the pull request: the decision is mine,',
+    'and I will give you the go-ahead in this thread.',
     `When you are done, hand the scope back: \`${APP_SCOPE_UTILITY_ID}\` operation "delete_scope"`,
     'with input { "threads": "move-to-default", "deleteBranch": true }, then drop the fetched',
-    `branch with \`git branch -D pr-${pr.number}\`. Do not push anything and do not merge the PR.`
+    `branch with \`git branch -D pr-${pr.number}\`.`
   ].join('\n')
+}
+
+/**
+ * The brief a pull request handed to an agent receives.
+ *
+ * Triage rather than review: a review says whether the code is good, and what I need
+ * from an assignment is what this pull request is, where it came from, and whether
+ * it is safe to take, so the report can end in a decision I can approve.
+ */
+export function prTriagePrompt(pr: PullRequestSummary, reportPath: string): string {
+  return agentAssignmentPrompt(pr, reportPath, [
+    `Triage pull request #${pr.number}: "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
+    `Pull request link: ${pr.url}`,
+    '',
+    'Work out what this pull request actually is, why it exists, and whether it is safe to take:',
+    '- What it changes, and what the change is for. A title and a diff rarely say the same thing.',
+    '- Where it came from. If it is a dependency bump, read the release notes or changelog for the',
+    '  versions it moves between and check for breaking changes, deprecations, and advisories. The',
+    '  upstream changelog and the package registry are fair game to read; the title alone is not',
+    '  evidence.',
+    '- What it touches here, and whether anything in this repository still uses the changed code.',
+    '- Whether the checks already on the pull request agree with what you find.',
+    '- Whether it is a duplicate, a superseded change, or something that should be closed instead.'
+  ])
+}
+
+/**
+ * The brief a comment handed to an agent receives.
+ *
+ * The comment is the task, so everything about it is written into the brief: which
+ * pull request it belongs to, its permalink, where it sits, the diff GitHub showed
+ * with it, and its text. A read-only side chat can ride the comment as a selection,
+ * but this is a real thread that has to still make sense after a restart, so nothing
+ * is left to a transient attachment.
+ */
+export function prCommentAssignmentPrompt(
+  comment: PrCommentChatSubject,
+  body: string,
+  pr: PullRequestSummary,
+  repository: string,
+  reportPath: string
+): string {
+  return agentAssignmentPrompt(pr, reportPath, [
+    `Handle one comment on pull request #${pr.number}: "${pr.title}" (${pr.headRef} → ${pr.baseRef}) in ${repository}.`,
+    `Pull request link: ${pr.url}`,
+    '',
+    `The comment is a ${comment.kindLabel} by @${comment.author}.`,
+    `Comment link: ${comment.url}`,
+    ...(comment.location ? [`Inline location: ${comment.location}`] : []),
+    ...(comment.diffHunk
+      ? [
+          '',
+          'The diff GitHub showed with this comment, which is the code it was written against:',
+          `${fenceFor(comment.diffHunk)}diff`,
+          comment.diffHunk.trim(),
+          fenceFor(comment.diffHunk)
+        ]
+      : []),
+    '',
+    'The comment, verbatim:',
+    fenceFor(body),
+    body.trim(),
+    fenceFor(body),
+    '',
+    'Work out what the comment is asking for before you do anything:',
+    '- It may ask for a fix, a clarification, a revert, a test, or a second opinion. Read it against',
+    '  the diff above and against the pull request as a whole, then say which one you concluded it is',
+    '  and why.',
+    '- If it is a question, answer it from code you have actually read. If it is a claim, check it and',
+    '  say whether it holds.',
+    '- If it points at something outside this repository, name exactly what you would need to read and',
+    '  ask me, rather than guessing.',
+    '- If it needs no action, say that plainly and recommend nothing.',
+    '- If a reply is the right answer, draft it in the report word for word, so I can approve it as',
+    '  written.'
+  ])
 }
 
 /**

@@ -469,15 +469,75 @@ export interface PullRequestBundle {
   fetchedAt: number
 }
 
-/** An agent's review report read back from `.cio/git/pr/<number>/review.md`. */
+/** What an agent assignment was asked to work on. */
+export type PrAgentAssignmentKind = 'triage' | 'comment'
+
+/**
+ * One agent assignment's report, read back from `.cio/git/pr/<number>/`.
+ *
+ * An assignment is one thread with one report file, so a pull request can hold
+ * several at once: a triage, then one for each comment handed to an agent. Each
+ * keeps its own `review-<id>.md`, which is what stops a second assignment from
+ * overwriting the first.
+ */
 export interface PrAgentReport {
+  /** Identity of the assignment, and the `<id>` in `review-<id>.md`. */
+  id: string
+  kind: PrAgentAssignmentKind
+  /** What the assignment addressed, e.g. `Triage` or `Comment by @dependabot`. */
+  title: string
   /** Absolute path to the report file. */
   path: string
   content: string
   /** Epoch ms of the last write, or null when no report exists yet. */
   updatedAt: number | null
-  /** Thread the review was handed to, so the UI can jump back into it. */
+  /** Epoch ms the assignment was made, so the list can order and label it. */
+  createdAt: number | null
+  /** Thread the assignment was handed to, so the UI can jump back into it. */
   threadId: string | null
+  /** Permalink of the comment the assignment was opened from, when there was one. */
+  url: string | null
+}
+
+/**
+ * What the list needs to draw one row's assignment chip.
+ *
+ * Deliberately a count and the newest assignment rather than the reports
+ * themselves: a page of rows wants to know whether an agent is on a pull request
+ * and how to get back to it, not the text of every report ever written.
+ */
+export interface PrAgentAssignmentSummary {
+  /** How many assignments the pull request holds. */
+  count: number
+  /** Newest assignment's thread, for a jump back into it. */
+  threadId: string | null
+  /** Newest assignment's title. */
+  title: string
+  /** Epoch ms the newest assignment was made. */
+  createdAt: number | null
+}
+
+/** What an agent assignment is asked to do when it is created. */
+export interface PrAgentAssignmentInput {
+  kind: PrAgentAssignmentKind
+  /** What the assignment addresses, shown in the report list. */
+  title: string
+  /** Permalink of the comment the assignment was opened from, when there is one. */
+  url?: string
+}
+
+/**
+ * A created assignment's files, so the caller can name the report path in the
+ * brief it hands the agent. The path is composed in the main process: the
+ * renderer never builds a filesystem path of its own.
+ */
+export interface PrAgentAssignmentWorkspace {
+  /** Identity of the assignment, and the `<id>` in `review-<id>.md`. */
+  id: string
+  /** The pull request's report directory. */
+  directory: string
+  /** Absolute path of the report the agent should write. */
+  reportPath: string
 }
 
 /** An agent-composed PR title/description produced by a disposable virtual task. */

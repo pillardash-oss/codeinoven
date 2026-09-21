@@ -47,6 +47,8 @@
     onQuote: (entry: ConversationEntry) => void
     /** Open a read-only side chat anchored on one of the thread's comments. */
     onCommentChat?: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
+    /** Hand one of the thread's comments to an agent as an assignment. */
+    onAssignAgent?: (entry: ConversationEntry) => void
     /** Open the Delete confirmation for one comment in the thread. */
     onDelete: (entry: ConversationEntry) => void
     onNotice: (message: string) => void
@@ -62,6 +64,7 @@
     authorLogin,
     onQuote,
     onCommentChat,
+    onAssignAgent,
     onDelete,
     onNotice,
     onRefresh
@@ -245,6 +248,7 @@
             {authorLogin}
             {onQuote}
             {onCommentChat}
+            {onAssignAgent}
             onReply={openReply}
             {onDelete}
             {onNotice}

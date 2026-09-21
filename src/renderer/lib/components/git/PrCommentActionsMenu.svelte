@@ -1,9 +1,11 @@
 <script lang="ts">
   /**
    * Per-comment actions. Most match the set github.com offers on one of its own
-   * comments; Explain and Quick chat are this app's own additions, opening a
-   * read-only side chat anchored on the comment, and Reply here is the one that
-   * answers the comment where it stands instead of in the panel's composer.
+   * comments; Explain, Quick chat and Assign to an agent are this app's own
+   * additions. The first two open a read-only side chat anchored on the comment,
+   * while the third hands it to an agent with a worktree and a report to write.
+   * Reply here is the one that answers the comment where it stands instead of in
+   * the panel's composer.
    *
    * Two rules shape what appears. GitHub only lets an author edit or delete a
    * comment, so those rows exist only for the viewer's own; and blocking is
@@ -17,6 +19,7 @@
    */
   import {
     Ban,
+    Bot,
     ClipboardCopy,
     Flag,
     Link2,
@@ -76,6 +79,12 @@
     /** Open an empty read-only temporary side chat with this comment attached.
      *  Omitted for the same reason as `onExplain`. */
     onQuickChat?: () => void
+    /**
+     * Hand this comment to an agent as an assignment: a real thread of its own, a
+     * worktree to test in, and a brief built from this comment. Omitted for the same
+     * reason as `onExplain`, since a comment with no body is nothing to hand over.
+     */
+    onAssignAgent?: () => void
     onReferenceInNewIssue: () => void
     onEdit: () => void
     onDelete: () => void
@@ -98,6 +107,7 @@
     onReply,
     onExplain,
     onQuickChat,
+    onAssignAgent,
     onReferenceInNewIssue,
     onEdit,
     onDelete,
@@ -127,10 +137,10 @@
 </script>
 
 <!--
-  The two side-chat rows sit above the clipboard rows: they are the only actions
-  here that do something inside the app rather than hand the comment off, so
-  they read first. A review with no body has nothing to anchor a chat on, so
-  both rows disappear together there.
+  The side-chat and assignment rows sit above the clipboard rows: they are the only
+  actions here that do something inside the app rather than hand the comment off, so
+  they read first. A review with no body has nothing to anchor a chat or an
+  assignment on, so all three rows disappear together there.
 -->
 {#if onExplain}
   <Menu.Item class={itemClass} onSelect={onExplain} disabled={busy}>
@@ -144,7 +154,13 @@
     Quick chat
   </Menu.Item>
 {/if}
-{#if onExplain || onQuickChat}
+{#if onAssignAgent}
+  <Menu.Item class={itemClass} onSelect={onAssignAgent} disabled={busy}>
+    <Bot size={12} class="shrink-0 text-dimmed" />
+    Assign to an agent
+  </Menu.Item>
+{/if}
+{#if onExplain || onQuickChat || onAssignAgent}
   <Menu.Separator class="my-1 h-px bg-border" />
 {/if}
 

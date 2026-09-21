@@ -32,6 +32,9 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  PrAgentAssignmentInput,
+  PrAgentAssignmentSummary,
+  PrAgentAssignmentWorkspace,
   PrAgentReport,
   PrCommentKind,
   PrMinimizeReason,
@@ -295,8 +298,13 @@ export class GitState {
     return this.prs.bundles
   }
 
-  get prAgentReports(): Record<string, PrAgentReport> {
+  get prAgentReports(): Record<string, PrAgentReport[]> {
     return this.prs.agentReports
+  }
+
+  /** Row chips: what the list knows about each pull request's agent assignments. */
+  get prAgentAssignments(): Record<string, PrAgentAssignmentSummary | null> {
+    return this.prs.agentAssignments
   }
 
   get mentionUsers(): Record<string, { users: RepositoryMentionUser[]; fetchedAt: number }> {
@@ -1176,8 +1184,24 @@ export class GitState {
     return this.prOps.reviewPullRequest(projectId, owner, repo, pullNumber, event, body)
   }
 
-  createPrReviewWorkspace(projectId: string, pullNumber: number, threadId?: string) {
-    return this.prOps.createPrReviewWorkspace(projectId, pullNumber, threadId)
+  /** Open an agent assignment and hand back the report path its brief should name. */
+  async createAgentAssignment(
+    projectId: string,
+    pullNumber: number,
+    threadId: string,
+    input: PrAgentAssignmentInput
+  ): Promise<PrAgentAssignmentWorkspace | null> {
+    const assignment = await this.prOps.createAgentAssignment(
+      projectId,
+      pullNumber,
+      threadId,
+      input
+    )
+    if (!assignment) return null
+    // Recorded here rather than at each call site, so the row chip and the reader's
+    // report list show the assignment the moment it exists.
+    this.prs.recordAgentAssignment(pullNumber, threadId, input, assignment)
+    return assignment
   }
 
   // Cached pulls, deployments, and mention candidates.
@@ -1236,8 +1260,14 @@ export class GitState {
     return this.prs.getCommitFiles(projectId, owner, repo, sha)
   }
 
-  loadAgentReport(projectId: string, pullNumber: number) {
-    return this.prs.loadAgentReport(projectId, pullNumber)
+  /** Every agent assignment report a pull request holds, newest first. */
+  loadAgentReports(projectId: string, pullNumber: number) {
+    return this.prs.loadAgentReports(projectId, pullNumber)
+  }
+
+  /** The assignment summaries a page of rows needs, in one batched read. */
+  ensureAgentAssignments(projectId: string, numbers: number[]) {
+    return this.prs.ensureAgentAssignments(projectId, numbers)
   }
 
   ensureDeploymentOverview(

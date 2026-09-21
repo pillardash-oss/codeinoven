@@ -47,7 +47,11 @@
     onReopenPullRequests: (targets: PullRequestSummary[]) => void
     onExplain: (pr: PullRequestSummary) => void
     onQuickChat: (pr: PullRequestSummary) => void
-    onAgentReview: (pr: PullRequestSummary) => void
+    /** Hand this one pull request to an agent to triage, test, and report back on. */
+    onAssignAgent: (pr: PullRequestSummary) => void
+    /** Thread an assignment on this row is already running in, when there is one. */
+    assignedThreadId?: string | null
+    onOpenAgentThread: (threadId: string) => void
     onMerge: (pr: PullRequestSummary, method: 'merge' | 'squash' | 'rebase') => void
     onMarkReady: (pr: PullRequestSummary) => void
     onEditLabels: (pr: PullRequestSummary) => void
@@ -70,7 +74,9 @@
     onReopenPullRequests,
     onExplain,
     onQuickChat,
-    onAgentReview,
+    onAssignAgent,
+    assignedThreadId = null,
+    onOpenAgentThread,
     onMerge,
     onMarkReady,
     onEditLabels,
@@ -169,10 +175,21 @@
           <MessageSquareDashed size={13} class="shrink-0 text-muted" />
           Quick chat about this pull request
         </ContextMenu.Item>
-        <ContextMenu.Item class={itemClass} onSelect={() => onAgentReview(pr)}>
+        <ContextMenu.Item class={itemClass} onSelect={() => onAssignAgent(pr)}>
           <Bot size={13} class="shrink-0 text-muted" />
-          Review with an agent
+          Assign to an agent
         </ContextMenu.Item>
+        {#if assignedThreadId}
+          <!--
+            The row above starts an assignment; this one goes back to the assignment
+            already running, which is a different question and the one a user asks
+            after the agent has had time to work.
+          -->
+          <ContextMenu.Item class={itemClass} onSelect={() => onOpenAgentThread(assignedThreadId)}>
+            <Bot size={13} class="shrink-0 text-primary" />
+            Open agent thread
+          </ContextMenu.Item>
+        {/if}
 
         {#if pr.state === 'open'}
           <ContextMenu.Separator class="my-1 h-px bg-border" />

@@ -13,13 +13,13 @@
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
   import {
+    assignAgentToPullRequest as assignAgentToPullRequestAction,
     diagnoseDeployment,
     diagnoseWorkflowJob,
-    openReviewThread as openReviewThreadAction,
+    openAgentThread as openAgentThreadAction,
     preparePrConflictSession,
     resolveCurrentConflictsWithAgent,
-    resolvePrConflictsWithAgent,
-    startAgentReview as startAgentReviewAction
+    resolvePrConflictsWithAgent
   } from './git-status-panel-agent-actions'
   import type {
     GitBranchInfo,
@@ -758,12 +758,12 @@
     )
   }
 
-  function startAgentReview(pr: PullRequestSummary): void {
-    void startAgentReviewAction(projectId, pr)
+  function assignAgentToPullRequest(pr: PullRequestSummary): void {
+    void assignAgentToPullRequestAction(projectId, pr)
   }
 
-  function openReviewThread(threadId: string): void {
-    void openReviewThreadAction(projectId, threadId)
+  function openAgentThread(threadId: string): void {
+    void openAgentThreadAction(projectId, threadId)
   }
 
   /**
@@ -1000,8 +1000,12 @@
       openPrChat(target, action.kind === 'explain' ? 'explain' : 'quick')
       return
     }
-    if (action.kind === 'agent-review') {
-      startAgentReview(target)
+    if (action.kind === 'assign-agent') {
+      assignAgentToPullRequest(target)
+      return
+    }
+    if (action.kind === 'open-agent-thread') {
+      openAgentThread(action.threadId)
       return
     }
     if (action.kind === 'mark-ready') {
@@ -1674,11 +1678,11 @@
       count: prViewCount(
         view.id,
         pullRequestBundle,
-        (
-          (selectedPullRequest
-            ? gitState.prAgentReports[String(selectedPullRequest.number)]?.content
-            : '') ?? ''
-        ).trim().length > 0
+        selectedPullRequest
+          ? (gitState.prAgentReports[String(selectedPullRequest.number)] ?? []).some(
+              (report) => report.content.trim().length > 0
+            )
+          : false
       )
     }))
   )
@@ -3703,8 +3707,8 @@
               bind:tab={prDetailTab}
               onBack={() => (selectedPullRequest = null)}
               onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
-              onAgentReview={(pr) => void startAgentReview(pr)}
-              onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+              onOpenThread={(threadId) => void openAgentThread(threadId)}
               onOpenWorkflowRun={openWorkflowRunFromCheck}
               onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
@@ -3970,8 +3974,8 @@
           summary={fullscreenActivePullRequest}
           variant="fullscreen"
           onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
-          onAgentReview={(pr) => void startAgentReview(pr)}
-          onOpenThread={(threadId) => void openReviewThread(threadId)}
+          onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+          onOpenThread={(threadId) => void openAgentThread(threadId)}
           onOpenWorkflowRun={openWorkflowRunFromCheck}
           onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
           onResolveWithAgent={(pr) => void startConflictResolution(pr)}

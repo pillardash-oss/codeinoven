@@ -45,6 +45,8 @@
     /** Open a read-only side chat anchored on this entry: explain it, or attach
      *  it to an empty quick chat the reader writes into. */
     onCommentChat: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
+    /** Hand one entry to an agent as an assignment. */
+    onAssignAgent: (entry: ConversationEntry) => void
     /** Surface a one-line confirmation in the reader's header. */
     onNotice: (message: string) => void
     /** Reload the bundle after a mutation. */
@@ -60,6 +62,7 @@
     authorLogin,
     onQuote,
     onCommentChat,
+    onAssignAgent,
     onNotice,
     onRefresh
   }: Props = $props()
@@ -144,6 +147,7 @@
         {authorLogin}
         {onQuote}
         {onCommentChat}
+        {onAssignAgent}
         onDelete={(entry) => (deletingEntry = entry)}
         {onNotice}
         {onRefresh}
@@ -174,6 +178,7 @@
           {authorLogin}
           {onQuote}
           {onCommentChat}
+          {onAssignAgent}
           onReply={(entry) => (replyEntry = entry)}
           onDelete={(entry) => (deletingEntry = entry)}
           {onNotice}
@@ -196,6 +201,7 @@
             {authorLogin}
             {onQuote}
             {onCommentChat}
+            {onAssignAgent}
             onReply={(entry) => (replyEntry = entry)}
             onDelete={(entry) => (deletingEntry = entry)}
             {onNotice}

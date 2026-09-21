@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    Bot,
     ChevronLeft,
     ChevronRight,
     GitMerge,
@@ -35,7 +36,13 @@
     prListFilterLabel,
     type PrListAction
   } from './pr-view'
-  import type { PrListFilter, PrListSort, PrState, PullRequestSummary } from '$shared/types'
+  import type {
+    PrAgentAssignmentSummary,
+    PrListFilter,
+    PrListSort,
+    PrState,
+    PullRequestSummary
+  } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -291,6 +298,19 @@
     return count === 1 ? '1 comment' : `${count} comments`
   }
 
+  /**
+   * What the agent chip says when the pointer rests on it.
+   *
+   * A count is the whole story when there is one assignment, and the newest title is
+   * the useful part once there are several: the user wants to know which piece of work
+   * the agent is on, not how many report files exist.
+   */
+  function agentAssignmentLabel(summary: PrAgentAssignmentSummary): string {
+    return summary.count === 1
+      ? `Assigned to an agent: ${summary.title}`
+      : `${summary.count} agent assignments, newest: ${summary.title}`
+  }
+
   $effect(() => {
     // Re-runs whenever the repo, filter, ordering, or page changes; the store
     // decides whether that actually needs a network call.
@@ -424,6 +444,7 @@
             {@const checksState = pr.checks?.state ?? 'none'}
             {@const ChecksIcon = prChecksStateIcon(checksState)}
             {@const rowSelected = selected[pr.number] === true}
+            {@const agentAssignment = gitState.prAgentAssignments[String(pr.number)] ?? null}
             <PrRowContextMenu
               {pr}
               targets={targetsFor(pr)}
@@ -435,7 +456,10 @@
               onReopenPullRequests={(targets) => onAction({ kind: 'reopen', targets })}
               onExplain={(target) => onAction({ kind: 'explain', targets: [target] })}
               onQuickChat={(target) => onAction({ kind: 'quick-chat', targets: [target] })}
-              onAgentReview={(target) => onAction({ kind: 'agent-review', targets: [target] })}
+              onAssignAgent={(target) => onAction({ kind: 'assign-agent', targets: [target] })}
+              assignedThreadId={agentAssignment?.threadId ?? null}
+              onOpenAgentThread={(threadId) =>
+                onAction({ kind: 'open-agent-thread', targets: [pr], threadId })}
               onMerge={(target, method) => onAction({ kind: 'merge', targets: [target], method })}
               onMarkReady={(target) => onAction({ kind: 'mark-ready', targets: [target] })}
               onEditLabels={(target) => onAction({ kind: 'labels', targets: [target] })}
@@ -556,6 +580,19 @@
                 is the button, so the signals carry no hover of their own.
               -->
                 <div class="flex shrink-0 flex-col items-end gap-1">
+                  {#if agentAssignment}
+                    <!--
+                    The agent chip leads the column because it is the one signal here the
+                    user set themselves, and the one they come back to check on.
+                  -->
+                    <span
+                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
+                      title={agentAssignmentLabel(agentAssignment)}
+                    >
+                      <Bot size={9} />
+                      {agentAssignment.count}
+                    </span>
+                  {/if}
                   {#if hasIssue}
                     <span
                       class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"

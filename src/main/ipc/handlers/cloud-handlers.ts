@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { cp, mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { cp, mkdir } from 'fs/promises'
 import { dirname, join } from 'path'
 import { APP_NAME } from '../../../lib/brand'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../../lib/native-skill-paths'
@@ -19,12 +19,14 @@ import {
   validateBoolean,
   validateBranchName,
   validateEntityId,
+  validatePrAgentAssignmentInput,
   validatePrCommentBody,
   validatePrCommentId,
   validatePrCommentKind,
   validatePrMinimizeReason,
   validateGraphqlNodeId,
   validatePrNumber,
+  validatePrNumbers,
   validatePrReviewEvent,
   validateThreadSettings
 } from '../ipc-validation'
@@ -45,6 +47,11 @@ import type {
   UtilityDefinitionInput
 } from '../../../lib/types'
 import type { PullRequestComposeContext } from '../../git/git-service'
+import {
+  createPrAgentAssignment,
+  listPrAgentReports,
+  summarizePrAgentAssignments
+} from '../../git/pr-agent-assignments'
 import type { DeploymentProviderContext } from '../../providers/deployment-provider.interface'
 import type { IpcHandlerContext } from './context'
 
@@ -1455,33 +1462,14 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     }
   )
 
-  ipcMain.handle('pr:agentReport', async (_, projectId: unknown, pullNumber: unknown) => {
+  ipcMain.handle('pr:agentReports', async (_, projectId: unknown, pullNumber: unknown) => {
     const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
-    const reportPath = join(
-      projectPath,
-      '.cio',
-      'git',
-      'pr',
-      String(validatePrNumber(pullNumber)),
-      'review.md'
-    )
-    const threadId = await readFile(join(dirname(reportPath), 'thread.json'), 'utf-8')
-      .then((raw) => {
-        const parsed: unknown = JSON.parse(raw)
-        const value =
-          typeof parsed === 'object' && parsed !== null
-            ? (parsed as Record<string, unknown>)['threadId']
-            : null
-        return typeof value === 'string' ? value : null
-      })
-      .catch(() => null)
-    try {
-      const [content, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
-      return { path: reportPath, content, updatedAt: stats.mtimeMs, threadId }
-    } catch {
-      // No report yet   the agent hasn't finished (or hasn't been asked).
-      return { path: reportPath, content: '', updatedAt: null, threadId }
-    }
+    return listPrAgentReports(projectPath, validatePrNumber(pullNumber))
+  })
+
+  ipcMain.handle('pr:agentAssignments', async (_, projectId: unknown, numbers: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    return summarizePrAgentAssignments(projectPath, validatePrNumbers(numbers))
   })
 
   ipcMain.handle(
@@ -1602,6 +1590,27 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle(
+    'pr:threadResolve',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      threadNodeId: unknown,
+      resolved: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const nodeId = validateGraphqlNodeId(threadNodeId)
+      const settled = validateBoolean(resolved, 'Resolved')
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.setPullRequestReviewThreadResolved({ nodeId, resolved: settled })
+        return true
+      })
+    }
+  )
+
+  ipcMain.handle(
     'pr:review',
     async (
       _,
@@ -1627,21 +1636,15 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle(
-    'pr:reviewWorkspace',
-    async (_, projectId: unknown, pullNumber: unknown, threadId?: unknown) => {
+    'pr:createAgentAssignment',
+    async (_, projectId: unknown, pullNumber: unknown, threadId: unknown, input: unknown) => {
       const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
-      const directory = join(projectPath, '.cio', 'git', 'pr', String(validatePrNumber(pullNumber)))
-      await mkdir(directory, { recursive: true })
-      if (threadId !== undefined) {
-        // Remember which thread owns this review so the sidebar can jump back
-        // into the conversation after a restart.
-        await writeFile(
-          join(directory, 'thread.json'),
-          JSON.stringify({ threadId: validateEntityId(threadId, 'Thread ID') }, null, 2),
-          'utf-8'
-        )
-      }
-      return directory
+      return createPrAgentAssignment(
+        projectPath,
+        validatePrNumber(pullNumber),
+        validateEntityId(threadId, 'Thread ID'),
+        validatePrAgentAssignmentInput(input)
+      )
     }
   )
 

@@ -2,6 +2,8 @@ import { invoke } from '$lib/ipc.svelte'
 import type {
   GitHubMutationResult,
   GitHubPermissionRequired,
+  PrAgentAssignmentInput,
+  PrAgentAssignmentWorkspace,
   PrCommentKind,
   PrComposeInput,
   PrComposeReport,
@@ -812,16 +814,22 @@ export class GitPullRequestOperations {
     }
   }
 
-  /** Create `.cio/git/pr/<number>/` so an agent has somewhere to write its report. */
-  async createPrReviewWorkspace(
+  /**
+   * Open an agent assignment on a pull request and return its report path.
+   *
+   * The assignment owns its own report file, so a pull request can carry a triage
+   * and any number of comment assignments without one overwriting another.
+   */
+  async createAgentAssignment(
     projectId: string,
     pullNumber: number,
-    threadId?: string
-  ): Promise<string | null> {
+    threadId: string,
+    input: PrAgentAssignmentInput
+  ): Promise<PrAgentAssignmentWorkspace | null> {
     try {
-      return await invoke('pr:reviewWorkspace', projectId, pullNumber, threadId)
+      return await invoke('pr:createAgentAssignment', projectId, pullNumber, threadId, input)
     } catch (reason) {
-      this.access.setError(errorMessage(reason, 'The review workspace could not be created'))
+      this.access.setError(errorMessage(reason, 'The agent assignment could not be created'))
       return null
     }
   }

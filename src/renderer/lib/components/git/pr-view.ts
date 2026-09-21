@@ -89,7 +89,10 @@ export type PrListAction =
   | { kind: 'reopen'; targets: PullRequestSummary[] }
   | { kind: 'explain'; targets: PullRequestSummary[] }
   | { kind: 'quick-chat'; targets: PullRequestSummary[] }
-  | { kind: 'agent-review'; targets: PullRequestSummary[] }
+  /** Hand one pull request to an agent to triage and report on. */
+  | { kind: 'assign-agent'; targets: PullRequestSummary[] }
+  /** Jump back into the thread an agent assignment is running in. */
+  | { kind: 'open-agent-thread'; targets: PullRequestSummary[]; threadId: string }
   | { kind: 'merge'; targets: PullRequestSummary[]; method: PrMergeMethod }
   | { kind: 'mark-ready'; targets: PullRequestSummary[] }
   | { kind: 'labels'; targets: PullRequestSummary[] }

@@ -56,6 +56,11 @@
      * cannot host one.
      */
     onCommentChat?: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
+    /**
+     * Hand this comment to an agent as an assignment. Omitted where the surface
+     * cannot host a thread, which is also where the chat rows are omitted.
+     */
+    onAssignAgent?: (entry: ConversationEntry) => void
     /** Answer this exact comment, when the surface has somewhere to answer it. */
     onReply?: (entry: ConversationEntry) => void
     /** Open the Delete confirmation for this entry. */
@@ -77,6 +82,7 @@
     footer,
     onQuote,
     onCommentChat,
+    onAssignAgent,
     onReply,
     onDelete,
     onNotice,
@@ -332,6 +338,9 @@
                 : undefined}
               onQuickChat={onCommentChat && entry.body.trim()
                 ? () => onCommentChat(entry, 'quick')
+                : undefined}
+              onAssignAgent={onAssignAgent && entry.body.trim()
+                ? () => onAssignAgent(entry)
                 : undefined}
               onReferenceInNewIssue={() => void referenceInNewIssue()}
               onEdit={startEdit}

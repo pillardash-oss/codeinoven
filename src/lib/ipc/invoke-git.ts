@@ -29,12 +29,15 @@ import type {
   GitSyncPeerOption,
   GitSyncResult,
   MergeSummary,
-  PrAgentReport,
   PrCommentKind,
   PrComposeReport,
   PrCreateInput,
   PrListRequest,
   PrMergeMethod,
+  PrAgentAssignmentInput,
+  PrAgentAssignmentSummary,
+  PrAgentAssignmentWorkspace,
+  PrAgentReport,
   PrMinimizeReason,
   PrResolveOptions,
   PrReviewEvent,
@@ -625,8 +628,21 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string],
     RepositoryMentionUser[]
   >,
-  /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
-  'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,
+  /** Every agent assignment report a pull request holds, newest first. */
+  'pr:agentReports': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport[]>,
+  /**
+   * Assignment summaries for the rows a listing is about to draw. Batched on
+   * purpose: a page of twenty rows must not be twenty round trips.
+   */
+  'pr:agentAssignments': {} as Contract<
+    [projectId: string, numbers: number[]],
+    Record<string, PrAgentAssignmentSummary>
+  >,
+  /** Open a new agent assignment on a pull request and return its report path. */
+  'pr:createAgentAssignment': {} as Contract<
+    [projectId: string, pullNumber: number, threadId: string, input: PrAgentAssignmentInput],
+    PrAgentAssignmentWorkspace
+  >,
   'pr:comment': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     GitHubMutationResult<PullRequestComment>
@@ -713,11 +729,6 @@ export const invokeGitContract = {
       body: string
     ],
     PullRequestReviewResult
-  >,
-  /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
-  'pr:reviewWorkspace': {} as Contract<
-    [projectId: string, pullNumber: number, threadId?: string],
-    string
   >,
   /** Run the PR-compose agent virtually and consume its temporary report. */
   'pr:composeWithAgent': {} as Contract<
