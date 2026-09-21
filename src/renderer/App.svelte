@@ -366,6 +366,50 @@
     }
   }
 
+  /**
+   * Start the "new thread" flow for whatever the shell is showing. Shared by
+   * the Cmd/Ctrl+N chord and the palette's "New thread" action so both always
+   * agree.
+   *
+   * The scoped threads view is the state with the scope sidebar docked. The
+   * shell reports it either as its own `projects-scope` view or as `projects`
+   * with a live sidebar context, so both spellings are handled here   the same
+   * test the header switcher, the sidebar and the notification router use. It
+   * targets the docked scope's project and bucket directly, exactly like the
+   * sidebar's own new-thread button, which also makes it work from the empty
+   * state where no thread (and therefore no active project) is open.
+   */
+  function requestThreadForCurrentView(): void {
+    if (activeView === 'scope') {
+      if (!scopeState.activeProjectId) return
+      scopeState.requestCreateScopedThread(
+        scopeState.sidebarContext?.bucketId ?? scopeState.buckets[0]?.id ?? DEFAULT_SCOPE_BUCKET_ID
+      )
+      return
+    }
+
+    const scopedContext = scopeState.sidebarContext
+    if ((activeView === 'projects' || activeView === 'projects-scope') && scopedContext) {
+      // Docked scoped-threads sidebar: create in the docked scope's project and
+      // bucket, never in whatever thread happens to be open.
+      workspaceState.requestCreateThread(scopedContext.bucketId)
+      return
+    }
+
+    if (activeView === 'chats') {
+      workspaceState.requestNewChat()
+      return
+    }
+    if (activeView !== 'projects' && activeView !== 'threads') return
+    if (workspaceState.activeProject && workspaceState.activeProject.id !== INBOX_PROJECT_ID) {
+      // Same-scope inheritance: the new thread inherits the open thread's scope
+      // bucket (no stale sidebar bucket, no view switch).
+      workspaceState.requestCreateThread()
+      return
+    }
+    workspaceState.requestAddProject()
+  }
+
   async function handlePaletteSelection(selection: ActionSelection): Promise<void> {
     const settingsTab = settingsTabs.find(
       (tab) => actionId(`settings:${tab.id}`) === selection.action.id
@@ -384,21 +428,7 @@
         workspaceState.requestNewChat()
         return
       case 'app:new-thread':
-        if (activeView === 'scope') {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
-          // Docked scoped-threads sidebar: create in the docked scope.
-          workspaceState.requestCreateThread(scopeState.sidebarContext.bucketId)
-        } else {
-          // Create in the current thread's scope: Workspace inherits the
-          // active thread's scope bucket onto the new thread, exactly like
-          // settings inheritance  no view or sidebar change.
-          workspaceState.requestCreateThread()
-        }
+        requestThreadForCurrentView()
         return
       case 'app:file-search':
         fileSearch.openPalette()
@@ -1012,39 +1042,7 @@
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
-      if (activeView === 'scope') {
-        if (scopeState.activeProjectId) {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        }
-        return
-      }
-
-      if (activeView === 'projects-scope') {
-        // Docked scoped-threads sidebar: create a thread in the docked scope's
-        // project and bucket, same as the sidebar's new-thread action. Works
-        // from the empty state too (no thread open, so no active project).
-        const context = scopeState.sidebarContext
-        if (context) workspaceState.requestCreateThread(context.bucketId)
-        return
-      }
-
-      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
-      if (activeView === 'chats') {
-        workspaceState.requestNewChat()
-      } else if (
-        workspaceState.activeProject &&
-        workspaceState.activeProject.id !== INBOX_PROJECT_ID
-      ) {
-        // Same-scope inheritance: the new thread inherits the open thread's
-        // scope bucket (no stale sidebar bucket, no view switch).
-        workspaceState.requestCreateThread()
-      } else {
-        workspaceState.requestAddProject()
-      }
+      requestThreadForCurrentView()
     }
   }
 
