@@ -25,9 +25,11 @@
   import { invoke } from '$lib/ipc.svelte'
   import { agentToolsStore } from '$lib/stores/agent-tools.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
+  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -519,6 +521,7 @@
 
   onMount(() => {
     void load()
+    void installedSkillState.ensureLoaded()
     void providerStore.init()
     void agentToolsStore.load()
   })
@@ -793,6 +796,9 @@
                     >
                       Marketplace
                     </span>
+                    {#if installedSkillState.isInstalled(row.entry.skillId)}
+                      <SkillInstalledBadge />
+                    {/if}
                     {#if row.entry.isOfficial}
                       <span
                         class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"

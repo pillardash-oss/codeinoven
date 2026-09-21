@@ -28,6 +28,7 @@ import type {
   ResolvedUtility,
   SkillMarketDetail,
   SkillMarketInstallRequest,
+  InstalledSkillLocation,
   SkillMarketLeaderboard,
   SkillMarketSearchResult,
   SkillMarketView,
@@ -185,6 +186,7 @@ export const invokeProviderContract = {
   'utilities:listSkillMarket': {} as Contract<[view: SkillMarketView], SkillMarketLeaderboard>,
   'utilities:getSkillMarketDetail': {} as Contract<[id: string], SkillMarketDetail>,
   'utilities:installMarketSkill': {} as Contract<[request: SkillMarketInstallRequest], string>,
+  'utilities:installedSkillLocations': {} as Contract<[], InstalledSkillLocation[]>,
   'utilities:update': {} as Contract<
     [id: string, patch: UtilityDefinitionPatch],
     UtilityDefinition

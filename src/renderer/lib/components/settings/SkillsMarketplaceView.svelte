@@ -9,7 +9,9 @@
     refreshSkillMarketLeaderboard
   } from '$lib/skill-market-cache'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
+  import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
+  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
 
   interface Props {
@@ -112,6 +114,7 @@
   }
 
   onMount(() => {
+    void installedSkillState.ensureLoaded()
     void loadLeaderboard('all-time')
     for (const view of views) {
       if (view.id !== 'all-time') {
@@ -255,6 +258,7 @@
                         Official
                       </span>
                     {/if}
+                    {#if installedSkillState.isInstalled(entry.skillId)}<SkillInstalledBadge />{/if}
                   </span>
                   <span class="mt-0.5 block truncate text-xs text-muted">{entry.source}</span>
                 </span>

@@ -193,6 +193,30 @@ export interface SkillMarketEntry {
   isOfficial?: boolean
 }
 
+/**
+ * One place a marketplace skill is already installed. The marketplace uses these
+ * to mark installed entries and to stop offering an install that already landed,
+ * without trusting a renderer-only flag that would not survive a restart.
+ */
+export interface InstalledSkillLocation {
+  /** Marketplace skill id, which is also the skill's folder name on disk. */
+  skillId: string
+  /** Whether CodeInOven's registry or the native Skills CLI layout owns this copy. */
+  manager: 'cio' | 'native'
+  /** Layer the copy lives in. */
+  scope: 'global' | 'project' | 'harness'
+  /** Project the copy belongs to (project scope only). */
+  projectId?: string
+  /** Harness whose skill folder holds the copy (harness scope only). */
+  harnessId?: string
+  /** Human-readable destination, e.g. "All harnesses" or a project name. */
+  label: string
+  /** Filesystem location for native copies; empty for registry-managed copies. */
+  path: string
+  /** Activation of a registry-managed copy. */
+  activation?: UtilityActivation
+}
+
 export type SkillMarketView = 'all-time' | 'trending' | 'hot'
 
 export interface SkillMarketLeaderboard {

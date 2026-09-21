@@ -10,6 +10,7 @@ import { resolvePackageCommand } from '../../drivers/cli-environment'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../../providers/base-url'
 import { resolveDeploymentProvider } from '../../providers/registry'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
+import { listInstalledSkillLocations } from '../../utilities/installed-skill-locations'
 import { listHarnesses } from '../../agents/harness-registry'
 import { Logger } from '../../system/logger'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
@@ -1891,6 +1892,13 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       }
     }
     return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
+  })
+
+  ipcMain.handle('utilities:installedSkillLocations', async () => {
+    const projects = (await projectManager.listProjects())
+      .filter((project) => project.source !== 'ssh' && Boolean(project.path))
+      .map((project) => ({ id: project.id, name: project.name, path: project.path }))
+    return listInstalledSkillLocations(storage, projects)
   })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
