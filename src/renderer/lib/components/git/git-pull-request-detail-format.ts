@@ -21,6 +21,13 @@ export interface ConversationEntry {
   body: string
   kind: ConversationEntryKind
   meta?: string
+  /**
+   * The unified diff hunk GitHub showed when an inline comment was written, or
+   * null for every other entry. It is the code the comment is talking about,
+   * and unlike the live file it still shows that code after the line has gone
+   * outdated, which is exactly when a reader needs it.
+   */
+  diffHunk: string | null
   /** Permalink GitHub itself uses for this exact entry. */
   url: string
   /**
@@ -63,6 +70,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
       body: bundle.detail.body,
       kind: 'description',
       url: bundle.detail.url,
+      diffHunk: null,
       commentId: null,
       commentKind: 'issue',
       nodeId: null
@@ -79,6 +87,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
       body: comment.body,
       kind: 'comment',
       url: comment.url,
+      diffHunk: null,
       commentId: comment.id,
       commentKind: 'issue',
       nodeId: comment.nodeId
@@ -96,6 +105,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
       kind: 'review',
       meta: review.state.replace(/_/gu, ' ').toLowerCase(),
       url: review.url,
+      diffHunk: null,
       commentId: null,
       commentKind: 'issue',
       nodeId: review.nodeId
@@ -113,6 +123,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
       kind: 'inline',
       meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
       url: comment.url,
+      diffHunk: comment.diffHunk,
       commentId: comment.id,
       commentKind: 'review',
       nodeId: comment.nodeId

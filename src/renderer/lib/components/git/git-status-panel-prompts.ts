@@ -24,6 +24,12 @@ export interface PrCommentChatSubject {
   kindLabel: string
   /** Inline anchor `path:line`, present only for an inline review comment. */
   location?: string
+  /**
+   * The unified diff hunk GitHub showed with an inline comment, present only
+   * when the comment came with one. It is the version of the code the comment
+   * was written against, which the live working tree may no longer match.
+   */
+  diffHunk?: string | null
 }
 
 /**
@@ -47,6 +53,15 @@ export function prCommentChatContext(
     `Comment: ${comment.kindLabel} by @${comment.author}`,
     `Comment link: ${comment.url}`,
     ...(comment.location ? [`Inline location: ${comment.location}`] : []),
+    ...(comment.diffHunk
+      ? [
+          '',
+          'The diff GitHub showed with this comment, which is the code the comment was written against:',
+          '```diff',
+          comment.diffHunk.trim(),
+          '```'
+        ]
+      : []),
     'The comment body is attached to this chat as the selection.'
   ].join('\n')
 }
@@ -70,6 +85,11 @@ export function prCommentExplainPrompt(comment: PrCommentChatSubject): string {
     ...(comment.location
       ? [
           `- The comment is anchored at ${comment.location}; start there and confirm it still matches what you read.`
+        ]
+      : []),
+    ...(comment.diffHunk
+      ? [
+          '- The diff GitHub showed with this comment is in the context above. It is the code the comment was written against, so use it to identify exactly which lines are meant, and check whether the working tree still matches it.'
         ]
       : []),
     '- If the referenced code is not in the working tree, say plainly that it is missing here and name what is missing. It then lives only on the remote: the pull request head, another branch, or another repository.',

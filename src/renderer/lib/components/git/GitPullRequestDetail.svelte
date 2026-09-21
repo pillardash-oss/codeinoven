@@ -322,7 +322,8 @@
       author: githubDisplayLogin(entry.author),
       url: entry.url,
       kindLabel: conversationKindLabel(entry.kind, entry.meta),
-      ...(entry.kind === 'inline' && entry.meta ? { location: entry.meta } : {})
+      ...(entry.kind === 'inline' && entry.meta ? { location: entry.meta } : {}),
+      ...(entry.diffHunk ? { diffHunk: entry.diffHunk } : {})
     }
     contextSidebarState.openTemporaryChat(
       projectId,
