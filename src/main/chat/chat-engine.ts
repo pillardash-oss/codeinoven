@@ -22955,11 +22955,20 @@ export class ChatEngine {
       }
       // The snapshot is self-contained: grading judges the conversation payload,
       // never the project, so a deleted or renamed project cannot block it.
-      // A harness whose own route already failed once is struck out: it is
-      // judged through the harness-agnostic fallback below instead of spending
-      // one more harness process per row on candidates that cannot run.
+      // A harness whose own route already failed once is struck out of the
+      // native lane, but only when a harness-agnostic fallback judge is
+      // actually resolvable to take the row: a strike with no fallback is not
+      // actionable, so the native lane still runs rather than burning the
+      // row's attempt cap without a single grading call.
+      const excludeHarnessIds = auxiliary
+        ? [candidate.harnessId, auxiliary.harnessId]
+        : [candidate.harnessId]
+      const struckOut = (this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) > 0
+      const struckOutFallback = struckOut
+        ? await this.resolveFallbackRankingJudge(workingDirectory, excludeHarnessIds)
+        : null
       let nativeScore: number | null = null
-      if ((this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) === 0) {
+      if (!struckOut || struckOutFallback === null) {
         try {
           const driver = await this.driverForAccount(candidate.harnessId)
           judge = {
@@ -23010,10 +23019,9 @@ export class ChatEngine {
       // model, so the judge's harness is an implementation detail: fall back
       // to the model and account the user is actively using, or to any other
       // resolvable harness's cheap candidates.
-      const fallback = await this.resolveFallbackRankingJudge(
-        workingDirectory,
-        auxiliary ? [candidate.harnessId, auxiliary.harnessId] : [candidate.harnessId]
-      )
+      const fallback =
+        struckOutFallback ??
+        (await this.resolveFallbackRankingJudge(workingDirectory, excludeHarnessIds))
       if (!fallback) return judge
       judge = {
         score: null,
