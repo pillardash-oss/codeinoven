@@ -1,5 +1,6 @@
 import { Check, CircleDot, CircleSlash, X } from '@lucide/svelte'
 import type {
+  PrAuthorAssociation,
   PrCommentKind,
   PrCommentSide,
   PullRequestBundle,
@@ -24,6 +25,12 @@ export interface ConversationEntry {
   avatarUrl: string | null
   /** True for app accounts, which GitHub labels with a `Bot` badge. */
   isBot: boolean
+  /**
+   * What the author is to the repository, or null when the provider did not
+   * say. The row labels the commenter with it, which is how a reader tells a
+   * maintainer from a drive-by commenter without leaving the app.
+   */
+  authorAssociation: PrAuthorAssociation | null
   at: string
   /** Last edit time, or null when the entry has never been edited. */
   updatedAt: string | null
@@ -143,6 +150,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
             author: bundle.detail.authorLogin,
             avatarUrl: bundle.detail.authorAvatarUrl ?? null,
             isBot: bundle.detail.authorIsBot === true,
+            authorAssociation: bundle.detail.authorAssociation ?? null,
             at: bundle.detail.createdAt,
             updatedAt: null,
             body: bundle.detail.body,
@@ -168,6 +176,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
         author: comment.authorLogin,
         avatarUrl: comment.authorAvatarUrl,
         isBot: comment.authorIsBot,
+        authorAssociation: comment.authorAssociation,
         at: comment.createdAt,
         updatedAt: comment.updatedAt,
         body: comment.body,
@@ -345,6 +354,7 @@ function reviewEntry(review: PullRequestReview): ConversationEntry {
     author: review.authorLogin,
     avatarUrl: review.authorAvatarUrl,
     isBot: review.authorIsBot,
+    authorAssociation: review.authorAssociation,
     at: review.submittedAt,
     updatedAt: null,
     body: review.body,
@@ -368,6 +378,7 @@ function reviewCommentEntry(
     author: comment.authorLogin,
     avatarUrl: comment.authorAvatarUrl,
     isBot: comment.authorIsBot,
+    authorAssociation: comment.authorAssociation,
     at: comment.createdAt,
     updatedAt: comment.updatedAt,
     body: comment.body,
@@ -438,6 +449,61 @@ export function reviewBadgeClass(meta: string | undefined): string {
   if (meta === 'approved') return 'bg-success/10 text-success'
   if (meta === 'changes requested') return 'bg-warning/10 text-warning'
   return 'bg-elevated text-dimmed'
+}
+
+/**
+ * The label a commenter wears, and what it means.
+ *
+ * The word is the badge; the title is the sentence behind it, because
+ * `COLLABORATOR` and `CONTRIBUTOR` are GitHub's vocabulary rather than a
+ * reader's, and a badge nobody can decode is decoration.
+ */
+export interface CommentRoleBadge {
+  label: string
+  title: string
+}
+
+/**
+ * What the person behind a comment is to this repository.
+ *
+ * Two facts decide the label and the pull request's author wins: an account
+ * that opened the pull request reads as `Author` even when it is also a member,
+ * which is exactly what github.com shows, because "wrote this pull request" is
+ * the fact a reader is weighing. Everything else falls back to GitHub's own
+ * `author_association`, and an account with no relationship to the repository
+ * wears nothing at all rather than a label saying nothing.
+ *
+ * The login comparison is case-insensitive because GitHub logins are: the same
+ * account is written `Octocat` and `octocat` across payloads.
+ */
+export function commentRoleBadge(
+  entry: ConversationEntry,
+  pullRequestAuthor: string
+): CommentRoleBadge | null {
+  if (entry.author.toLowerCase() === pullRequestAuthor.toLowerCase()) {
+    return { label: 'Author', title: 'Opened this pull request' }
+  }
+  switch (entry.authorAssociation) {
+    case 'OWNER':
+      return { label: 'Owner', title: 'Owns this repository' }
+    case 'MEMBER':
+      return { label: 'Member', title: 'Member of the organization that owns this repository' }
+    case 'COLLABORATOR':
+      return { label: 'Collaborator', title: 'Has write access to this repository' }
+    case 'CONTRIBUTOR':
+      return { label: 'Contributor', title: 'Has contributed to this repository before' }
+    case 'FIRST_TIMER':
+      return { label: 'First-time contributor', title: 'Has never contributed on GitHub before' }
+    case 'FIRST_TIME_CONTRIBUTOR':
+      return {
+        label: 'First-time contributor',
+        title: 'Has never contributed to this repository before'
+      }
+    default:
+      // `NONE` and `MANNEQUIN` are GitHub saying there is no relationship to
+      // name, so the row stays quiet rather than labelling a stranger.
+      return null
+  }
 }
 
 /** One rendered line of a diff, with the file lines it exists at. */

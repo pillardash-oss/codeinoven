@@ -192,6 +192,12 @@ export interface PullRequestCompare {
 /** Full pull request view, loaded when one is opened in the sidebar. */
 export interface PullRequestDetail extends PullRequestSummary {
   body: string
+  /**
+   * What the pull request's author is to the repository. The description is a
+   * comment like any other in the conversation, so it carries the same role
+   * badge its author's comments do.
+   */
+  authorAssociation: PrAuthorAssociation | null
   /** Null when the provider has not finished computing mergeability yet. */
   mergeable: boolean | null
   merged: boolean
@@ -230,6 +236,25 @@ export type PrCommentKind = 'issue' | 'review'
 export type PrCommentSide = 'left' | 'right'
 
 /**
+ * What an account is to the repository a comment was written in.
+ *
+ * GitHub reports this beside every comment as `author_association`, and the
+ * conversation row labels the commenter with it, the same way github.com does.
+ * These are GitHub's own eight values: `MANNEQUIN` is the placeholder it keeps
+ * for an account that no longer exists, and `NONE` is an account with no
+ * relationship to the repository, which is why neither of them earns a label.
+ */
+export type PrAuthorAssociation =
+  | 'OWNER'
+  | 'MEMBER'
+  | 'COLLABORATOR'
+  | 'CONTRIBUTOR'
+  | 'FIRST_TIMER'
+  | 'FIRST_TIME_CONTRIBUTOR'
+  | 'MANNEQUIN'
+  | 'NONE'
+
+/**
  * An account whose picture the UI wants.
  *
  * The declared URL is authoritative and the login is the fallback. That order
@@ -257,6 +282,8 @@ export interface PullRequestComment {
   authorAvatarUrl: string | null
   /** True for app/bot accounts, so the row can draw GitHub's `Bot` badge. */
   authorIsBot: boolean
+  /** What the commenter is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   body: string
   createdAt: string
   /** Last edit time, null when the comment has never been edited. */
@@ -300,6 +327,8 @@ export interface PullRequestReview {
   authorLogin: string
   authorAvatarUrl: string | null
   authorIsBot: boolean
+  /** What the reviewer is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
   state: string
   body: string
@@ -320,6 +349,8 @@ export interface PullRequestReviewComment {
   authorLogin: string
   authorAvatarUrl: string | null
   authorIsBot: boolean
+  /** What the commenter is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   body: string
   path: string
   /** Line in the file the comment anchors to; null once outdated. */

@@ -9,6 +9,7 @@ import type {
   GitRepositoryIdentity,
   GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
+  PrAuthorAssociation,
   PrCommentKind,
   PrDraft,
   PrListSort,
@@ -430,6 +431,7 @@ export class GitHubProvider implements GitProvider {
     const mergeableRaw = record['mergeable']
     return {
       ...summary,
+      authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       merged: record['merged'] === true,
@@ -608,6 +610,7 @@ export class GitHubProvider implements GitProvider {
         {
           id,
           ...this.toAuthor(this.readRecord(record, 'user')),
+          authorAssociation: this.toAuthorAssociation(record),
           state,
           body: this.readString(record, 'body') ?? '',
           submittedAt: this.readString(record, 'submitted_at') ?? '',
@@ -709,6 +712,7 @@ export class GitHubProvider implements GitProvider {
     return {
       id,
       ...this.toAuthor(this.readRecord(record, 'user')),
+      authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
       path: this.readString(record, 'path') ?? '',
       line: line > 0 ? line : null,
@@ -1774,11 +1778,37 @@ export class GitHubProvider implements GitProvider {
     return {
       id,
       ...this.toAuthor(this.readRecord(record, 'user')),
+      authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at'),
       nodeId: this.readString(record, 'node_id'),
       url: this.readString(record, 'html_url') ?? ''
+    }
+  }
+
+  /**
+   * What the commenter is to the repository.
+   *
+   * GitHub reports this on every REST comment payload as `author_association`,
+   * and the conversation labels the commenter with it. A value GitHub has not
+   * documented is dropped rather than passed through: the row draws the word,
+   * and a word the reader cannot place is worse than no label at all.
+   */
+  private toAuthorAssociation(record: Record<string, unknown>): PrAuthorAssociation | null {
+    const raw = this.readString(record, 'author_association')
+    switch (raw) {
+      case 'OWNER':
+      case 'MEMBER':
+      case 'COLLABORATOR':
+      case 'CONTRIBUTOR':
+      case 'FIRST_TIMER':
+      case 'FIRST_TIME_CONTRIBUTOR':
+      case 'MANNEQUIN':
+      case 'NONE':
+        return raw
+      default:
+        return null
     }
   }
 

@@ -26,11 +26,13 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import PrAvatar from './PrAvatar.svelte'
   import BotBadge from './BotBadge.svelte'
+  import IdentityBadge from './IdentityBadge.svelte'
   import PrCommentActionsMenu from './PrCommentActionsMenu.svelte'
   import {
     canDeleteConversationEntry,
     canEditConversationEntry,
     canHideConversationEntry,
+    commentRoleBadge,
     type ConversationEntry
   } from './git-pull-request-detail-format'
   import type { PrMinimizeReason } from '$shared/types'
@@ -113,6 +115,12 @@
    */
   const repository = $derived({ owner: identity.owner, repo: identity.repo })
   const displayLogin = $derived(githubDisplayLogin(entry.author))
+  /**
+   * What this commenter is to the repository: the account that opened the pull
+   * request, a member, a collaborator, a contributor. Null for an account with
+   * no relationship to name, and the row then wears no role at all.
+   */
+  const roleBadge = $derived(commentRoleBadge(entry, authorLogin))
   /**
    * The login this row answers, for a reply inside a thread. Null for a comment
    * that opened its own unit, which is every row outside a thread.
@@ -250,11 +258,16 @@
     <div class="min-w-0 flex-1">
       <div class="flex min-w-0 items-center gap-1.5">
         <!--
-          The `Bot` badge below is what tells the reader this account is an app,
-          so the `[bot]` suffix GitHub keeps on the login is left off the name: it
-          says the same thing twice in one word.
+          Two labels can follow the name: what the commenter is to this
+          repository (the account that opened the pull request, a member, a
+          collaborator, a contributor), and whether the account is an App at all.
+          The `[bot]` suffix GitHub keeps on a bot's login is left off the name,
+          because the badge says the same thing without the noise.
         -->
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{displayLogin}</span>
+        {#if roleBadge}
+          <IdentityBadge label={roleBadge.label} title={roleBadge.title} />
+        {/if}
         {#if entry.isBot}
           <BotBadge />
         {/if}
