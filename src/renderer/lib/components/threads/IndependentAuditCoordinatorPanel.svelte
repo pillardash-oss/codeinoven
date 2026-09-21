@@ -203,6 +203,7 @@
           {recentModels}
           {onRemoveRecent}
           side="bottom"
+          fullWidth
           disabled={running}
           label="Change model"
           variant="action"

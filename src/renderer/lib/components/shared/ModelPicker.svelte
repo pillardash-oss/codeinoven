@@ -56,6 +56,8 @@
     side?: 'top' | 'bottom'
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
+    /** Stretch the trigger across the full container width (board/panel layouts). */
+    fullWidth?: boolean
     label?: string
     /** Keep the catalog open while toggling several models. */
     multiSelect?: boolean
@@ -109,6 +111,7 @@
     side = 'top',
     disabled = false,
     variant = 'compact',
+    fullWidth = false,
     label,
     multiSelect = false,
     selectedModelKeys = [],
@@ -240,8 +243,8 @@
     variant === 'field'
       ? 'flex w-full min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? 'flex min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
-        : 'flex min-w-0 items-center rounded-lg transition-colors hover:bg-elevated'
+        ? `flex min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay ${fullWidth ? 'w-full' : ''}`
+        : `flex min-w-0 items-center rounded-lg transition-colors hover:bg-elevated ${fullWidth ? 'w-full' : ''}`
   )
   let modelButtonClasses = $derived(
     variant === 'field'
