@@ -13,7 +13,7 @@ import {
   unsentComposerContent,
   voiceScopeTarget
 } from './voice-send'
-import { logRendererError } from '../system/renderer-logger'
+import { logRendererDev, logRendererError } from '../system/renderer-logger'
 import { isRemotePwaRuntime } from '$lib/runtime-context'
 import type {
   SpeechDictationSpan,
@@ -185,6 +185,16 @@ class SpeechController {
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented) return
     if (event.key === 'Escape') {
+      // A capture that never reached `recording` (or already left it) swallows
+      // Escape silently. Log the unexpected phases in dev so a dead Escape key
+      // is never left unexplained.
+      if (
+        this.state.state === 'starting' ||
+        this.state.state === 'stopping' ||
+        this.state.state === 'failed'
+      ) {
+        logRendererDev(`Escape ignored while voice recording is ${this.state.state}.`)
+      }
       if (this.state.state !== 'recording') return
       if (!this.escapeStopsRecording()) return
       event.preventDefault()
@@ -226,7 +236,12 @@ class SpeechController {
     // Settings page or the Scope view) covering the shell, or an open modal or
     // palette (spotlight). Escape there closes the surface on top and must
     // never kill a recording happening underneath.
-    if (isEscapeClaimed()) return false
+    if (isEscapeClaimed()) {
+      logRendererDev(
+        'Escape-to-stop blocked: an overlay, palette, or full-page surface currently claims Escape.'
+      )
+      return false
+    }
     const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
     // Temporary side chats render a synthetic thread that is never the
@@ -238,12 +253,31 @@ class SpeechController {
     const sidebarTab = contextSidebarState.activeTab
     if (sidebarTab?.kind === 'temporary-chat') {
       if (sidebarTab.temporaryChatId === scope.threadId) {
-        return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+        const allowed = scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+        if (!allowed) {
+          logRendererDev(
+            `Escape-to-stop blocked: the temporary chat tab belongs to project ${sidebarTab.projectId} but the recording scope is ${scope.kind} ${'projectId' in scope ? scope.projectId : ''}.`
+          )
+        }
+        return allowed
       }
     }
     const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
-    if (!viewed || viewed.id !== scope.threadId) return false
-    if (scope.kind === 'project') return viewed.projectId === scope.projectId
+    if (!viewed || viewed.id !== scope.threadId) {
+      logRendererDev(
+        `Escape-to-stop blocked: the recording thread ${scope.threadId ?? '(none)'} is not the viewed thread${viewed ? ` (viewing ${viewed.id})` : ' (no thread viewed)'}.`
+      )
+      return false
+    }
+    if (scope.kind === 'project') {
+      if (viewed.projectId !== scope.projectId) {
+        logRendererDev(
+          `Escape-to-stop blocked: the recording project ${scope.projectId} is not the viewed project (viewing ${viewed.projectId}).`
+        )
+        return false
+      }
+      return true
+    }
     return true
   }
 
