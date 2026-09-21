@@ -93,12 +93,14 @@ export interface UpdatePrCommentInput extends PrCommentTarget {
  * Answer an inline review comment inside that comment's thread.
  *
  * A reply is not a new thread: GitHub files it under the comment it answers, so
- * the id is the comment being replied to, root or reply alike, and the body
- * carries only what the reply says. Conversation comments have no threading on
- * GitHub at all, which is why this only exists for the inline collection.
+ * the id is the comment being replied to   and GitHub only accepts the id of the
+ * comment that opened a thread, never one of its replies, so a reply to a reply
+ * belongs to the same thread as the reply it answers and is posted against that
+ * thread's opening comment. Conversation comments have no threading on GitHub at
+ * all, which is why this only exists for the inline collection.
  */
 export interface ReplyPrReviewCommentInput extends PullRequestTarget {
-  /** The comment being answered. Its thread receives the reply. */
+  /** The top-level comment whose thread receives the reply. */
   commentId: number
   body: string
 }

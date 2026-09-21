@@ -10,7 +10,7 @@
    * draws no border of its own when it is embedded (`framed={false}`).
    */
   import type { Snippet } from 'svelte'
-  import { Check, Loader2, MoreHorizontal } from '@lucide/svelte'
+  import { Check, ChevronDown, Loader2, MoreHorizontal } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { relativeTime } from '$lib/format/relative-time'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -86,6 +86,12 @@
   /** True while this row's body is being rewritten in place. */
   let editing = $state(false)
   let editBody = $state('')
+  /**
+   * True while the reader has this row folded down to its header. Local to the
+   * mount on purpose: a fold is how someone is reading right now, not a property
+   * of the comment, so reopening the pull request shows every body again.
+   */
+  let folded = $state(false)
 
   const savingComment = $derived(gitState.isBusy('pr-comment-edit'))
   /** Any per-comment action in flight, so one row's menu cannot double-fire. */
@@ -101,6 +107,11 @@
    */
   const repository = $derived({ owner: identity.owner, repo: identity.repo })
   const displayLogin = $derived(githubDisplayLogin(entry.author))
+  /**
+   * The login this row answers, for a reply inside a thread. Null for a comment
+   * that opened its own unit, which is every row outside a thread.
+   */
+  const repliesTo = $derived(entry.repliesTo ? githubDisplayLogin(entry.repliesTo) : null)
 
   function openEntryOnGitHub(): void {
     if (entry.url) void openInBrowser(entry.url)
@@ -264,8 +275,25 @@
                not what was first posted. -->
           <span title="Edited {relativeTime(entry.updatedAt)}">· edited</span>
         {/if}
+        {#if repliesTo}
+          <!-- A thread is linear, so the row says which comment it answers: the
+               indent only shows that it is an answer, not whose. -->
+          <span>· replying to @{repliesTo}</span>
+        {/if}
       </p>
     </div>
+    {#if !editing && entry.body.trim()}
+      <button
+        type="button"
+        class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground"
+        aria-expanded={!folded}
+        aria-label={folded ? `Expand ${displayLogin}'s comment` : `Fold ${displayLogin}'s comment`}
+        title={folded ? 'Show this comment' : 'Fold this comment'}
+        onclick={() => (folded = !folded)}
+      >
+        <ChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
+      </button>
+    {/if}
     {#if !editing}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
@@ -356,24 +384,23 @@
         </button>
       </div>
     </div>
-  {:else if entry.body.trim()}
+  {:else if !folded && entry.body.trim()}
     <div class="px-2.5 py-2">
       <!--
         GitHub's dialect includes HTML, so PR prose needs it to read correctly;
         the sanitizer still strips anything executable. Agent-authored text
         elsewhere keeps it off, and `repository` is what turns #150 and @login
         into links the way github.com does.
+
+        No type step is set here: `.markdown-body` already carries the app's
+        conversation reading size for prose, and it is the step a reader gets in
+        every other prose surface, so a comment body must not fight it.
       -->
-      <MarkdownView
-        text={entry.body}
-        class="markdown-body-card text-[0.6875rem] leading-relaxed"
-        allowHtml
-        {repository}
-      />
+      <MarkdownView text={entry.body} allowHtml {repository} />
     </div>
   {/if}
 
-  {#if footer && !editing}
+  {#if footer && !editing && !folded}
     {@render footer(entry)}
   {/if}
 </article>

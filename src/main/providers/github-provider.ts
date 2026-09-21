@@ -631,12 +631,15 @@ export class GitHubProvider implements GitProvider {
     const line = this.readNumber(record, 'line')
     const reviewId = this.readNumber(record, 'pull_request_review_id')
     const inReplyToId = this.readNumber(record, 'in_reply_to_id')
+    const side = this.readString(record, 'side')
     return {
       id,
       ...this.toAuthor(this.readRecord(record, 'user')),
       body: this.readString(record, 'body') ?? '',
       path: this.readString(record, 'path') ?? '',
       line: line > 0 ? line : null,
+      // GitHub spells these `LEFT`/`RIGHT`; the app names the file they number.
+      side: side === 'LEFT' ? 'left' : side === 'RIGHT' ? 'right' : null,
       reviewId: reviewId > 0 ? reviewId : null,
       inReplyToId: inReplyToId > 0 ? inReplyToId : null,
       diffHunk: this.readString(record, 'diff_hunk'),

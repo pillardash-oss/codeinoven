@@ -207,6 +207,17 @@ export interface PullRequestCommit {
 export type PrCommentKind = 'issue' | 'review'
 
 /**
+ * Which side of a diff a line number belongs to.
+ *
+ * GitHub numbers a comment by the file it is anchored in: a comment on an added
+ * or context line carries a line of the file after the change (`right`), while a
+ * comment on a removed line carries one of the file before it (`left`). The two
+ * numberings overlap, so without this a deletion comment is read against the
+ * wrong line.
+ */
+export type PrCommentSide = 'left' | 'right'
+
+/**
  * An account whose picture the UI wants.
  *
  * The declared URL is authoritative and the login is the fallback. That order
@@ -301,6 +312,8 @@ export interface PullRequestReviewComment {
   path: string
   /** Line in the file the comment anchors to; null once outdated. */
   line: number | null
+  /** Which file `line` numbers, or null when the provider did not say. */
+  side: PrCommentSide | null
   /**
    * The review this comment was submitted with, or null when the provider did
    * not attribute it. GitHub submits a review's inline comments and its summary

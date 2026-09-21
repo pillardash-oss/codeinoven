@@ -68,22 +68,24 @@
 
   /**
    * The reply's target: the comment the reader chose, or the thread's opening
-   * comment. GitHub files a reply under the comment it answers, so a reply to a
-   * reply stays in the same thread.
+   * comment. GitHub files a reply under the comment it answers, but it only
+   * accepts the id of the comment that opened a thread: replying to a reply is
+   * still addressed to the thread's root, which is what keeps the answer in the
+   * same thread instead of being refused.
    */
   function openReply(entry?: ConversationEntry): void {
     replyTo = entry ?? root ?? null
   }
 
   async function submitReply(body: string): Promise<boolean> {
-    const target = replyTo ?? root
-    if (!target || target.commentId === null) return false
+    const targetId = root?.commentId
+    if (targetId === null || targetId === undefined) return false
     const posted = await gitState.replyToPrReviewComment(
       projectId,
       identity.owner,
       identity.repo,
       number,
-      target.commentId,
+      targetId,
       body
     )
     if (!posted) return false
@@ -103,6 +105,7 @@
     <button
       type="button"
       class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+      aria-expanded={!collapsed}
       title={collapsed ? 'Show this thread' : 'Fold this thread'}
       onclick={() => (collapsed = !collapsed)}
     >
@@ -138,24 +141,33 @@
   </div>
 
   {#if !collapsed}
-    <PrDiffHunk hunk={threadDiffHunk(thread)} anchor={thread.line} />
+    <PrDiffHunk hunk={threadDiffHunk(thread)} anchor={thread.line} side={thread.side} />
 
     <div class="divide-y divide-border/50">
-      {#each thread.comments as comment (comment.key)}
-        <PrCommentCard
-          entry={comment}
-          framed={false}
-          {projectId}
-          {identity}
-          {number}
-          {authorLogin}
-          {onQuote}
-          {onCommentChat}
-          onReply={openReply}
-          {onDelete}
-          {onNotice}
-          {onRefresh}
-        />
+      {#each thread.comments as comment, index (comment.key)}
+        <!--
+          A reply belongs to the comment above it, so it steps in under a guide
+          line instead of reading as another comment in the thread. One step only:
+          a thread is a conversation about one line of code, and nesting it by
+          reply depth would walk the text off the panel. The row itself names the
+          comment it answers, so the indent never has to carry whose reply it is.
+        -->
+        <div class={index === 0 ? '' : 'border-l border-border/60 pl-2.5'}>
+          <PrCommentCard
+            entry={comment}
+            framed={false}
+            {projectId}
+            {identity}
+            {number}
+            {authorLogin}
+            {onQuote}
+            {onCommentChat}
+            onReply={openReply}
+            {onDelete}
+            {onNotice}
+            {onRefresh}
+          />
+        </div>
       {/each}
     </div>
 
@@ -163,6 +175,7 @@
       {#if replyTo}
         <PrReplyBox
           recipient={githubDisplayLogin(replyTo.author)}
+          hint="Posts this reply into the thread"
           {busy}
           onSubmit={submitReply}
           onCancel={() => (replyTo = null)}

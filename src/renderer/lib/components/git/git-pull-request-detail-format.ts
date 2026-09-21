@@ -1,6 +1,7 @@
 import { Check, CircleDot, CircleSlash, X } from '@lucide/svelte'
 import type {
   PrCommentKind,
+  PrCommentSide,
   PullRequestBundle,
   PullRequestCheck,
   PullRequestFile,
@@ -28,6 +29,12 @@ export interface ConversationEntry {
   body: string
   kind: ConversationEntryKind
   meta?: string
+  /**
+   * The login this comment answers, for one inside an inline thread. Null for a
+   * comment that opened its thread and for every entry outside one, which is what
+   * lets a row say whose answer it is rather than leaving the indent to imply it.
+   */
+  repliesTo: string | null
   /**
    * The unified diff hunk GitHub showed when an inline comment was written, or
    * null for every other entry. It is the code the comment is talking about, and
@@ -66,6 +73,12 @@ export interface ReviewThread {
   path: string
   /** Line in the file the thread anchors to; null once the thread is outdated. */
   line: number | null
+  /**
+   * Which file `line` numbers, as the opening comment declared it. A thread on a
+   * removed line is anchored in the file before the change, and reading its line
+   * against the file after it would point at a different line entirely.
+   */
+  side: PrCommentSide | null
   /** The comment that opened the thread, then its replies in arrival order. */
   comments: ConversationEntry[]
 }
@@ -106,28 +119,35 @@ export type ConversationNode =
 export function buildConversation(bundle: PullRequestBundle | undefined): ConversationNode[] {
   if (!bundle) return []
   const nodes: ConversationNode[] = []
-  if (bundle.detail.body.trim()) {
-    nodes.push({
-      kind: 'description',
-      key: 'body',
-      at: bundle.detail.createdAt,
-      entry: {
-        key: 'body',
-        author: bundle.detail.authorLogin,
-        avatarUrl: bundle.detail.authorAvatarUrl ?? null,
-        isBot: bundle.detail.authorIsBot === true,
-        at: bundle.detail.createdAt,
-        updatedAt: null,
-        body: bundle.detail.body,
-        kind: 'description',
-        diffHunk: null,
-        url: bundle.detail.url,
-        commentId: null,
-        commentKind: 'issue',
-        nodeId: null
-      }
-    })
-  }
+  // The description is the pull request itself and holds the top of the stream.
+  // It is built apart from the rest because it is the one unit no timestamp
+  // orders: without a body there is no description at all, and the first thing
+  // anyone actually said takes the top instead.
+  const description: ConversationNode[] = bundle.detail.body.trim()
+    ? [
+        {
+          kind: 'description',
+          key: 'body',
+          at: bundle.detail.createdAt,
+          entry: {
+            key: 'body',
+            author: bundle.detail.authorLogin,
+            avatarUrl: bundle.detail.authorAvatarUrl ?? null,
+            isBot: bundle.detail.authorIsBot === true,
+            at: bundle.detail.createdAt,
+            updatedAt: null,
+            body: bundle.detail.body,
+            kind: 'description',
+            repliesTo: null,
+            diffHunk: null,
+            url: bundle.detail.url,
+            commentId: null,
+            commentKind: 'issue',
+            nodeId: null
+          }
+        }
+      ]
+    : []
 
   for (const comment of bundle.comments) {
     nodes.push({
@@ -143,6 +163,7 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
         updatedAt: comment.updatedAt,
         body: comment.body,
         kind: 'comment',
+        repliesTo: null,
         diffHunk: null,
         url: comment.url,
         commentId: comment.id,
@@ -184,14 +205,10 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
     })
   }
 
-  // The description is the pull request itself, so it stays at the top; every
-  // other unit reads in the order it happened. `sort` is stable, which keeps two
-  // units submitted in the same second in the order the provider listed them.
-  const [description, ...rest] = nodes
-  return [
-    ...(description ? [description] : []),
-    ...rest.sort((a, b) => parseAt(a.at) - parseAt(b.at))
-  ]
+  // The description holds the top; every other unit reads in the order it
+  // happened. `sort` is stable, which keeps two units submitted in the same
+  // second in the order the provider listed them.
+  return [...description, ...nodes.sort((a, b) => parseAt(a.at) - parseAt(b.at))]
 }
 
 /**
@@ -217,6 +234,7 @@ function buildThreads(
       key: `t${comment.id}`,
       path: comment.path,
       line: comment.line,
+      side: comment.side,
       comments: [reviewCommentEntry(comment)]
     }
     threadOf.set(comment.id, thread)
@@ -228,8 +246,18 @@ function buildThreads(
     if (parentId === null) continue
     const thread = threadOf.get(parentId) ?? threadOf.get(rootIdOf(parentId, comments))
     if (!thread) continue
-    thread.comments.push(reviewCommentEntry(comment))
+    const parent = comments.find((candidate) => candidate.id === parentId)
+    thread.comments.push(reviewCommentEntry(comment, parent?.authorLogin ?? null))
     threadOf.set(comment.id, thread)
+  }
+
+  // A thread is read in the order its replies arrived, whatever order the
+  // provider listed them in. The opening comment stays where it is: a reply that
+  // carries an earlier timestamp is a provider oddity, not a new thread head.
+  for (const thread of roots) {
+    const [root, ...replies] = thread.comments
+    if (!root) continue
+    thread.comments = [root, ...replies.sort((a, b) => parseAt(a.at) - parseAt(b.at))]
   }
 
   return roots.sort((a, b) => {
@@ -298,6 +326,7 @@ function reviewEntry(review: PullRequestReview): ConversationEntry {
     body: review.body,
     kind: 'review',
     meta: review.state.replace(/_/gu, ' ').toLowerCase(),
+    repliesTo: null,
     diffHunk: null,
     url: review.url,
     commentId: null,
@@ -306,7 +335,10 @@ function reviewEntry(review: PullRequestReview): ConversationEntry {
   }
 }
 
-function reviewCommentEntry(comment: PullRequestReviewComment): ConversationEntry {
+function reviewCommentEntry(
+  comment: PullRequestReviewComment,
+  repliesTo: string | null = null
+): ConversationEntry {
   return {
     key: `rc${comment.id}`,
     author: comment.authorLogin,
@@ -317,6 +349,7 @@ function reviewCommentEntry(comment: PullRequestReviewComment): ConversationEntr
     body: comment.body,
     kind: 'inline',
     meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`,
+    repliesTo,
     diffHunk: comment.diffHunk,
     url: comment.url,
     commentId: comment.id,
@@ -396,12 +429,14 @@ export function conversationNodeDotClass(node: ConversationNode): string {
   return 'bg-dimmed'
 }
 
-/** One rendered line of a diff hunk, with the file line it belongs to. */
+/** One rendered line of a diff hunk, with the file lines it exists at. */
 export interface HunkLine {
   /** The line as the provider sent it, its `+`/`-`/space marker included. */
   text: string
-  /** Line number in the file after the change; null for a removed or marker line. */
-  number: number | null
+  /** Line in the file before the change; null for a line only the new file has. */
+  oldNumber: number | null
+  /** Line in the file after the change; null for a line only the old file has. */
+  newNumber: number | null
   /** True for the line the comment is anchored to. */
   anchor: boolean
 }
@@ -427,11 +462,18 @@ export const HUNK_CONTEXT_ROWS = 5
 export function hunkWindow(
   hunk: string | null,
   anchor: number | null,
-  rows: number | null = HUNK_CONTEXT_ROWS
+  rows: number | null = HUNK_CONTEXT_ROWS,
+  side: PrCommentSide | null = 'right'
 ): HunkWindow {
   const all = hunkLines(hunk)
   if (all.length === 0) return { lines: [], hiddenAbove: 0 }
-  const isAnchor = (line: HunkLine): boolean => line.number !== null && line.number === anchor
+  // A comment on a removal numbers the file before the change, and that number
+  // can exist on both sides of the same hunk, so the side is what decides which
+  // of the two lines the comment actually meant.
+  const anchorNumber = (line: HunkLine): number | null =>
+    side === 'left' ? line.oldNumber : line.newNumber
+  const isAnchor = (line: HunkLine): boolean =>
+    anchorNumber(line) !== null && anchorNumber(line) === anchor
   // An outdated comment anchors to nothing, and a hunk with no anchor still has
   // its tail worth reading, so both fall back to the end.
   let end = anchor === null ? -1 : all.findLastIndex(isAnchor)
@@ -453,30 +495,48 @@ export function hunkWindow(
 function hunkLines(hunk: string | null): HunkLine[] {
   if (!hunk) return []
   const lines: HunkLine[] = []
-  let number = 0
+  let oldNumber = 0
+  let newNumber = 0
   let inHunk = false
   for (const text of hunk.split('\n')) {
     if (text.startsWith('@@')) {
-      number = hunkFirstLineNumber(text)
+      const start = hunkStartLineNumbers(text)
+      oldNumber = start.old
+      newNumber = start.new
       inHunk = true
       continue
     }
     // The header is the first thing GitHub sends; anything ahead of it is not code.
     if (!inHunk) continue
-    if (text.startsWith('-') || text.startsWith('\\')) {
-      lines.push({ text, number: null, anchor: false })
+    // The `\ No newline at end of file` marker belongs to the line above it and
+    // has a number of its own on neither side.
+    if (text.startsWith('\\')) {
+      lines.push({ text, oldNumber: null, newNumber: null, anchor: false })
       continue
     }
-    lines.push({ text, number, anchor: false })
-    number += 1
+    if (text.startsWith('-')) {
+      lines.push({ text, oldNumber, newNumber: null, anchor: false })
+      oldNumber += 1
+      continue
+    }
+    if (text.startsWith('+')) {
+      lines.push({ text, oldNumber: null, newNumber, anchor: false })
+      newNumber += 1
+      continue
+    }
+    // Context exists in both files, and the two counters only stay level while
+    // nothing has been added or removed ahead of it.
+    lines.push({ text, oldNumber, newNumber, anchor: false })
+    oldNumber += 1
+    newNumber += 1
   }
   return lines
 }
 
-/** The first line number a hunk header claims for the file after the change. */
-function hunkFirstLineNumber(header: string): number {
-  const match = /^@@ -\d+(?:,\d+)? \+(\d+)/u.exec(header)
-  return match ? Number(match[1]) : 1
+/** The line numbers a hunk header starts at, one per side of the change. */
+function hunkStartLineNumbers(header: string): { old: number; new: number } {
+  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)/u.exec(header)
+  return match ? { old: Number(match[1]), new: Number(match[2]) } : { old: 1, new: 1 }
 }
 
 /**
