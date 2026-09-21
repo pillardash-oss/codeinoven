@@ -17,7 +17,6 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import BrowserDownloadsMenu from './BrowserDownloadsMenu.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
@@ -88,23 +87,43 @@
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
    *  the view never has to detach for it; the open flag only tracks the
-   *  expanded state of the anchor button. */
+   *  expanded state of the anchor button. The downloads and page menus follow
+   *  the same native-popup pattern. */
   let siteMenuOpen = $state(false)
-  /** Whether the in-flow downloads list under the toolbar is expanded. */
-  let downloadsOpen = $state(false)
   const activeDownloadCount = $derived(browserDownloads.activeCount(tabProjectId))
 
-  function toggleDownloads(): void {
-    downloadsOpen = !downloadsOpen
-    if (downloadsOpen) void browserDownloads.load(tabProjectId)
+  /** Open the native downloads menu anchored under the download button. The
+   *  OS popup composites above the page view, so the panel's layout never has
+   *  to move for it (the previous in-flow list pushed the page down). */
+  function openDownloadsMenu(event: MouseEvent): void {
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    const rect = button.getBoundingClientRect()
+    void invoke(
+      'browser:downloadsMenu',
+      tabProjectId,
+      Math.max(0, Math.round(rect.left)),
+      Math.max(0, Math.round(rect.bottom + 4))
+    ).catch(() => {})
   }
 
-  /** Escape collapses the downloads list, the way it closes the app's other
-   *  anchored surfaces. Bound on the window rather than on the panel, so a
-   *  presentational layout wrapper never has to carry a key handler. */
-  function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.defaultPrevented || event.key !== 'Escape') return
-    if (downloadsOpen) downloadsOpen = false
+  /** Left click reloads, or aborts the in-flight navigation while loading. */
+  function onReloadButton(): void {
+    void invoke(pageState.loading ? 'browser:stop' : 'browser:reload', tabId).catch(() => {})
+  }
+
+  /** Right click offers the soft/hard reload choice the page area also offers. */
+  function onReloadContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    const rect = button.getBoundingClientRect()
+    void invoke(
+      'browser:pageMenu',
+      tabId,
+      Math.max(0, Math.round(rect.left)),
+      Math.max(0, Math.round(rect.bottom + 4))
+    ).catch(() => {})
   }
 
   let siteHost = $derived.by(() => {
@@ -266,9 +285,10 @@
   })
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
-
-<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
+<div
+  {@attach panelVisible && manageNativeBrowserView}
+  class="flex h-full min-h-0 flex-col bg-app"
+>
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -301,8 +321,8 @@
       class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
       title={pageState.loading ? 'Stop loading' : 'Reload page'}
-      onclick={() =>
-        void invoke(pageState.loading ? 'browser:stop' : 'browser:reload', tabId).catch(() => {})}
+      onclick={onReloadButton}
+      oncontextmenu={onReloadContextMenu}
     >
       {#if pageState.loading}
         <X size={14} />
@@ -345,16 +365,10 @@
     </div>
     <button
       type="button"
-      class={[
-        'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
-        downloadsOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
-      ]}
+      class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Browser downloads"
-      aria-expanded={downloadsOpen}
       title="Browser downloads"
-      onclick={toggleDownloads}
+      onclick={openDownloadsMenu}
     >
       <Download size={13} />
       {#if activeDownloadCount > 0}
@@ -385,9 +399,6 @@
       {/if}
     </button>
   </form>
-  {#if downloadsOpen}
-    <BrowserDownloadsMenu projectId={tabProjectId} onClose={() => (downloadsOpen = false)} />
-  {/if}
   {#if addressError}
     <p
       class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
@@ -402,5 +413,16 @@
     class="min-h-0 min-w-0 flex-1 bg-surface"
     role="document"
     aria-label={`Browser content for ${pageState.title || address}`}
+    oncontextmenu={(event) => {
+      // The page itself never sees DOM context menus (it is a native view),
+      // so the host offers the browser-level menu: soft and hard reload.
+      event.preventDefault()
+      void invoke(
+        'browser:pageMenu',
+        tabId,
+        Math.max(0, Math.round(event.clientX)),
+        Math.max(0, Math.round(event.clientY))
+      ).catch(() => {})
+    }}
   ></div>
 </div>

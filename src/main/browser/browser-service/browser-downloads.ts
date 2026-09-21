@@ -4,9 +4,10 @@
  * resume/open/reveal actions the renderer drives.
  */
 
-import { app, shell, type BrowserWindow } from 'electron'
+import { BrowserWindow, Menu, MenuItem, app, shell, type MenuItemConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import type { BrowserDownload, BrowserDownloadState } from '../../../lib/ipc-contract'
+import { downloadStatusLabel } from './browser-download-label'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import {
   DOWNLOAD_EVENT_INTERVAL_MS,
@@ -133,6 +134,54 @@ export class BrowserDownloadTracker {
     if (!record?.download.savePath) return false
     shell.showItemInFolder(record.download.savePath)
     return true
+  }
+
+  /** Open the OS-native downloads menu for a project, anchored under the
+   *  toolbar's download button. The menu composites above the WebContentsView,
+   *  so the panel's layout never has to change for it. Each entry carries the
+   *  actions its live state allows; clicking a filename opens the file. */
+  showMenu(projectId: string, x: number, y: number): void {
+    if (this.deps.window.isDestroyed()) return
+    const menu = new Menu()
+    const downloads = this.list(projectId)
+    if (downloads.length === 0) {
+      menu.append(new MenuItem({ label: 'No downloads yet', enabled: false }))
+      menu.popup({ window: this.deps.window, x, y })
+      return
+    }
+    for (const download of downloads) {
+      menu.append(this.downloadItem(download))
+    }
+    menu.popup({ window: this.deps.window, x, y })
+  }
+
+  /** One download as a submenu rooted at its labelled filename. */
+  private downloadItem(download: BrowserDownload): MenuItem {
+    const actions: MenuItemConstructorOptions[] = []
+    if (download.state === 'progressing') {
+      actions.push(
+        {
+          label: download.paused ? 'Resume' : 'Pause',
+          click: () => (download.paused ? this.resume(download.id) : this.pause(download.id))
+        },
+        { label: 'Cancel', click: () => this.cancel(download.id) }
+      )
+    } else {
+      if (download.state === 'completed' && download.savePath) {
+        actions.push({ label: 'Open', click: () => this.open(download.id) })
+      }
+      if (download.savePath) {
+        actions.push({ label: 'Show in folder', click: () => this.reveal(download.id) })
+      }
+    }
+    return new MenuItem({
+      label: download.fileName,
+      submenu: [
+        { label: downloadStatusLabel(download), enabled: false },
+        { type: 'separator' },
+        ...actions
+      ]
+    })
   }
 
   /** Cancel every in-flight download that belongs to a project being cleared. */

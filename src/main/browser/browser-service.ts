@@ -1,5 +1,7 @@
 import {
   BrowserWindow,
+  Menu,
+  MenuItem,
   session,
   webFrameMain,
   WebContentsView,
@@ -225,6 +227,9 @@ export class BrowserService {
     ipcMain.handle('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
     })
+    ipcMain.handle('browser:reloadIgnoringCache', (_event, rawTabId) => {
+      this.requireTab(validateTabId(rawTabId)).view.webContents.reloadIgnoringCache()
+    })
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
@@ -270,6 +275,19 @@ export class BrowserService {
       // Native popup menus run a nested run loop; detach from the invoke reply
       // so the renderer's call resolves immediately.
       setImmediate(() => this.siteData.showSiteMenu(projectId, host, x, y))
+    })
+    ipcMain.handle('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
+      const tabId = validateTabId(rawTabId)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      this.requireTab(tabId)
+      setImmediate(() => this.showPageMenu(tabId, x, y))
+    })
+    ipcMain.handle('browser:downloadsMenu', (_event, rawProjectId, rawX, rawY) => {
+      const projectId = validateProjectId(rawProjectId)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      setImmediate(() => this.downloadTracker.showMenu(projectId, x, y))
     })
     ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -897,6 +915,31 @@ export class BrowserService {
       Logger.dev('Browser navigation did not complete:', { tabId, url, error })
       this.publishState(tabId)
     })
+  }
+
+  /** Open the native page context menu. The OS popup composites above the
+   *  WebContentsView, so the page never has to detach for the menu. */
+  private showPageMenu(tabId: string, x: number, y: number): void {
+    if (this.window.isDestroyed()) return
+    const contents = this.requireTab(tabId).view.webContents
+    const menu = new Menu()
+    menu.append(
+      new MenuItem({
+        label: 'Reload (keeps cache)',
+        click: () => {
+          if (!contents.isDestroyed()) contents.reload()
+        }
+      })
+    )
+    menu.append(
+      new MenuItem({
+        label: 'Hard reload (ignores cache)',
+        click: () => {
+          if (!contents.isDestroyed()) contents.reloadIgnoringCache()
+        }
+      })
+    )
+    menu.popup({ window: this.window, x, y })
   }
 
   private stateFor(tabId: string, tab: BrowserTab): BrowserPageState {
