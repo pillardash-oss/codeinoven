@@ -1071,13 +1071,25 @@ export class GitState {
   }
 
   /** Close a batch, one at a time, reporting what succeeded and what did not. */
-  closePullRequests(projectId: string, owner: string, repo: string, numbers: number[]) {
-    return this.prOps.closePullRequests(projectId, owner, repo, numbers)
+  closePullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[],
+    comment: string | null = null
+  ) {
+    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment)
   }
 
   /** Reopen a batch, one at a time, reporting what succeeded and what did not. */
-  reopenPullRequests(projectId: string, owner: string, repo: string, numbers: number[]) {
-    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers)
+  reopenPullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[],
+    comment: string | null = null
+  ) {
+    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment)
   }
 
   /** Replace the labels a pull request carries, from the label picker. */

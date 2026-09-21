@@ -47,6 +47,26 @@ export interface PrBatchResult {
   stoppedBy: string | null
 }
 
+/** What one pull request's turn in a batch did, as the loop reads it. */
+type PrBatchStep =
+  | { outcome: 'done' }
+  | { outcome: 'failed'; message: string }
+  /** The batch should not continue: the refusal applies to every remaining row. */
+  | { outcome: 'stopped'; message: string }
+
+/**
+ * Whether a refusal is GitHub asking the caller to slow down.
+ *
+ * A secondary rate limit and an abuse-detection refusal are statements about the
+ * caller, not about the pull request being written, and both name themselves in the
+ * message GitHub returns. Recognising them is what keeps a throttled batch from
+ * spending its remaining rows collecting the same 403, which is exactly the pattern
+ * that turns a soft limit into a flagged one.
+ */
+function isThrottleRefusal(message: string): boolean {
+  return /rate limit|abuse detection/iu.test(message)
+}
+
 /** One metadata write's outcome: what the provider stored, or why it did not. */
 export type PrMetadataOutcome<T> =
   { status: 'saved'; value: T } | { status: 'failed'; message: string }
@@ -316,6 +336,11 @@ export class GitPullRequestOperations {
    * window. So this closes one, then the next, and refreshes the indicator once at
    * the end.
    *
+   * `comment` rides along when the user wants each pull request to say why it went.
+   * It is posted before the close, so a pull request whose note could not be posted
+   * stays open: closing it would leave a row that gives no reason, and the batch
+   * result names the ones that need a second attempt.
+   *
    * Nothing here sets the store's error. A batch's failures belong to the batch, so
    * they come back in the result and are reported next to the count the user
    * confirmed, rather than in a banner that names no pull request.
@@ -324,7 +349,8 @@ export class GitPullRequestOperations {
     projectId: string,
     owner: string,
     repo: string,
-    numbers: number[]
+    numbers: number[],
+    comment: string | null = null
   ): Promise<PrBatchResult> {
     return this.runLifecycleBatch(
       projectId,
@@ -333,7 +359,8 @@ export class GitPullRequestOperations {
       numbers,
       'pr-close',
       'closed',
-      'Pull request could not be closed'
+      'Pull request could not be closed',
+      comment
     )
   }
 
@@ -342,7 +369,8 @@ export class GitPullRequestOperations {
     projectId: string,
     owner: string,
     repo: string,
-    numbers: number[]
+    numbers: number[],
+    comment: string | null = null
   ): Promise<PrBatchResult> {
     return this.runLifecycleBatch(
       projectId,
@@ -351,7 +379,8 @@ export class GitPullRequestOperations {
       numbers,
       'pr-reopen',
       'open',
-      'Pull request could not be reopened'
+      'Pull request could not be reopened',
+      comment
     )
   }
 
@@ -362,7 +391,8 @@ export class GitPullRequestOperations {
     numbers: number[],
     operation: 'pr-close' | 'pr-reopen',
     nextState: 'open' | 'closed',
-    failureFallback: string
+    failureFallback: string,
+    comment: string | null
   ): Promise<PrBatchResult> {
     const succeeded: number[] = []
     const failed: PrBatchFailure[] = []
@@ -373,25 +403,29 @@ export class GitPullRequestOperations {
     this.access.setGitHubPermission(null)
     try {
       for (const [index, pullNumber] of numbers.entries()) {
-        try {
-          const result =
-            operation === 'pr-close'
-              ? await invoke('pr:close', projectId, owner, repo, pullNumber)
-              : await invoke('pr:reopen', projectId, owner, repo, pullNumber)
-          if (result.status === 'permission_required') {
-            // Missing App access fails identically for every remaining pull
-            // request, so the batch stops instead of spending one round trip per
-            // row to collect the same answer nineteen more times.
-            this.access.setGitHubPermission(result)
-            failed.push({ number: pullNumber, message: result.message })
-            skipped.push(...numbers.slice(index + 1))
-            stoppedBy = result.message
-            break
-          }
+        const step = await this.runBatchStep(
+          projectId,
+          owner,
+          repo,
+          pullNumber,
+          operation,
+          nextState,
+          failureFallback,
+          comment
+        )
+        if (step.outcome === 'done') {
           succeeded.push(pullNumber)
-          this.access.applyPullRequestState(owner, repo, pullNumber, nextState)
-        } catch (reason) {
-          failed.push({ number: pullNumber, message: errorMessage(reason, failureFallback) })
+          continue
+        }
+        failed.push({ number: pullNumber, message: step.message })
+        // Two refusals say something about the batch rather than about this one pull
+        // request: missing App access, and being asked to slow down. Neither gets
+        // better on the next row, and continuing would spend the rest of the batch
+        // collecting the same answer while making the next one likelier.
+        if (step.outcome === 'stopped' || isThrottleRefusal(step.message)) {
+          skipped.push(...numbers.slice(index + 1))
+          stoppedBy = step.message
+          break
         }
       }
     } finally {
@@ -401,6 +435,57 @@ export class GitPullRequestOperations {
     // and the open set only changed once, however many rows changed it.
     if (succeeded.length > 0) this.access.refreshConflictIndicators(projectId, true)
     return { succeeded, failed, skipped, stoppedBy }
+  }
+
+  /**
+   * One pull request's turn in a batch: the note first, then the state change.
+   *
+   * The note is posted on its own so a refusal is reported as the comment failing
+   * rather than as the close failing for a reason the user cannot see, and so a pull
+   * request whose note did not land is left untouched: closing it anyway would leave
+   * a row that gives no reason, and the batch result names the ones to retry.
+   */
+  private async runBatchStep(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    operation: 'pr-close' | 'pr-reopen',
+    nextState: 'open' | 'closed',
+    failureFallback: string,
+    comment: string | null
+  ): Promise<PrBatchStep> {
+    if (comment) {
+      try {
+        const posted = await invoke('pr:comment', projectId, owner, repo, pullNumber, comment)
+        if (posted.status === 'permission_required') {
+          this.access.setGitHubPermission(posted)
+          return { outcome: 'stopped', message: posted.message }
+        }
+      } catch (reason) {
+        return {
+          outcome: 'failed',
+          message: `The comment could not be posted, so the pull request was left untouched: ${errorMessage(
+            reason,
+            'the provider refused it'
+          )}`
+        }
+      }
+    }
+    try {
+      const result =
+        operation === 'pr-close'
+          ? await invoke('pr:close', projectId, owner, repo, pullNumber)
+          : await invoke('pr:reopen', projectId, owner, repo, pullNumber)
+      if (result.status === 'permission_required') {
+        this.access.setGitHubPermission(result)
+        return { outcome: 'stopped', message: result.message }
+      }
+      this.access.applyPullRequestState(owner, repo, pullNumber, nextState)
+      return { outcome: 'done' }
+    } catch (reason) {
+      return { outcome: 'failed', message: errorMessage(reason, failureFallback) }
+    }
   }
 
   /**

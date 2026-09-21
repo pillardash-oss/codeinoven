@@ -14,6 +14,13 @@
    * no undo. The result names the failures individually, because `gitState.error`
    * holds a single message and a batch that closed seventeen of twenty has to say
    * which three are still open and why.
+   *
+   * The optional note is what makes a swept backlog explain itself. A dependabot
+   * branch closed by hand usually wants one line saying why, the same line on every
+   * one of them, and typing it twenty times is the reason a sweep turns into twenty
+   * individual closes. The note is posted before the close it belongs to, so a pull
+   * request whose note failed stays open rather than becoming a closed row that
+   * gives no reason.
    */
   interface Props {
     /**
@@ -31,6 +38,13 @@
   let { batch, projectId, owner, repo, onClose }: Props = $props()
 
   let result = $state<PrBatchResult | null>(null)
+  /** The note every pull request in this batch receives, posted verbatim. */
+  let comment = $state('')
+  /**
+   * Field id suffix. Two panels can be mounted at once, and an id has to name one
+   * element, so the label's `for` is scoped to this instance.
+   */
+  const fieldSuffix = Math.random().toString(36).slice(2)
 
   const busy = $derived(gitState.isBusy('pr-close') || gitState.isBusy('pr-reopen'))
   const targets = $derived(batch.targets)
@@ -38,6 +52,8 @@
 
   const verb = $derived(mode === 'close' ? 'Close' : 'Reopen')
   const pastVerb = $derived(mode === 'close' ? 'closed' : 'reopened')
+  /** The trimmed note, which is what travels: whitespace is not a comment. */
+  const note = $derived(comment.trim())
   const title = $derived(
     targets.length === 1
       ? `${verb} pull request #${targets[0]?.number}?`
@@ -55,10 +71,11 @@
 
   async function run(): Promise<void> {
     const numbers = targets.map((target) => target.number)
+    const batchComment = note.length > 0 ? note : null
     const outcome =
       mode === 'close'
-        ? await gitState.closePullRequests(projectId, owner, repo, numbers)
-        : await gitState.reopenPullRequests(projectId, owner, repo, numbers)
+        ? await gitState.closePullRequests(projectId, owner, repo, numbers, batchComment)
+        : await gitState.reopenPullRequests(projectId, owner, repo, numbers, batchComment)
     result = outcome
   }
 
@@ -93,6 +110,30 @@
       ? ` and ${unlistedNumbers} more`
       : ''}
   </p>
+
+  <div class="mt-3">
+    <label
+      class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
+      for="pr-batch-comment-{fieldSuffix}"
+    >
+      Comment (optional)
+    </label>
+    <textarea
+      id="pr-batch-comment-{fieldSuffix}"
+      class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+      placeholder={mode === 'close'
+        ? 'Why these are being closed, e.g. superseded by a single dependency bump'
+        : 'Why these are being reopened'}
+      bind:value={comment}></textarea>
+    <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
+      {#if note.length > 0}
+        Posted verbatim on all {targets.length} pull requests, before each one is {pastVerb}. A pull
+        request whose comment fails is left untouched, so retrying cannot post the same note twice.
+      {:else}
+        Leave this empty to {mode === 'close' ? 'close' : 'reopen'} them with no comment.
+      {/if}
+    </p>
+  </div>
 </ConfirmDialog>
 
 <Modal
