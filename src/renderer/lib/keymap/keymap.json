@@ -138,6 +138,13 @@
           "scenario": "Anywhere a microphone input is visible."
         },
         {
+          "id": "chat-focus-composer",
+          "keys": ["double-mod"],
+          "label": "Focus the chat composer",
+          "description": "Taps the primary modifier twice in quick succession (⌘ on macOS, Ctrl elsewhere) to move keyboard focus into the chat composer from anywhere in the app, restoring the caret where you left it. Stays inert while a modal, sheet, or palette is open.",
+          "scenario": "A chat composer is on screen."
+        },
+        {
           "id": "chat-history-previous",
           "keys": ["arrowup"],
           "label": "Recall previous message",

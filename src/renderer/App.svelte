@@ -10,6 +10,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import {
     rendererRecovery,
     flushAllDraftCommits,
@@ -1080,6 +1081,7 @@
     window.addEventListener('mousedown', onMouseHistoryButton)
     window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
+    const uninstallComposerFocusShortcut = initComposerFocusShortcut()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
     const unsubscribeIpc = installAppIpcSubscriptions({
@@ -1120,6 +1122,7 @@
       window.removeEventListener('mousedown', onMouseHistoryButton)
       window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
+      uninstallComposerFocusShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()

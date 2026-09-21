@@ -4,6 +4,7 @@
   import { fade } from 'svelte/transition'
   import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
   import { motionDuration } from '$lib/motion'
+  import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -418,7 +419,20 @@
   let dropAnchorProbe = $state<HTMLElement | null>(null)
   const captureComposerRoot: Attachment<HTMLElement> = (element) => {
     composerRoot = element
+    // Publish this composer to the app-wide focus registry so the double-tap
+    // primary-modifier gesture can return the caret here from anywhere in the
+    // app. The composer owns how it takes focus, and refuses it while it is
+    // disabled.
+    const unregister = registerComposerFocusTarget({
+      root: element,
+      focus: () => {
+        if (disabled) return false
+        focusComposerAtSavedCaret()
+        return true
+      }
+    })
     return () => {
+      unregister()
       if (composerRoot === element) composerRoot = null
     }
   }
