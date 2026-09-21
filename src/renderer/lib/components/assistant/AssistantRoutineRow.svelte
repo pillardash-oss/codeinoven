@@ -289,93 +289,92 @@
     </span>
   </button>
 
-  <span class="relative shrink-0">
-    <span
-      class="block opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+  <!-- Hover actions float over the row (opaque `elevated`, matching the row's
+       hover surface) instead of reserving space, so the title truncates at the
+       full row width and only gets covered while the actions are visible. -->
+  <span
+    class="pointer-events-none absolute inset-y-1 right-1.5 z-10 flex items-center gap-0.5 rounded-md bg-elevated px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+  >
+    <SidebarSearchControl
+      open={searchOpen}
+      query={searchQuery}
+      onOpenChange={(open) => onSearchOpenChange(routine, open)}
+      onQueryChange={(value) => onSearchQueryChange(routine, value)}
+      ariaLabel="Search tasks in {routine.name}"
+      title="Search tasks"
+      placeholder="Search tasks in {routine.name}…"
+    />
+    <button
+      type="button"
+      class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="New task in {routine.name}"
+      title="New task"
+      onclick={() => onCreateTask(routine)}
     >
-      <span class="flex items-center gap-0.5">
-        <SidebarSearchControl
-          open={searchOpen}
-          query={searchQuery}
-          onOpenChange={(open) => onSearchOpenChange(routine, open)}
-          onQueryChange={(value) => onSearchQueryChange(routine, value)}
-          ariaLabel="Search tasks in {routine.name}"
-          title="Search tasks"
-          placeholder="Search tasks in {routine.name}…"
-        />
-        <button
-          type="button"
-          class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="New task in {routine.name}"
-          title="New task"
-          onclick={() => onCreateTask(routine)}
-        >
-          <Plus size={12} />
-        </button>
-        <DropdownMenu.Root bind:open={menuOpen}>
-          <DropdownMenu.Trigger
-            class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-            aria-label="Options for {routine.name}"
-            title="Routine options"
-            oncontextmenu={(event: MouseEvent) => event.preventDefault()}
-          >
-            <Ellipsis size={12} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-            >
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                onSelect={() => onOpenHowTo(routine)}
-              >
-                <PanelRightOpen size={14} class="text-muted" />
-                How to
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                onSelect={() => onRename(routine)}
-              >
-                <Pencil size={14} class="text-muted" />
-                Rename Routine
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                onSelect={() => onTogglePin(routine)}
-              >
-                {#if routine.pinned}
-                  <PinOff size={14} class="text-muted" />
-                  Unpin Routine
-                {:else}
-                  <Pin size={14} class="text-muted" />
-                  Pin Routine
-                {/if}
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                onSelect={() => onDelete(routine)}
-              >
-                <Trash2 size={14} />
-                Remove Routine
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      </span>
-    </span>
-    {#if working}
-      <span
-        class="pointer-events-none absolute right-0 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      <Plus size={12} />
+    </button>
+    <DropdownMenu.Root bind:open={menuOpen}>
+      <DropdownMenu.Trigger
+        class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+        aria-label="Options for {routine.name}"
+        title="Routine options"
+        oncontextmenu={(event: MouseEvent) => event.preventDefault()}
       >
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full" style="background: {color}"></span>
-      </span>
-    {/if}
+        <Ellipsis size={12} />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="bottom"
+          align="end"
+          sideOffset={4}
+          collisionPadding={8}
+          class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+        >
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            onSelect={() => onOpenHowTo(routine)}
+          >
+            <PanelRightOpen size={14} class="text-muted" />
+            How to
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            onSelect={() => onRename(routine)}
+          >
+            <Pencil size={14} class="text-muted" />
+            Rename Routine
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            onSelect={() => onTogglePin(routine)}
+          >
+            {#if routine.pinned}
+              <PinOff size={14} class="text-muted" />
+              Unpin Routine
+            {:else}
+              <Pin size={14} class="text-muted" />
+              Pin Routine
+            {/if}
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
+            onSelect={() => onDelete(routine)}
+          >
+            <Trash2 size={14} />
+            Remove Routine
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   </span>
+  {#if working}
+    <span
+      class="pointer-events-none flex h-5 w-5 shrink-0 items-center justify-center opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+    >
+      <span class="h-1.5 w-1.5 animate-pulse rounded-full" style="background: {color}"></span>
+    </span>
+  {/if}
 </div>
 
 {#if showPopover}
@@ -385,13 +384,7 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
     >
-      <AssistantRoutineHoverPopover
-        {routine}
-        {taskCount}
-        {working}
-        {missed}
-        {nextRunAt}
-      />
+      <AssistantRoutineHoverPopover {routine} {taskCount} {working} {missed} {nextRunAt} />
     </div>
   </Portal>
 {/if}
