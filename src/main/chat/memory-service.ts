@@ -31,6 +31,7 @@ import {
   capText,
   detectMemoryCandidates,
   estimateTokens,
+  isTrivialUserTurn,
   normalizeText,
   readMemoryExtractionLimits,
   type MemoryExtractionDecision,
@@ -828,6 +829,17 @@ export class MemoryService {
     projectId?: string
     threadId?: string
     now?: number
+    /**
+     * Whether the standing-preference patterns decide that this turn is worth a
+     * model call at all.
+     *
+     * True is the historical behaviour and the default, and it is what keeps the
+     * cheap-model chain off ordinary turns. A caller that holds a model able to
+     * judge durability itself sets it to false, so the pattern list stops being
+     * the thing that decides whether a rule exists; the trivial-turn check, the
+     * debounce, the window and the token budget below all still apply either way.
+     */
+    requireDurableCandidate?: boolean
   }): Promise<MemoryExtractionDecision> {
     const now = input.now ?? Date.now()
     const current = await this.current(input.projectId, input.threadId)
@@ -864,7 +876,13 @@ export class MemoryService {
       assistantInput: runInputTokens === 0 ? '' : assistantInput,
       inputTokens: runInputTokens
     })
-    if (candidates.length === 0) return skip('no-candidate', 0)
+    if (input.requireDurableCandidate ?? true) {
+      if (candidates.length === 0) return skip('no-candidate', 0)
+    } else if (isTrivialUserTurn(input.candidateUserMessage ?? input.userMessage)) {
+      // Even with the pattern list out of the way, a bare acknowledgement or a
+      // one-word question is not worth sending anywhere.
+      return skip('no-candidate', 0)
+    }
 
     const limits = readMemoryExtractionLimits()
     const contextKey = `${input.projectId ?? ''}:${input.threadId ?? ''}`

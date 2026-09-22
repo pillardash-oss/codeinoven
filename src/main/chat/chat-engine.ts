@@ -87,6 +87,23 @@ import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
+import {
+  buildTurnGradeQuestions,
+  buildTurnGradeState,
+  readTurnGrade,
+  TURN_GRADE_JUDGE_HARNESS_ID,
+  TURN_GRADE_SEAM
+} from './turn-grader-decision'
+import {
+  buildMemoryDecisionQuestions,
+  buildMemoryDecisionState,
+  MEMORY_DECISION_SEAM,
+  memoryDecisionDefaultScope,
+  memorySpanCandidates,
+  readMemoryDecision
+} from './memory/memory-decision'
+import { estimateTypesafeTokens, typesafeCostUsd } from '../../lib/typesafe/policy'
+import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
 import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
@@ -688,6 +705,15 @@ export class ChatEngine {
   private static readonly RANKING_JUDGE_COOLDOWN_MAX_MS = 6 * 60 * 60_000
 
   /**
+   * How long a "can the TypeSafe capability answer?" reading is reused.
+   *
+   * Read only when deciding whether the deterministic memory gate may widen, so a
+   * stale value costs at most one widened turn. Shorter than the capability's own
+   * key-resolution cache, so a key stored in Settings qualifies without a restart.
+   */
+  private static readonly TYPESAFE_ANSWERABLE_TTL_MS = 30_000
+
+  /**
    * Spread added to a held-back or retried deadline. Conversations that closed
    * in the same session share one inactivity deadline, so without this a whole
    * batch of them expires together and is judged as one back-to-back burst  
@@ -1183,6 +1209,20 @@ export class ChatEngine {
   private rankingRepo: ModelRankingRepo
 
   private rankingSnapshotRepo: ModelRankingSnapshotRepo
+
+  /**
+   * The app's TypeSafe (Jev) decision capability, attached during boot.
+   *
+   * Null means the capability is not available at all, and every seam that asks
+   * it for a judgement falls straight through to the code it ran before TypeSafe
+   * existed. A seam never has to distinguish "not configured" from "down": both
+   * are the same fallback, which is what keeps an outage from being a special case
+   * in each caller.
+   */
+  private typesafeDecision: TypesafeDecisionService | null = null
+
+  /** Last reading of whether the capability is currently in a state that answers. */
+  private typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
 
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -21001,6 +21041,18 @@ export class ChatEngine {
   }
 
   /**
+   * Attach the app's TypeSafe (Jev) decision capability.
+   *
+   * Attached after construction because the capability is built later in boot
+   * than this engine is, the same way the heartbeat and retry schedulers are. One
+   * instance serves every seam, so the key, the breaker and the audit trail are
+   * shared rather than duplicated per caller.
+   */
+  attachTypesafeDecisionService(service: TypesafeDecisionService): void {
+    this.typesafeDecision = service
+  }
+
+  /**
    * Send one disposable "ping" completion for a configured Heartbeat, pinned
    * to its exact harness/provider/model   no visible thread, no cheap-model
    * substitution. Runs in the same inbox scratch directory as standalone chats.
@@ -23324,6 +23376,64 @@ export class ChatEngine {
   }
 
   /**
+   * Grade one ranked conversation with the app's TypeSafe capability.
+   *
+   * Null hands the row back to the harness lanes below exactly as they ran before
+   * this existed. That covers every way the capability can fail to produce a
+   * usable number, so a revoked key, an outage, and an unreadable answer all cost
+   * a slower judge instead of a lost grade.
+   */
+  private async gradeWithTypesafe(
+    candidate: RankingGradeCandidate
+  ): Promise<RankingJudgeOutcome | null> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return null
+    const decision = await capabilities.decide({
+      seam: TURN_GRADE_SEAM,
+      state: buildTurnGradeState({
+        userMessage: candidate.userMessage,
+        assistantOutput: candidate.assistantOutput,
+        followUp: candidate.followUp
+      }),
+      questions: buildTurnGradeQuestions(),
+      // The grade is read from the answer's own distribution, so the capability's
+      // floors   which ask for a confident yes   do not apply to a rating.
+      thresholds: { noul: 0, confidence: 0 }
+    })
+    if (decision.status !== 'answered') {
+      Logger.dev('Ranking grading fell through from TypeSafe:', {
+        harnessId: candidate.harnessId,
+        modelId: candidate.modelId,
+        status: decision.status,
+        detail: decision.detail
+      })
+      return null
+    }
+    const grade = readTurnGrade(decision.answers)
+    if (!grade) {
+      Logger.dev('TypeSafe returned no readable grade:', {
+        harnessId: candidate.harnessId,
+        modelId: candidate.modelId
+      })
+      return null
+    }
+    Logger.dev('Ranking grading completed on TypeSafe', {
+      harnessId: candidate.harnessId,
+      modelId: candidate.modelId,
+      score: grade.score,
+      confidence: grade.confidence,
+      judgeModelId: decision.model,
+      latencyMs: decision.latencyMs
+    })
+    return {
+      score: grade.score,
+      judgeHarnessId: TURN_GRADE_JUDGE_HARNESS_ID,
+      judgeModelId: decision.model,
+      viaAuxiliary: false
+    }
+  }
+
+  /**
    * Judge one candidate and persist nothing. Returns the 0–10 score, or null on
    * judge failure, together with the judge that ran so a failure is reported
    * against the model that produced it rather than against the graded model.
@@ -23339,6 +23449,12 @@ export class ChatEngine {
       viaAuxiliary: false
     }
     try {
+      // TypeSafe first whenever it is available: one HTTPS call with no process
+      // spawn, no provider account and a judge outside every harness. Anything
+      // short of a readable score falls through to the lanes below.
+      const typesafe = await this.gradeWithTypesafe(candidate)
+      if (typesafe) return typesafe
+
       const workingDirectory = await this.auxiliaryWorkingDirectory()
       // A user-assigned auxiliary model judges the conversation when one is
       // configured for the graded model's harness. Grading has no thread, so a
@@ -24877,7 +24993,11 @@ export class ChatEngine {
         candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
         assistantResponse,
         projectId,
-        threadId
+        threadId,
+        // With the capability able to answer, durability is its judgement to make
+        // and the standing-preference patterns stop gating the turn. When it
+        // cannot answer, the patterns stay exactly as load bearing as before.
+        requireDurableCandidate: !(await this.typesafeCanAnswer())
       })
       if (extraction.run) {
         // The decision needs the user's earlier message to tell a standing rule
@@ -25044,6 +25164,105 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Whether the capability can actually answer a question right now.
+   *
+   * Only the memory gate needs this. That gate decides whether the deterministic
+   * pattern list is what judges durability, and widening it while the capability
+   * cannot answer would send turns the patterns rejected to the cheap-model chain
+   * instead, spending more than the code did before TypeSafe existed. A missing
+   * key and an open breaker therefore both read as "cannot answer".
+   */
+  private async typesafeCanAnswer(): Promise<boolean> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return false
+    const now = Date.now()
+    const cached = this.typesafeAnswerable
+    if (cached && now - cached.checkedAt < ChatEngine.TYPESAFE_ANSWERABLE_TTL_MS) {
+      return cached.value
+    }
+    let value = false
+    try {
+      const status = await capabilities.getStatus()
+      // `unverified` is the ordinary state before the first call has succeeded,
+      // so it counts: a key is present and nothing has failed yet.
+      value =
+        status.hasKey && (status.availability === 'ready' || status.availability === 'unverified')
+    } catch (error) {
+      Logger.dev('TypeSafe availability could not be read:', error)
+    }
+    this.typesafeAnswerable = { value, checkedAt: now }
+    return value
+  }
+
+  /**
+   * Decide one memory proposal with the app's TypeSafe capability.
+   *
+   * Null is the caller's signal to run the cheap-model chain exactly as it ran
+   * before, so this method never has to report *why* it could not answer.
+   *
+   * The seam deliberately passes zero confidence floors and applies its own
+   * policy to the raw probabilities instead. A floor tuned for a confident yes
+   * would reject the most common answer there is   "this turn states nothing
+   * lasting"   and pay for a second model call on every ordinary turn, which is
+   * worse than the code path it replaced.
+   */
+  private async decideMemoryWithTypesafe(input: {
+    userMessage: string
+    assistantResponse: string
+    previousUserMessage: string | null
+    projectId: string
+    threadId: string
+    allowedScopes: readonly MemoryScope[]
+  }): Promise<StructuredMemoryProposal | null> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return null
+    const spans = memorySpanCandidates(input.userMessage)
+    if (spans.length === 0) return null
+    const state = buildMemoryDecisionState({
+      userMessage: input.userMessage,
+      assistantResponse: input.assistantResponse,
+      previousUserMessage: input.previousUserMessage
+    })
+    const questions = buildMemoryDecisionQuestions({ allowedScopes: input.allowedScopes, spans })
+    const decision = await capabilities.decide({
+      seam: MEMORY_DECISION_SEAM,
+      state,
+      questions,
+      thresholds: { noul: 0, confidence: 0 },
+      threadId: input.threadId
+    })
+    if (decision.status !== 'answered') return null
+    const proposal = readMemoryDecision({
+      answers: decision.answers,
+      spans,
+      allowedScopes: input.allowedScopes,
+      defaultScope: memoryDecisionDefaultScope({
+        isStandaloneChat: input.projectId === INBOX_PROJECT_ID
+      })
+    })
+    // The capability answered the question, so this turn's auxiliary cost belongs
+    // to it even when the answer is "nothing durable"   that answer consumed the
+    // call, and reporting only the proposing turns would understate the cost.
+    const usage = decision.usage ?? {
+      inputTokens: estimateTypesafeTokens(state, questions),
+      outputTokens: 0
+    }
+    this.memoryService.recordAuxiliaryUsage('memory', usage.inputTokens, input.userMessage.length, {
+      outputTokens: usage.outputTokens,
+      costUsd: typesafeCostUsd(usage),
+      costStatus: 'estimated'
+    })
+    Logger.dev('Memory proposal decided by TypeSafe', {
+      projectId: input.projectId,
+      threadId: input.threadId,
+      propose: proposal.propose,
+      model: decision.model,
+      latencyMs: decision.latencyMs
+    })
+    return proposal
+  }
+
   private async generateMemoryProposal(
     userMessage: string,
     assistantResponse: string,
@@ -25104,6 +25323,16 @@ export class ChatEngine {
       `COMPLETED_TURN_JSON: ${turnEvidence}`,
       'Return only the required memory decision JSON object.'
     ].join('\n\n')
+    const typesafe = await this.decideMemoryWithTypesafe({
+      userMessage,
+      assistantResponse,
+      previousUserMessage,
+      projectId,
+      threadId,
+      allowedScopes
+    })
+    if (typesafe) return typesafe
+
     let cheapFailure: string | null
     // A user-assigned auxiliary model decides instead of the thread's harness
     // when one is configured for that harness. Any failure falls through to the

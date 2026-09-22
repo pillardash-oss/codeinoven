@@ -409,6 +409,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       ),
       new TypesafeAuditLog(storage)
     )
+    // The same instance the Settings card talks to is the one the engine asks for
+    // judgements, so a key stored, cleared or checked there applies to the
+    // auxiliary decisions already in flight without anything being restarted.
+    state.chatEngine?.attachTypesafeDecisionService(typesafe)
+
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
