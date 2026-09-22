@@ -3321,7 +3321,6 @@
       routines={assistantRoutineList}
       tasks={assistantTasks}
       selectedThreadId={activeThreadRowId(selectedThread)}
-      {active}
       {navigate}
       onOpenTask={openAssistantTask}
       onOpenTaskHowTo={openAssistantHowToForTask}

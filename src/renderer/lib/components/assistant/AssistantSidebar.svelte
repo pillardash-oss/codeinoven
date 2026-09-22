@@ -4,7 +4,7 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import SidebarAccountControls from '$lib/components/workspace/SidebarAccountControls.svelte'
+  import SidebarFooterControls from '$lib/components/workspace/SidebarFooterControls.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
@@ -18,7 +18,6 @@
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
-    active: boolean
     navigate: (view: MainView) => void
     onOpenTask: (task: Thread) => void
     onOpenTaskHowTo: (task: Thread) => void
@@ -44,7 +43,6 @@
     tasks,
     selectedThreadId,
     scroller = $bindable(null),
-    active,
     navigate,
     onOpenTask,
     onOpenTaskHowTo,
@@ -167,7 +165,7 @@
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   {#snippet footer()}
-    <SidebarAccountControls {active} {navigate} />
+    <SidebarFooterControls {navigate} />
   {/snippet}
 
   <div class="flex h-full min-h-0 flex-col">
