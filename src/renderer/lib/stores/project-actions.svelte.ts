@@ -7,6 +7,13 @@ export interface ProjectActionRun {
   terminalId: string
   script: string
   variables: Record<string, string>
+  /** Scope bucket the run was launched from.
+   *
+   *  Recorded at start, not read from the panel when the script finally spawns:
+   *  a path-sensitive script must run against the checkout the user was looking
+   *  at when they pressed Run, never against whatever scope the panel happens to
+   *  show once its terminal finishes attaching. */
+  scopeBucketId: string
   running: boolean
   expanded: boolean
 }
@@ -76,7 +83,7 @@ class ProjectActionsState {
     const ordered = await invoke('projectActions:reorder', projectId, orderedIds)
     this.actionsByProject.set(projectId, ordered)
   }
-  start(action: ProjectAction, variables: Record<string, string>): void {
+  start(action: ProjectAction, variables: Record<string, string>, scopeBucketId: string): void {
     const terminalId = `action-${action.id}-${crypto.randomUUID()}`
     this.exitSubscriptions.get(action.id)?.()
     this.runs.set(action.id, {
@@ -84,6 +91,7 @@ class ProjectActionsState {
       terminalId,
       script: action.script,
       variables,
+      scopeBucketId,
       running: true,
       expanded: true
     })

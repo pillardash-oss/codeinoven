@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import { TriangleAlert } from '@lucide/svelte'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import {
     terminalSessions,
     terminalSpawnScopes,
@@ -109,13 +109,8 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-terminal-background">
-  {#if scopeStale}
-    <div
-      class="flex w-full shrink-0 items-center gap-1.5 border-b border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning"
-      role="status"
-    >
-      <TriangleAlert size={12} class="shrink-0" aria-hidden="true" />
-      <span class="min-w-0 truncate">Panel info is stale, toggle for latest info</span>
+  <StalePanelNotice stale={scopeStale}>
+    {#snippet action()}
       <button
         type="button"
         class="ml-auto shrink-0 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning hover:bg-warning/20 disabled:opacity-50"
@@ -126,8 +121,8 @@
       >
         Restart in this scope
       </button>
-    </div>
-  {/if}
+    {/snippet}
+  </StalePanelNotice>
   <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
     <div
       class="h-full w-full overflow-hidden py-1 pl-2"
