@@ -23,6 +23,9 @@ export interface AssignmentCoordinatorPanelProps {
   /** Present only when the open thread is a worker/auditor child: returns to
    *  the Sr. Engineer that owns this Assignment. */
   onBackToCoordinator?: () => void
+  /** Present only while the open thread is a not-reporting worker: switches its
+   *  reporting back on and asks it to hand its finished work to the Sr. Engineer. */
+  onReportToCoordinator?: () => Promise<void>
 }
 
 /** Props for the Achievement / durable-Audit coordinator board. */

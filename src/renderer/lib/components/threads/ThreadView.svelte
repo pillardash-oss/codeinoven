@@ -2406,6 +2406,7 @@
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
   let assignmentWorkerRetryingId = $state<string | null>(null)
+  let assignmentWorkerReportingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
   /** A retry may only follow a completed, non-error assistant response for the
@@ -2492,6 +2493,16 @@
    *  auditor child. Null for every normal, user-facing thread. */
   const coordinatorParentId = $derived(
     isOrchestrationChildThread(thread) ? (thread.coordinatorThreadId ?? null) : null
+  )
+  /** The open thread is a worker of this Assignment whose reporting the user
+   *  switched off, so it can be asked to hand its finished work back now. */
+  const workerCanReportToCoordinator = $derived(
+    coordinatorParentId !== null &&
+      thread.assignmentRole === 'worker' &&
+      assignment !== null &&
+      assignment.status !== 'draft' &&
+      assignment.status !== 'stopped' &&
+      settings.reportToCoordinator === false
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
@@ -2631,7 +2642,10 @@
           onResume: resumeAssignmentCoordination,
           onStop: stopAssignment,
           onResumeAssignment: resumeStoppedAssignment,
-          onBackToCoordinator
+          onBackToCoordinator,
+          onReportToCoordinator: workerCanReportToCoordinator
+            ? reportWorkerToCoordinator
+            : undefined
         }
       }
     }
@@ -8010,6 +8024,34 @@
       errorMessage = error instanceof Error ? error.message : 'The worker could not be retried.'
     } finally {
       assignmentWorkerRetryingId = null
+    }
+  }
+
+  /**
+   * Ask the open not-reporting worker to hand its finished work back. The main
+   * process switches reporting on and prompts the worker, so this mirrors the
+   * setting locally: the composer control and this button reflect it at once
+   * instead of waiting for the thread broadcast.
+   */
+  async function reportWorkerToCoordinator(): Promise<void> {
+    const current = assignment
+    if (!current || assignmentWorkerReportingId) return
+    assignmentWorkerReportingId = thread.id
+    try {
+      assignment = await invoke(
+        'agent:reportWorkerToCoordinator',
+        current.projectId,
+        current.coordinatorThreadId,
+        thread.id
+      )
+      updateSettings({ ...settings, reportToCoordinator: true })
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The worker could not be asked to report.'
+      throw error
+    } finally {
+      assignmentWorkerReportingId = null
     }
   }
 

@@ -1673,6 +1673,11 @@ export class ChatEngine {
         this.retryAssignmentWorker(projectId, coordinatorThreadId, workerThreadId)
     )
     ipcMain.handle(
+      'agent:reportWorkerToCoordinator',
+      (_, projectId: string, coordinatorThreadId: string, workerThreadId: string) =>
+        this.reportWorkerToCoordinator(projectId, coordinatorThreadId, workerThreadId)
+    )
+    ipcMain.handle(
       'agent:resumeAssignmentAttention',
       (_, projectId: string, coordinatorThreadId: string) =>
         this.resumeAssignmentAttention(projectId, coordinatorThreadId)
@@ -5160,6 +5165,82 @@ export class ChatEngine {
   ): Promise<AssignmentPlan> {
     this.touchUserActivity()
     return this.retryAssignmentWorkerInternal(projectId, coordinatorThreadId, workerThreadId)
+  }
+
+  /**
+   * Hand a not-reporting worker's finished work back to the Sr. Engineer.
+   *
+   * Reporting off is a private iteration loop the user drives, so nothing is
+   * ever handed back on its own. This action is the user asking for the
+   * hand-back now: it switches the worker's reporting back on, reactivates its
+   * task, and prompts the worker to submit fresh evidence and report through the
+   * Assignment API. That report is what wakes the Sr. Engineer's audit, so the
+   * two cards settle into the ordinary review loop again.
+   */
+  async reportWorkerToCoordinator(
+    projectId: string,
+    coordinatorThreadId: string,
+    workerThreadId: string
+  ): Promise<AssignmentPlan> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    workerThreadId = validateEntityId(workerThreadId, 'Worker thread ID')
+    const assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const task = assignment.content.tasks.find(
+      (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
+    )
+    if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
+    const worker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (
+      !worker?.settings ||
+      worker.assignmentId !== assignment.id ||
+      worker.assignmentRole !== 'worker' ||
+      worker.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      throw new AssignmentEngineError('not_found', 'Assignment worker thread not found')
+    }
+    if (assignment.status === 'stopped') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'A stopped Assignment cannot take a worker report'
+      )
+    }
+    // Switch reporting on before anything else: the reactivation and the report
+    // contract both read it, and the worker's own composer control must agree.
+    const settings = validateThreadSettings({ ...worker.settings, reportToCoordinator: true })
+    await this.threadManager.updateSettings(projectId, workerThreadId, settings)
+    const reactivated = await this.assignmentEngine.markWorkerSteered(assignment.id, workerThreadId)
+    await this.ensureAssignmentApi()
+    const reportInstruction = this.workerReportInstruction({
+      assignmentId: assignment.id,
+      threadId: worker.id,
+      taskId: task.id,
+      settings,
+      completion: 'When your verification is current'
+    })
+    await this.sendPrompt(
+      projectId,
+      workerThreadId,
+      settings,
+      [
+        'Reporting to the Sr. Engineer is switched back on for this thread.',
+        `Submit baseline and check evidence for your task “${task.title}” and report it through the Assignment API so the Sr. Engineer can audit it and give feedback.`,
+        reportInstruction
+      ].join('\n\n'),
+      [],
+      undefined,
+      createMessageId(),
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      { action: `Report to Sr. Engineer · ${task.workerName ?? worker.title}`.slice(0, 120) }
+    )
+    const refreshedWorker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (refreshedWorker) broadcastThreadUpdate(refreshedWorker)
+    return reactivated
   }
 
   private async retryAssignmentWorkerInternal(
