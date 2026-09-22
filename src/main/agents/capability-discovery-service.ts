@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, sep } from 'node:path'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { skillSearchKeywords } from '../../lib/skill-search-keywords'
 import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
@@ -510,6 +511,7 @@ export class CapabilityDiscoveryService {
         origin,
         enabled: true,
         description: parseSkillFrontmatter(markdown, entry.name).description,
+        searchKeywords: skillSearchKeywords(markdown),
         detail: skillPath,
         source,
         harnessId: attribution.harnessId,

@@ -35,6 +35,7 @@
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { skillSearchKeywords } from '$shared/skill-search-keywords'
   import type {
     AgentCapabilityEntry,
     AgentToolDefinition,
@@ -70,6 +71,8 @@
         utility: UtilityDefinition
         name: string
         description: string
+        /** Vendor identifiers the skill body names, beyond name and description. */
+        keywords: string
         enabled: boolean
         appOwned: boolean
         tags: string[]
@@ -80,6 +83,7 @@
         entry: AgentCapabilityEntry
         name: string
         description: string
+        keywords: string
         enabled: boolean
         appOwned: false
         tags: string[]
@@ -92,6 +96,7 @@
     entry: SkillMarketEntry
     name: string
     description: string
+    keywords: string
     tags: string[]
   }
 
@@ -200,12 +205,16 @@
       entry,
       name: entry.name,
       description: entry.description ?? '',
+      keywords: entry.searchKeywords ?? '',
       enabled: entry.enabled,
       appOwned: false,
       tags: nativeTags(entry)
     }))
   }
 
+  /** Vendor identifiers each registry skill names in its body. Resolved once
+   *  per row build, so typing in the search box only filters rows already
+   *  carrying their keywords. */
   function registryRows(utilities: UtilityDefinition[]): UtilityRowItem[] {
     return utilities.map((utility) => ({
       id: `registry:${utility.id}`,
@@ -213,6 +222,7 @@
       utility,
       name: utility.name,
       description: utility.description ?? '',
+      keywords: utility.kind === 'skill' ? skillSearchKeywords(utility.config.instructions) : '',
       enabled: utility.enabled,
       appOwned: Boolean(utility.appOwned),
       tags: registryTags(utility)
@@ -227,7 +237,10 @@
     'computer_use'
   ]
 
-  function tabRows(): RowItem[] {
+  /** Rows for the active section. Derived rather than called, so skill body
+   *  keywords are extracted once per registry or capability load and typing in
+   *  the search box only filters rows that already carry them. */
+  let tabRows = $derived.by((): RowItem[] => {
     if (activeTab === 'all') {
       return [
         ...registryRows(
@@ -258,7 +271,7 @@
     }
     if (activeTab === 'bookmarks') return bookmarkRows()
     return []
-  }
+  })
 
   /** Bookmarked marketplace skills, newest bookmark first. */
   function bookmarkRows(): BookmarkRowItem[] {
@@ -268,6 +281,7 @@
       entry: bookmark,
       name: bookmark.name,
       description: bookmark.source,
+      keywords: '',
       tags: []
     }))
   }
@@ -290,7 +304,7 @@
   }
 
   let availableTags = $derived.by(() => {
-    const tags = Array.from(new Set(tabRows().flatMap((row) => row.tags)))
+    const tags = Array.from(new Set(tabRows.flatMap((row) => row.tags)))
     tags.sort((a, b) => {
       if (a === 'App') return -1
       if (b === 'App') return 1
@@ -307,10 +321,10 @@
 
   let filteredRows = $derived.by(() => {
     const needle = query.trim().toLowerCase()
-    return tabRows().filter((row) => {
+    return tabRows.filter((row) => {
       if (activeTagFilter !== 'all' && !row.tags.includes(activeTagFilter)) return false
       if (!needle) return true
-      return [row.name, row.description, ...row.tags].some((value) =>
+      return [row.name, row.description, row.keywords, ...row.tags].some((value) =>
         value.toLowerCase().includes(needle)
       )
     })
@@ -548,6 +562,17 @@
       error =
         installError instanceof Error ? installError.message : 'The plugin could not be installed.'
     }
+  }
+
+  /**
+   * Re-read the catalog. The settings shell keeps this page mounted behind the
+   * marketplace, which can install or uninstall a skill while this page is
+   * invisible, so it calls this when the route returns to the catalog: an
+   * uninstalled skill takes its row, and the search keywords that row carries,
+   * with it.
+   */
+  export function reload(): void {
+    void load()
   }
 
   onMount(() => {
@@ -794,7 +819,7 @@
         </p>
       {/if}
 
-      {#if loading && tabRows().length === 0}
+      {#if loading && tabRows.length === 0}
         <div class="rounded-xl border border-dashed p-8 text-center">
           <Loader2 size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading…</p>

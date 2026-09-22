@@ -355,6 +355,10 @@ export interface AgentCapabilityEntry {
   origin: AgentCapabilityOrigin
   enabled: boolean
   description?: string
+  /** Vendor and provider identifiers the skill body names (a provider host or
+   *  credential name, for example). Library search reads this because a skill's
+   *  frontmatter description often omits the vendor it wraps. */
+  searchKeywords?: string
   /** Transport + command/URL for MCP servers, or the skill's folder path. */
   detail?: string
   source: AgentCapabilitySource

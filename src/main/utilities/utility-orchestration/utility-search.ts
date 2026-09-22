@@ -1,5 +1,6 @@
 import { access, readFile } from 'fs/promises'
 import { join } from 'path'
+import { skillSearchKeywords } from '../../../lib/skill-search-keywords'
 import type { ResolvedUtility, UtilityDefinition, UtilityKind } from '../../../lib/types'
 import { isRecord } from './utility-input'
 
@@ -129,7 +130,12 @@ function utilitySearchConfiguration(utility: UtilityDefinition): string {
         .filter((value): value is string => Boolean(value))
         .join(' ')
     case 'skill':
-      return utility.config.supportingFiles?.join(' ') ?? ''
+      return [
+        utility.config.supportingFiles?.join(' '),
+        skillSearchKeywords(utility.config.instructions)
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
     case 'web_search':
     case 'web_fetch':
       return [utility.config.provider, utility.config.endpoint]
