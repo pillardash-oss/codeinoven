@@ -3,7 +3,6 @@
   import { Workflow } from '@lucide/svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import SidebarFooterControls from '$lib/components/workspace/SidebarFooterControls.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -11,6 +10,7 @@
   import type { Routine, Thread } from '$shared/types'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
+  import RoutineEditModal from './RoutineEditModal.svelte'
 
   interface Props {
     routines: Routine[]
@@ -30,7 +30,6 @@
     onDeleteTask: (task: Thread) => Promise<void>
     onForkTask: (task: Thread) => void
     onOpenTaskNotes: (task: Thread) => void
-    onRenameRoutine: (routineId: string, name: string) => Promise<void>
     onDeleteRoutine: (routineId: string) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
@@ -53,7 +52,6 @@
     onDeleteTask,
     onForkTask,
     onOpenTaskNotes,
-    onRenameRoutine,
     onDeleteRoutine,
     onTogglePinRoutine,
     onMoveRoutine,
@@ -64,9 +62,7 @@
   const routineSearchOpen = new SvelteSet<string>()
   const routineSearchQueries = new SvelteMap<string, string>()
 
-  let renameTarget = $state<Routine | null>(null)
-  let renameDraft = $state('')
-  let renameBusy = $state(false)
+  let editTarget = $state<Routine | null>(null)
   let deleteTarget = $state<Routine | null>(null)
   let deleteBusy = $state(false)
 
@@ -132,22 +128,8 @@
     return list.filter((task) => task.title.toLowerCase().includes(query))
   }
 
-  function startRename(routine: Routine): void {
-    renameTarget = routine
-    renameDraft = routine.name
-  }
-
-  async function submitRename(): Promise<void> {
-    const target = renameTarget
-    const name = renameDraft.trim()
-    if (!target || name.length === 0) return
-    renameBusy = true
-    try {
-      await onRenameRoutine(target.id, name)
-      renameTarget = null
-    } finally {
-      renameBusy = false
-    }
+  function startEdit(routine: Routine): void {
+    editTarget = routine
   }
 
   async function submitDelete(): Promise<void> {
@@ -194,6 +176,7 @@
             working={routineWorking(routine.id)}
             missed={assistantRoutines.hasMissedForRoutine(routine.id)}
             taskCount={routineTaskList.length}
+            iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
             nextRunAt={routineNextRun(routine.id)}
             searchOpen={searching}
             searchQuery={query}
@@ -202,7 +185,7 @@
             onSearchQueryChange={(r, value) => routineSearchQueries.set(r.id, value)}
             onCreateTask={onCreateTaskInRoutine}
             onOpenHowTo={onOpenRoutineHowTo}
-            onRename={startRename}
+            onEdit={startEdit}
             onTogglePin={onTogglePinRoutine}
             onDelete={(r) => (deleteTarget = r)}
             {onMoveRoutine}
@@ -268,39 +251,7 @@
   </div>
 </CollapsibleSidebar>
 
-<Modal open={renameTarget !== null} title="Rename routine" onClose={() => (renameTarget = null)}>
-  <input
-    class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-    placeholder="Routine name"
-    aria-label="Routine name"
-    bind:value={renameDraft}
-    onkeydown={(event) => {
-      if (event.key === 'Enter' && !event.isComposing) {
-        event.preventDefault()
-        void submitRename()
-      }
-    }}
-  />
-  {#snippet footer()}
-    <div class="flex justify-end gap-2">
-      <button
-        type="button"
-        class="rounded-md px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        onclick={() => (renameTarget = null)}
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        class="rounded-md bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={renameDraft.trim().length === 0 || renameBusy}
-        onclick={() => void submitRename()}
-      >
-        Save
-      </button>
-    </div>
-  {/snippet}
-</Modal>
+<RoutineEditModal routine={editTarget} onClose={() => (editTarget = null)} />
 
 <ConfirmDialog
   open={deleteTarget !== null}

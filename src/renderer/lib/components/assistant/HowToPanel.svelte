@@ -22,11 +22,9 @@
     routineId: string | null
     /** Open a forked task thread in its project after a hand-off. */
     onHandedOff?: (forked: import('$shared/types').Thread) => void
-    /** Bring the routine's authoring task on screen so the user can describe it. */
-    onOpenAuthoringTask?: (threadId: string) => void
   }
 
-  let { projectId, threadId, routineId, onHandedOff, onOpenAuthoringTask }: Props = $props()
+  let { projectId, threadId, routineId, onHandedOff }: Props = $props()
 
   const task = $derived(
     workspaceState.selectedThread?.id === threadId &&
@@ -248,29 +246,27 @@
             >
               {howTo}
             </div>
-          {:else if routine}
-            <p class="text-[0.75rem] leading-relaxed text-muted">
-              No how-to yet. Describe how this routine should run to the agent in its first task,
-              refine it together, then send <span class="text-foreground">/save-how-to</span>
-              to commit it.
-            </p>
-            {#if onOpenAuthoringTask}
-              <button
-                type="button"
-                class="mt-2 rounded-md border border-border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-overlay"
-                onclick={() => onOpenAuthoringTask(threadId)}
-              >
-                Open the routine's task
-              </button>
-            {/if}
           {:else}
-            <p class="text-[0.75rem] leading-relaxed text-muted">
-              This task has no routine, so it has no how-to. Group it into a routine to give it one.
-            </p>
+            <!-- Empty state: an unconfigured routine has nothing else to show. -->
+            <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
+              <span
+                class="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-elevated"
+              >
+                <ScrollText size={17} strokeWidth={1.6} class="text-dimmed" />
+              </span>
+              <p class="text-[0.8125rem] font-medium text-foreground">
+                {routine ? 'No how-to yet' : 'No how-to'}
+              </p>
+              <p class="max-w-[16rem] text-[0.75rem] leading-relaxed text-muted">
+                {routine
+                  ? 'Describe what this routine should do to the agent in its task. The plan you agree on shows up here.'
+                  : 'This task is not part of a routine, so it has no instructions yet.'}
+              </p>
+            </div>
           {/if}
         </section>
 
-        {#if routine}
+        {#if routine && howTo}
           <section aria-label="Schedule" class="rounded-lg border border-border p-3">
             <h3 class="mb-2 text-[0.6875rem] font-medium text-muted">Routine schedule</h3>
             <ScheduleEditor
@@ -344,7 +340,7 @@
           </section>
         {/if}
 
-        {#if task && onHandedOff}
+        {#if task && onHandedOff && (howTo || !routine)}
           <section aria-label="Hand-off">
             <AssistantHandoffControl {task} {onHandedOff} />
           </section>

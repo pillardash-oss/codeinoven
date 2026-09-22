@@ -130,10 +130,20 @@ routine-aware creation logic.
 Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
 icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
-with How to, Rename, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
+with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
 task dragged onto a routine is grouped into it. Hovering a routine reveals a
 popover with its status, schedule type, next run, task count, and a how-to
 preview (`AssistantRoutineHoverPopover.svelte`).
+
+Routines are editable exactly like projects: **Edit routine**
+(`RoutineEditModal.svelte`) opens the shared `AppearancePicker` for the accent
+colour and SVG icon, an **Upload Image** action for a custom icon, and the
+routine name. Custom icons are stored under `routines/<routine-id>/` through the
+shared `src/lib/icon-file.ts` helpers (the same ones project icons use), served
+back by `routine:getIcon`, and cached on `assistantRoutines.iconUrls`. A routine
+row resolves its icon as custom image, then SVG icon type tinted with the accent
+colour, then the generic routine icon; the accent colour stays as the row's left
+border.
 
 Task rows (`AssistantTaskRow.svelte`) behave exactly like thread rows. Hovering
 reveals an ellipsis (overlaid, so the title truncates at the full row width)
@@ -167,9 +177,11 @@ prompt"; the user-facing term is how-to.
   present the final how-to in a fenced `how-to` block and ask the user to send
   `/save-how-to`, which commits it to the routine.
 - The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
-  how-to, the schedule, and the connections. Its tab strip only appears once a
-  scheduled run was actually missed, and the Missed runs tab lists each miss of
-  that routine with Dismiss and Run now.
+  how-to, and only once a how-to exists the routine schedule, the task schedule,
+  and the connections. With no how-to it is a single empty state and nothing
+  else, so an unconfigured routine never shows schedule or hand-off chrome. Its
+  tab strip only appears once a scheduled run was actually missed, and the
+  Missed runs tab lists each miss of that routine with Dismiss and Run now.
 - When a routine lacks the utilities it needs, the agent checks the app utility
   library, researches compatible skills/MCPs/plugins, and asks the user to send
   `@cio-utility proceed` before anything is installed. No silent installs; the

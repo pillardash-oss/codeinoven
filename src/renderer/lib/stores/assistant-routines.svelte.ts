@@ -1,5 +1,13 @@
+import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { nextRunAt, type MissedRun, type Routine, type RoutineConnection, type RoutineSchedule, type Thread } from '$shared/types'
+import {
+  nextRunAt,
+  type MissedRun,
+  type Routine,
+  type RoutineConnection,
+  type RoutineSchedule,
+  type Thread
+} from '$shared/types'
 
 /**
  * AssistantRoutines   the renderer's live view of assistant routines and the
@@ -13,6 +21,8 @@ import { nextRunAt, type MissedRun, type Routine, type RoutineConnection, type R
 class AssistantRoutinesState {
   routines: Routine[] = $state([])
   missedRuns: MissedRun[] = $state([])
+  /** Custom icon data URLs for routines that store one, keyed by routine id. */
+  iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   private initialized = false
   private disposers: Array<() => void> = []
 
@@ -22,6 +32,7 @@ class AssistantRoutinesState {
     this.disposers.push(
       subscribe('routine:changed', (routines) => {
         this.routines = routines
+        void this.refreshIcons()
       }),
       subscribe('assistant:missedRunsChanged', (runs) => {
         this.missedRuns = runs
@@ -40,6 +51,28 @@ class AssistantRoutinesState {
 
   async refresh(): Promise<void> {
     this.routines = await invoke('routine:list')
+    await this.refreshIcons()
+  }
+
+  /**
+   * Load custom icon data URLs for the routines that declare one. Batched into
+   * one pass so a routine mutation never triggers a per-row IPC storm.
+   */
+  private async refreshIcons(): Promise<void> {
+    const next = new SvelteMap<string, string>()
+    await Promise.all(
+      this.routines
+        .filter((routine) => routine.icon)
+        .map(async (routine) => {
+          try {
+            const url = await invoke('routine:getIcon', routine.id)
+            if (url) next.set(routine.id, url)
+          } catch {
+            // Icon loading is best-effort; the row falls back to its SVG/Workflow icon.
+          }
+        })
+    )
+    this.iconUrls = next
   }
 
   async refreshMissedRuns(): Promise<void> {
@@ -97,15 +130,29 @@ class AssistantRoutinesState {
     routineId: string,
     input: {
       name?: string
-      color?: string
+      color?: string | null
       icon?: string | null
-      iconType?: string
+      iconType?: string | null
       schedule?: RoutineSchedule | null
       howTo?: string
       connections?: RoutineConnection[]
     }
   ): Promise<Routine> {
     const routine = await invoke('routine:update', routineId, input)
+    await this.refresh()
+    return routine
+  }
+
+  /** Store a custom icon image for a routine, mirroring project icons. */
+  async setRoutineIcon(routineId: string, sourcePath: string): Promise<Routine> {
+    const routine = await invoke('routine:setIcon', routineId, sourcePath)
+    await this.refresh()
+    return routine
+  }
+
+  /** Remove a routine's custom icon image. */
+  async clearRoutineIcon(routineId: string): Promise<Routine> {
+    const routine = await invoke('routine:clearIcon', routineId)
     await this.refresh()
     return routine
   }

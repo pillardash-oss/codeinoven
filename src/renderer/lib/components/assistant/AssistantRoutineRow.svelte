@@ -32,6 +32,8 @@
     /** Any task carries a pending missed run. */
     missed: boolean
     taskCount: number
+    /** Custom icon data URL for this routine, when it stores one. */
+    iconUrl?: string | null
     /** Next intended fire for the routine, or null when unscheduled. */
     nextRunAt: number | null
     /** Inline routine-search state, driven from the sidebar. */
@@ -42,7 +44,7 @@
     onSearchQueryChange: (routine: Routine, value: string) => void
     onCreateTask: (routine: Routine) => void
     onOpenHowTo: (routine: Routine) => void
-    onRename: (routine: Routine) => void
+    onEdit: (routine: Routine) => void
     onTogglePin: (routine: Routine) => void
     onDelete: (routine: Routine) => void
     /** Drag-to-reorder routines; position is relative to this row. */
@@ -57,6 +59,7 @@
     working,
     missed,
     taskCount,
+    iconUrl = null,
     nextRunAt,
     searchOpen,
     searchQuery,
@@ -65,7 +68,7 @@
     onSearchQueryChange,
     onCreateTask,
     onOpenHowTo,
-    onRename,
+    onEdit,
     onTogglePin,
     onDelete,
     onMoveRoutine,
@@ -75,8 +78,11 @@
   const TASK_DRAG_TYPE = 'application/x-assistant-task'
 
   const color = $derived(routine.color ?? 'var(--color-muted)')
+  // Custom image wins, then the SVG icon type tinted with the routine colour;
+  // without either the row falls back to the generic routine (Workflow) icon.
   const routineIcon = $derived(
-    routine.iconType ? getIconSvgDataUrl(routine.iconType, routine.color ?? '#8b95a5') : null
+    iconUrl ??
+      (routine.iconType ? getIconSvgDataUrl(routine.iconType, routine.color ?? '#8b95a5') : null)
   )
   const incomplete = $derived(!routineHowToComplete(routine))
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
@@ -339,10 +345,10 @@
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onRename(routine)}
+            onSelect={() => onEdit(routine)}
           >
             <Pencil size={14} class="text-muted" />
-            Rename Routine
+            Edit routine
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"

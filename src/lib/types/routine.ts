@@ -59,9 +59,11 @@ export interface CreateRoutineInput {
 
 export interface UpdateRoutineInput {
   name?: string
-  color?: string
+  /** `null` clears the accent colour, restoring the neutral border. */
+  color?: string | null
   icon?: string | null
-  iconType?: string
+  /** `null` clears the SVG icon type. */
+  iconType?: string | null
   schedule?: RoutineSchedule | null
   howTo?: string
   connections?: RoutineConnection[]

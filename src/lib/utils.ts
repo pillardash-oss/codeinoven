@@ -170,6 +170,11 @@ export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
 }
 
+/** Get routine storage path (routine icons and future per-routine artifacts). */
+export function getRoutinePath(routineId: string): string {
+  return join(getConfigRoot(), 'routines', routineId)
+}
+
 const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /**

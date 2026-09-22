@@ -1,4 +1,11 @@
-import { generateId } from '../utils'
+import { generateId, getRoutinePath } from '../utils'
+import { extname } from 'path'
+import {
+  isSupportedIconExtension,
+  readIconDataUrl,
+  removeIconFile,
+  storeIconFile
+} from '../icon-file'
 import { ASSISTANT_SPACE_ID } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import type { Database } from '../../main/database/database'
@@ -62,9 +69,9 @@ export class RoutineManager {
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
-      color: input.color ?? existing.color,
+      color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
-      iconType: input.iconType ?? existing.iconType,
+      iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,
       schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
       howTo: input.howTo ?? existing.howTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
@@ -73,6 +80,43 @@ export class RoutineManager {
     }
     this.routineRepo.upsert(updated)
     return updated
+  }
+
+  /**
+   * Store a custom icon image for a routine, mirroring project icon storage.
+   * The previous icon file is replaced; the routine's colour and SVG icon type
+   * stay in place so clearing the image later restores the prior appearance.
+   */
+  async setIcon(routineId: string, sourcePath: string): Promise<Routine> {
+    const existing = this.routineRepo.get(routineId)
+    if (!existing) throw new Error(`Routine not found: ${routineId}`)
+
+    const ext = extname(sourcePath).toLowerCase() || '.png'
+    if (!isSupportedIconExtension(ext)) throw new Error(`Unsupported icon format: ${ext}`)
+
+    const iconFile = await storeIconFile(getRoutinePath(routineId), sourcePath, existing.icon)
+    const updated: Routine = { ...existing, icon: iconFile, updatedAt: Date.now() }
+    this.routineRepo.upsert(updated)
+    return updated
+  }
+
+  /** Remove a routine's custom icon image, if it has one. */
+  async clearIcon(routineId: string): Promise<Routine> {
+    const existing = this.routineRepo.get(routineId)
+    if (!existing) throw new Error(`Routine not found: ${routineId}`)
+
+    if (existing.icon) await removeIconFile(getRoutinePath(routineId), existing.icon)
+
+    const updated: Routine = { ...existing, icon: undefined, updatedAt: Date.now() }
+    this.routineRepo.upsert(updated)
+    return updated
+  }
+
+  /** Read a routine's custom icon image as a data URL, or null when it has none. */
+  async getIconDataUrl(routineId: string): Promise<string | null> {
+    const routine = this.routineRepo.get(routineId)
+    if (!routine?.icon) return null
+    return readIconDataUrl(getRoutinePath(routineId), routine.icon)
   }
 
   /** Delete a routine and ungroup its tasks (they survive as routine-less). */

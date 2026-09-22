@@ -27,6 +27,12 @@ export const invokeAssistantContract = {
   'routine:reorder': {} as Contract<[orderedIds: string[]], Routine[]>,
   /** Pin or unpin a routine so it sorts above the rest. */
   'routine:setPinned': {} as Contract<[routineId: string, pinned: boolean], Routine>,
+  /** Store a custom icon image for a routine from a local file path. */
+  'routine:setIcon': {} as Contract<[routineId: string, sourcePath: string], Routine>,
+  /** Remove a routine's custom icon image. */
+  'routine:clearIcon': {} as Contract<[routineId: string], Routine>,
+  /** Read a routine's custom icon as a data URL, or null when it has none. */
+  'routine:getIcon': {} as Contract<[routineId: string], string | null>,
   /** Group a task into a routine, or ungroup it with `null`. */
   'assistant:setTaskRoutine': {} as Contract<[threadId: string, routineId: string | null], Thread>,
   /** Set or clear a task's per-task schedule override. */

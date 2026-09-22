@@ -1,7 +1,10 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
-import { broadcastMissedRunsChanged, broadcastRoutinesChanged } from '../../scheduler/assistant-events'
+import {
+  broadcastMissedRunsChanged,
+  broadcastRoutinesChanged
+} from '../../scheduler/assistant-events'
 import type { IpcHandlerContext } from './context'
 import type {
   CreateRoutineInput,
@@ -47,9 +50,7 @@ function sanitizeSchedule(value: unknown): RoutineSchedule | null {
       )
     : undefined
   const onceAt =
-    typeof record.onceAt === 'number' && Number.isFinite(record.onceAt)
-      ? record.onceAt
-      : undefined
+    typeof record.onceAt === 'number' && Number.isFinite(record.onceAt) ? record.onceAt : undefined
   return {
     cadence: cadence as RoutineSchedule['cadence'],
     times: times.sort(),
@@ -83,7 +84,9 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
     ...(typeof record.iconType === 'string' ? { iconType: record.iconType.slice(0, 64) } : {}),
     schedule: sanitizeSchedule(record.schedule),
     ...(typeof record.howTo === 'string' ? { howTo: record.howTo.slice(0, MAX_HOW_TO) } : {}),
-    ...(record.connections !== undefined ? { connections: sanitizeConnections(record.connections) } : {})
+    ...(record.connections !== undefined
+      ? { connections: sanitizeConnections(record.connections) }
+      : {})
   }
 }
 
@@ -94,12 +97,19 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
   if (record.name !== undefined) {
     patch.name = requireString(record.name, 'Routine name').slice(0, MAX_ROUTINE_NAME)
   }
-  if (record.color !== undefined) patch.color = requireString(record.color, 'Routine colour').slice(0, 32)
+  if (record.color !== undefined) {
+    patch.color =
+      record.color === null ? null : requireString(record.color, 'Routine colour').slice(0, 32)
+  }
   if (record.icon !== undefined) {
-    patch.icon = record.icon === null ? null : requireString(record.icon, 'Routine icon').slice(0, 200)
+    patch.icon =
+      record.icon === null ? null : requireString(record.icon, 'Routine icon').slice(0, 200)
   }
   if (record.iconType !== undefined) {
-    patch.iconType = requireString(record.iconType, 'Routine icon type').slice(0, 64)
+    patch.iconType =
+      record.iconType === null
+        ? null
+        : requireString(record.iconType, 'Routine icon type').slice(0, 64)
   }
   if (record.schedule !== undefined) patch.schedule = sanitizeSchedule(record.schedule)
   if (record.howTo !== undefined) {
@@ -161,6 +171,25 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     broadcastRoutines()
     return routine
   })
+
+  ipcMain.handle('routine:setIcon', async (_, routineId: unknown, sourcePath: unknown) => {
+    const routine = await routineManager.setIcon(
+      validateEntityId(routineId, 'Routine ID'),
+      requireString(sourcePath, 'Routine icon path')
+    )
+    broadcastRoutines()
+    return routine
+  })
+
+  ipcMain.handle('routine:clearIcon', async (_, routineId: unknown) => {
+    const routine = await routineManager.clearIcon(validateEntityId(routineId, 'Routine ID'))
+    broadcastRoutines()
+    return routine
+  })
+
+  ipcMain.handle('routine:getIcon', (_, routineId: unknown) =>
+    routineManager.getIconDataUrl(validateEntityId(routineId, 'Routine ID'))
+  )
 
   ipcMain.handle('assistant:setTaskRoutine', (_, threadId: unknown, routineId: unknown) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')

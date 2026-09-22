@@ -2959,12 +2959,6 @@
     })
   }
 
-  /** Open a routine's authoring task from the how-to panel. */
-  function openAssistantTaskById(threadId: string): void {
-    const task = allThreads.find((thread) => thread.id === threadId)
-    if (task) openAssistantTask(task)
-  }
-
   /** Create a routine-less task and open it (header New Task). */
   async function createAssistantTask(): Promise<void> {
     if (!assistantProject) return
@@ -3025,10 +3019,6 @@
     } else {
       await openAssistantHowToForRoutine(routine)
     }
-  }
-
-  async function renameAssistantRoutine(routineId: string, name: string): Promise<void> {
-    await assistantRoutines.updateRoutine(routineId, { name })
   }
 
   /** Remove a routine; its tasks survive as routine-less tasks. */
@@ -3331,7 +3321,6 @@
       onDeleteTask={handleDelete}
       onForkTask={(task) => void forkThread(task)}
       onOpenTaskNotes={openAssistantTaskNotes}
-      onRenameRoutine={renameAssistantRoutine}
       onDeleteRoutine={deleteAssistantRoutine}
       onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
       onMoveRoutine={(draggedId, targetId, position) =>
@@ -3429,7 +3418,6 @@
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
             onHandedOffTask={handleAssistantHandoff}
-            onOpenAssistantTask={openAssistantTaskById}
           />
         {/snippet}
         <div
