@@ -1,4 +1,5 @@
 import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '../../../lib/types'
+import { memoryAudienceForContainer } from '../../../lib/memory/memory-scopes'
 import { MEMORY_LIMITS, MEMORY_EXTRACTION_LIMITS } from './memory-constants'
 
 /** Standing-preference vocabulary that makes a user turn a durable candidate. */
@@ -25,7 +26,8 @@ export interface MemoryCandidate {
   content: string
   category: MemoryCategory
   priority: MemoryPriority
-  scope: MemoryScope
+  /** The audiences/place the candidate memory would apply to. */
+  scopes: MemoryScope[]
 }
 
 export type MemorySkipReason = 'none' | 'no-candidate' | 'debounced' | 'over-budget'
@@ -180,13 +182,18 @@ export function detectMemoryCandidates(input: {
       .filter((entry) => entry.enabled)
       .map((entry) => normalizeText(entry.content))
   )
-  const scope: MemoryScope = input.projectId === 'inbox' ? 'thread' : 'project'
+  // A deterministic candidate belongs where the conversation does: its own
+  // thread for a chat, the project for a project thread, and the assistant
+  // space for an assistant task (the routine is unknown until the model, which
+  // receives the routine scope word, decides).
+  const audience = memoryAudienceForContainer(input.projectId)
+  const scopes: MemoryScope[] = audience === 'chat' ? ['thread'] : [audience]
   const candidate: MemoryCandidate = {
     label: capText(cappedContent, MEMORY_LIMITS.maxLabelCharacters),
     content: cappedContent,
     category: categoryForCandidate(cappedContent, matched),
     priority: priorityForCandidate(cappedContent),
-    scope
+    scopes
   }
   const normalized = normalizeText(candidate.content)
   if (existing.has(normalized)) return []

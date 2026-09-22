@@ -2,9 +2,15 @@ import type {
   MemoryEntry,
   MemoryExportFile,
   MemoryExportKind,
-  MemoryImportPreview
+  MemoryImportPreview,
+  MemoryAudience
 } from '../../../lib/types'
-import { INBOX_PROJECT_ID } from '../../../lib/types'
+import { ASSISTANT_SPACE_ID } from '../../../lib/types'
+import {
+  locationScopeOf,
+  memoryLocationForScopes,
+  orderMemoryScopes
+} from '../../../lib/memory/memory-scopes'
 import { normalizeText } from './memory-extraction'
 import { isRecord, optionalEntityId, validateMemoryConfig } from './memory-validation'
 
@@ -43,7 +49,13 @@ export function parseMemoryExport(value: unknown): MemoryImportPreview {
     throw new TypeError('The memory export contains no entries array')
   }
   const kind = value.kind
-  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
+  if (
+    kind !== 'projects' &&
+    kind !== 'chats' &&
+    kind !== 'assistant' &&
+    kind !== 'both' &&
+    kind !== 'project'
+  ) {
     throw new TypeError('The memory export kind is invalid')
   }
   const projectId = value.projectId
@@ -81,7 +93,13 @@ export function validateMemoryExportKind(
   kind: MemoryExportKind
   projectId?: string
 } {
-  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
+  if (
+    kind !== 'projects' &&
+    kind !== 'chats' &&
+    kind !== 'assistant' &&
+    kind !== 'both' &&
+    kind !== 'project'
+  ) {
     throw new TypeError('Memory export scope is invalid')
   }
   if (kind === 'project') {
@@ -94,31 +112,35 @@ export function validateMemoryExportKind(
   return { kind }
 }
 
-/** Whether an entry belongs to a given export scope. Global applies to both. */
+/**
+ * Whether an entry belongs to a given export scope.
+ *
+ * An audience-level entry belongs to every audience it names (an empty set
+ * names them all), and a located entry belongs to the audience of the place it
+ * lives in.
+ */
 export function entryBelongsToExportKind(entry: MemoryEntry, kind: MemoryExportKind): boolean {
-  switch (kind) {
-    case 'both':
-      return true
-    case 'projects':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'projects' ||
-        entry.scope === 'project' ||
-        (entry.scope === 'thread' && entry.projectId !== INBOX_PROJECT_ID)
-      )
-    case 'chats':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'chat' ||
-        (entry.scope === 'thread' && entry.projectId === INBOX_PROJECT_ID)
-      )
+  if (kind === 'both') return true
+  if (kind === 'project') {
+    return entryBelongsToAudience(entry, 'projects') && entry.projectId !== undefined
+  }
+  return entryBelongsToAudience(entry, kind === 'chats' ? 'chat' : kind)
+}
+
+/** Whether an entry's scope set reaches one audience. */
+export function entryBelongsToAudience(entry: MemoryEntry, audience: MemoryAudience): boolean {
+  const location = locationScopeOf(entry.scopes)
+  if (!location) {
+    if (entry.scopes.length === 0) return true
+    return entry.scopes.includes(audience)
+  }
+  switch (location) {
     case 'project':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'projects' ||
-        entry.scope === 'project' ||
-        entry.scope === 'thread'
-      )
+    case 'thread':
+      return audience === 'projects'
+    case 'routine':
+    case 'task':
+      return audience === 'assistant'
   }
 }
 
@@ -127,28 +149,31 @@ export function importDestinationFor(
   entry: MemoryEntry,
   options: { kind: MemoryExportKind; projectId?: string }
 ): { projectId?: string; threadId?: string } | null {
-  switch (entry.scope) {
-    case 'global':
-    case 'projects':
-      return {}
-    case 'chat':
-      return { projectId: INBOX_PROJECT_ID }
-    case 'project': {
-      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
-      if (!projectId) return null
-      return { projectId }
-    }
-    case 'thread': {
-      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
-      if (!projectId || !entry.threadId) return null
+  const location = locationScopeOf(entry.scopes)
+  if (location === 'project' || location === 'thread') {
+    const projectId = options.kind === 'project' ? options.projectId : entry.projectId
+    if (!projectId) return null
+    if (location === 'thread') {
+      if (!entry.threadId) return null
       return { projectId, threadId: entry.threadId }
     }
+    return { projectId }
   }
+  if (location === 'routine') {
+    if (!entry.routineId) return null
+    return { projectId: ASSISTANT_SPACE_ID }
+  }
+  if (location === 'task') {
+    if (!entry.threadId) return null
+    return { projectId: ASSISTANT_SPACE_ID, threadId: entry.threadId }
+  }
+  const expected = memoryLocationForScopes(entry.scopes)
+  return { projectId: expected.projectId, threadId: expected.threadId }
 }
 
-/** Dedupe identity: scope + normalized content (the user-chosen merge rule). */
+/** Dedupe identity: scope set + normalized content (the user-chosen merge rule). */
 export function dedupeKey(entry: MemoryEntry): string {
-  return `${entry.scope}\0${normalizeText(entry.content)}`
+  return `${orderMemoryScopes(entry.scopes).join(',')}\0${normalizeText(entry.content)}`
 }
 
 export function dedupeEntriesById(entries: MemoryEntry[]): MemoryEntry[] {

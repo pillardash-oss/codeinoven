@@ -27,6 +27,10 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
+  import {
+    entryVisibleOnSurface,
+    type MemoryPanelSurface
+  } from '$lib/components/memory/memory-routing'
   import type {
     AgentCapabilityEntry,
     AgentContextCapabilities,
@@ -34,7 +38,7 @@
     AgentArtifact,
     MemoryEntry
   } from '$shared/types'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
   import UtilityEditorModal, {
     type UtilityEditorTarget
   } from '../settings/UtilityEditorModal.svelte'
@@ -240,6 +244,44 @@
     }
   }
 
+  /**
+   * Every memory entry this conversation actually receives.
+   *
+   * The panel reads the same three files the engine does and then applies the
+   * shared surface rule, so this list can never show memory the agent would not
+   * be sent: an assistant task sees assistant, routine and task memory only,
+   * and a routine entry shows up only for the tasks of its own routine.
+   */
+  async function loadContextMemoryEntries(
+    containerId: string,
+    containerThreadId: string
+  ): Promise<MemoryEntry[]> {
+    const isAssistant = containerId === ASSISTANT_SPACE_ID
+    const surface: MemoryPanelSurface = isAssistant
+      ? 'sidebar-assistant'
+      : containerId === INBOX_PROJECT_ID
+        ? 'sidebar-chats'
+        : 'sidebar-projects'
+    // An assistant task's routine decides which routine-scoped entries apply,
+    // so it is read from the thread rather than guessed from the panel.
+    const routineId = isAssistant
+      ? (await invoke('thread:get', containerId, containerThreadId))?.routineId
+      : undefined
+    const [rootEntries, containerEntries, threadEntries] = await Promise.all([
+      invoke('memory:getEntries'),
+      invoke('memory:getEntries', containerId),
+      invoke('memory:getEntries', containerId, containerThreadId)
+    ])
+    return [...rootEntries, ...containerEntries, ...threadEntries].filter((entry) =>
+      entryVisibleOnSurface(entry, {
+        surface,
+        projectId: containerId,
+        threadId: containerThreadId,
+        routineId
+      })
+    )
+  }
+
   async function loadMemory(): Promise<void> {
     if (!projectId || !threadId) {
       memory = []
@@ -250,25 +292,7 @@
     try {
       const [thread, entries] = await Promise.all([
         invoke('thread:get', projectId, threadId),
-        projectId === INBOX_PROJECT_ID
-          ? Promise.all([
-              invoke('memory:getEntries'),
-              invoke('memory:getEntries', INBOX_PROJECT_ID),
-              invoke('memory:getEntries', INBOX_PROJECT_ID, threadId)
-            ]).then(([globalEntries, chatEntries, threadEntries]) => [
-              ...globalEntries.filter((entry) => entry.scope === 'global'),
-              ...chatEntries,
-              ...threadEntries
-            ])
-          : Promise.all([
-              invoke('memory:getEntries'),
-              invoke('memory:getEntries', projectId),
-              invoke('memory:getEntries', projectId, threadId)
-            ]).then(([globalEntries, projectEntries, threadEntries]) => [
-              ...globalEntries,
-              ...projectEntries,
-              ...threadEntries
-            ])
+        loadContextMemoryEntries(projectId, threadId)
       ])
       const activeModelKey =
         thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId

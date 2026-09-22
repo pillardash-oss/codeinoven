@@ -638,7 +638,12 @@
 
   function openMemoryTab(): void {
     if (!selectedThread) return
-    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+    contextSidebarState.openMemory(
+      selectedThread.projectId,
+      selectedThread.id,
+      undefined,
+      selectedThread.routineId
+    )
   }
 
   /** The coordinator published by the thread on screen, if it coordinates work.

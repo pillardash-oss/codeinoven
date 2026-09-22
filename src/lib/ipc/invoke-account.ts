@@ -37,11 +37,12 @@ export const invokeAccountContract = {
       options?: {
         category?: import('../types').MemoryCategory
         priority?: import('../types').MemoryPriority
-        scope?: import('../types').MemoryScope
+        scopes?: import('../types').MemoryScope[]
         source?: import('../types').MemorySource
         modelKeys?: string[]
         projectId?: string
         threadId?: string
+        routineId?: string
       }
     ],
     import('../types').MemoryEntry
@@ -77,10 +78,11 @@ export const invokeAccountContract = {
       options?: {
         category?: import('../types').MemoryCategory
         priority?: import('../types').MemoryPriority
-        scope?: import('../types').MemoryScope
+        scopes?: import('../types').MemoryScope[]
         modelKeys?: string[]
         projectId?: string
         threadId?: string
+        routineId?: string
       }
     ],
     import('../types').MemoryProposal

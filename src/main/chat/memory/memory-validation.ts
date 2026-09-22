@@ -7,6 +7,13 @@ import type {
   MemorySource
 } from '../../../lib/types'
 import { isHarnessScopedModelKey } from '../../../lib/model-keys'
+import {
+  MEMORY_AUDIENCES,
+  MEMORY_LOCATION_SCOPES,
+  isMemoryLocationScope,
+  orderMemoryScopes,
+  readMemoryScopes
+} from '../../../lib/memory/memory-scopes'
 import { MEMORY_LIMITS } from './memory-constants'
 
 export const VALID_CATEGORIES: MemoryCategory[] = [
@@ -17,7 +24,7 @@ export const VALID_CATEGORIES: MemoryCategory[] = [
   'models'
 ]
 export const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
-export const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
+export const VALID_SCOPES: MemoryScope[] = [...MEMORY_AUDIENCES, ...MEMORY_LOCATION_SCOPES]
 export const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
 const MAX_MODEL_KEYS = 50
 const MODEL_KEY_MAX_CHARACTERS = 512
@@ -86,7 +93,7 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       'medium',
       `Memory entry ${index} priority`
     )
-    const scope = enumValue(entry.scope, VALID_SCOPES, 'global', `Memory entry ${index} scope`)
+    const scope = typeof entry.scope === 'string' ? (entry.scope as MemoryScope) : undefined
     const source = enumValue(entry.source, VALID_SOURCES, 'manual', `Memory entry ${index} source`)
     const modelKeys = validateModelKeys(entry.modelKeys, `Memory entry ${index} model keys`)
     if (category === 'models' && modelKeys.length === 0) {
@@ -101,6 +108,12 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
     )
     const projectId = optionalEntityId(entry.projectId, `Memory entry ${index} project ID`)
     const threadId = optionalEntityId(entry.threadId, `Memory entry ${index} thread ID`)
+    const routineId = optionalEntityId(entry.routineId, `Memory entry ${index} routine ID`)
+    const scopes = validateMemoryScopes(
+      entry.scopes,
+      { scope, projectId },
+      `Memory entry ${index} scopes`
+    )
     return {
       id,
       label,
@@ -110,12 +123,13 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       updatedAt: entry.updatedAt,
       category,
       priority,
-      scope,
+      scopes,
       source,
       frequency,
       lastReinforced,
       projectId,
       threadId,
+      routineId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
   })
@@ -169,6 +183,39 @@ export function enumValue<T extends string>(
     throw new TypeError(`${label} is invalid`)
   }
   return value as T
+}
+
+/**
+ * Validate a stored scope set.
+ *
+ * A set is either audience-level (any subset of the three audiences, empty
+ * meaning every audience) or exactly one place inside an audience. The legacy
+ * single `scope` field is accepted so a file written before the set existed
+ * still validates, and it is normalized to its audience meaning.
+ */
+export function validateMemoryScopes(
+  value: unknown,
+  legacy: { scope?: string; projectId?: string } = {},
+  label = 'Memory scopes'
+): MemoryScope[] {
+  if (value === undefined)
+    return readMemoryScopes({ scope: legacy.scope, projectId: legacy.projectId })
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
+  const scopes = value.map((candidate, index) => {
+    if (typeof candidate !== 'string' || !VALID_SCOPES.includes(candidate as MemoryScope)) {
+      throw new TypeError(`${label} item ${index} is invalid`)
+    }
+    return candidate as MemoryScope
+  })
+  const unique = orderMemoryScopes([...new Set(scopes)])
+  const located = unique.filter(isMemoryLocationScope)
+  if (located.length > 1) {
+    throw new TypeError(`${label} cannot pin a memory to more than one place`)
+  }
+  if (located.length === 1 && unique.length > 1) {
+    throw new TypeError(`${label} cannot mix an audience with a pinned place`)
+  }
+  return unique
 }
 
 export function optionalEntityId(value: unknown, label: string): string | undefined {

@@ -114,7 +114,8 @@ export class PromptAssembler {
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
-    workspaceScope: WorkspaceScopeMode = 'full'
+    workspaceScope: WorkspaceScopeMode = 'full',
+    routineId?: string
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -160,7 +161,7 @@ export class PromptAssembler {
       })
     )
 
-    const memory = await this.memoryService.formatCurrent(projectId, threadId, modelKey)
+    const memory = await this.memoryService.formatCurrent(projectId, threadId, modelKey, routineId)
     layers.push(
       withLayerAccounting({
         title: 'Memory',
@@ -211,7 +212,8 @@ export class PromptAssembler {
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
-    workspaceScope: WorkspaceScopeMode = 'full'
+    workspaceScope: WorkspaceScopeMode = 'full',
+    routineId?: string
   ): Promise<string> {
     return (
       await this.getAssembledPromptWithLayers(
@@ -225,7 +227,8 @@ export class PromptAssembler {
         agentBehaviorPrompt,
         modelKey,
         executionScope,
-        workspaceScope
+        workspaceScope,
+        routineId
       )
     ).prompt
   }
@@ -250,7 +253,8 @@ export class PromptAssembler {
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
-    workspaceScope: WorkspaceScopeMode = 'full'
+    workspaceScope: WorkspaceScopeMode = 'full',
+    routineId?: string
   ): Promise<{ prompt: string; layers: BehaviorLayer[] }> {
     const layers = await this.getLayers(
       projectId,
@@ -262,7 +266,8 @@ export class PromptAssembler {
       agentBehaviorPrompt,
       modelKey,
       executionScope,
-      workspaceScope
+      workspaceScope,
+      routineId
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)
@@ -323,10 +328,7 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
  * full block (project scope, the `.cio/` scratch space, `.cio/specs/` boundary)
  * in a few lines instead of the full `buildWorkspaceContext`.
  */
-export function abbreviatedWorkspaceGuard(
-  driver: DriverInfo | null,
-  projectPath: string
-): string {
+export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath: string): string {
   const harnessLine = driver
     ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session   it is NOT your project or the user's target.`
     : 'No agent harness is selected; this session may be limited.'
@@ -337,9 +339,9 @@ export function abbreviatedWorkspaceGuard(
     `You are working inside ${APP_NAME}, a desktop control plane coordinating agentic software engineering on the user's project.`,
     harnessLine,
     projectLine,
-    "Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.",
-    'Keep every non-source output inside the project\'s `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).',
-    'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.',
+    'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
+    "Keep every non-source output inside the project's `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
+    'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
   ].join(' ')
 }
 

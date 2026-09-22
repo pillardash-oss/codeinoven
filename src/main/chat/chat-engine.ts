@@ -287,6 +287,11 @@ import { foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
+import {
+  MEMORY_AUDIENCE_SCOPES,
+  memoryAudienceForContainer,
+  memoryLocationForScopes
+} from '../../lib/memory/memory-scopes'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
 import {
@@ -5855,8 +5860,8 @@ export class ChatEngine {
   ): Promise<string> {
     let behaviorDriver: HarnessDriver | undefined
     try {
-      const threadSettings =
-        settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      const threadSettings = settings ?? thread?.settings
       const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
       behaviorDriver = driver
@@ -5892,7 +5897,8 @@ export class ChatEngine {
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
         executionScope,
-        workspaceScope
+        workspaceScope,
+        thread?.routineId
       )
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
@@ -25634,7 +25640,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     references: PromptReference[]
   ): Promise<void> {
-    const current = await this.memoryService.current(projectId, threadId)
+    const routineId = (await this.threadManager.getThread(projectId, threadId))?.routineId
+    const current = await this.memoryService.current(projectId, threadId, routineId)
     if (current.enabled) {
       // Deterministic extraction gate (A-06): skip the auxiliary model call when
       // no durable candidate is detected, the conversation is debounced, or the
@@ -25705,7 +25712,7 @@ export class ChatEngine {
                 content: decision.content,
                 category: decision.category,
                 priority: decision.priority,
-                scope: decision.scope,
+                scopes: [decision.scope],
                 modelKeys:
                   decision.category === 'models'
                     ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -25794,7 +25801,7 @@ export class ChatEngine {
               content: decision.content,
               category: decision.category,
               priority: decision.priority,
-              scope: decision.scope,
+              scopes: [decision.scope],
               modelKeys:
                 decision.category === 'models'
                   ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -25927,10 +25934,8 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings
   ): Promise<StructuredMemoryProposal> {
-    const allowedScopes: MemoryScope[] =
-      projectId === INBOX_PROJECT_ID
-        ? ['global', 'chat', 'thread']
-        : ['global', 'projects', 'project', 'thread']
+    const audience = memoryAudienceForContainer(projectId)
+    const allowedScopes: MemoryScope[] = [...MEMORY_AUDIENCE_SCOPES[audience]]
     const proposalSchema: Record<string, unknown> = {
       ...PROPOSE_MEMORY_SCHEMA,
       properties: {
@@ -25943,9 +25948,11 @@ export class ChatEngine {
       }
     }
     const scopeInstruction =
-      projectId === INBOX_PROJECT_ID
-        ? 'This is a standalone chat. Use scope global only for preferences shared across both projects and chats, chats for preferences applying to every standalone chat, or thread only for this chat.'
-        : 'This is a project thread. Use scope global for preferences shared across both projects and chats, projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
+      audience === 'chat'
+        ? 'This is a standalone chat. Use scope chat for preferences applying to every standalone chat, or thread only for this chat.'
+        : audience === 'assistant'
+          ? "This is an assistant task. Use scope assistant for preferences applying to every assistant task, routine for preferences applying to this routine's tasks, or task only for this task."
+          : 'This is a project thread. Use scope projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
     const decisionSystemPrompt = [
       'Evaluate one completed exchange and decide whether it contains durable, user-authored information worth proposing for persistent memory. Judge the user intent, never summarize, and never write memory unless the exchange qualifies.',
       'Step 1, decide whether the user stated something lasting: a standing preference, a reusable rule or convention, an identity fact, or a behavioral instruction that must keep applying after this task ends. Step 2, only when Step 1 concluded lasting, write the memory and set propose to true.',
@@ -25959,7 +25966,7 @@ export class ChatEngine {
       'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
       'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
       'A complaint or correction can still be durable when it states an explicit recurring rule. Do not reject a durable rule merely because the user is frustrated.',
-      'Scope words such as global, project, thread, chat, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
+      'Scope words such as project, thread, chat, routine, task, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
       'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
       'Choose category from behavioral, project-rule, identity, preference, or models. Use models when the durable preference is specifically about how one or more AI models behave; the application will associate it with the model used for this completed turn. Choose priority from critical, high, medium, or low.',
       scopeInstruction
@@ -26183,26 +26190,25 @@ export class ChatEngine {
     projectId: string,
     threadId: string
   ): Promise<Record<string, unknown>> {
-    const current = await this.memoryService.current(projectId, threadId)
+    const routineId = (await this.threadManager.getThread(projectId, threadId))?.routineId
+    const current = await this.memoryService.current(projectId, threadId, routineId)
     if (!current.enabled) {
       return {
         status: 'memory_disabled',
         message: 'Persistent memory is disabled. No proposal was created.'
       }
     }
-    if (projectId === INBOX_PROJECT_ID && !['global', 'chat', 'thread'].includes(input.scope)) {
-      throw new TypeError('Standalone chats support only global, chats, or thread memory')
-    }
-    if (projectId !== INBOX_PROJECT_ID && input.scope === 'chat') {
-      throw new TypeError('Chats-scoped memory is available only in standalone chats')
+    const audience = memoryAudienceForContainer(projectId)
+    const allowedScopes = MEMORY_AUDIENCE_SCOPES[audience]
+    if (input.scopes.length === 0 || !input.scopes.every((scope) => allowedScopes.includes(scope))) {
+      throw new TypeError(`This context supports only ${allowedScopes.join(', ')} memory`)
     }
 
-    const queueProjectId =
-      input.scope === 'global' || input.scope === 'projects'
-        ? undefined
-        : input.scope === 'chat'
-          ? INBOX_PROJECT_ID
-          : projectId
+    const queueProjectId = memoryLocationForScopes(input.scopes, {
+      projectId,
+      threadId,
+      routineId
+    }).projectId
     const normalizedContent = input.content.trim().toLowerCase()
     const remembered = current.entries.find(
       (entry) => entry.content.trim().toLowerCase() === normalizedContent
@@ -26211,7 +26217,7 @@ export class ChatEngine {
       return {
         status: 'already_remembered',
         memoryId: remembered.id,
-        scope: remembered.scope,
+        scopes: remembered.scopes,
         message: 'This information is already in persistent memory.'
       }
     }
@@ -26227,7 +26233,7 @@ export class ChatEngine {
       return {
         status: 'already_pending',
         proposalId: pending.id,
-        scope: pending.scope,
+        scopes: pending.scopes,
         message: 'This memory proposal is already awaiting user approval.'
       }
     }
@@ -26235,16 +26241,17 @@ export class ChatEngine {
     const proposal = await this.memoryService.createProposal(input.label, input.content, {
       category: input.category,
       priority: input.priority,
-      scope: input.scope,
+      scopes: input.scopes,
       modelKeys: input.modelKeys,
-      projectId: input.scope === 'project' || input.scope === 'thread' ? projectId : undefined,
-      threadId: input.scope === 'thread' ? threadId : undefined
+      projectId,
+      threadId,
+      routineId
     })
     broadcastMemoryProposal(projectId, threadId)
     return {
       status: 'pending_approval',
       proposalId: proposal.id,
-      scope: proposal.scope,
+      scopes: proposal.scopes,
       message:
         'Memory proposal created. The application will request approval separately; do not mention this internal workflow in the task response.'
     }

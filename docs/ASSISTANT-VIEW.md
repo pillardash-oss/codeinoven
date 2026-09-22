@@ -192,14 +192,35 @@ the conversation tools only: **History**, **How to**, **Workspace files**
 **Debugger** in development builds. It never carries terminal, actions, changes
 or cloud tools.
 
+Memory is scoped by **audience**, never by one flat scope word. An entry
+carries a scope set that either names audiences (**Projects**, **Chats**,
+**Assistants**, with an empty set meaning every audience) or pins itself to
+exactly one place (`project`, `thread`, `routine`, `task`). The scope control is
+a multi-select that mirrors the projects picker: an **All audiences** row plus
+one toggle per scope (`MemoryScopeSelect.svelte`), and the set is stored as
+`scopes:` metadata on the entry in its own memory file. `memory-scopes.ts`
+(`src/lib/memory/memory-scopes.ts`) owns those rules, and both the engine and the
+panel read them from there instead of re-deriving them.
+
+Where an entry lives follows from its set: audience-level entries live in their
+audience's own file (the root memory file for the projects audience or a mix of
+audiences, the inbox file for chats, the assistant container's file for
+assistants), a `project`/`thread` entry lives in that project's or thread's
+file, a `routine` entry lives in the assistant container's file keyed by
+`routineId`, and a `task` entry lives in that task's thread file.
+
 Memory on an assistant task uses the `sidebar-assistant` surface
 (`src/renderer/lib/components/memory/memory-routing.ts`), which pins the project
-to the hidden assistant container instead of a pickable project: **Global**
-(the projects-wide scope), **Assistant** (the assistant space's own file) and
-**This task** (the thread file). Those are exactly the layers the engine loads
-for an assistant turn (`MemoryService.current` treats the assistant container
-like a project thread), so the panel never shows memory the agent would not
-receive.
+to the hidden assistant container instead of a pickable project and offers the
+assistant's three scopes: **Assistant** (the assistant container's own file,
+which reaches every task), **Routine** (this task's routine, whose entries live
+in that same file keyed by `routineId`) and **Task** (this task's own thread
+file). The panel shows an entry only when its scope set applies to assistants,
+which is exactly what the engine loads: `MemoryService.current`
+(`src/main/chat/memory-service.ts`) resolves the task's `routineId` from the
+thread record and filters the container file by it, so one routine can never
+receive another routine's memory, and a project-only or chat-only entry never
+reaches an assistant task.
 
 ## How-to authoring
 

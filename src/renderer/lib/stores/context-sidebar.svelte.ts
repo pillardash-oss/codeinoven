@@ -568,8 +568,13 @@ class ContextSidebarState {
     this.tabContexts.setAssistantHowToRoutine(projectId, threadId, routineId)
   }
 
-  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
-    this.tabContexts.openMemory(projectId, threadId, section)
+  openMemory(
+    projectId: string,
+    threadId: string,
+    section?: MemorySection,
+    routineId?: string
+  ): void {
+    this.tabContexts.openMemory(projectId, threadId, section, routineId)
   }
 
   toggleNotifications(): void {

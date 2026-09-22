@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../src/lib/types'
 import type { MemoryConfig, MemoryEntry } from '../../src/lib/types'
 import { modelKey } from '../../src/lib/model-keys'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
+import { parseMemoryMd, serializeMemoryMd } from '../../src/main/chat/memory/memory-markdown'
 import {
   MEMORY_EXTRACTION_LIMITS,
   MEMORY_LIMITS,
@@ -36,7 +38,7 @@ function memory(): MemoryConfig {
         updatedAt: 1,
         category: 'behavioral',
         priority: 'medium',
-        scope: 'global',
+        scopes: ['projects', 'chat'],
         source: 'manual',
         frequency: 1,
         lastReinforced: 1
@@ -50,12 +52,45 @@ function memory(): MemoryConfig {
         updatedAt: 1,
         category: 'preference',
         priority: 'low',
-        scope: 'global',
+        scopes: ['projects', 'chat'],
         source: 'manual',
         frequency: 1,
         lastReinforced: 1
       }
     ]
+  }
+}
+
+async function openMemoryService(): Promise<{
+  storage: StorageEngine
+  service: MemoryService
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'codeinoven-memory-scopes-'))
+  temporaryRoots.push(root)
+  const storage = new StorageEngine(root)
+  await storage.initialize()
+  return { storage, service: new MemoryService(storage) }
+}
+
+function labels(config: MemoryConfig): string[] {
+  return config.entries.map((entry) => entry.label)
+}
+
+function entryOn(scopes: MemoryEntry['scopes'], overrides: Partial<MemoryEntry> = {}): MemoryEntry {
+  return {
+    id: 'memory-scope-fixture',
+    label: 'Scope fixture',
+    content: 'Scope fixture content.',
+    enabled: true,
+    createdAt: 1,
+    updatedAt: 1,
+    category: 'preference',
+    priority: 'medium',
+    scopes,
+    source: 'manual',
+    frequency: 1,
+    lastReinforced: 1,
+    ...overrides
   }
 }
 
@@ -145,6 +180,121 @@ describe('MemoryService', () => {
     config.entries[0] = { ...config.entries[0], category: 'models' }
     expect(() => validateMemoryConfig(config)).toThrow('requires at least one model')
   })
+
+  it('loads each audience set only in its own context', async () => {
+    const { service } = await openMemoryService()
+    await service.addEntry('Projects rule', 'Applies to project threads.', {
+      scopes: ['projects']
+    })
+    await service.addEntry('Chat rule', 'Applies to chats.', { scopes: ['chat'] })
+    await service.addEntry('Assistant rule', 'Applies to assistant tasks.', {
+      scopes: ['assistant']
+    })
+
+    const projectThread = await service.current('project-1', 'thread-1')
+    expect(labels(projectThread)).toContain('Projects rule')
+    expect(labels(projectThread)).not.toContain('Chat rule')
+    expect(labels(projectThread)).not.toContain('Assistant rule')
+    await expect(service.formatCurrent('project-1', 'thread-1')).resolves.toContain('Projects rule')
+
+    const chat = await service.current(INBOX_PROJECT_ID, 'chat-thread-1')
+    expect(labels(chat)).toContain('Chat rule')
+    expect(labels(chat)).not.toContain('Projects rule')
+    expect(labels(chat)).not.toContain('Assistant rule')
+
+    const assistantTask = await service.current(ASSISTANT_SPACE_ID, 'task-1')
+    expect(labels(assistantTask)).toContain('Assistant rule')
+    expect(labels(assistantTask)).not.toContain('Projects rule')
+    expect(labels(assistantTask)).not.toContain('Chat rule')
+  })
+
+  it('loads an empty scope set in every context', async () => {
+    const { service } = await openMemoryService()
+    await service.addEntry('All audiences', 'Applies everywhere.', { scopes: [] })
+
+    expect(labels(await service.current('project-1', 'thread-1'))).toContain('All audiences')
+    expect(labels(await service.current(INBOX_PROJECT_ID, 'chat-thread-1'))).toContain(
+      'All audiences'
+    )
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-1'))).toContain('All audiences')
+  })
+
+  it('loads routine memory only for tasks of that routine', async () => {
+    const { service } = await openMemoryService()
+    await service.addEntry('Routine A rule', 'Applies to routine A tasks.', {
+      scopes: ['routine'],
+      routineId: 'routine-a'
+    })
+
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-1', 'routine-a'))).toContain(
+      'Routine A rule'
+    )
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-2', 'routine-b'))).not.toContain(
+      'Routine A rule'
+    )
+    // A task whose routine is unknown never receives another routine's memory.
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-3'))).not.toContain(
+      'Routine A rule'
+    )
+    // Routine memory never leaks into a project context, even with a matching id.
+    expect(labels(await service.current('project-1', 'thread-1', 'routine-a'))).not.toContain(
+      'Routine A rule'
+    )
+  })
+
+  it('loads task memory only for its own assistant task thread', async () => {
+    const { service } = await openMemoryService()
+    await service.addEntry('Task one rule', 'Applies to task one.', {
+      scopes: ['task'],
+      projectId: ASSISTANT_SPACE_ID,
+      threadId: 'task-1'
+    })
+
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-1'))).toContain('Task one rule')
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-2'))).not.toContain(
+      'Task one rule'
+    )
+    expect(labels(await service.current('project-1', 'task-1'))).not.toContain('Task one rule')
+  })
+
+  it('keeps scope sets across a markdown read/write round trip', () => {
+    const audienceEntry = entryOn(['projects', 'chat'], {
+      id: 'memory-round-trip',
+      label: 'Round trip entry',
+      content: 'Keeps its audience set.'
+    })
+    const everywhereEntry = entryOn([], {
+      id: 'memory-everywhere',
+      label: 'Everywhere entry',
+      content: 'Keeps the empty set.'
+    })
+
+    const reparsed = parseMemoryMd(serializeMemoryMd([audienceEntry, everywhereEntry]))
+    expect(reparsed).toHaveLength(2)
+    expect(reparsed[0].scopes).toEqual(['projects', 'chat'])
+    expect(reparsed[1].scopes).toEqual([])
+  })
+
+  it('reads the legacy single scope, mapping global to projects and chats', async () => {
+    const { storage, service } = await openMemoryService()
+    await storage.writeRaw(
+      join('memory', 'memory.md'),
+      [
+        '<!-- codeinoven-memory-entry -->',
+        '## Legacy global',
+        '',
+        'id: legacy-global',
+        'category: behavioral',
+        'priority: high',
+        'scope: global',
+        '',
+        'Was written before scope sets existed.'
+      ].join('\n')
+    )
+
+    const [entry] = await service.getEntries()
+    expect(entry.scopes).toEqual(['projects', 'chat'])
+  })
 })
 
 const ASSISTANT = 'Done   the change is applied and verified.'
@@ -222,7 +372,8 @@ describe('detectMemoryCandidates', () => {
         updatedAt: 1,
         category: 'behavioral',
         priority: 'high',
-        scope: 'project',
+        scopes: ['project'],
+        projectId: 'project-1',
         source: 'manual',
         frequency: 1,
         lastReinforced: 1

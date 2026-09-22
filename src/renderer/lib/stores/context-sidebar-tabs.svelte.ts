@@ -666,17 +666,18 @@ export class SidebarTabContexts {
   }
 
   /** Update the routine an open how-to tab targets (task grouping changed). */
-  setAssistantHowToRoutine(
-    projectId: string,
-    threadId: string,
-    routineId: string | null
-  ): void {
+  setAssistantHowToRoutine(projectId: string, threadId: string, routineId: string | null): void {
     const context = this.contextFor(projectId, threadId)
     const tab = context?.tabs.find((candidate) => candidate.kind === 'assistant-how-to')
     if (tab && tab.kind === 'assistant-how-to') tab.routineId = routineId
   }
 
-  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
+  openMemory(
+    projectId: string,
+    threadId: string,
+    section?: MemorySection,
+    routineId?: string
+  ): void {
     const context = this.ensureProjectContext(projectId)
     const id = `memory:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
@@ -684,6 +685,11 @@ export class SidebarTabContexts {
       if (existing.kind === 'memory') {
         existing.threadId = threadId
         if (section) existing.memorySection = section
+        // The routine follows the selected task, so a task switch inside the
+        // assistant space re-targets the already-open panel. A caller that
+        // does not know the routine (a proposal toast, the sources panel) must
+        // not wipe the one the panel already resolved for this project.
+        if (routineId !== undefined) existing.routineId = routineId
       }
       this.focusInProjectContext(context, id)
       return
@@ -694,7 +700,8 @@ export class SidebarTabContexts {
       title: 'Memory',
       projectId,
       threadId,
-      memorySection: section ?? 'active'
+      memorySection: section ?? 'active',
+      routineId
     })
   }
 

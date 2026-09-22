@@ -191,6 +191,7 @@
           variant="sidebar"
           projectId={activeContextTab.projectId}
           threadId={activeContextTab.threadId}
+          routineId={activeContextTab.routineId}
           bind:activeSection={activeContextTab.memorySection}
         />
       {/await}

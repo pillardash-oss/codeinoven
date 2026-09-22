@@ -134,6 +134,9 @@ export interface MemoryContextTab {
   projectId: string
   threadId: string
   memorySection: MemorySection
+  /** Routine of the assistant task this panel shows memory for; undefined for
+   *  project and chat tabs, which have no routine. */
+  routineId?: string
 }
 
 /**

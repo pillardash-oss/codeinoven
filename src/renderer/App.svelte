@@ -527,7 +527,7 @@
         ) {
           contextSidebarState.hide()
         } else {
-          contextSidebarState.openMemory(thread.projectId, thread.id)
+          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.routineId)
         }
         return
       }

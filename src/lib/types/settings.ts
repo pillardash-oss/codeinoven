@@ -69,7 +69,21 @@ export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'prefe
 
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 
-export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
+/**
+ * An audience a memory can be loaded for: the three surfaces that receive
+ * persistent memory. An entry applies to every audience when its scope set is
+ * empty.
+ */
+export type MemoryAudience = 'projects' | 'chat' | 'assistant'
+
+/**
+ * One scope a memory carries: an audience, or a single place inside an
+ * audience (`project`/`thread` for projects, `routine`/`task` for assistants).
+ *
+ * A scope set is either audience-level (any subset of `MemoryAudience`, empty
+ * meaning every audience) or exactly one place. It is never both.
+ */
+export type MemoryScope = MemoryAudience | 'project' | 'thread' | 'routine' | 'task'
 
 export type MemorySource = 'manual' | 'auto-detected'
 
@@ -82,12 +96,15 @@ export interface MemoryEntry {
   updatedAt: number
   category: MemoryCategory
   priority: MemoryPriority
-  scope: MemoryScope
+  /** Audiences/places this memory applies to; empty means every audience. */
+  scopes: MemoryScope[]
   source: MemorySource
   frequency: number
   lastReinforced: number
   projectId?: string
   threadId?: string
+  /** Set by routine-scoped memory: the routine whose tasks receive it. */
+  routineId?: string
   /** Harness-scoped model keys for model-specific memories. */
   modelKeys?: string[]
 }
@@ -106,9 +123,12 @@ export interface MemoryProposal {
   content: string
   category: MemoryCategory
   priority: MemoryPriority
-  scope: MemoryScope
+  /** Audiences/places this proposal would apply to; empty means every audience. */
+  scopes: MemoryScope[]
   projectId?: string
   threadId?: string
+  /** Set by a routine-scoped proposal: the routine whose tasks receive it. */
+  routineId?: string
   /** Harness-scoped model keys for model-specific proposals. */
   modelKeys?: string[]
   createdAt: number
@@ -136,7 +156,7 @@ export interface DeferredMemoryExtraction {
 }
 
 /** Which bucket of memory an export/import targets. */
-export type MemoryExportKind = 'projects' | 'chats' | 'both' | 'project'
+export type MemoryExportKind = 'projects' | 'chats' | 'assistant' | 'both' | 'project'
 
 /** The on-disk JSON shape written by a memory export and read by an import. */
 export interface MemoryExportFile {
