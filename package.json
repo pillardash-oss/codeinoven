@@ -117,7 +117,7 @@
     "ghostty-web": "^0.4.0",
     "globals": "^17.12.0",
     "highlight.js": "^11.12.0",
-    "jsdom": "^30.0.1",
+    "jsdom": "^30.1.0",
     "jsonc-parser": "^3.3.1",
     "marked": "^18.0.11",
     "mermaid": "^11.17.2",
