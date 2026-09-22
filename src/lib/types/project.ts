@@ -8,6 +8,16 @@ export const INBOX_PROJECT_ID = 'inbox'
  */
 export const ASSISTANT_SPACE_ID = 'assistant'
 
+/**
+ * Whether a conversation browses its own app-owned workspace directory instead
+ * of a project root: standalone chats mount `chats-artifacts/<threadId>` and
+ * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`. Every file
+ * surface keys the mount off the open thread for exactly these containers.
+ */
+export function usesThreadWorkspaceMount(projectId: string): boolean {
+  return projectId === INBOX_PROJECT_ID || projectId === ASSISTANT_SPACE_ID
+}
+
 export type ChangeTrackingMode = 'git' | 'manual'
 
 export type RepositoryStatus = 'git' | 'not_git' | 'git_unavailable'

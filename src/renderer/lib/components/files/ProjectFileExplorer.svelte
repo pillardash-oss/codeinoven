@@ -207,7 +207,7 @@
             query,
             'all',
             workspaceState.activeScopeBucketIdFor(projectId),
-            projectState.chatThreadId ?? undefined
+            projectState.mountThreadId ?? undefined
           )
         ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return

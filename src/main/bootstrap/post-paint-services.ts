@@ -13,8 +13,8 @@
 
 import { app } from 'electron'
 import { join } from 'path'
-import { chatThreadArtifactDirectory } from '../../lib/project-artifacts'
-import { ensureDir, getConfigRoot } from '../../lib/utils'
+import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
+import { getConfigRoot } from '../../lib/utils'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -113,16 +113,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),
-    {
-      // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
-      // directory; resolution creates it on demand so an empty thread still has
-      // a browsable root.
-      resolve: async (threadId: string) => {
-        const root = storage.resolve(chatThreadArtifactDirectory(threadId))
-        await ensureDir(root)
-        return root
-      }
-    }
+    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // directory and assistant file trees on the task's
+    // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
+    // demand so an empty conversation still has a browsable root.
+    createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
   state.computerUsePipService = new ComputerUsePipService(storage)

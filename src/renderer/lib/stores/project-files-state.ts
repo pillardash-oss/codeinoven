@@ -57,9 +57,11 @@ export interface ProjectFilesState {
    *  or `null` while nothing is loaded. Used to tell a mounted file tree that
    *  it is still showing another scope's root after a thread switch. */
   listingMountKey: string | null
-  /** Inbox thread whose `chats-artifacts/<threadId>` directory this project's
-   *  file tree is mounted on; `null` for real projects and threadless views. */
-  chatThreadId: string | null
+  /** Thread whose own workspace directory this project's file tree is mounted
+   *  on: a chat's `chats-artifacts/<threadId>` or an assistant task's
+   *  `assistant-cwd/<routineId ?? threadId>`; `null` for real projects and
+   *  threadless views. */
+  mountThreadId: string | null
   /** Whether the "Last turn" filter is active in the file tree. Lives here
    *  (per project) instead of local component state so panel remounts from
    *  sidebar tab changes (e.g. previewing a file) do not reset it. */
@@ -109,7 +111,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
     listingMountKey: null,
-    chatThreadId: null,
+    mountThreadId: null,
     lastTurnOnly: false,
     previewReloadTokens: {},
     staleFiles: {}

@@ -66,7 +66,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -82,11 +82,13 @@
       : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
-  /** Inbox chats mount the file tree on the thread's own artifact directory;
-   *  real projects always use the project root regardless of the open thread. */
-  let chatThreadId = $derived(projectId === INBOX_PROJECT_ID ? activeThreadId : null)
+  /** A conversation's file tree mounts on the thread's own app-owned workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory); real projects always use the project root regardless of the
+   *  open thread. */
+  let mountThreadId = $derived(usesThreadWorkspaceMount(projectId) ? activeThreadId : null)
   $effect(() => {
-    projectFilesWorkspace.setChatThread(projectId, chatThreadId)
+    projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
   // This panel can be restored directly from persisted sidebar state before a
   // file action has had a chance to prepare the workspace store.
@@ -218,7 +220,7 @@
       ? projectFilePreviewUrl(
           projectId,
           activeTab.path,
-          chatThreadId ?? undefined,
+          mountThreadId ?? undefined,
           previewReloadToken
         )
       : null
@@ -237,7 +239,7 @@
       currentReloadToken: () =>
         activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
       scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId
+      mountThreadId
     })
   )
   let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
@@ -274,7 +276,7 @@
     return projectFilePreviewUrl(
       projectId,
       directory ? `${directory}/` : '',
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   })
   /** Sanitized page for the active HTML file, built from the live session draft
@@ -652,7 +654,7 @@
       projectId,
       activeTab.path,
       workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   }
 

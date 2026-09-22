@@ -346,6 +346,7 @@ import {
   ASSISTANT_CWD_DIR,
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
+  assistantThreadWorkspaceDirectory,
   chatThreadArtifactDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
@@ -19644,9 +19645,10 @@ export class ChatEngine {
     // A routine behaves like a project, so every task in it works inside its own
     // `assistant-cwd/<routineId>/` root and keeps its artifacts there. A
     // routine-less task gets `assistant-cwd/<threadId>/` so it still lives under
-    // the assistant root without colliding with any routine.
+    // the assistant root without colliding with any routine. The file tree
+    // resolves the very same directory through `assistantThreadWorkspaceDirectory`.
     if (projectId === ASSISTANT_SPACE_ID) {
-      const assistantDirectory = join(ASSISTANT_CWD_DIR, thread.routineId ?? thread.id)
+      const assistantDirectory = assistantThreadWorkspaceDirectory(threadId, thread.routineId)
       await this.storage.ensureDirectory(assistantDirectory)
       return this.storage.resolve(assistantDirectory)
     }

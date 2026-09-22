@@ -20,8 +20,15 @@ export interface MemoryLocation {
  *   memory is settings-only and is preserved untouched by a sidebar save.
  * - `sidebar-chats` is a chat conversation's memory sidebar: it owns the
  *   `chat` scope (shown as "Global") and the `thread` scope.
+ * - `sidebar-assistant` is an assistant task's memory sidebar. Assistant tasks
+ *   are conversations inside the hidden assistant space, so the engine loads
+ *   them exactly like a project thread (root `projects` scope, the assistant
+ *   space's own file, and the task's file). It therefore owns the same three
+ *   scopes but pins the project to the assistant space, because an assistant
+ *   task never belongs to any project the user can pick.
  */
-export type MemoryPanelSurface = 'settings' | 'sidebar-projects' | 'sidebar-chats'
+export type MemoryPanelSurface =
+  'settings' | 'sidebar-projects' | 'sidebar-chats' | 'sidebar-assistant'
 
 /** One selectable scope, with the pickers it needs on the surface offering it. */
 export interface MemoryScopeOption {
@@ -53,6 +60,11 @@ export const MEMORY_SCOPE_OPTIONS = {
   'sidebar-chats': [
     { value: 'chat', label: 'Global', needsProject: false, needsThread: false },
     { value: 'thread', label: 'Thread', needsProject: false, needsThread: true }
+  ],
+  'sidebar-assistant': [
+    { value: 'projects', label: 'Global', needsProject: false, needsThread: false },
+    { value: 'project', label: 'Assistant', needsProject: false, needsThread: false },
+    { value: 'thread', label: 'This task', needsProject: false, needsThread: false }
   ]
 } as const satisfies Record<MemoryPanelSurface, readonly MemoryScopeOption[]>
 
@@ -65,7 +77,8 @@ export const MEMORY_SCOPE_OPTIONS = {
 export const MEMORY_MANAGED_SCOPES = {
   settings: ['global', 'projects', 'chat'],
   'sidebar-projects': ['projects', 'project', 'thread'],
-  'sidebar-chats': ['chat', 'thread']
+  'sidebar-chats': ['chat', 'thread'],
+  'sidebar-assistant': ['projects', 'project', 'thread']
 } as const satisfies Record<MemoryPanelSurface, readonly MemoryScope[]>
 
 export function managedScopesFor(surface: MemoryPanelSurface): readonly MemoryScope[] {

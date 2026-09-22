@@ -105,7 +105,8 @@
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isOrchestrationChildThread,
-    threadTracksReadStatus
+    threadTracksReadStatus,
+    usesThreadWorkspaceMount
   } from '$shared/types'
   import type {
     AgentPart,
@@ -498,11 +499,12 @@
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
-    // Inbox chats browse the thread's own artifact directory instead of a
-    // project root; the mount must be registered before the root listing.
-    if (selectedThread.projectId === INBOX_PROJECT_ID) {
+    // Conversations browse their own app-owned workspace directory instead of a
+    // project root (a chat's artifact directory, an assistant task's working
+    // directory); the mount must be registered before the root listing.
+    if (usesThreadWorkspaceMount(selectedThread.projectId)) {
       projectFilesWorkspace.ensureState(selectedThread.projectId)
-      projectFilesWorkspace.setChatThread(selectedThread.projectId, selectedThread.id)
+      projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
       await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
       return
@@ -780,10 +782,13 @@
   )
 
   /** Whether the file tree can be opened for the thread on screen: a local
-   *  project with a real path, or an inbox chat's own artifact directory. */
+   *  project with a real path, or a conversation that owns its own workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory). */
   let fileTreeAvailable = $derived(
     Boolean(
-      selectedThread && (selectedThread.projectId === INBOX_PROJECT_ID || projectToolsAvailable)
+      selectedThread &&
+      (usesThreadWorkspaceMount(selectedThread.projectId) || projectToolsAvailable)
     )
   )
 
@@ -808,9 +813,11 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev)   never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
-    // Assistant tasks are conversations too: their rail is just history plus
-    // the how-to panel   no terminal, actions, files, memory, or cloud tools.
+    // Assistant tasks are conversations too: their rail adds the how-to panel
+    // and mounts the file tree on the task's own working directory, but it still
+    // carries no terminal, actions or cloud tools.
     const isAssistantThread = selectedThread.projectId === ASSISTANT_SPACE_ID
+    const isConversation = isChatThread || isAssistantThread
 
     // The message-history counter leads the rail so it reads first, like a
     // running tally of the conversation   click to jump to any past message.
@@ -831,10 +838,10 @@
       }
     ]
 
-    if (isAssistantThread) {
-      return [
-        history,
-        [
+    // The how-to panel is an assistant task's own authoring surface: it sits
+    // right under history, above the workspace tools.
+    const assistantTools: ContextDockItem[] = isAssistantThread
+      ? [
           {
             id: 'assistant-how-to',
             label: 'How to',
@@ -844,21 +851,22 @@
               toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
           }
         ]
-      ]
-    }
+      : []
 
     const workspaceTools: ContextDockItem[] = []
-    // Chats surface their own per-thread artifact directory as the file tree.
-    if (isChatThread) {
+    // Conversations surface their own app-owned workspace directory as the file
+    // tree: a chat's artifact directory, or an assistant task's working
+    // directory (the routine's root).
+    if (isConversation) {
       workspaceTools.push({
         id: 'files',
-        label: 'Artifacts',
+        label: isChatThread ? 'Artifacts' : 'Workspace files',
         icon: FolderTree,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
     }
-    if (!isChatThread && projectToolsAvailable) {
+    if (!isConversation && projectToolsAvailable) {
       workspaceTools.push(
         {
           id: 'files',
@@ -876,7 +884,7 @@
         }
       )
     }
-    if (!isChatThread && workspaceState.terminalAvailable) {
+    if (!isConversation && workspaceState.terminalAvailable) {
       workspaceTools.push({
         id: 'terminal',
         label: terminalOpen ? 'Hide terminal' : 'Show terminal',
@@ -921,7 +929,7 @@
         onSelect: () => toggleDockPanel('memory', openMemoryTab)
       }
     ]
-    if (!isChatThread) {
+    if (!isConversation) {
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
@@ -1038,6 +1046,7 @@
 
     return [
       history,
+      assistantTools,
       workspaceTools,
       sessionTools,
       temporaryChats,

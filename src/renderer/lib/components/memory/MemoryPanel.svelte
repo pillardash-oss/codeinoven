@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
   import {
+    ASSISTANT_SPACE_ID,
     INBOX_PROJECT_ID,
     type MemoryCategory,
     type MemoryEntry,
@@ -96,13 +97,18 @@
     low: 'Low'
   }
 
-  /** Which memory surface this panel is, which decides its scopes and files. */
+  /** Which memory surface this panel is, which decides its scopes and files.
+   *  Assistant tasks are conversations in the hidden assistant space, so they
+   *  get their own surface: the same scopes a project thread has, pinned to the
+   *  assistant space instead of a pickable project. */
   let surface = $derived<MemoryPanelSurface>(
     variant === 'settings'
       ? 'settings'
       : projectId === INBOX_PROJECT_ID
         ? 'sidebar-chats'
-        : 'sidebar-projects'
+        : projectId === ASSISTANT_SPACE_ID
+          ? 'sidebar-assistant'
+          : 'sidebar-projects'
   )
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
@@ -121,7 +127,20 @@
       ? 'Choose whether each memory applies to projects, chats, or both.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
-        : 'Global, project, and thread preferences active in this conversation.'
+        : projectId === ASSISTANT_SPACE_ID
+          ? 'Global, assistant, and task preferences active in this conversation.'
+          : 'Global, project, and thread preferences active in this conversation.'
+  )
+
+  /** The audience named in the "memory is disabled" notice. It names the config
+   *  switch that actually gates this surface, so the notice never blames a
+   *  toggle the panel is not showing. */
+  let memoryAudienceLabel = $derived(
+    surface === 'sidebar-chats'
+      ? 'chats'
+      : surface === 'sidebar-assistant'
+        ? 'assistant tasks'
+        : 'projects'
   )
 
   let currentSection = $derived(variant === 'settings' ? settingsSection : activeSection)
@@ -579,8 +598,8 @@
       </div>
     {:else if !sidebarMemoryEnabled}
       <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
-        Persistent memory is disabled{surface === 'sidebar-chats' ? ' for chats' : ' for projects'}.
-        Entries can be managed here but are not sent to agents.
+        Persistent memory is disabled for {memoryAudienceLabel}. Entries can be managed here but are
+        not sent to agents.
       </p>
     {/if}
 

@@ -32,6 +32,7 @@ import { AssignmentEngine } from '../../lib/engines/assignment-engine'
 import { SpecContextService } from '../chat/spec-context-service'
 import { EditorService } from '../editor/editor-service'
 import { ProjectFilesService } from '../editor/project-files-service'
+import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
@@ -126,7 +127,12 @@ export function registerIpcHandlers(
   // Constructed after the scope resolver so interactive file surfaces can
   // resolve managed worktree roots instead of always reading the project root.
   const projectFilesService =
-    options.projectFilesService ?? new ProjectFilesService(projectManager, scopeRoots)
+    options.projectFilesService ??
+    new ProjectFilesService(
+      projectManager,
+      scopeRoots,
+      createThreadWorkspaceRoots(storage, database)
+    )
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
