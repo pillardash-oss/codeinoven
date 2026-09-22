@@ -4760,6 +4760,7 @@
         if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
           providerStatus = null
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -4781,6 +4782,7 @@
             errorMessage = event.error ?? 'The harness session failed.'
           }
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         break
       }
@@ -4951,6 +4953,7 @@
   async function refreshCompletedTurn(): Promise<void> {
     const staleMessageRefresh = refreshMessagesInFlight
     const checkpointRefresh = refreshCheckpoints()
+    void refreshStreamTailAfterTurn()
     if (staleMessageRefresh) await staleMessageRefresh
     await Promise.all([refreshMessages(), checkpointRefresh])
   }
@@ -10107,6 +10110,32 @@
       if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
     } catch {
       // Transient read failure   keep what we have and try again next tick.
+    }
+  }
+
+  /**
+   * One bounded durable read at a turn boundary. The 1s poll dies the moment
+   * `busy` flips false, so task-list checkoffs that streamed into the log in
+   * the last poll gap — or the whole tail that streamed while this view sat
+   * inactive — would otherwise never reach the card, and the stale snapshot
+   * outranks the fresher message cache because the synthetic stream message is
+   * appended last and a todo-list snapshot replaces the whole task map. A turn
+   * boundary is the one moment the card must read the durable truth, so a
+   * finished thread can still clear its card on its own.
+   */
+  async function refreshStreamTailAfterTurn(): Promise<void> {
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+      if (!alive || page.kind !== 'window') return
+      streamParts = mergeWorkingParts(streamParts, page.parts)
+      streamHasOlder = page.hasOlder
+      streamTodoParts = page.todoParts
+      streamCursor = page.cursor
+    } catch {
+      // Best-effort: the message cache still carries the checkoffs, and the
+      // next turn's poll or mount read rebuilds the fold again.
     }
   }
 
