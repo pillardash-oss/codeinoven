@@ -7832,6 +7832,18 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
+  /** The live thread a dispatched task currently runs in. A reassigned task
+   *  points at its newest worker, so resolution needs no history; an unassigned
+   *  or deleted thread resolves to nothing and its review badge stays inert. */
+  function resolveAssignmentTaskThread(threadId: string | undefined): Thread | undefined {
+    if (!threadId) return undefined
+    if (threadId === thread.id) return thread
+    return (
+      assignmentThreads.find((candidate) => candidate.id === threadId) ??
+      (assignmentCoordinatorThread?.id === threadId ? assignmentCoordinatorThread : undefined)
+    )
+  }
+
   /** Leave a worker/auditor view for the coordinator that owns it. The child is
    *  hidden from every thread list, so this control is the way back. */
   function openCoordinatorParent(): void {
@@ -10408,6 +10420,8 @@
           onTaskScopeChange={updateAssignmentTaskScope}
           onWorkerScopeChange={updateAssignmentWorkerScope}
           {assignmentScopeBucketId}
+          onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+          resolveTaskThread={resolveAssignmentTaskThread}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -11949,6 +11963,8 @@
                   onTaskScopeChange={updateAssignmentTaskScope}
                   onWorkerScopeChange={updateAssignmentWorkerScope}
                   {assignmentScopeBucketId}
+                  onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+                  resolveTaskThread={resolveAssignmentTaskThread}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>

@@ -8,7 +8,8 @@
     AssignmentPlan,
     AssignmentPlanContent,
     ProviderCatalog,
-    ScopeChoice
+    ScopeChoice,
+    Thread
   } from '$shared/types'
 
   interface Props {
@@ -40,6 +41,11 @@
       targetKey: string,
       position: 'before' | 'after'
     ) => void
+    /** Opens a dispatched task's current worker thread. */
+    onOpenTaskThread?: (threadId: string) => void | Promise<void>
+    /** Resolves a task's thread as it exists right now; undefined when the task
+     *  is unassigned or its worker thread was deleted. */
+    resolveTaskThread?: (threadId: string | undefined) => Thread | undefined
   }
 
   let {
@@ -63,7 +69,9 @@
     assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
-    onReorderFavorite
+    onReorderFavorite,
+    onOpenTaskThread,
+    resolveTaskThread
   }: Props = $props()
 
   // The card owns an editable snapshot until the user explicitly saves it.
@@ -129,6 +137,8 @@
           {assignmentScopeBucketId}
           {onToggleFavorite}
           {onReorderFavorite}
+          {onOpenTaskThread}
+          {resolveTaskThread}
         />
 
         {#if error}
