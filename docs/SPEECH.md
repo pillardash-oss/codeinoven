@@ -155,7 +155,7 @@ Every destructive action uses the shared confirmation modal. The modal focuses i
 
 ## Troubleshooting
 
-- **Microphone unavailable:** Check the operating-system permission and the active capture device. CodeInOven grants media capture only to its trusted renderer; browser and remote origins do not inherit it.
+- **Microphone unavailable:** Check the operating-system permission and the active capture device. CodeInOven grants media capture only to its trusted renderer; embedded browser origins do not inherit it.
 - **Model cannot be selected:** The artifact may be missing, corrupt, incompatible with the active runtime, or still awaiting qualification.
 - **Checksum mismatch:** Retry the download. Staging bytes are discarded and never become selectable.
 - **Cleanup failed:** The raw transcript is retained and inserted. Details remain on the original history attempt.

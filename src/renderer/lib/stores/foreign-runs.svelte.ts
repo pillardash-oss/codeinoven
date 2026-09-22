@@ -10,7 +10,6 @@
  */
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 import { logRendererError } from '$lib/system/renderer-logger'
 import type { ForeignRunNotice } from '$shared/types'
 
@@ -54,9 +53,7 @@ class ForeignRunsStore {
       this.#revision += 1
       this.replace((args[0] ?? []) as ForeignRunNotice[])
     })
-    // A phone peer connects to exactly one desktop, so "another instance" is not
-    // a state it can be shown, and the hydration channel is desktop-only.
-    if (!isRemotePwaRuntime()) void this.#hydrate()
+    void this.#hydrate()
   }
 
   /** Whether another instance is running this thread's turn right now. */

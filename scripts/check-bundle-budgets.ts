@@ -2,18 +2,15 @@
  * Bundle-budget check for the production renderer build.
  *
  * Reads the built renderer output (default `out/renderer`) and enforces the
- * audit's desktop and remote budgets over each **eagerly-loaded initial JS
- * closure** — the entry plus the chunks Vite emits as modulepreloads:
+ * audit's budgets over each **eagerly-loaded initial JS closure** — the entry
+ * plus the chunks Vite emits as modulepreloads:
  *
- * - initial desktop JavaScript raw ≤ 5.5 MiB and gzip ≤ 1.3 MiB
- * - initial remote JavaScript (gzip) ≤ 500 KB
- * - no single initial JS chunk (gzip) > 350 KB
+ * - initial JavaScript raw ≤ 5.5 MiB and gzip ≤ 1.3 MiB
  *
  * Truly lazy dynamic imports and their modulepreload dep arrays are excluded
- * from the measurement. The closure is derived from the same production asset
- * graph the LAN gateway uses, so the check measures exactly what a phone loads
- * to show the first screen. Exits non-zero (deterministically) when a budget
- * is exceeded.
+ * from the measurement, so the check measures exactly what the app loads to
+ * show the first screen. Exits non-zero (deterministically) when a budget is
+ * exceeded.
  *
  * Usage: `bun run check:bundle [path/to/renderer-out]`
  */
@@ -23,11 +20,6 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import {
-  computePwaAssetGraph,
-  INITIAL_JS_GZIP_BUDGET_BYTES,
-  MAX_CHUNK_GZIP_BUDGET_BYTES
-} from '../src/main/remote/pwa-asset-graph'
 
 const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 // The post-split baseline is ~4.30 MB raw / ~0.92 MB gzip. These thresholds
@@ -89,12 +81,6 @@ async function computeDesktopBudget(): Promise<DesktopBudget> {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(resolve(staticRoot, 'remote.html'))) {
-    fail(
-      `No PWA build found at ${staticRoot} (remote.html missing). ` +
-        'Run `bun run build:production` before checking bundle budgets.'
-    )
-  }
   if (!existsSync(resolve(staticRoot, 'index.html'))) {
     fail(
       `No desktop build found at ${staticRoot} (index.html missing). ` +
@@ -136,41 +122,6 @@ async function main(): Promise<void> {
   }
 
   process.stdout.write('PASS: desktop initial JS closure within budget.\n')
-
-  const graph = await computePwaAssetGraph(staticRoot)
-  const { budget } = graph
-  const chunkRows = budget.chunks
-    .map(
-      (chunk) =>
-        `${chunk.url}\n    raw ${chunk.rawBytes} B  gzip ${chunk.gzipBytes} B` +
-        `${chunk.gzipBytes > MAX_CHUNK_GZIP_BUDGET_BYTES ? '  ← OVER MAX CHUNK BUDGET' : ''}`
-    )
-    .join('\n')
-
-  process.stdout.write(
-    `Initial remote JS budget check (${staticRoot})\n` +
-      `  initial JS gzip total: ${budget.initialJsGzipBytes} B` +
-      ` (budget ${INITIAL_JS_GZIP_BUDGET_BYTES} B)` +
-      `${budget.initialJsGzipBytes > INITIAL_JS_GZIP_BUDGET_BYTES ? '  ← OVER BUDGET' : ''}\n` +
-      `  max initial chunk gzip: ${budget.maxInitialChunkGzipBytes} B` +
-      ` (budget ${MAX_CHUNK_GZIP_BUDGET_BYTES} B)` +
-      `${budget.maxInitialChunkGzipBytes > MAX_CHUNK_GZIP_BUDGET_BYTES ? '  ← OVER BUDGET' : ''}\n`
-  )
-  if (chunkRows) process.stdout.write(`  chunks:\n  ${chunkRows}\n`)
-
-  const exceeded = budget.chunks.some((chunk) => chunk.gzipBytes > MAX_CHUNK_GZIP_BUDGET_BYTES)
-  const overTotal = budget.initialJsGzipBytes > INITIAL_JS_GZIP_BUDGET_BYTES
-
-  if (overTotal || exceeded) {
-    fail(
-      'Bundle budget exceeded:\n' +
-        `  initial JS gzip ${budget.initialJsGzipBytes} B > ` +
-        `${INITIAL_JS_GZIP_BUDGET_BYTES} B: ${overTotal}\n` +
-        `  single chunk gzip > ${MAX_CHUNK_GZIP_BUDGET_BYTES} B: ${exceeded}`
-    )
-  }
-
-  process.stdout.write('PASS: remote PWA initial JS closure within budget.\n')
 }
 
 void main()

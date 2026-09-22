@@ -16,7 +16,6 @@ import {
   ListTree,
   MessageSquarePlus,
   MessagesSquare,
-  Server,
   SlidersHorizontal,
   SquarePen,
   Terminal,
@@ -119,11 +118,10 @@ export const settingsTabs: Array<{
     keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
     icon: Keyboard
   },
-  { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
   {
     id: 'profile',
     label: 'Usage',
-    keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
+    keywords: ['usage', 'activity', 'tokens', 'cost', 'rankings'],
     icon: ChartColumn
   },
   {

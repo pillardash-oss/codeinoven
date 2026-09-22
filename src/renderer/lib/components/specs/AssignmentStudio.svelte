@@ -154,7 +154,7 @@
 
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let selectedSection = $state('overview')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  /** Narrow layout only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // The effect reconciles a saved assignment version with the local editing buffer.
   // svelte-ignore state_referenced_locally

@@ -11,7 +11,6 @@ import { listHarnesses } from '../../agents/harness-registry'
 import { buildProcessEnvironment } from '../../drivers/cli-environment'
 import { isHarnessCommandAvailable } from '../../drivers/harness-runtime'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
-import { forwardRemoteEvent } from '../../remote/remote-event-forwarder'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../../lib/native-skill-paths'
 import {
@@ -1000,7 +999,6 @@ export function deliverBroadcast(event: AgentEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:event', event)
   }
-  forwardRemoteEvent('agent:event', event)
 }
 
 export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {

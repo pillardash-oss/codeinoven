@@ -252,7 +252,6 @@
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
-  import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
@@ -906,7 +905,7 @@
   }
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
-   *  session, an app restart, or a relay drop mid-turn). The trace renders the
+   *  session, or an app restart mid-turn). The trace renders the
    *  last-known saved parts with an explicit saved-activity note instead of the
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
@@ -3888,7 +3887,7 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        // Another renderer (notably the PWA) can create or resume the harness
+        // Another renderer window can create or resume the harness
         // session while this desktop view stays mounted. Adopt that persisted
         // binding before its stream arrives, then reconcile the user message
         // that the remote renderer optimistically owns in its own cache.
@@ -7249,46 +7248,6 @@
   }
 
   async function openPrototypePreview(previewPath: string): Promise<void> {
-    if (isRemotePwaRuntime()) {
-      const configuredOrigin = await invoke('prototypePreview:getOrigin')
-      if (!configuredOrigin) {
-        throw new Error('Prototype preview origin is not configured for this deployment.')
-      }
-      let offset = 0
-      let size = 0
-      let mime = 'text/html; charset=utf-8'
-      const chunks: ArrayBuffer[] = []
-      while (offset === 0 || offset < size) {
-        const chunk = await invoke(
-          'prototypePreview:readChunk',
-          thread.projectId,
-          thread.id,
-          previewPath,
-          offset
-        )
-        if (
-          chunk.nextOffset <= offset ||
-          chunk.size < 1 ||
-          chunk.size > 25 * 1024 * 1024 ||
-          chunk.nextOffset > chunk.size
-        ) {
-          throw new Error('The prototype preview returned invalid chunk metadata.')
-        }
-        const binary = atob(chunk.base64)
-        const bytes = new Uint8Array(binary.length)
-        for (let index = 0; index < binary.length; index += 1) {
-          bytes[index] = binary.charCodeAt(index)
-        }
-        chunks.push(bytes.buffer)
-        offset = chunk.nextOffset
-        size = chunk.size
-        mime = chunk.mime
-      }
-      const url = URL.createObjectURL(new Blob(chunks, { type: mime }))
-      window.open(url, '_blank', 'noopener,noreferrer')
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      return
-    }
     const origin = await invoke('prototypePreview:getOrigin')
     if (!origin) {
       errorMessage = 'Prototype preview origin is not configured for this deployment.'

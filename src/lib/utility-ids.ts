@@ -19,9 +19,8 @@ export const APP_SCOPE_UTILITY_ID = 'cio:scope'
 /**
  * Stable id of the app-owned Android device skill, a playbook an agent applies
  * with its own shell rather than a tool the app executes. Named `adb` rather
- * than `device` on purpose: `device` already means a paired phone running the
- * CodeInOven PWA (see `remote_devices` and
- * `src/renderer/lib/remote/device-identity.ts`).
+ * than `device` on purpose, because a device in the app's own vocabulary means
+ * an attached Android device, not an app role.
  */
 export const APP_ADB_UTILITY_ID = 'cio:adb'
 

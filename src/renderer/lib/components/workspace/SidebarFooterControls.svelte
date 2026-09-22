@@ -8,143 +8,35 @@
     Loader2,
     Plug,
     RefreshCw,
-    Settings,
-    Smartphone
+    Settings
   } from '@lucide/svelte'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapKeys } from '$lib/keymap/keymap'
   import { preloadSettingsChunk } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
-  import type { AccountProfileState } from '$shared/types'
   import TaskManagerModal from './TaskManagerModal.svelte'
 
   interface Props {
-    active: boolean
     navigate: (view: MainView) => void
   }
 
-  let { active, navigate }: Props = $props()
+  let { navigate }: Props = $props()
 
-  async function getRemoteStatus() {
-    return invoke('remote:getStatus')
-  }
-
-  type RemoteStatus = Awaited<ReturnType<typeof getRemoteStatus>>
-
-  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
-  let remoteStatus = $state<RemoteStatus | null>(null)
-  let wasActive: boolean | null = null
   let taskManagerOpen = $state(false)
-
-  const profile = $derived(accountState.profile)
-  const initials = $derived.by(() => {
-    const source = profile?.displayName || profile?.email || ''
-    return source
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  })
-  const enrolled = $derived(Boolean(remoteStatus?.cloud.desktopId))
-  const connectedDevice = $derived(remoteStatus?.devices.find((device) => device.connected) ?? null)
-  const remoteReady = $derived(
-    Boolean(remoteStatus?.gateway.listening || remoteStatus?.cloud.state === 'online')
-  )
-  const remoteTitle = $derived(
-    connectedDevice
-      ? `${connectedDevice.name} connected via ${connectedDevice.transport === 'lan' ? 'LAN' : 'internet'}`
-      : remoteReady
-        ? 'Mobile access ready'
-        : 'Mobile access unavailable'
-  )
-
-  async function refreshFooterState(): Promise<void> {
-    const [accountResult, remoteResult] = await Promise.allSettled([
-      invoke('account:getProfile'),
-      getRemoteStatus()
-    ])
-    if (accountResult.status === 'fulfilled') accountState = accountResult.value
-    if (remoteResult.status === 'fulfilled') remoteStatus = remoteResult.value
-  }
-
-  $effect(() => {
-    const nowActive = active
-    if (wasActive === null || (nowActive && !wasActive)) void refreshFooterState()
-    wasActive = nowActive
-  })
-
-  $effect(() => {
-    return subscribe('remote:status', (status) => {
-      remoteStatus = status
-    })
-  })
-
-  $effect(() => {
-    return subscribe('account:profileChanged', (state) => {
-      accountState = state
-    })
-  })
 </script>
 
 <div class="flex items-center gap-1 px-2 py-1.5">
-  {#if profile}
-    <button
-      type="button"
-      class="flex h-8 min-w-0 flex-1 shrink-0 items-center gap-2 overflow-hidden rounded-lg pr-2 transition-colors hover:bg-elevated"
-      title="Open {profile.displayName || profile.email}'s profile"
-      aria-label="Open {profile.displayName || profile.email}'s profile"
-      onmouseenter={preloadSettingsChunk}
-      onclick={() => navigate('settings-profile')}
-    >
-      <span
-        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[0.625rem] font-bold text-on-primary ring-1 ring-border"
-      >
-        {#if profile.image}
-          <img class="h-full w-full object-cover" src={profile.image} alt="" />
-        {:else}
-          <span aria-hidden="true">{initials}</span>
-        {/if}
-      </span>
-      <span class="min-w-0 flex-1 truncate text-left text-[0.8125rem] font-medium text-foreground">
-        {profile.displayName || profile.email}
-      </span>
-    </button>
-
-    {#if enrolled}
-      <button
-        type="button"
-        class="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title={remoteTitle}
-        aria-label={`${remoteTitle}. Open remote connection`}
-        onmouseenter={preloadSettingsChunk}
-        onclick={() => navigate('settings-remote')}
-      >
-        <Smartphone size={15} />
-        <span
-          class="absolute right-1 top-1 h-2 w-2 rounded-full border-2 border-surface {connectedDevice
-            ? 'bg-success'
-            : remoteReady
-              ? 'bg-primary'
-              : 'bg-danger'}"
-          aria-hidden="true"
-        ></span>
-      </button>
-    {/if}
-  {:else}
-    <button
-      type="button"
-      class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open settings"
-      data-shortcut={keymapKeys('nav-settings').join(',')}
-      onmouseenter={preloadSettingsChunk}
-      onclick={() => navigate('settings')}
-    >
-      <Settings size={14} />
-      Settings
-    </button>
-  {/if}
+  <button
+    type="button"
+    class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    title="Open settings"
+    data-shortcut={keymapKeys('nav-settings').join(',')}
+    onmouseenter={preloadSettingsChunk}
+    onclick={() => navigate('settings')}
+  >
+    <Settings size={14} />
+    Settings
+  </button>
 
   <div class="ml-auto flex shrink-0 items-center gap-1">
     <button
@@ -156,19 +48,6 @@
     >
       <Plug size={14} />
     </button>
-    {#if profile}
-      <button
-        type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open settings"
-        data-shortcut={keymapKeys('nav-settings').join(',')}
-        aria-label="Open settings"
-        onmouseenter={preloadSettingsChunk}
-        onclick={() => navigate('settings')}
-      >
-        <Settings size={15} />
-      </button>
-    {/if}
     {#if !updaterState.status.canAutoUpdate}
       <button
         type="button"

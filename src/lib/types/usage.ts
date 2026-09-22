@@ -380,17 +380,3 @@ export interface AccountActivityDay {
   date: string
   messageCount: number
 }
-
-/** App-wide local usage rolled up for cloud persistence and profile display. */
-export interface AccountUsageSummary {
-  messageCount: number
-  costUsd: number
-  tokens: number
-  durationMs: number
-  topHarnessId: string | null
-  topModelId: string | null
-  harnesses: AccountUsageBreakdown[]
-  models: AccountUsageBreakdown[]
-  activityDays: AccountActivityDay[]
-  generatedAt: number
-}

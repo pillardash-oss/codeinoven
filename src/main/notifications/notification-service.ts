@@ -4,8 +4,6 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
-import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
-import { remoteWebPush } from '../remote/web-push-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -537,8 +535,8 @@ export class NotificationService {
 
   /**
    * One shared delivery path for every notification kind: broadcast the
-   * payload to all renderers (plus remote mirrors), then show the OS
-   * notification when the app is not focused.
+   * payload to all renderers, then show the OS notification when the app is
+   * not focused.
    */
   private async deliverNotification(
     payload: AgentNotificationPayload,
@@ -557,11 +555,6 @@ export class NotificationService {
         sendToRenderer(window.webContents, 'notification:show', payload)
       }
     }
-    forwardRemoteEvent('notification:show', payload)
-    void remoteWebPush
-      .send(payload)
-      .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
-
     if (options.badgeThreadKey) this.markThreadNotified(options.badgeThreadKey)
 
     if (this.appFocused()) return

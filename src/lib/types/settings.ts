@@ -201,8 +201,6 @@ export interface AppConfig {
   updateChannel: 'stable' | 'nightly'
   /** Prevent sleep while a harness is actively working; review-ready spec threads stay idle. */
   keepAwakeWhileWorking: boolean
-  /** Prevent sleep while at least one authenticated phone is connected remotely. */
-  keepAwakeWhileRemoteConnected: boolean
   /** When true, sending an image to a text-only model auto-uses the configured
    *  image descriptor model instead of showing the vision-model picker card. */
   imageDescriptorAskAgain: boolean
@@ -257,7 +255,6 @@ export type AppConfigPatch = Partial<
     | 'autoInstallUpdates'
     | 'updateChannel'
     | 'keepAwakeWhileWorking'
-    | 'keepAwakeWhileRemoteConnected'
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'

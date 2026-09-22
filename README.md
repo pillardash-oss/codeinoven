@@ -184,7 +184,6 @@ Release builds are available for:
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.
-- Remote phone support is available through the built-in LAN pairing flow (QR) and optional relay mode.
 
 ### Packaging and release notes
 

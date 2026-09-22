@@ -3000,7 +3000,6 @@
   <WorkspaceSidebar
     bind:scroller={sidebarScroller}
     {mode}
-    {active}
     {navigate}
     {projects}
     {visibleProjects}

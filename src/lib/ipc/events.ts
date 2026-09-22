@@ -20,15 +20,12 @@ import type {
   SystemNotificationPermissionStatus,
   ThreadClickedPayload
 } from './notifications'
-import type { RemoteModeStatus, RemotePendingStepUpApproval } from './remote'
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
-  /** Emitted after browser sign-in changes the shared desktop account. */
-  'account:profileChanged': [] as unknown as [state: import('../types').AccountProfileState],
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
@@ -149,13 +146,6 @@ export const IPC_EVENT_CONTRACT = {
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],
-  /** Remote-mode status changes from the main process. */
-  'remote:status': [] as unknown as [status: RemoteModeStatus],
-  /**
-   * Pending single-use local step-up approvals awaiting desktop disposition.
-   * Emitted whenever a high-risk remote operation requires local approval.
-   */
-  'remote:stepUpPending': [] as unknown as [approvals: RemotePendingStepUpApproval[]],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

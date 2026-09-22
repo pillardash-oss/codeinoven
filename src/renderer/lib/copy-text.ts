@@ -7,11 +7,11 @@ async function copyWithElectron(text: string): Promise<void> {
 }
 
 /**
- * Copy text in both desktop Electron and browser/PWA renderer contexts.
+ * Copy text in the desktop renderer.
  *
  * Start both supported paths during the originating user gesture. Electron is
- * verified by reading the value back; the browser path keeps remote/PWA copy
- * controls working where desktop IPC is unavailable.
+ * verified by reading the value back; the browser fallback keeps copy controls
+ * working where desktop IPC is unavailable.
  */
 export async function copyText(text: string): Promise<void> {
   const attempts: Promise<void>[] = [copyWithElectron(text)]

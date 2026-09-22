@@ -43,7 +43,6 @@ import {
 } from './bootstrap/session-guards'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
-declare const __CODEINOVEN_DEV_REMOTE_MODE__: boolean
 declare const __CODEINOVEN_APP_VERSION__: string
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -187,7 +186,6 @@ ipcMain.handle('app:rendererReady', async () => {
 })
 
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
-const restorePersistedRemoteModeInDev = isProduction || __CODEINOVEN_DEV_REMOTE_MODE__
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -560,10 +558,7 @@ void app
         state,
         storage,
         database,
-        mainBundleDirectory,
-        appIconPath: getAppIconPath(),
         isProduction,
-        restorePersistedRemoteModeInDev,
         threadCreation,
         threadDeletion,
         onThreadClicked: openThreadFromNotification,

@@ -56,7 +56,6 @@
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
-  import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
@@ -1040,8 +1039,6 @@
       <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
-    {:else if section === 'remote'}
-      <RemoteSettingsTab />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}

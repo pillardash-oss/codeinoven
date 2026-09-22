@@ -169,7 +169,6 @@ jobs:
     timeout-minutes: 20
     needs: install
     env:
-      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
 
     steps:
@@ -319,7 +318,6 @@ jobs:
     timeout-minutes: 30
     needs: [check, lint, test, audit, build, windows-runtime, linux-runtime]
     env:
-      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
 
     steps:

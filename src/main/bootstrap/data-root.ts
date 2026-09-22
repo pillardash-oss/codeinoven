@@ -8,8 +8,8 @@ import { Logger } from '../system/logger'
  * Electron otherwise derives Linux `userData` from the product name and creates
  * `~/.config/CodeInOven` alongside CodeInOven's canonical Pillardash config
  * root. Redirect Chromium before `ready` and move the legacy directory on the
- * first upgraded launch so cookies, local storage, caches, the remote pairing
- * secret, and the owned-process journal are preserved instead of orphaned.
+ * first upgraded launch so cookies, local storage, caches, and the
+ * owned-process journal are preserved instead of orphaned.
  */
 export function configureLinuxElectronDataRoot(): void {
   if (process.platform !== 'linux') return

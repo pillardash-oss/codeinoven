@@ -2,7 +2,6 @@ import {
   BrainCircuit,
   ChartColumn,
   Cloud,
-  Globe,
   HeartPulse,
   Info,
   Keyboard,
@@ -136,14 +135,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: Keyboard
   },
   {
-    id: 'remote',
-    section: 'remote',
-    title: 'Remote',
-    description: 'Remote access and pairing.',
-    keywords: ['pairing', 'access'],
-    icon: Globe
-  },
-  {
     id: 'cloud-deployments',
     section: 'cloud-deployments',
     title: 'Cloud Deployments',
@@ -155,8 +146,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'profile',
     section: 'profile',
     title: 'Usage',
-    description: 'Usage, quotas, and account profile.',
-    keywords: ['quota', 'account', 'billing'],
+    description: 'Local usage, cost, and model rankings.',
+    keywords: ['quota', 'usage', 'spend', 'activity'],
     icon: ChartColumn
   },
   {

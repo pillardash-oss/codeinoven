@@ -26,8 +26,6 @@ import type { HarnessUpdateService } from '../agents/harness-update-service'
 import type { HarnessAutoUpdateService } from '../agents/harness-auto-update-service'
 import type { HarnessInstallService } from '../agents/harness-install-service'
 import type { NotificationService } from '../notifications/notification-service'
-import type { RemoteModeController } from '../remote/remote-mode'
-import type { DeviceCredentialService } from '../remote/device-credential-service'
 import type { ModelPricingService } from '../providers/model-pricing-service'
 import type { SpeechService } from '../speech/speech-service'
 import type { ProjectFilesService } from '../editor/project-files-service'
@@ -58,8 +56,8 @@ export interface BootstrapState {
   /**
    * Optional services constructed after the primary window paints. Module
    * evaluation only declares the bindings so the heavy service graph (chat
-   * engine, PTY, harness, remote mode, ...) never blocks the splash or the
-   * first window. Every consumer guards for `null`.
+   * engine, PTY, harness, ...) never blocks the splash or the first window.
+   * Every consumer guards for `null`.
    */
   chatEngine: ChatEngine | null
   ptyService: PtyService | null
@@ -75,17 +73,12 @@ export interface BootstrapState {
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
-  remoteCredentials: DeviceCredentialService | null
-  remoteMode: RemoteModeController | null
-  stopRemoteOwnershipListener: (() => void) | null
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
   foreignRuns: ForeignRunService | null
   /** Cross-instance thread transfer: releases and adopts running threads. */
   threadTransfer: ThreadTransferService | null
-  remoteOwnershipPromise: Promise<void> | null
-  remoteOwnershipReconcilePending: boolean
   modelPricingService: ModelPricingService | null
   speechService: SpeechService | null
   unregisterSpeechIpc: (() => void) | null
@@ -135,14 +128,9 @@ export function createBootstrapState(): BootstrapState {
     powerWakeService: null,
     retryScheduler: null,
     heartbeatScheduler: null,
-    remoteCredentials: null,
-    remoteMode: null,
-    stopRemoteOwnershipListener: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,
-    remoteOwnershipPromise: null,
-    remoteOwnershipReconcilePending: false,
     modelPricingService: null,
     speechService: null,
     unregisterSpeechIpc: null,

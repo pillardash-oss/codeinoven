@@ -120,18 +120,17 @@ Canonical files live at `.cio/specs/<feature-slug>/prototypes/<prototype-id>/`. 
 
 ## Preview deployment
 
-`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production and remote access require an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
+`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production requires an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
 
-`REMOTE_API_ORIGIN` and `ACCOUNT_AUTH_ORIGIN` retain their existing meanings and are never preview-origin fallbacks. A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
+A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
 
-Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. Remote and mobile clients request 192 KiB chunks through the authenticated, encrypted workflow RPC and assemble a bounded Blob locally; ownership is checked against the active Brainstorm metadata before any canonical file is read. The relay's existing 1 MiB frame cap remains unchanged, and neither the account origin nor arbitrary filesystem RPC is used for prototype delivery.
+Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. The preview origin serves the canonical prototype files to the desktop's own browser surface.
 
 ## Recovery
 
 - Generation failure: keep the lifecycle selected, fix the provider or validation failure, and retry from the persisted stage.
 - Invalid preview link: verify the feature-scoped artifact, manifest, preview link target, and configured public origin.
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
-- Remote disconnection: reconnect the paired client and reload the persisted lifecycle before resuming.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
 
 ### Stop outranks every auto-resume

@@ -2,7 +2,6 @@ import { BrowserWindow } from 'electron'
 import type { AgentEvent, Thread } from '../../lib/types'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
-import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { instanceRegistry } from '../system/instance-registry'
 
@@ -46,7 +45,6 @@ export function broadcastThreadUpdate(thread: Thread): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:updated', thread)
   }
-  forwardRemoteEvent('thread:updated', thread)
   if (thread.read) {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
@@ -71,7 +69,6 @@ export function broadcastThreadDraftUpdated(
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
   }
-  forwardRemoteEvent('thread:draftUpdated', { projectId, threadId, drafting, draftJson })
 }
 
 /**
@@ -96,12 +93,11 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
   }
 }
 
-/** Push permanent task deletion so every desktop and remote view drops it. */
+/** Push permanent task deletion so every renderer view drops it. */
 export function broadcastThreadDeleted(thread: Pick<Thread, 'projectId' | 'id'>): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:deleted', thread.projectId, thread.id)
   }
-  forwardRemoteEvent('thread:deleted', [thread.projectId, thread.id])
   dismissThreadNotifications(thread.projectId, thread.id)
 }
 
@@ -121,12 +117,11 @@ export function broadcastThreadOperationError(
   }
 }
 
-/** Keep note-presence indicators synchronized across desktop and remote renderers. */
+/** Keep note-presence indicators synchronized across renderer windows. */
 export function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'note:changed', projectId, threadId, hasNote)
   }
-  forwardRemoteEvent('note:changed', [projectId, threadId, hasNote])
 }
 
 /** Notify renderers that one task's live process list changed. */
@@ -134,7 +129,6 @@ export function broadcastAgentProcessesChanged(projectId: string, threadId: stri
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:processesChanged', projectId, threadId)
   }
-  forwardRemoteEvent('agent:processesChanged', [projectId, threadId])
   broadcastTaskManagerProcessesChanged()
 }
 
@@ -150,7 +144,6 @@ function deliverCrossInstanceCheckpointUpdated(event: CheckpointUpdatedEvent): v
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:event', event)
   }
-  forwardRemoteEvent('agent:event', event)
 }
 
 instanceRegistry.onCheckpointUpdated(deliverCrossInstanceCheckpointUpdated)

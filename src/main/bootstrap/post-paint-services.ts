@@ -3,8 +3,8 @@
  *
  * Construct and register the optional services only after the primary window
  * has painted. Dynamic imports keep the heavy modules (PTY, harness services,
- * provider connection, remote mode, notifications, ...) out of the
- * module-evaluation path so first paint is never blocked by their construction.
+ * provider connection, notifications, ...) out of the module-evaluation path so
+ * first paint is never blocked by their construction.
  * Hydration IPC (config/project/bounded-thread/scope reads plus `app:*`) is
  * registered before navigation, in the bootstrap. Feature IPC, chat, provider
  * catalog, file preview, and optional services are registered here after first
@@ -17,13 +17,9 @@ import { chatThreadArtifactDirectory } from '../../lib/project-artifacts'
 import { ensureDir, getConfigRoot } from '../../lib/utils'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
-import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
-import { loadDeviceIdentity } from '../account/device-identity'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
-import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
-import { readMemorySyncState } from '../remote/memory-sync-state'
 import { setNotificationService, setPowerWakeService } from '../chat/thread-events'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
@@ -41,11 +37,7 @@ export interface PostPaintBootContext {
   state: BootstrapState
   storage: StorageEngine
   database: Database
-  /** Directory of the built main bundle; icons and renderer assets resolve from it. */
-  mainBundleDirectory: string
-  appIconPath: string
   isProduction: boolean
-  restorePersistedRemoteModeInDev: boolean
   threadCreation: ThreadCreationCoordinator
   threadDeletion: ThreadDeletionCoordinator
   onThreadClicked: (payload: ThreadClickedPayload) => void
@@ -338,11 +330,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       { HarnessUpdateService },
       { HarnessInstallService },
       { HarnessAutoUpdateService },
-      { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
-      { RemoteRpcDispatcher },
-      { DeviceCredentialService },
-      { HarnessUsageRepo },
-      { MemoryService },
       { NotificationService }
     ] = await Promise.all([
       import('../system/pty-service'),
@@ -350,11 +337,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../agents/harness-update-service'),
       import('../agents/harness-install-service'),
       import('../agents/harness-auto-update-service'),
-      import('../remote/remote-mode'),
-      import('../remote/remote-rpc'),
-      import('../remote/device-credential-service'),
-      import('../database/repositories/harness-usage-repo'),
-      import('../chat/memory-service'),
       import('../notifications/notification-service')
     ])
 
@@ -388,97 +370,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.harnessInstallService = new HarnessInstallService(state.providerConnection)
     state.notificationService = new NotificationService(storage, database, context.onThreadClicked)
 
-    /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
-    state.remoteCredentials = new DeviceCredentialService(database)
-    const accountProfileRepo = new AccountProfileRepo(database)
-    const accountUsage = new HarnessUsageRepo(database)
-    const accountMemory = new MemoryService(storage)
-    state.remoteMode = new RemoteModeController({
-      lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
-      localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
-      peerSecret: remotePeerSecret(),
-      staticRoot: join(context.mainBundleDirectory, '../renderer'),
-      iconPath: context.appIconPath,
-      rpc: new RemoteRpcDispatcher({
-        database,
-        chatEngine: state.chatEngine!,
-        storage,
-        credentials: state.remoteCredentials,
-        threadCreation: context.threadCreation,
-        threadDeletion: context.threadDeletion
-      }),
-      storage,
-      credentials: state.remoteCredentials,
-      accountProfileRepo,
-      loadAccountProfileData: async () => {
-        const identity = await loadDeviceIdentity(storage)
-        const analytics = await accountUsage.profileSummary()
-        const globalMemories = (await accountMemory.getEntries()).filter(
-          (entry) => entry.scope === 'global'
-        )
-        const syncState = await readMemorySyncState(storage)
-        return {
-          deviceId: identity.deviceId,
-          deviceLabel: identity.deviceLabel,
-          platform: identity.platform,
-          usage: {
-            deviceId: identity.deviceId,
-            deviceLabel: identity.deviceLabel,
-            platform: identity.platform,
-            messageCount: analytics.messageCount,
-            costUsd: analytics.costUsd,
-            tokens: analytics.tokens,
-            durationMs: analytics.durationMs,
-            activeDays: analytics.activityDays.length,
-            projects: await accountUsage.projectUsageSummary(),
-            updatedAt: Date.now()
-          },
-          globalMemories,
-          globalMemoryTombstones: syncState?.tombstones ?? []
-        }
-      },
-      applyGlobalMemories: async (entries) => {
-        // The server returns the tombstone-filtered union of every device's
-        // memories, so replacing the local list is what propagates deletions.
-        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
-      },
-      canOwnTransport: () => instanceRegistry.isPreferredRemoteOwner(),
-      onSessionActiveChange: (active) => state.powerWakeService?.setRemoteSessionActive(active)
-    })
-
-    const reconcileRemoteTransportOwnership = (startup = false): void => {
-      if (!state.remoteMode) return
-      if (state.remoteOwnershipPromise) {
-        state.remoteOwnershipReconcilePending = true
-        return
-      }
-      state.remoteOwnershipReconcilePending = false
-      const mayRestorePersistedMode = !startup || context.restorePersistedRemoteModeInDev
-      const operation =
-        instanceRegistry.isPreferredRemoteOwner() && mayRestorePersistedMode
-          ? state.remoteMode.restoreRemoteMode()
-          : state.remoteMode.relinquishTransportOwnership()
-      state.remoteOwnershipPromise = operation
-        .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
-        .finally(() => {
-          state.remoteOwnershipPromise = null
-          if (state.remoteOwnershipReconcilePending) reconcileRemoteTransportOwnership()
-        })
-    }
-    state.stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(
-      reconcileRemoteTransportOwnership
-    )
-
     // Optional IPC   registered only after the services exist.
     if (state.updaterService) {
       state.updaterService.addActivitySource({
         activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0
       })
-      state.updaterService.addActivitySource({
-        activeSessionCount: () => (state.remoteMode?.status.blockedQuit ? 1 : 0)
-      })
     }
-    state.remoteMode.registerIpc()
     state.ptyService.register()
     state.providerConnection.register()
     state.harnessUpdateService.register()
@@ -588,10 +485,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     } catch (error) {
       Logger.error('Internal-attribution repair failed (non-fatal):', error)
     }
-
-    // Restore remote mode after paint so users can see app UI while the LAN
-    // stack spins up in the background.
-    reconcileRemoteTransportOwnership(true)
 
     try {
       state.notificationService.start()

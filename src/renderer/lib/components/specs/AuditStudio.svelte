@@ -139,7 +139,7 @@
   const annotationMarkers = $derived(overlay.markers)
   let severityEditingId = $state<string | null>(null)
   let selectedSection = $state<AuditSectionId>('executive_summary')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  /** Narrow layout only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
   let syncedReportUpdatedAt = $state(0)

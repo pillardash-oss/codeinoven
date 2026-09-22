@@ -44,7 +44,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
-  import SidebarAccountControls from './SidebarAccountControls.svelte'
+  import SidebarFooterControls from './SidebarFooterControls.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
@@ -52,7 +52,6 @@
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads'
-    active: boolean
     navigate: (view: MainView) => void
     scroller?: HTMLElement | null
     projects: Project[]
@@ -113,7 +112,6 @@
 
   let {
     mode,
-    active,
     navigate,
     scroller = $bindable(),
     projects,
@@ -283,7 +281,7 @@
 
     {#snippet footer()}
       {#if !workspaceState.specStudioOpen}
-        <SidebarAccountControls {active} {navigate} />
+        <SidebarFooterControls {navigate} />
       {/if}
     {/snippet}
 

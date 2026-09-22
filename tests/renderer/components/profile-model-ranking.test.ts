@@ -62,7 +62,6 @@ describe('ProfileSettingsTab model-ranking DOM presentation', () => {
     invokeMock.mockReset()
     invokeMock.mockImplementation(async (channel: string) => {
       if (channel === 'account:getLocalUsage') return analytics()
-      if (channel === 'account:getProfile') return { status: 'signed-out', profile: null }
       return null
     })
   })

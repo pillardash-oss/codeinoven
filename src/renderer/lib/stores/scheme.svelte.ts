@@ -4,8 +4,8 @@ import type { ResolvedTheme } from '$lib/theme'
  * The colour scheme the interface is painted in.
  *
  * This cannot be asked of a media query. A user picks light or dark in
- * Appearance (or on the phone client) independently of the OS, the choice is
- * painted as a `dark` class on `<html>`, and nothing tells Electron about it, so
+ * Appearance independently of the OS, the choice is painted as a `dark` class
+ * on `<html>`, and nothing tells Electron about it, so
  * `prefers-color-scheme` inside the renderer keeps answering for the OS.
  *
  * Provider markdown is where that difference becomes visible. A GitHub comment

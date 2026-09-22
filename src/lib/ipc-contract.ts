@@ -6,7 +6,6 @@ import { invokeProjectContract } from './ipc/invoke-project'
 import { invokeAppContract } from './ipc/invoke-app'
 import { invokeEngineeringContract } from './ipc/invoke-engineering'
 import { invokeGitContract } from './ipc/invoke-git'
-import { invokeRemoteContract } from './ipc/invoke-remote'
 import { invokeBrowserContract } from './ipc/invoke-browser'
 import { invokeNotificationContract } from './ipc/invoke-notification'
 import { invokeUpdaterContract } from './ipc/invoke-updater'
@@ -18,7 +17,6 @@ export * from './ipc/updater'
 export * from './ipc/browser'
 export * from './ipc/logging'
 export * from './ipc/notifications'
-export * from './ipc/remote'
 export * from './ipc/events'
 
 export const IPC_INVOKE_CONTRACT = {
@@ -30,7 +28,6 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeAppContract,
   ...invokeEngineeringContract,
   ...invokeGitContract,
-  ...invokeRemoteContract,
   ...invokeBrowserContract,
   ...invokeNotificationContract,
   ...invokeUpdaterContract,

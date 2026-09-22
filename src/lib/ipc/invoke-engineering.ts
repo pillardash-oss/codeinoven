@@ -155,10 +155,6 @@ export const invokeEngineeringContract = {
     string
   >,
   'prototypePreview:getOrigin': {} as Contract<[], string | null>,
-  'prototypePreview:readChunk': {} as Contract<
-    [projectId: string, threadId: string, previewPath: string, offset: number],
-    { base64: string; nextOffset: number; size: number; mime: string }
-  >,
   'brainstorm:ensureWorkflow': {} as Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
