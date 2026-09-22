@@ -278,9 +278,25 @@
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({
     canSave: false,
+    canSaveDraft: false,
     dirty: false,
     saving: false
   })
+  /** A conflict save is possible while there is resolved progress the scratch
+   *  file has not taken yet, or once every conflict block is resolved. */
+  let conflictSaveReady = $derived(conflictStatus.canSaveDraft || conflictStatus.canSave)
+  /** What the save chord does right now for a conflict being resolved: it
+   *  writes the resolved progress as a draft until there is nothing left to
+   *  draft, and only then hands the finished file back to git. The label says
+   *  which of the two the press performs, so marking a file resolved is never
+   *  a surprise. */
+  let conflictSaveLabel = $derived(
+    conflictStatus.canSaveDraft
+      ? 'Save conflict draft (Cmd/Ctrl+S)'
+      : conflictStatus.canSave
+        ? 'Replace the original file and mark it resolved (Cmd/Ctrl+S)'
+        : 'Accept a conflict block first: a draft needs at least one resolved block'
+  )
   let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
@@ -322,9 +338,17 @@
     conflictStatus = next
   }
 
+  /** Save the active tab. A conflict being resolved saves its resolved
+   *  progress as a draft first: one press cannot both persist the scratch file
+   *  and stage the file back to git, so the draft lands first and the press
+   *  after that, with no draft left to write, marks the file resolved. */
   async function saveActiveFile(): Promise<void> {
     if (!activeTab) return
     if (activePathIsConflicted) {
+      if (conflictStatus.canSaveDraft) {
+        await conflictController?.saveDraft()
+        return
+      }
       await conflictController?.save()
       return
     }
@@ -396,12 +420,28 @@
       (event.metaKey || event.ctrlKey) &&
       !event.shiftKey &&
       event.key.toLowerCase() === 's' &&
+      conflictController !== null
+    ) {
+      // The conflict editor owns the chord while it is mounted, even when there
+      // is nothing to save yet: consuming it keeps the press from falling
+      // through to the workspace's left-sidebar toggle underneath the user.
+      // Holding the key never escalates either, so a repeat press cannot mark
+      // the file resolved while the draft write is still settling.
+      event.preventDefault()
+      if (event.repeat || conflictStatus.saving || !conflictSaveReady) return
+      void saveActiveFile()
+      return
+    }
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === 's' &&
       activeTab &&
       activeTab.view !== 'diff' &&
-      (activePathIsConflicted || activeSession) &&
-      (activePathIsConflicted ? conflictStatus.canSave : dirty) &&
+      activeSession &&
+      dirty &&
       !deletedAtCheckpoint &&
-      !(activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)
+      !activeSession.saving
     ) {
       event.preventDefault()
       void saveActiveFile()
@@ -708,12 +748,10 @@
           {beautifyLabel}
           {showSaveButton}
           saveDisabled={deletedAtCheckpoint ||
-            (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
+            (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
             (activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving))}
           saving={activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving)}
-          saveLabel={activePathIsConflicted
-            ? 'Replace the original file and mark it resolved'
-            : 'Save file (Cmd/Ctrl+S)'}
+          saveLabel={activePathIsConflicted ? conflictSaveLabel : 'Save file (Cmd/Ctrl+S)'}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
           onInfo={() => void showActiveFileInfo()}
@@ -1013,11 +1051,9 @@
             type="button"
             class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
             disabled={deletedAtCheckpoint ||
-              (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
+              (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
               (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-            title={activePathIsConflicted
-              ? 'Replace the original file and mark it resolved'
-              : 'Save file (Cmd/Ctrl+S)'}
+            title={activePathIsConflicted ? conflictSaveLabel : 'Save file (Cmd/Ctrl+S)'}
             onclick={() => void saveActiveFile()}
           >
             {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
@@ -1025,7 +1061,9 @@
             {:else}
               <Save size={11} />
             {/if}
-            {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
+            {#if activePathIsConflicted}
+              {conflictStatus.canSaveDraft ? 'Save draft' : 'Mark as resolved'}
+            {:else}Save{/if}
           </button>
         {/if}
         <button

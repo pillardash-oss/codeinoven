@@ -982,20 +982,26 @@
       return
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
-      // On the plain workspace (no studio, no dirty file tab, no edited file
-      // opened from the OS) the Cmd/Ctrl+S save chord is otherwise unused, so it
-      // folds/unfolds the left sidebar. Anywhere a save binding owns the chord (a
-      // Spec/Assignment/Brainstorm studio, a project file tab with unsaved
-      // changes, or an edited standalone file) it keeps priority: we return
-      // without preventDefault so that handler saves instead of toggling.
+      // On the plain workspace (no studio, no conflict being resolved, no dirty
+      // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
+      // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
+      // save binding owns the chord (a Spec/Assignment/Brainstorm studio, the
+      // conflict resolution editor, a project file tab with unsaved changes, or
+      // an edited standalone file) it keeps priority: we return without
+      // preventDefault so that handler saves instead of toggling.
       // Shift is excluded so Cmd/Ctrl+Shift+S reaches the right-sidebar toggle
       // above, which used to fall through to this branch and fold the left
       // sidebar instead.
       if (e.repeat) return
       const leftSidebarViews = ['projects', 'chats', 'threads']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      // The conflict editor holds resolved progress that its Save draft owns, so
+      // the chord belongs to it even while no plain file tab is dirty.
+      const conflictOpen = Boolean(document.querySelector('[data-region="conflict-editor"]'))
       const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
-      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      if (!leftSidebarViews.includes(activeView) || studioOpen || conflictOpen || dirtyFiles) {
+        return
+      }
       if (standaloneFiles.activeHasUnsavedChanges) return
       e.preventDefault()
       sidebarState.toggle()

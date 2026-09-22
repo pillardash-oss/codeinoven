@@ -110,7 +110,12 @@
   }
 
   function notifyStatus(): void {
-    onStatusChange({ canSave: allResolved, dirty, saving: saving || draftSaving })
+    onStatusChange({
+      canSave: allResolved,
+      canSaveDraft,
+      dirty,
+      saving: saving || draftSaving
+    })
   }
 
   function handleConflictRangesChange(ranges: FileEditorConflictRange[]): void {
@@ -255,17 +260,18 @@
     notifyStatus()
   }
 
-  async function saveDraft(): Promise<void> {
-    if (!canSaveDraft || draftSaving || saving) return
+  async function saveDraft(): Promise<boolean> {
+    if (!canSaveDraft || draftSaving || saving) return false
     const controller = centerController
-    if (!controller) return
+    if (!controller) return false
     handleConflictRangesChange(controller.getConflictRanges())
     draftSaving = true
     notifyStatus()
     try {
       const saved = await gitState.saveConflictDraft(projectId, path, scratchContent, hunkStates)
-      if (!saved) return
+      if (!saved) return false
       dirty = false
+      return true
     } finally {
       draftSaving = false
       notifyStatus()
@@ -288,7 +294,7 @@
     }
   }
 
-  const controller: ConflictResolutionController = { save }
+  const controller: ConflictResolutionController = { save, saveDraft }
 
   onMount(() => {
     onControllerChange(controller)
@@ -461,7 +467,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">
       <Loader2 size={14} class="animate-spin" /> Preparing conflict scratch document
@@ -519,7 +525,7 @@
         type="button"
         class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!canSaveDraft || draftSaving || saving}
-        title="Save resolved conflict progress to the scratch file"
+        title="Save resolved conflict progress to the scratch file (Cmd/Ctrl+S)"
         onclick={() => void saveDraft()}
       >
         {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
@@ -611,7 +617,8 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-accent/30 bg-accent/10 px-2"
           >
-            <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
+            <span
+              class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
               >incoming</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
@@ -661,7 +668,8 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-primary/30 bg-primary/10 px-2"
           >
-            <span class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
+            <span
+              class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
               >current</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"

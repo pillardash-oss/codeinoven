@@ -388,8 +388,8 @@
           "id": "files-save",
           "keys": ["mod", "s"],
           "label": "Save file",
-          "description": "Saves the active file tab, or an edited file opened from the operating system.",
-          "scenario": "A file tab is open and has unsaved changes."
+          "description": "Saves the active file tab, or an edited file opened from the operating system. In the conflict resolution editor the press first saves the resolved progress as a draft, and only once there is no draft left to write does it replace the original file and mark it resolved.",
+          "scenario": "A file tab is open and has unsaved changes, or a conflicted file is open in the conflict resolution editor."
         },
         {
           "id": "files-goto-line",
