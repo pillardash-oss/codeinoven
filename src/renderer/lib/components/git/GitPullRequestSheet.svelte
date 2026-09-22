@@ -573,11 +573,14 @@
       const project = await invoke('project:get', projectId).catch(() => null)
       if (!project) throw new Error('Could not open this project for the agent')
       const settings = { ...threadSettings.lastUsed }
+      // The thread belongs to the scope this sheet drafts in, so a worktree's
+      // diverged branch is resolved in that worktree, not the project root.
       const thread = await invoke('thread:create', {
         projectId,
         providerId: settings.harnessId,
         title: `Resolve diverged branch ${head}`,
         workingDirectory: project.path,
+        scopeBucketId,
         settings
       }).catch(() => null)
       if (!thread) throw new Error('Could not create the resolution thread')

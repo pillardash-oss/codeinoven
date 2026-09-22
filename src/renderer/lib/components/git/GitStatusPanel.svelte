@@ -795,6 +795,7 @@
     await resolvePrConflictsWithAgent(
       projectId,
       pr,
+      scopeBucketId,
       primaryRemote?.name ?? 'origin',
       gitState.status?.branch ?? 'main',
       () => {
@@ -810,7 +811,11 @@
    * this only has to hand the agent the brief   the same brief the PR path uses.
    */
   async function resolveConflictsWithAgent(): Promise<void> {
-    await resolveCurrentConflictsWithAgent(projectId, status?.branch ?? 'this worktree')
+    await resolveCurrentConflictsWithAgent(
+      projectId,
+      scopeBucketId,
+      status?.branch ?? 'this worktree'
+    )
   }
 
   async function signOutGitHub(): Promise<void> {

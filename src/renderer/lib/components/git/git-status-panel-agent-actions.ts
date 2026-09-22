@@ -273,10 +273,16 @@ export async function openAgentThread(projectId: string, threadId: string): Prom
  * Open a thread that resolves the given conflicted paths, with the brief
  * pre-loaded as a draft so the user reviews it before sending. The panel's
  * own conflict controls stay the place the merge is completed from.
+ *
+ * The thread carries the scope the panel is attached to, so conflicts that
+ * live in a managed worktree are resolved in that worktree. Main derives the
+ * working root from the scope id and fails closed on an unhealthy checkout,
+ * which is why the renderer never supplies a worktree path here.
  */
 async function launchConflictAgent(
   projectId: string,
   project: Project,
+  scopeBucketId: string,
   title: string,
   conflictedPaths: string[],
   pullRequest: PullRequestSummary | null
@@ -286,8 +292,14 @@ async function launchConflictAgent(
     providerId: 'pi',
     title,
     workingDirectory: project.path,
+    scopeBucketId,
     settings: { ...threadSettings.lastUsed }
-  }).catch(() => null)
+  }).catch((error: unknown) => {
+    // A refused create is actionable (an unhealthy worktree, a full bucket),
+    // so it must never read as a button that did nothing.
+    reportError(error, 'The conflict resolution thread could not be created.')
+    return null
+  })
   if (!thread) return
   rendererRecovery.setDraft(
     projectId,
@@ -328,11 +340,13 @@ export async function preparePrConflictSession(
  * Resolve a PR's online conflicts with the agent's help: prepare the working
  * tree, then (once `onPrepared` has let the panel switch views) hand the agent
  * a thread to resolve the conflict markers. The agent never pushes   the user
- * finishes with Complete merge.
+ * finishes with Complete merge. The scope is the one the panel is attached to,
+ * so the checkout that was prepared is the checkout the agent resolves in.
  */
 export async function resolvePrConflictsWithAgent(
   projectId: string,
   pr: PullRequestSummary,
+  scopeBucketId: string,
   remote: string,
   returnBranch: string,
   onPrepared: () => void
@@ -345,6 +359,7 @@ export async function resolvePrConflictsWithAgent(
   await launchConflictAgent(
     projectId,
     project,
+    scopeBucketId,
     `Resolve conflicts in PR #${pr.number}`,
     [...gitState.conflicted],
     pr
@@ -355,9 +370,12 @@ export async function resolvePrConflictsWithAgent(
  * Resolve whatever integration is in progress with the agent's help. The
  * conflicts are already in the working tree (a pull, a merge or a rebase), so
  * this only has to hand the agent the brief   the same brief the PR path uses.
+ * The thread opens in `scopeBucketId`, which is the checkout the conflicted
+ * working tree belongs to.
  */
 export async function resolveCurrentConflictsWithAgent(
   projectId: string,
+  scopeBucketId: string,
   branchLabel: string
 ): Promise<void> {
   const project = await invoke('project:get', projectId).catch(() => null)
@@ -365,6 +383,7 @@ export async function resolveCurrentConflictsWithAgent(
   await launchConflictAgent(
     projectId,
     project,
+    scopeBucketId,
     `Resolve conflicts in ${branchLabel}`,
     [...gitState.conflicted],
     null
