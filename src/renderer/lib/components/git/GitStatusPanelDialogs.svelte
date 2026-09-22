@@ -1,6 +1,5 @@
 <script lang="ts">
   import { GitMerge, Loader2 } from '@lucide/svelte'
-  import { AlertDialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {
@@ -15,6 +14,7 @@
   } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -164,8 +164,6 @@
     requestSetOrigin,
     runSetOrigin
   }: Props = $props()
-
-  let checkoutConfirmButton = $state<HTMLButtonElement | null>(null)
 </script>
 
 {#if pushConfirm}
@@ -902,203 +900,104 @@
 
 {#if deleteCommitTarget}
   {@const deleteCommit = deleteCommitTarget}
-  <AlertDialog.Root open onOpenChange={() => (deleteCommitTarget = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Delete commit?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Drop
-          <strong class="font-medium text-foreground">
-            “{deleteCommit.message.split('\n')[0]}”
-          </strong>
-          ({deleteCommit.shortHash}) from history. Commits after it are replayed and get new hashes,
-          so this is safest for commits that have not been pushed yet. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('delete-commit')}
-            onclick={() => void confirmDeleteCommit()}
-          >
-            {#if gitState.isBusy('delete-commit')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Delete commit
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title="Delete commit?"
+    onCancel={() => (deleteCommitTarget = null)}
+    onConfirm={() => void confirmDeleteCommit()}
+    confirmLabel="Delete commit"
+    busy={gitState.isBusy('delete-commit')}
+  >
+    <p>
+      Drop
+      <strong class="font-medium text-foreground">
+        “{deleteCommit.message.split('\n')[0]}”
+      </strong>
+      ({deleteCommit.shortHash}) from history. Commits after it are replayed and get new hashes, so
+      this is safest for commits that have not been pushed yet. This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if checkoutConfirm}
   {@const target = checkoutConfirm}
-  <AlertDialog.Root open onOpenChange={() => (checkoutConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-        onOpenAutoFocus={(event) => {
-          event.preventDefault()
-          checkoutConfirmButton?.focus()
-        }}
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          {target.kind === 'local'
-            ? `Check out “${target.name}”?`
-            : `Create local branch “${target.name}”?`}
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          {#if target.kind === 'local'}
-            This switches the working tree to <strong class="font-medium text-foreground"
-              >{target.name}</strong
-            >. Any uncommitted changes come with you if they don't conflict.
-          {:else}
-            This creates and checks out <strong class="font-medium text-foreground"
-              >{target.name}</strong
-            >
-            as a local branch that tracks
-            <strong class="font-medium text-foreground">{target.ref}</strong>.
-          {/if}
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            bind:ref={checkoutConfirmButton}
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            disabled={gitState.isBusy('checkout')}
-            onclick={() => void confirmCheckoutBranch()}
-          >
-            {#if gitState.isBusy('checkout')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            {target.kind === 'local' ? 'Check out' : 'Create and check out'}
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={target.kind === 'local'
+      ? `Check out “${target.name}”?`
+      : `Create local branch “${target.name}”?`}
+    onCancel={() => (checkoutConfirm = null)}
+    onConfirm={() => void confirmCheckoutBranch()}
+    confirmLabel={target.kind === 'local' ? 'Check out' : 'Create and check out'}
+    busy={gitState.isBusy('checkout')}
+    variant="primary"
+  >
+    <p>
+      {#if target.kind === 'local'}
+        This switches the working tree to <strong class="font-medium text-foreground"
+          >{target.name}</strong
+        >. Any uncommitted changes come with you if they don't conflict.
+      {:else}
+        This creates and checks out <strong class="font-medium text-foreground"
+          >{target.name}</strong
+        >
+        as a local branch that tracks
+        <strong class="font-medium text-foreground">{target.ref}</strong>.
+      {/if}
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if deleteBranchConfirm}
   {@const target = deleteBranchConfirm}
-  <AlertDialog.Root open onOpenChange={() => (deleteBranchConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Delete branch “{target}”?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Branch <strong class="font-medium text-foreground">{target}</strong> will be permanently deleted.
-          This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('checkout')}
-            onclick={() => void confirmDeleteBranch()}
-          >
-            {#if gitState.isBusy('checkout')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Delete branch
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Delete branch “${target}”?`}
+    onCancel={() => (deleteBranchConfirm = null)}
+    onConfirm={() => void confirmDeleteBranch()}
+    confirmLabel="Delete branch"
+    busy={gitState.isBusy('checkout')}
+  >
+    <p>
+      Branch <strong class="font-medium text-foreground">{target}</strong> will be permanently deleted.
+      This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if forceDeleteBranchConfirm}
   {@const target = forceDeleteBranchConfirm}
-  <AlertDialog.Root open onOpenChange={() => (forceDeleteBranchConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Force delete branch “{target}”?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Branch <strong class="font-medium text-foreground">{target}</strong> is not fully merged. Are
-          you sure you want to delete it? Unmerged commits may become unreachable.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('checkout')}
-            onclick={() => void confirmForceDeleteBranch()}
-          >
-            {#if gitState.isBusy('checkout')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Delete branch
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Force delete branch “${target}”?`}
+    onCancel={() => (forceDeleteBranchConfirm = null)}
+    onConfirm={() => void confirmForceDeleteBranch()}
+    confirmLabel="Delete branch"
+    busy={gitState.isBusy('checkout')}
+  >
+    <p>
+      Branch <strong class="font-medium text-foreground">{target}</strong> is not fully merged. Are you
+      sure you want to delete it? Unmerged commits may become unreachable.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if deleteRemoteBranchConfirm}
   {@const target = deleteRemoteBranchConfirm}
-  <AlertDialog.Root open onOpenChange={() => (deleteRemoteBranchConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Delete remote branch “{target.remote}/{target.name}”?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted
-          from <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches
-          are not affected, and the deletion cannot be undone from here.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('push')}
-            onclick={() => void confirmDeleteRemoteBranch()}
-          >
-            {#if gitState.isBusy('push')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Delete remote branch
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Delete remote branch “${target.remote}/${target.name}”?`}
+    onCancel={() => (deleteRemoteBranchConfirm = null)}
+    onConfirm={() => void confirmDeleteRemoteBranch()}
+    confirmLabel="Delete remote branch"
+    busy={gitState.isBusy('push')}
+  >
+    <p>
+      Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted from
+      <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches are not
+      affected, and the deletion cannot be undone from here.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 <!-- Add / Replace Git Origin -->
@@ -1163,39 +1062,20 @@
 {/if}
 
 {#if originReplaceConfirm}
-  <AlertDialog.Root open onOpenChange={() => (originReplaceConfirm = false)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-danger/30 bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Replace {originName}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Changing the <span class="font-mono text-foreground">{originName}</span> remote URL
-          permanently redirects future <strong class="font-medium text-foreground">pull</strong>
-          and <strong class="font-medium text-foreground">push</strong> operations to the new address.
-          Your local history is preserved, but the current remote target is replaced. This cannot be undone
-          automatically make sure this is the repository you want to use.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={originBusy}
-            onclick={() => void runSetOrigin()}
-          >
-            {#if originBusy}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Replace {originName}
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Replace ${originName}?`}
+    onCancel={() => (originReplaceConfirm = false)}
+    onConfirm={() => void runSetOrigin()}
+    confirmLabel={`Replace ${originName}`}
+    busy={originBusy}
+  >
+    <p>
+      Changing the <span class="font-mono text-foreground">{originName}</span> remote URL
+      permanently redirects future <strong class="font-medium text-foreground">pull</strong>
+      and <strong class="font-medium text-foreground">push</strong> operations to the new address. Your
+      local history is preserved, but the current remote target is replaced. This cannot be undone automatically
+      make sure this is the repository you want to use.
+    </p>
+  </ConfirmDialog>
 {/if}

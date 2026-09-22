@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { AlertDialog } from 'bits-ui'
   import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -326,31 +326,18 @@
   </div>
 {/if}
 
-<AlertDialog.Root bind:open={confirmCloseOpen}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Discard attachment changes?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Your unsaved edits to {filename} will be lost.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-        >
-          Keep editing
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={onClose}
-        >
-          Discard changes
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmDialog
+  open={confirmCloseOpen}
+  title="Discard attachment changes?"
+  onCancel={() => (confirmCloseOpen = false)}
+  onConfirm={() => {
+    confirmCloseOpen = false
+    onClose()
+  }}
+  confirmLabel="Discard changes"
+  cancelLabel="Keep editing"
+>
+  <p>
+    Your unsaved edits to <span class="font-medium text-foreground">{filename}</span> will be lost.
+  </p>
+</ConfirmDialog>

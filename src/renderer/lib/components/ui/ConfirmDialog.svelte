@@ -4,12 +4,21 @@
   import Modal from './Modal.svelte'
 
   /**
-   * The shared confirmation dialog for destructive actions.
+   * The shared confirmation dialog.
    *
-   * Every destructive action in the app must be confirmed, and the shape of that
-   * confirmation is always the same: a tokenized danger surface, a cancel on the
-   * left, and a single destructive commit on the right that can show progress
-   * while the action runs. Callers supply only the title and body.
+   * Every confirmation in the app renders through this one, so the shape never
+   * depends on which surface raised it: the shared `Modal` chrome, a cancel on
+   * the left, and a single commit on the right that reports progress while it
+   * runs. Callers supply content and labels only, never styling.
+   *
+   * `variant` is `danger` for anything that destroys work and `primary` for a
+   * commit that only moves state, such as checking out a branch or saving a
+   * buffer before a navigation. `secondaryAction` covers the few dialogs that
+   * offer a third way out, such as discarding an unsaved buffer instead of
+   * saving it.
+   *
+   * Bodies carry whatever the decision needs: prose, a list of the files at
+   * stake, or a field whose value travels with the confirmation.
    */
   interface Props {
     open: boolean
@@ -27,6 +36,10 @@
     busy?: boolean
     /** Blocks the confirm button while the action is still unavailable. */
     disabled?: boolean
+    /** `danger` destroys work; `primary` only moves state. */
+    variant?: 'danger' | 'primary'
+    /** A third choice between cancel and commit, e.g. Discard next to Save. */
+    secondaryAction?: { label: string; onSelect: () => void; tone?: 'danger' | 'neutral' }
   }
 
   let {
@@ -39,7 +52,9 @@
     cancelLabel = 'Cancel',
     note,
     busy = false,
-    disabled = false
+    disabled = false,
+    variant = 'danger',
+    secondaryAction
   }: Props = $props()
 </script>
 
@@ -54,23 +69,40 @@
   {#snippet footer()}
     <button
       type="button"
+      data-modal-dismiss
       class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onCancel}
     >
       {cancelLabel}
     </button>
+    {#if secondaryAction}
+      <button
+        type="button"
+        class={[
+          'rounded-lg border px-3 py-2 text-sm font-medium',
+          secondaryAction.tone === 'danger'
+            ? 'border-danger/40 text-danger hover:bg-danger/10'
+            : 'bg-elevated hover:bg-overlay'
+        ]}
+        onclick={secondaryAction.onSelect}
+      >
+        {secondaryAction.label}
+      </button>
+    {/if}
     <button
       type="button"
-      class="inline-flex items-center gap-2 rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      data-modal-primary
+      class={[
+        'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
+        variant === 'danger' ? 'bg-danger text-on-danger' : 'bg-primary text-on-primary'
+      ]}
       disabled={disabled || busy}
       onclick={() => void onConfirm()}
     >
       {#if busy}
         <Loader2 size={14} class="animate-spin" />
-        <span>{confirmLabel}</span>
-      {:else}
-        {confirmLabel}
       {/if}
+      <span>{confirmLabel}</span>
     </button>
   {/snippet}
 </Modal>

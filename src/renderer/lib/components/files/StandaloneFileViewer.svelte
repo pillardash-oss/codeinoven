@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Dialog, AlertDialog } from 'bits-ui'
+  import { Dialog } from 'bits-ui'
   import { X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
 
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -156,38 +157,17 @@
   </Dialog.Portal>
 </Dialog.Root>
 
-<AlertDialog.Root bind:open={() => pendingClose !== null, (open) => !open && (pendingClose = null)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Unsaved changes
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        {pendingClose?.name} has edits that are not saved to disk yet.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <button
-          type="button"
-          class="h-8 rounded-lg border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10"
-          onclick={discardPending}
-        >
-          Discard
-        </button>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          onclick={() => void saveAndClosePending()}
-        >
-          Save and close
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmDialog
+  open={pendingClose !== null}
+  title="Unsaved changes"
+  onCancel={() => (pendingClose = null)}
+  onConfirm={saveAndClosePending}
+  confirmLabel="Save and close"
+  variant="primary"
+  secondaryAction={{ label: 'Discard', onSelect: discardPending, tone: 'danger' }}
+>
+  <p>
+    <span class="font-medium text-foreground">{pendingClose?.name}</span> has edits that are not saved
+    to disk yet.
+  </p>
+</ConfirmDialog>

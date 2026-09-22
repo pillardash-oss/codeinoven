@@ -46,6 +46,7 @@
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileInfoDialog from './FileInfoDialog.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
@@ -301,6 +302,13 @@
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
   let deleteTargetPath = $state<string | null>(null)
+  /** The file a Reload confirmation is open for, or null. */
+  let reloadConfirmPath = $state<string | null>(null)
+  let reloadConfirmTitle = $derived(
+    reloadConfirmPath === null
+      ? ''
+      : `Discard unsaved changes to ${reloadConfirmPath} and reload it?`
+  )
   let info = $state<ProjectFileInfo | null>(null)
   let mutationPending = $state(false)
   let goToLineOpen = $state(false)
@@ -473,10 +481,21 @@
       }
       return
     }
-    if (dirty && !window.confirm(`Discard unsaved changes to ${activeTab.path} and reload it?`)) {
+    if (dirty) {
+      reloadConfirmPath = activeTab.path
       return
     }
     void projectFilesWorkspace.reload(projectId, activeTab.path)
+  }
+
+  /** Reload the file the confirmation was raised for, now that the user accepted
+   *  losing the draft. The path is captured at request time, so the reload never
+   *  follows a tab the user switched to while the dialog was open. */
+  function discardAndReloadSelected(): void {
+    const path = reloadConfirmPath
+    reloadConfirmPath = null
+    if (path === null) return
+    void projectFilesWorkspace.reload(projectId, path)
   }
 
   /** Reformat the active file's draft in place. The result is left unsaved on
@@ -1264,3 +1283,13 @@
 />
 
 <FileInfoDialog {info} onClear={() => (info = null)} />
+
+<ConfirmDialog
+  open={reloadConfirmPath !== null}
+  title={reloadConfirmTitle}
+  onCancel={() => (reloadConfirmPath = null)}
+  onConfirm={discardAndReloadSelected}
+  confirmLabel="Discard and reload"
+>
+  <p>The version on disk replaces your unsaved edits.</p>
+</ConfirmDialog>
