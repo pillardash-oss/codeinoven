@@ -66,3 +66,15 @@ export function isGitRefusedOperation(value: unknown): value is GitRefusedOperat
   const candidate = value as { ok?: unknown; refusal?: unknown }
   return candidate.ok === false && typeof candidate.refusal === 'string'
 }
+
+/**
+ * Whether a value is the success half of a `GitInvocation` envelope, meaning the
+ * payload the caller asked for sits one level down in `value`. Guards the decode
+ * in `invokeGit` so the success path is runtime-checked the way the refusal path
+ * is, rather than trusted blind.
+ */
+export function isGitInvocationSuccess(value: unknown): value is { ok: true; value: unknown } {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as { ok?: unknown; value?: unknown }
+  return candidate.ok === true && 'value' in candidate
+}

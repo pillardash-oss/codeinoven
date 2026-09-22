@@ -610,10 +610,14 @@ describe('git IPC', () => {
 
     const checkoutHandler = handlers.get('git:checkout')
     expect(checkoutHandler).toBeDefined()
+    // The contract result of a refusing git channel is the `GitInvocation`
+    // envelope: `{ ok: true, value }` on success, `{ ok: false, refusal }` when
+    // git refused. invokeGit unwraps the value on the renderer side.
     await expect(
       checkoutHandler?.(trustedEvent(), 'git-project', 'feature/git')
     ).resolves.toMatchObject({
-      branch: 'feature/git'
+      ok: true,
+      value: { branch: 'feature/git' }
     })
 
     const thread = new ThreadRepo(database).get('git-thread')
