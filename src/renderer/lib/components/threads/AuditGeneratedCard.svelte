@@ -8,9 +8,11 @@
   import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
-    state?: Thread['auditState'] | 'failed'
+    state?: Thread['auditState'] | 'failed' | 'partial'
     version?: number
     error?: string
+    /** Evidence gaps surfaced on a partial report (generated but not fully validated). */
+    validationIssues?: string[]
     startedAt?: number
     finishedAt?: number
     retryLabel?: string
@@ -39,6 +41,7 @@
     state: auditState,
     version,
     error,
+    validationIssues = [],
     startedAt,
     finishedAt,
     retryLabel = 'Retry audit',
@@ -60,6 +63,9 @@
 
   let folded = $state(false)
   let failed = $derived(auditState === 'failed')
+  /** A report was generated, but some verification facts could not be matched
+   *  to executed evidence in the auditor transcript. */
+  let partial = $derived(auditState === 'partial')
   let invalidShapeRecovery = $derived(
     failed && error?.includes('Assignment audit made no progress after incremental correction')
   )
@@ -93,16 +99,24 @@
 
 <section
   out:slide={dismissSlide()}
-  class="rounded-xl border bg-surface p-4 {failed ? 'border-danger/40' : 'border-border'}"
+  class="rounded-xl border bg-surface p-4 {failed
+    ? 'border-danger/40'
+    : partial
+      ? 'border-warning/40'
+      : 'border-border'}"
   aria-label="Audit status"
 >
   <div class="flex items-start gap-3">
     <div
-      class="rounded-lg p-2 {failed ? 'bg-danger/10 text-danger' : 'bg-primary/10 text-primary'}"
+      class="rounded-lg p-2 {failed
+        ? 'bg-danger/10 text-danger'
+        : partial || interrupted
+          ? 'bg-warning/10 text-warning'
+          : 'bg-primary/10 text-primary'}"
     >
       {#if busy || auditState === 'running'}
         <Loader2 size={18} class="animate-spin" />
-      {:else if failed || interrupted}
+      {:else if failed || interrupted || partial}
         <CircleAlert size={18} />
       {:else}
         <FileCheck2 size={18} />
@@ -116,18 +130,24 @@
             : 'Audit failed'
           : interrupted
             ? 'Audit interrupted'
-            : reworking
-              ? 'Review sent to Sr. Engineer'
-              : version === undefined
-                ? reworkCycle
-                  ? `Rework ${reworkCycle} complete   audit running again`
-                  : 'Audit in progress'
-                : `Report generated   Version ${version}`}
+            : partial
+              ? 'Report generated, evidence incomplete'
+              : reworking
+                ? 'Review sent to Sr. Engineer'
+                : version === undefined
+                  ? reworkCycle
+                    ? `Rework ${reworkCycle} complete   audit running again`
+                    : 'Audit in progress'
+                  : `Report generated   Version ${version}`}
       </h3>
       {#if !folded}
         <p
-          class="mt-1 text-xs leading-relaxed {failed ? 'text-danger' : 'text-muted'}"
-          role={failed ? 'alert' : undefined}
+          class="mt-1 text-xs leading-relaxed {failed
+            ? 'text-danger'
+            : partial
+              ? 'text-warning'
+              : 'text-muted'}"
+          role={failed || partial ? 'alert' : undefined}
         >
           {failed
             ? invalidShapeRecovery
@@ -136,14 +156,28 @@
             : interrupted
               ? error ||
                 'The auditor could not finish. Choose another harness or model, then retry the audit.'
-              : reworking
-                ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
-                : version === undefined
-                  ? reworkCycle
-                    ? 'The existing auditor is independently verifying the completed rework.'
-                    : 'This dedicated auditor task is locked while the report is being prepared.'
-                  : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
+              : partial
+                ? 'The auditor generated a report, but some verification facts could not be matched to executed commands in its transcript. View the report, ask the auditor to validate its facts, or change the model.'
+                : reworking
+                  ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
+                  : version === undefined
+                    ? reworkCycle
+                      ? 'The existing auditor is independently verifying the completed rework.'
+                      : 'This dedicated auditor task is locked while the report is being prepared.'
+                    : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
         </p>
+        {#if partial && validationIssues.length > 0}
+          <details class="mt-3 text-xs text-muted">
+            <summary class="cursor-pointer font-medium text-foreground">
+              Unvalidated verification facts
+            </summary>
+            <ul class="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
+              {#each validationIssues as issue (issue)}
+                <li>{issue}</li>
+              {/each}
+            </ul>
+          </details>
+        {/if}
         {#if failed && elapsed}
           <p class="mt-2 text-[0.6875rem] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
         {/if}
@@ -188,6 +222,23 @@
           >
             {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
             {retryLabel}
+          </button>
+        {:else if partial}
+          <button
+            class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:opacity-50"
+            disabled={busy}
+            title="Ask the auditor to re-run the unvalidated verification facts and update the report"
+            onclick={() => onRetry(settings)}
+          >
+            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
+            {retryLabel}
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+            title="Open this report in Audit Studio"
+            onclick={onViewReport}
+          >
+            View report
           </button>
         {:else if auditState === 'running' && onViewTrace}
           <button

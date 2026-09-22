@@ -137,6 +137,10 @@ function collectVerificationCheck(
     input.evidencePath === undefined
       ? undefined
       : collectText(input.evidencePath, `${label}.evidencePath`, issues)
+  const justification =
+    input.justification === undefined
+      ? undefined
+      : collectText(input.justification, `${label}.justification`, issues)
   if (status === 'passed' || status === 'failed') {
     if (!command) issues.push(`${label}.command is required when the check ran`)
     if (files.length === 0) issues.push(`${label}.files must identify the scoped check targets`)
@@ -160,6 +164,7 @@ function collectVerificationCheck(
     ...(exitCode === undefined ? {} : { exitCode }),
     evidence: collectMarkdownText(input.evidence, `${label}.evidence`, issues),
     ...(evidencePath === undefined ? {} : { evidencePath }),
+    ...(justification === undefined ? {} : { justification }),
     findingIds
   }
 }
@@ -321,13 +326,24 @@ export function validateAuditReportContent(
       issues.push('auditedFiles is required for an Assignment audit')
     }
     if (!verification) issues.push('verification is required for an Assignment audit')
-    if (
-      verification &&
-      !verification.checks.some((check) => check.status === 'passed' || check.status === 'failed')
-    ) {
-      issues.push(
-        'Assignment audit requires at least one executed verification check backed by auditor evidence'
+    if (verification) {
+      const executed = verification.checks.filter(
+        (check) => check.status === 'passed' || check.status === 'failed'
       )
+      const exempted = verification.checks.filter(
+        (check) => check.status === 'not_applicable' && Boolean(check.justification)
+      )
+      // Evidence is normally mandatory: at least one executed check backed by
+      // auditor transcript evidence. An honest all-exempt report is acceptable
+      // when every check explains why it did not run.
+      const evidenceCovered =
+        executed.length > 0 ||
+        (exempted.length > 0 && exempted.length === verification.checks.length)
+      if (!evidenceCovered) {
+        issues.push(
+          'Assignment audit requires at least one executed verification check backed by auditor evidence, or an explicit not_applicable justification for every check'
+        )
+      }
     }
   }
   if (auditedFiles) content.auditedFiles = auditedFiles

@@ -36,6 +36,7 @@ import type {
   AssignmentTaskReport,
   AssignmentTaskReview,
   AuditReportContent,
+  AuditVerificationCheck,
   BrainstormContent,
   HarnessCommand,
   HarnessCommandSource,
@@ -132,6 +133,7 @@ export function auditCorrectionPrompt(error: Error | null): string {
     ...evidenceGaps.map((issue) => `- ${issue}`),
     `This session is still open, so the app utility gateway (search with ${UTILITY_SEARCH_TOOL_NAME}, activate, invoke) and the read-only tools remain available for this turn: perform the missing work now.`,
     `Call ${UTILITY_SEARCH_TOOL_NAME} for every framework, MCP, or skill utility the report mentions, activate and invoke the relevant result in non-writing mode, and execute the commands the report claims, then return exactly one corrected audit-report JSON object that reflects only evidence you actually observed in this session.`,
+    'Never claim passed or failed for a check you did not execute. If a check genuinely cannot be executed or scoped in this repository, set its status to "not_applicable" and record the concrete reason in the check\'s "justification" field; a check with a substantive justification is accepted without a matching transcript command, and a one-word "n/a" is not enough.',
     'Preserve the findings that remain accurate, update the verification evidence for what you just executed, and never invent execution evidence. Return the corrected JSON object with no Markdown fences or commentary.'
   ].join('\n')
 }
@@ -511,6 +513,29 @@ export function assignmentAuditErrorsUnchanged(
   return prior.length === current.length && prior.every((error, index) => error === current[index])
 }
 
+export interface AssignmentAuditExecutionEvidence {
+  /** The completed tool part backing each executed check in the report.
+   *  `not_applicable`/justified checks are absent because no command backs them. */
+  checkInvocations: Map<string, Extract<AgentPart, { type: 'tool' }>>
+  /** Reported verification claims the auditor transcript does not back. The
+   *  caller decides whether to fail or to persist a partial report. */
+  issues: string[]
+}
+
+/** A justification is accepted only as a substantive reason, so a bare dodge
+ *  cannot exempt a check the auditor never executed. */
+export const MIN_AUDIT_JUSTIFICATION_LENGTH = 16
+
+/** True when a check is exempt from transcript matching: it either did not run
+ *  (`not_applicable`) or the auditor recorded a substantive reason for it. */
+export function auditCheckIsExempt(check: AuditVerificationCheck): boolean {
+  if (check.status === 'not_applicable') return true
+  return (
+    typeof check.justification === 'string' &&
+    check.justification.trim().length >= MIN_AUDIT_JUSTIFICATION_LENGTH
+  )
+}
+
 export function validateAssignmentAuditExecutionEvidence(input: {
   content: AuditReportContent
   /** Assignment scope to enforce; omitted for independent (spec-less) audits. */
@@ -518,7 +543,7 @@ export function validateAssignmentAuditExecutionEvidence(input: {
   messages: AgentMessage[]
   auditStartedAt: number
   utilitySearchRequired: boolean
-}): Map<string, Extract<AgentPart, { type: 'tool' }>> {
+}): AssignmentAuditExecutionEvidence {
   const issues: string[] = []
   const checkInvocations = new Map<string, Extract<AgentPart, { type: 'tool' }>>()
   const auditedFiles = new Set(input.content.auditedFiles?.map((file) => file.path) ?? [])
@@ -690,7 +715,9 @@ export function validateAssignmentAuditExecutionEvidence(input: {
   }
   const verification = input.content.verification
   for (const check of verification?.checks ?? []) {
-    if (check.status === 'not_applicable') continue
+    // A check that did not run (or that the auditor justified in writing) needs
+    // no transcript match: the report records the declaration instead.
+    if (auditCheckIsExempt(check)) continue
     const rawCommand = check.command.replace(/^\$\s*/u, '').trim()
     const tokens = commandBody(rawCommand).split(' ').filter(Boolean)
     const pathTokens = tokens.filter(isPathToken)
@@ -774,8 +801,7 @@ export function validateAssignmentAuditExecutionEvidence(input: {
       )
     }
   }
-  if (issues.length > 0) throw new AuditReportValidationError(issues)
-  return checkInvocations
+  return { checkInvocations, issues }
 }
 
 export function latestAssignmentAuditOutput(messages: AgentMessage[]): string | null {

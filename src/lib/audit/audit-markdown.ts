@@ -40,10 +40,13 @@ export function exportAuditReportMarkdown(
           const findingIds = check.findingIds.length
             ? `\n  - Findings: ${check.findingIds.join(', ')}`
             : ''
+          const justification = check.justification
+            ? `\n  - Not executed: ${check.justification}`
+            : ''
           const evidencePath = check.evidencePath
             ? `\n  - Full output: [\`${check.evidencePath}\`](${evidenceLinkTarget(check.evidencePath, options.evidenceLinkPrefix)})`
             : ''
-          return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}${evidencePath}`
+          return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}${justification}${evidencePath}`
         })
         .join('\n\n')
     : 'Not recorded.'
@@ -60,6 +63,15 @@ export function exportAuditReportMarkdown(
     '# Audit Report',
     '',
     `Audit-Version: ${report.version}`,
+    ...(report.evidenceValidation === 'partial'
+      ? [
+          '',
+          '> Report generated, evidence incomplete: some verification facts could not be matched to executed commands in the auditor transcript.',
+          ...(report.evidenceIssues?.length
+            ? ['>', ...report.evidenceIssues.map((issue) => `> - ${issue}`)]
+            : [])
+        ]
+      : []),
     ...(report.specId !== undefined && report.specVersion !== undefined
       ? [`Specification: ${report.specId} v${report.specVersion}`]
       : report.independent === true

@@ -9,6 +9,7 @@
     running = false,
     auditThread,
     reportAvailable = false,
+    partialReport = false,
     selectedThreadId,
     auditorSettings,
     providers,
@@ -58,6 +59,14 @@
           auditThread?.lastError?.split('\n', 1)[0]?.trim() ||
           'The auditor stopped before delivering a report. Resume to continue from where it stopped.',
         tone: 'text-danger'
+      }
+    }
+    if (reportAvailable && partialReport) {
+      return {
+        label: 'Report ready, evidence incomplete',
+        description:
+          'The auditor generated a report, but some verification facts could not be matched to executed commands in its transcript. View it, ask the auditor to validate its facts, or change the model.',
+        tone: 'text-warning'
       }
     }
     if (reportAvailable) {
@@ -124,12 +133,18 @@
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-          title={auditFailed
-            ? 'Continue the audit from where the auditor stopped, without restarting from scratch'
-            : 'Start an independent audit of the current thread work'}
+          title={partialReport && reportAvailable
+            ? 'Ask the auditor to re-run the unvalidated verification facts and update the report'
+            : auditFailed
+              ? 'Continue the audit from where the auditor stopped, without restarting from scratch'
+              : 'Start an independent audit of the current thread work'}
           onclick={onOpenAudit}
         >
-          {auditFailed ? 'Resume audit' : 'Run audit'}
+          {partialReport && reportAvailable
+            ? 'Validate facts'
+            : auditFailed
+              ? 'Resume audit'
+              : 'Run audit'}
           <ShieldCheck size={13} />
         </button>
       {/if}

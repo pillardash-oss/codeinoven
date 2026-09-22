@@ -253,6 +253,7 @@ export const AUDIT_REPORT_SCHEMA: Record<string, unknown> = {
               status: { type: 'string', enum: ['passed', 'failed', 'not_applicable'] },
               exitCode: { type: 'number' },
               evidence: { type: 'string', minLength: 1 },
+              justification: { type: 'string', minLength: 1 },
               findingIds: { type: 'array', items: { type: 'string', minLength: 1 } }
             },
             required: ['id', 'kind', 'command', 'files', 'status', 'evidence', 'findingIds']

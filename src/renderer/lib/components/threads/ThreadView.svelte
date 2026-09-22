@@ -2689,6 +2689,7 @@
           running: independentAuditRunning,
           auditThread: durableAuditThread,
           reportAvailable: auditReport !== null,
+          partialReport: auditReport?.evidenceValidation === 'partial',
           selectedThreadId: thread.id,
           auditorSettings: auditSettings,
           providers,
@@ -2800,7 +2801,7 @@
     }
   })
 
-  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
+  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed' | 'partial'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
     const cycleStatus = assignment?.auditCycle?.status
@@ -2815,7 +2816,11 @@
       return assignment?.status === 'completed' ? 'offered' : undefined
     }
     if (cycleStatus === 'running') return 'running'
-    if (cycleStatus === 'report_ready') return 'report_ready'
+    // A report that was generated but whose verification evidence could not be
+    // fully validated surfaces as the half-report card instead of a final one.
+    if (cycleStatus === 'report_ready') {
+      return auditReport?.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     if (
       cycleStatus === 'planning_rework' ||
       cycleStatus === 'awaiting_rework_approval' ||
@@ -2823,7 +2828,9 @@
     )
       return 'reworking'
     if (cycleStatus === 'completed') return undefined
-    if (auditState === 'report_ready' && auditReport) return 'report_ready'
+    if (auditState === 'report_ready' && auditReport) {
+      return auditReport.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     return auditState
   })
   let assignmentReworkCycle = $derived(assignment?.auditCycle?.reworkCycle)
@@ -10987,8 +10994,11 @@
                       {#if !conversationBusy || !isLatest || turnAuditReport}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
-                            state="report_ready"
+                            state={turnAuditReport.evidenceValidation === 'partial'
+                              ? 'partial'
+                              : 'report_ready'}
                             version={turnAuditReport.version}
+                            validationIssues={turnAuditReport.evidenceIssues ?? []}
                             settings={auditSettings}
                             {providers}
                             projectId={thread.projectId}
@@ -11888,6 +11898,27 @@
                 finishedAt={assignmentAuditFinishedAt}
                 retryLabel="Retry audit"
                 reworkCycle={assignmentReworkCycle}
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                busy={auditBusy}
+                onRetry={generateDurableAssignmentAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
+            {:else if assignmentAuditState === 'partial' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+              <AuditGeneratedCard
+                state="partial"
+                version={auditReport.version}
+                validationIssues={auditReport.evidenceIssues ?? []}
+                retryLabel="Ask auditor to validate facts"
                 settings={auditSettings}
                 {providers}
                 projectId={thread.projectId}

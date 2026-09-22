@@ -713,6 +713,29 @@
   {/snippet}
 
       <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
+        {#if draft.evidenceValidation === 'partial'}
+          <div
+            class="rounded-xl border border-warning/40 bg-warning/10 p-4"
+            role="alert"
+            aria-label="Evidence partially validated"
+          >
+            <p class="text-xs font-semibold text-warning">
+              Report generated, evidence incomplete
+            </p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              Some verification facts in this report could not be matched to executed commands in
+              the auditor transcript. Read the report with that in mind, ask the auditor to
+              validate its facts, or change the auditor model.
+            </p>
+            {#if draft.evidenceIssues?.length}
+              <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted">
+                {#each draft.evidenceIssues as issue (issue)}
+                  <li>{issue}</li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {/if}
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
         <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
@@ -895,6 +918,11 @@
                           </code>
                         {/if}
                         <p class="text-xs leading-5 text-muted">{check.evidence}</p>
+                        {#if check.justification}
+                          <p class="text-xs leading-5 text-warning">
+                            Not executed: {check.justification}
+                          </p>
+                        {/if}
                         {#if check.files.length}
                           <p class="break-all text-[0.625rem] leading-4 text-dimmed">
                             {check.files.join(', ')}

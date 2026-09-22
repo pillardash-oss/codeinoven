@@ -571,6 +571,7 @@ import {
   toRankingCandidate,
   turnStreamPath,
   userInstructionText,
+  auditCheckIsExempt,
   validateAssignmentAuditExecutionEvidence,
   validatePromptReferences,
   validateQuestionAnswers,
@@ -15306,6 +15307,14 @@ export class ChatEngine {
     const auditStartedAt = Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     let lastError: Error | null = null
+    /** The most recent structurally-valid report content plus the evidence
+     *  gaps that kept it from full validation. When the correction attempts are
+     *  exhausted this is persisted as a partial report instead of discarding
+     *  a generated report. */
+    let partialCandidate: {
+      content: AuditReportContent
+      issues: string[]
+    } | null = null
     // A previous failed run leaves the auditor's durable session intact, so
     // the next run continues from where it stopped instead of re-auditing
     // the whole thread from scratch.
@@ -15437,12 +15446,31 @@ export class ChatEngine {
                   { requireVerification: true }
                 )
         }
-        const checkInvocations = validateAssignmentAuditExecutionEvidence({
+        // Most recent structurally-valid content, kept as the partial fallback
+        // whenever the evidence matcher still leaves gaps on that response.
+        partialCandidate = { content, issues: [] }
+        const evidence = validateAssignmentAuditExecutionEvidence({
           content,
           messages: await driver.loadMessages(projectPath, sessionId),
           auditStartedAt,
           utilitySearchRequired: utilityTurn.runtimeAvailable
         })
+        const checkInvocations = evidence.checkInvocations
+        const evidenceIssues = evidence.issues
+        if (evidenceIssues.length > 0) {
+          // The auditor still has its correction attempts; this content is kept
+          // as the partial fallback if every attempt stays unvalidated.
+          partialCandidate = { content, issues: evidenceIssues }
+          content = await this.persistAssignmentAuditCheckEvidence({
+            projectId,
+            threadId: coordinatorThreadId,
+            runId,
+            content,
+            checkInvocations,
+            requireInvocations: false
+          })
+          throw new AuditReportValidationError(evidenceIssues)
+        }
         content = await this.persistAssignmentAuditCheckEvidence({
           projectId,
           threadId: coordinatorThreadId,
@@ -15516,6 +15544,51 @@ export class ChatEngine {
           auditorThread.id,
           sessionId
         )
+      }
+    }
+
+    // The auditor generated a structurally-valid report but every correction
+    // attempt still left evidence gaps in the transcript. Persist it as a
+    // partial report instead of discarding the work: it stays viewable in Spec
+    // Studio, and the half-report card offers re-validation or a model change.
+    if (partialCandidate !== null && partialCandidate.issues.length > 0) {
+      const report = await this.auditEngine.create({
+        projectId,
+        threadId: coordinatorThreadId,
+        independent: true,
+        content: partialCandidate.content,
+        outcome: auditRequiresRework(partialCandidate.content) ? 'rework_required' : 'passed',
+        evidenceValidation: 'partial',
+        evidenceIssues: partialCandidate.issues,
+        provenance: {
+          source: 'agent',
+          actor: 'auditor',
+          harnessId: auditorSettings.harnessId,
+          providerId: auditorSettings.providerId,
+          modelId: auditorSettings.modelId
+        }
+      })
+      await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
+        id: report.id,
+        version: report.version
+      })
+      await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+        read: false
+      })
+      await this.loadMessages(projectId, auditorThread.id)
+      await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
+      Logger.error('Independent audit persisted with unvalidated evidence', {
+        projectId,
+        threadId: coordinatorThreadId,
+        reportId: report.id,
+        version: report.version,
+        issues: partialCandidate.issues.length,
+        error: (lastError ?? new Error('Evidence validation failed.')).message
+      })
+      return {
+        report,
+        auditorThread:
+          (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
       }
     }
 
@@ -16236,6 +16309,10 @@ export class ChatEngine {
     runId: string
     content: AuditReportContent
     checkInvocations: Map<string, Extract<AgentPart, { type: 'tool' }>>
+    /** False when persisting a partial (evidence-unvalidated) report: executed
+     *  checks without a matched invocation keep their model-written evidence and
+     *  no evidencePath instead of aborting. */
+    requireInvocations?: boolean
   }): Promise<AuditReportContent> {
     const verification = input.content.verification
     if (!verification) return input.content
@@ -16244,7 +16321,9 @@ export class ChatEngine {
     const versions = new Map<AuditVerificationCheckKind, number>()
     const checks: AuditVerificationCheck[] = []
     for (const check of verification.checks) {
-      if (check.status === 'not_applicable') {
+      // A check that did not run (or that the auditor justified in writing)
+      // keeps its model-written evidence and never needs an evidence file.
+      if (auditCheckIsExempt(check)) {
         checks.push({
           ...check,
           evidence: check.evidence.replace(/\s+/gu, ' ').trim().slice(0, 320)
@@ -16253,6 +16332,13 @@ export class ChatEngine {
       }
       const invocation = input.checkInvocations.get(check.id)
       if (!invocation) {
+        if (input.requireInvocations === false) {
+          checks.push({
+            ...check,
+            evidence: check.evidence.replace(/\s+/gu, ' ').trim().slice(0, 320)
+          })
+          continue
+        }
         throw new AuditReportValidationError([
           `verification.checks ${check.id} has no matched invocation to persist`
         ])
@@ -16320,6 +16406,10 @@ export class ChatEngine {
     content: AuditReportContent
     auditorThread: Thread
     auditorSettings: ThreadSettings
+    /** Partial evidence-validation stamp for reports persisted after the
+     *  evidence matcher could still not back every claim. */
+    evidenceValidation?: AuditReport['evidenceValidation']
+    evidenceIssues?: string[]
   }): Promise<{ report: AuditReport; auditorThread: Thread }> {
     const report = await this.auditEngine.create({
       projectId: input.projectId,
@@ -16330,6 +16420,8 @@ export class ChatEngine {
       reworkCycle: input.assignment.auditCycle?.reworkCycle,
       content: input.content,
       outcome: auditRequiresRework(input.content) ? 'rework_required' : 'passed',
+      evidenceValidation: input.evidenceValidation,
+      evidenceIssues: input.evidenceIssues,
       provenance: {
         source: 'agent',
         actor: 'auditor',
@@ -16440,6 +16532,12 @@ export class ChatEngine {
         : [])
     ].join('\n\n')
     let terminalFailure: Error
+    /** Latest shape-valid attempt content plus its remaining evidence gaps,
+     *  persisted as a partial report when the repair loop exhausts. */
+    let partialCandidate: {
+      content: AuditReportContent
+      issues: string[]
+    } | null = null
     const resumingAudit = assignment.auditCycle?.status === 'running'
     const auditStartedAt =
       resumingAudit && assignment.auditCycle?.startedAt !== undefined
@@ -16496,19 +16594,22 @@ export class ChatEngine {
             coordinatorThreadId,
             recoveredAttempt.relativePath
           )
-          const checkInvocations = validateAssignmentAuditExecutionEvidence({
+          const evidence = validateAssignmentAuditExecutionEvidence({
             content: recoveredContent,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: false
           })
+          if (evidence.issues.length > 0) {
+            throw new AuditReportValidationError(evidence.issues)
+          }
           recoveredContent = await this.persistAssignmentAuditCheckEvidence({
             projectId,
             threadId: coordinatorThreadId,
             runId,
             content: recoveredContent,
-            checkInvocations
+            checkInvocations: evidence.checkInvocations
           })
           await this.writeAssignmentAuditRepairManifest({
             schemaVersion: 1,
@@ -16677,19 +16778,25 @@ export class ChatEngine {
             coordinatorThreadId,
             persistedAttempt.relativePath
           )
-          const checkInvocations = validateAssignmentAuditExecutionEvidence({
+          const evidence = validateAssignmentAuditExecutionEvidence({
             content,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: utilityRuntimeAvailable
           })
+          if (evidence.issues.length > 0) {
+            // The repair loop still gets its feedback; this content is kept as
+            // the partial fallback if no later attempt validates fully.
+            partialCandidate = { content, issues: evidence.issues }
+            throw new AuditReportValidationError(evidence.issues)
+          }
           content = await this.persistAssignmentAuditCheckEvidence({
             projectId,
             threadId: coordinatorThreadId,
             runId,
             content,
-            checkInvocations
+            checkInvocations: evidence.checkInvocations
           })
         } catch (error) {
           const errors =
@@ -16772,6 +16879,31 @@ export class ChatEngine {
         auditorThreadId: auditorThread.id
       })
       throw failure
+    }
+    // The auditor generated a shape-valid report but every repair attempt still
+    // left evidence gaps. Persist it as a partial report so the card and Spec
+    // Studio surface it instead of discarding the generated work.
+    if (partialCandidate !== null && partialCandidate.issues.length > 0) {
+      const completed = await this.completeAssignmentAudit({
+        projectId,
+        coordinatorThreadId,
+        spec,
+        assignment,
+        content: partialCandidate.content,
+        auditorThread,
+        auditorSettings,
+        evidenceValidation: 'partial',
+        evidenceIssues: partialCandidate.issues
+      })
+      Logger.error('Assignment audit persisted with unvalidated evidence', {
+        projectId,
+        threadId: coordinatorThreadId,
+        reportId: completed.report.id,
+        version: completed.report.version,
+        issues: partialCandidate.issues.length,
+        error: failure.message
+      })
+      return completed
     }
     Logger.error('Assignment audit failed', {
       projectId,
