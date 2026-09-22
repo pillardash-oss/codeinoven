@@ -22,8 +22,8 @@
     /**
      * Leading glyph, drawn where the branch icon sits by default. The panel owns
      * it so the working-tree state (clean, dirty, conflicted) stays with the
-     * status it comes from. The trigger renders it interactive, where the dirty
-     * badge is a control that opens the panel's Changes view; the picker's own
+     * status it comes from. The trigger renders it interactive, where every state
+     * but clean is a control that opens the panel's Changes view; the picker's own
      * rows render it bare, where the badge stays a plain mark.
      */
     statusIcon?: Snippet<[boolean]>
@@ -145,8 +145,8 @@
   }
 
   /**
-   * The dirty badge inside the trigger opens the Changes view, so a click that
-   * landed on it closes the picker instead of dragging it along to the next view.
+   * A status badge inside the trigger opens the Changes view, so a click that
+   * landed on one closes the picker instead of dragging it along to the next view.
    * `preventDefault` keeps the trigger's own click handler out of the loop (it is
    * what also covers the click a screen reader sends for the badge, which arrives
    * with no keyboard event in front of it); the click is left to bubble, so every

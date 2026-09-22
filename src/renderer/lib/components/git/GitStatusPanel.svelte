@@ -902,7 +902,7 @@
   }
 
   /**
-   * Take the branch trigger's dirty badge to the work it names: the Changes view
+   * Take the branch trigger's status badge to the work it names: the Changes view
    * with any commit that was open closed, so the click lands on the working tree
    * instead of the commit sheet the view would otherwise still be showing. The
    * click itself is left to bubble to the trigger, which closes a picker that
@@ -914,9 +914,9 @@
   }
 
   /**
-   * The badge is a control, so Enter and Space do what a click does. Both keys
-   * are consumed here: the trigger toggles the picker from its own keydown, and
-   * a cancelled key is what keeps it out of that path.
+   * Every state badge is a control, so Enter and Space do what a click does. Both
+   * keys are consumed here: the trigger toggles the picker from its own keydown,
+   * and a cancelled key is what keeps it out of that path.
    */
   function activateWorkingChangesFromKeyboard(event: KeyboardEvent): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -1848,12 +1848,22 @@
   )
   const showsActionRow = $derived(showsViewContext || showsRemoteActions)
 
+  /** The working tree's state as a badge names it, most urgent first. */
+  type WorktreeState = 'clean' | 'dirty' | 'conflicted'
+
+  /**
+   * Every state that names work waiting in the Changes view. The branch
+   * trigger's badge offers exactly these as controls; a clean tree has nothing
+   * behind it, so it stays a mark.
+   */
+  type WorktreeActionState = Exclude<WorktreeState, 'clean'>
+
   /**
    * Working-tree state as the branch picker's leading glyph, in the order the
    * states ask for attention: conflicts first, then uncommitted changes, then
    * clean. Null while there is no status to describe.
    */
-  const worktreeState = $derived.by((): 'clean' | 'dirty' | 'conflicted' | null => {
+  const worktreeState = $derived.by((): WorktreeState | null => {
     if (!status) return null
     if (conflicted.length > 0) return 'conflicted'
     return status.clean ? 'clean' : 'dirty'
@@ -2569,10 +2579,69 @@
    */
   const dirtyBadgeClass =
     'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
+
+  /**
+   * What a state badge says once the trigger renders it as a control. The state
+   * supplies the words and its own tone, nothing else: every state but clean is
+   * work waiting in the Changes view, so every one of them opens it. The hover
+   * halo takes the state's colour at the weight the chip already uses for its
+   * face, so a hover reads as that badge lighting up rather than as the row.
+   */
+  const statusActionCopy: Record<
+    WorktreeActionState,
+    { title: string; ariaLabel: string; hoverClass: string }
+  > = {
+    conflicted: {
+      title: 'Conflicts to resolve. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the conflicts in this working tree',
+      hoverClass: 'hover:bg-danger/20'
+    },
+    dirty: {
+      title: 'Uncommitted changes in this branch. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the uncommitted changes in this branch',
+      hoverClass: 'hover:bg-warning/20'
+    }
+  }
 </script>
 
+<!--
+  The trigger's copy of a state badge: a control, not a mark. The state the user
+  is looking at is the work they are about to do, so the badge itself is the
+  shortest way to the Changes view.
+
+  The hit area is padded and pulled back by the same amount, so a 12px glyph is
+  a 20px target without widening the row it sits in. `data-status-action` is the
+  contract with `BranchPicker`, the trigger's owner: a gesture that starts on the
+  badge must not open the branch list, and a click here must close a picker that
+  was already open.
+-->
+{#snippet worktreeStatusAction(state: WorktreeActionState)}
+  {@const copy = statusActionCopy[state]}
+  <span
+    class={[
+      '-m-1 flex shrink-0 cursor-pointer items-center rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+      copy.hoverClass
+    ]}
+    role="button"
+    tabindex="0"
+    data-status-action
+    title={copy.title}
+    aria-label={copy.ariaLabel}
+    onclick={openWorkingChanges}
+    onkeydown={activateWorkingChangesFromKeyboard}
+  >
+    {#if state === 'conflicted'}
+      <TriangleAlert size={12} class="shrink-0 text-danger" aria-hidden="true" />
+    {:else}
+      <span class={dirtyBadgeClass}>dirty</span>
+    {/if}
+  </span>
+{/snippet}
+
 {#snippet branchStatusIcon(interactive: boolean)}
-  {#if worktreeState === 'conflicted'}
+  {#if interactive && worktreeState !== null && worktreeState !== 'clean'}
+    {@render worktreeStatusAction(worktreeState)}
+  {:else if worktreeState === 'conflicted'}
     <TriangleAlert
       size={12}
       class="shrink-0 text-danger"
@@ -2581,35 +2650,12 @@
       title="Conflicts to resolve"
     />
   {:else if worktreeState === 'dirty'}
-    {#if interactive}
-      <!--
-        In the trigger the chip is a control, not a mark: the state the user is
-        looking at is also the work they want, so one click on it opens the
-        Changes view. The trigger is what keeps the picker shut for it: a gesture
-        starting on `data-status-action` cancels the pointer event that would
-        open the branch list, and reads the click as its own (`BranchPicker`).
-      -->
-      <span
-        class={[
-          dirtyBadgeClass,
-          'cursor-pointer transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
-        ]}
-        role="button"
-        tabindex="0"
-        data-status-action
-        title="Uncommitted changes in this branch. Open the Changes view"
-        aria-label="Open the Changes view for the uncommitted changes in this branch"
-        onclick={openWorkingChanges}
-        onkeydown={activateWorkingChangesFromKeyboard}>dirty</span
-      >
-    {:else}
-      <!--
-        A badge rather than a ring: at 12px an outlined circle reads as a bullet,
-        where the amber chip reads as the state it names. The picker's own list
-        marks the dirty branch with the same chip.
-      -->
-      <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
-    {/if}
+    <!--
+      A badge rather than a ring: at 12px an outlined circle reads as a bullet,
+      where the amber chip reads as the state it names. The picker's own list
+      marks the dirty branch with the same chip.
+    -->
+    <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
   {:else}
     <CircleCheck
       size={12}
