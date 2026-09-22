@@ -330,6 +330,7 @@
                       class="font-medium text-primary underline underline-offset-2"
                       type="button"
                       title="Open {oauth.deviceCode.verificationUri}"
+                      data-external-url={oauth.deviceCode.verificationUri}
                       onclick={() => void openInBrowser(oauth.deviceCode?.verificationUri ?? '')}
                     >
                       {oauth.deviceCode.verificationUri}

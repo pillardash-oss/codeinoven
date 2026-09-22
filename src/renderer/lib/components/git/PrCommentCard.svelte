@@ -248,7 +248,10 @@
   }
 </script>
 
-<article class={['overflow-hidden bg-surface', framed && 'rounded-lg border border-border']}>
+<article
+  class={['overflow-hidden bg-surface', framed && 'rounded-lg border border-border']}
+  data-entry-url={entry.url}
+>
   <header
     class={[
       'flex items-start gap-1.5 px-2.5 py-1.5',

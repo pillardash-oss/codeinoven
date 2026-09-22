@@ -14,8 +14,10 @@
    * comment that quotes it. The reply box says which one it is doing.
    */
   import { MessageSquareReply, MessagesSquare } from '@lucide/svelte'
+  import type { Attachment } from 'svelte/attachments'
   import { gitState } from '$lib/stores/git.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
+  import { flashElement } from '$lib/reveal-flash'
   import type { PullRequestFile } from '$shared/types'
   import PrCommentCard from './PrCommentCard.svelte'
   import PrReplyBox from './PrReplyBox.svelte'
@@ -51,6 +53,20 @@
     onNotice: (message: string) => void
     /** Reload the bundle after a mutation. */
     onRefresh: () => Promise<void>
+    /**
+     * An entry to bring into view, with a token that changes per request.
+     *
+     * The token is what makes a second request for the same comment a new
+     * request: the identity of this object, not the URL inside it, is what the
+     * reveal effect watches.
+     */
+    reveal?: { url: string; token: number } | null
+    /**
+     * Called once a reveal has been applied, so the surface that asked for it can
+     * drop the request. Without this, leaving the conversation and coming back
+     * would jump to that same comment again.
+     */
+    onRevealDone?: () => void
   }
 
   let {
@@ -64,7 +80,9 @@
     onCommentChat,
     onAssignAgent,
     onNotice,
-    onRefresh
+    onRefresh,
+    reveal = null,
+    onRevealDone
   }: Props = $props()
 
   /** The row a Delete confirmation is open for, or null. */
@@ -74,6 +92,29 @@
    * to identify it: a unit's reply box belongs to the comment it answers.
    */
   let replyEntry = $state<ConversationEntry | null>(null)
+
+  /**
+   * Take the reader to the entry a report asked to see, and say which one it was.
+   *
+   * An attachment, so this is the stream element's own concern: it runs when the
+   * stream mounts, and again on every request, because reading `reveal` is what
+   * makes it reactive. Each entry carries its provider permalink as
+   * `data-entry-url`, which is the one identity a comment keeps across a rebuild
+   * of the stream. The scroll alone answers "somewhere here"; the flash answers
+   * "this one", which is what a reader needs after landing among comments that
+   * all look alike.
+   */
+  const revealEntry: Attachment<HTMLDivElement> = (element) => {
+    const request = reveal
+    if (!request) return
+    const target = [...element.querySelectorAll<HTMLElement>('[data-entry-url]')].find(
+      (candidate) => candidate.dataset.entryUrl === request.url
+    )
+    if (!target) return
+    target.scrollIntoView({ block: 'start' })
+    flashElement(target)
+    onRevealDone?.()
+  }
 
   const busy = $derived(gitState.isBusy('pr-comment-reply') || gitState.isBusy('pr-comment'))
 
@@ -166,7 +207,7 @@
     Peers with room between them, not a rail: the order is the reading order, and
     a unit that owns children draws their tree itself.
   -->
-  <div class="flex flex-col gap-3 p-2.5">
+  <div {@attach revealEntry} class="flex flex-col gap-3 p-2.5">
     {#each nodes as node (node.key)}
       {#if node.kind === 'description' || node.kind === 'comment'}
         <PrCommentCard

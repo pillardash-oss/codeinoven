@@ -661,6 +661,7 @@
               class="mt-1 flex max-w-full items-center gap-1 text-left font-mono text-xs hover:underline"
               type="button"
               title="Open {entry.source} on GitHub"
+              data-external-url={detail?.repositoryUrl ?? entry.url}
               onclick={() => void openInBrowser(detail?.repositoryUrl ?? entry.url)}
             >
               <span class="truncate">{entry.source}</span><ExternalLink
@@ -700,6 +701,7 @@
           class="mt-5 flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
           type="button"
           title="Open this skill on skills.sh"
+          data-external-url={entry.url}
           onclick={() => void openInBrowser(entry.url)}
         >
           View on skills.sh <ExternalLink size={12} />

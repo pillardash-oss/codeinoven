@@ -210,18 +210,11 @@
   let notice = $state('')
   /** Every agent assignment on this pull request, newest first. */
   let agentReports = $state<PrAgentReport[]>([])
-  /** The assignment the Agent view shows, or null to follow the newest one. */
-  let selectedReportId = $state<string | null>(null)
   /**
-   * The report the Agent view is showing.
-   *
-   * Falls back to the newest assignment rather than to nothing: an id can outlive
-   * its report (a reload after the file was removed, a second assignment landing
-   * while one is selected), and showing the latest work is the useful answer then.
+   * A conversation entry an agent report asked to be shown, with a token that
+   * changes on every request so asking twice for the same comment still jumps.
    */
-  const agentReport = $derived(
-    agentReports.find((report) => report.id === selectedReportId) ?? agentReports[0] ?? null
-  )
+  let commentReveal = $state<{ url: string; token: number } | null>(null)
 
   const number = $derived(summary.number)
   /**
@@ -295,11 +288,7 @@
   const tabs = $derived(
     PR_DETAIL_VIEWS.map((view) => ({
       ...view,
-      count: prViewCount(
-        view.id,
-        bundle,
-        agentReports.some((report) => report.content.trim().length > 0)
-      )
+      count: prViewCount(view.id, bundle, agentReports.length)
     }))
   )
 
@@ -615,21 +604,40 @@
     }
   }
 
-  /** Post the agent's report into the PR conversation, verbatim. */
-  async function postAgentReport(): Promise<void> {
-    if (!agentReport?.content.trim()) return
+  /**
+   * Post an agent's report into the PR conversation, verbatim.
+   *
+   * The report is named by the caller rather than read from a selection: the
+   * Agent view shows every assignment at once, so there is no "current" report
+   * for this to pick up.
+   */
+  async function postAgentReport(report: PrAgentReport): Promise<void> {
+    if (!report.content.trim()) return
     const created = await gitState.commentOnPullRequest(
       projectId,
       identity.owner,
       identity.repo,
       number,
-      agentReport.content
+      report.content
     )
     if (created) {
       notice = 'Agent report posted to the pull request'
       tab = 'conversation'
       await refresh()
     }
+  }
+
+  /**
+   * Take an agent report's reader to the comment it answered.
+   *
+   * The conversation is what holds the comment, so this switches views and hands
+   * the permalink down; the conversation scrolls to that entry and flashes it,
+   * which is the difference between opening a view and finding the thing.
+   */
+  function showReportComment(report: PrAgentReport): void {
+    if (!report.url) return
+    commentReveal = { url: report.url, token: (commentReveal?.token ?? 0) + 1 }
+    tab = 'conversation'
   }
 
   $effect(() => {
@@ -970,6 +978,8 @@
         {identity}
         {number}
         authorLogin={summary.authorLogin}
+        reveal={commentReveal}
+        onRevealDone={() => (commentReveal = null)}
         onQuote={(entry) => void quoteEntry(entry)}
         onCommentChat={openCommentChat}
         onAssignAgent={assignCommentToAgent}
@@ -1003,14 +1013,14 @@
     {:else}
       <GitPullRequestDetailAgentReport
         {number}
+        {projectId}
         {summary}
         reports={agentReports}
-        {agentReport}
         {posting}
         {onOpenThread}
         {onAssignAgent}
-        onSelectReport={(id) => (selectedReportId = id)}
-        onPostReport={() => void postAgentReport()}
+        onShowInConversation={showReportComment}
+        onPostReport={(report) => void postAgentReport(report)}
       />
     {/if}
   </div>

@@ -52,13 +52,15 @@ export const PR_DETAIL_VIEWS: Array<{
 export function prViewCount(
   view: PrDetailTabId,
   bundle: PullRequestBundle | null | undefined,
-  hasAgentReport: boolean
+  agentAssignments: number
 ): number {
+  // Assignments are read from disk on their own rather than out of the fetched
+  // bundle, so this view counts before the bundle arrives.
+  if (view === 'agent') return agentAssignments
   if (!bundle) return 0
   if (view === 'commits') return bundle.commits.length
   if (view === 'files') return bundle.files.length
   if (view === 'checks') return bundle.checks.checks.length
-  if (view === 'agent') return hasAgentReport ? 1 : 0
   return conversationEntryCount(buildConversation(bundle))
 }
 

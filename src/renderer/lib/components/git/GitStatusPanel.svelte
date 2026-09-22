@@ -1679,10 +1679,8 @@
         view.id,
         pullRequestBundle,
         selectedPullRequest
-          ? (gitState.prAgentReports[String(selectedPullRequest.number)] ?? []).some(
-              (report) => report.content.trim().length > 0
-            )
-          : false
+          ? (gitState.prAgentReports[String(selectedPullRequest.number)]?.length ?? 0)
+          : 0
       )
     }))
   )

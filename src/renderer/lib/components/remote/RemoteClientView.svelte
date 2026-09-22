@@ -310,6 +310,7 @@
                   title="Open mobile website in browser"
                   aria-label="Open mobile website in browser"
                   disabled={interactionsLocked}
+                  data-external-url={mobileAppUrl}
                   onclick={() => void openInBrowser(mobileAppUrl)}
                 >
                   <ExternalLink size={13} /> Open
