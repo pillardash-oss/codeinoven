@@ -53,9 +53,9 @@
 
   /**
    * A triage assignment answers the pull request rather than one comment, so it
-   * carries no permalink and the two controls that lead back to a comment are
-   * absent for it. Both are read through a local so the narrowing survives into
-   * the click handlers.
+   * carries no permalink and both controls that lead back to a comment are absent
+   * for it. Both are read through a local so the narrowing survives into the click
+   * handlers.
    */
   const commentUrl = $derived(report.url)
   const threadId = $derived(report.threadId)
@@ -83,76 +83,88 @@
   const actionClass =
     'flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-1.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground'
 
+  /** The same control for one that is only an icon, so it stays square. */
+  const iconActionClass =
+    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-elevated hover:text-foreground'
+
   function openReportFile(): void {
     void revealCitationFile(projectId, report.path)
   }
 </script>
 
 <article class="overflow-hidden rounded-lg border border-border bg-surface">
-  <header class="flex items-start gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5">
-    <Bot size={13} class="mt-0.5 shrink-0 {hasBody ? 'text-primary' : 'text-dimmed'}" />
-    <div class="min-w-0 flex-1">
-      <p class="truncate text-[0.6875rem] font-medium text-foreground" title={report.title}>
+  <!--
+    Two rows, because the card answers two questions: what this assignment was,
+    and where its answer can be read. The first row names it and offers the one
+    thing that leads back to what it was asked, the second carries when it was
+    written and the three places its output lives. The permalink is the only
+    control that leaves the app, so it is the only icon-only one, and it declares
+    its address for the app's link context menu to find.
+  -->
+  <header class="border-b border-border/60 bg-elevated/50 px-2.5 py-1.5">
+    <div class="flex items-center gap-1.5">
+      <Bot size={13} class="shrink-0 {hasBody ? 'text-primary' : 'text-dimmed'}" />
+      <p
+        class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+        title={report.title}
+      >
         {report.title}
       </p>
+      {#if commentUrl}
+        <button
+          type="button"
+          class={actionClass}
+          title="Show the comment this assignment answered in the conversation"
+          onclick={() => onShowInConversation(report)}
+        >
+          <MessageSquare size={11} class="shrink-0" />
+          Show comment
+        </button>
+      {/if}
+    </div>
+    <div class="mt-1 flex items-center gap-1">
       {#if written}
-        <p class="truncate text-[0.5625rem] text-dimmed">
+        <p class="min-w-0 truncate text-[0.5625rem] text-dimmed">
           {report.updatedAt ? 'Written' : 'Assigned'}
           {relativeTime(written)}
         </p>
       {/if}
+      <div class="ml-auto flex shrink-0 items-center gap-1">
+        {#if threadId}
+          <button
+            type="button"
+            class={actionClass}
+            title="Open the agent thread this assignment runs in"
+            onclick={() => onOpenThread(threadId)}
+          >
+            <MessagesSquare size={11} class="shrink-0" />
+            Thread
+          </button>
+        {/if}
+        <button
+          type="button"
+          class={actionClass}
+          title="Open the report file in the file tree"
+          onclick={openReportFile}
+        >
+          <FileText size={11} class="shrink-0" />
+          Report
+        </button>
+        {#if commentUrl}
+          <button
+            type="button"
+            class={iconActionClass}
+            data-external-url={commentUrl}
+            title="Open the comment this assignment answered on GitHub"
+            aria-label="Open the comment this assignment answered on GitHub"
+            onclick={() => void openInBrowser(commentUrl)}
+          >
+            <ExternalLink size={11} />
+          </button>
+        {/if}
+      </div>
     </div>
   </header>
-
-  <!--
-    Where this report can be read from, as controls rather than as a path: the
-    thread that wrote it, the file it lives in, the comment it answered, and that
-    comment on GitHub. The last one is a button but stands for an address, so it
-    declares that address for the app's link context menu to find.
-  -->
-  <div class="flex flex-wrap items-center gap-1 px-2.5 pt-1.5">
-    {#if threadId}
-      <button
-        type="button"
-        class={actionClass}
-        title="Open the agent thread this assignment runs in"
-        onclick={() => onOpenThread(threadId)}
-      >
-        <MessagesSquare size={11} class="shrink-0" />
-        Thread
-      </button>
-    {/if}
-    <button
-      type="button"
-      class={actionClass}
-      title="Open the report file in the file tree"
-      onclick={openReportFile}
-    >
-      <FileText size={11} class="shrink-0" />
-      Report
-    </button>
-    {#if commentUrl}
-      <button
-        type="button"
-        class={actionClass}
-        title="Show the comment this assignment answered in the conversation"
-        onclick={() => onShowInConversation(report)}
-      >
-        <MessageSquare size={11} class="shrink-0" />
-        Comment
-      </button>
-      <button
-        type="button"
-        class={actionClass}
-        data-external-url={commentUrl}
-        title="Open the comment this assignment answered on GitHub"
-        onclick={() => void openInBrowser(commentUrl)}
-      >
-        <ExternalLink size={11} class="shrink-0" />
-        GitHub
-      </button>
-    {/if}
-  </div>
 
   {#if hasBody}
     <div class="px-2.5 py-2">

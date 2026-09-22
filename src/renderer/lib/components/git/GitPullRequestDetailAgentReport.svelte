@@ -12,10 +12,12 @@
    * reader move between them by scrolling instead of reading one enormous report
    * and losing the rest.
    *
-   * Nothing here starts an agent. The row menu, a comment's own menu and this
-   * view's button do that, and a report appears here when the agent writes it.
-   * That separation is why the empty state explains what an assignment is instead
-   * of hiding it behind an icon.
+   * Nothing here starts an agent. The row menu, a comment's own menu and the
+   * empty state's button do that, and a report appears here when the agent writes
+   * it. That separation is why the empty state explains what an assignment is
+   * instead of hiding it behind an icon, and why no assignment button is drawn
+   * once there is one: assigning again is a row menu action, and the count this
+   * view used to repeat is already in the view switcher's own menu.
    */
   interface Props {
     number: number
@@ -64,21 +66,6 @@
     </button>
   </div>
 {:else}
-  <div class="flex items-center justify-between gap-2 border-b border-border/60 px-2.5 py-1.5">
-    <p class="min-w-0 truncate text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-      {reports.length}
-      {reports.length === 1 ? 'assignment' : 'assignments'}
-    </p>
-    <button
-      type="button"
-      class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-1.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Assign another agent to this pull request"
-      onclick={() => onAssignAgent(summary)}
-    >
-      <Bot size={11} class="shrink-0" />
-      Assign an agent
-    </button>
-  </div>
   <div class="flex flex-col gap-2 p-2">
     {#each reports as report (report.id)}
       <PrAgentReportCard
