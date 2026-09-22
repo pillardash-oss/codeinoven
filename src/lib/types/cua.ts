@@ -16,6 +16,39 @@ export interface CuaInstallation {
   selected: boolean
 }
 
+/**
+ * A newer Cua Driver release, as reported by the installed driver's own release
+ * check (`cua-driver check-update --json`). The driver owns the GitHub round
+ * trip and caches the answer on disk for 20 hours, so this stays cheap to ask.
+ */
+export interface CuaUpdateCheck {
+  /** Version the selected installation reports right now. */
+  currentVersion: string
+  /** Newest release on the update channel the driver follows. */
+  latestVersion: string
+  updateAvailable: boolean
+  /** True when the driver answered from its own cache instead of GitHub. */
+  cached: boolean
+  /** Update channel the driver follows, e.g. `stable`. */
+  channel?: string
+  /** When the driver last asked GitHub, not when the app last asked the driver. */
+  checkedAt?: string
+  releaseNotesUrl?: string
+  /** The installer command Cua publishes, kept as a manual fallback. */
+  installCommand?: string
+}
+
+/** Live progress of an in-app Cua Driver update. */
+export interface CuaUpdateProgress {
+  state: 'updating' | 'installed' | 'failed'
+  /** Milestone the update is on, straight from Cua's own installer. */
+  detail?: string
+  /** Human-readable failure reason, set only when `state` is `failed`. */
+  error?: string
+  /** Version now on disk, set only when `state` is `installed`. */
+  version?: string
+}
+
 /** Renderer-safe state for the optional, externally installed Cua Driver bridge. */
 export interface CuaBridgeStatus {
   enabled: boolean

@@ -9,9 +9,12 @@
     script: string
     variables: Record<string, string>
     scopeBucketId?: string
+    /** True while the run should be executing. A finished or stopped run must
+     *  never respawn its script just because its terminal re-attached. */
+    live: boolean
   }
 
-  let { terminalId, projectId, threadId, script, variables, scopeBucketId }: Props = $props()
+  let { terminalId, projectId, threadId, script, variables, scopeBucketId, live }: Props = $props()
   let error = $state<string | null>(null)
 
   const attachTerminal: Attachment<HTMLDivElement> = (container) => {
@@ -30,7 +33,8 @@
           threadId,
           script,
           variables,
-          scopeBucketId
+          scopeBucketId,
+          live
         )
       } catch (reason) {
         if (!cancelled) error = reason instanceof Error ? reason.message : String(reason)

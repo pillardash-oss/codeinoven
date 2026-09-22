@@ -183,6 +183,20 @@ class TerminalSessionManager {
     return this.sessions.get(id)
   }
 
+  /** Explicit, user-requested restart of a live shell inside the scope its
+   *  panel currently wants (the live binding). Navigation never calls this:
+   *  only the stale-scope notice's restart action does. The PTY is destroyed
+   *  here and the exit subscription respawns it through spawnTargetOf(), which
+   *  reads the binding the panel keeps current, so the new shell starts in the
+   *  open thread's worktree. */
+  async restartInBoundScope(session: TerminalSession): Promise<void> {
+    if (session.kind !== 'shell' || !session.ptySpawned || !session.projectId) return
+    session.term.write('\r\n\x1b[90m[restarting in the open thread scope]\x1b[0m\r\n')
+    // A deliberate restart must never eat the crash-respawn budget.
+    session.respawnCount = 0
+    await invoke('pty:destroy', session.id)
+  }
+
   /** Move a live session into the visible panel and ensure its shell is running. */
   async attach(
     session: TerminalSession,
@@ -198,21 +212,12 @@ class TerminalSessionManager {
     session.binding = binding
     session.threadId = binding.threadId
     session.scopeBucketId = binding.scopeBucketId ?? null
-    const nextScope = binding.scopeBucketId ?? null
     // A panel that survived a thread switch into another scope keeps its live
-    // shell at the old root. Restarting it here is what makes toggling the
-    // panel enough to land on the open thread's worktree   the user never has
-    // to close the tab and open a new one. Only a real scope move restarts a
-    // shell: any other attach reuses it untouched.
-    if (
-      session.kind === 'shell' &&
-      session.ptySpawned &&
-      terminalSpawnScopes.get(session.id) !== nextScope
-    ) {
-      session.term.write('\r\n\x1b[90m[shell restarted for the open thread scope]\x1b[0m\r\n')
-      session.ptySpawned = false
-      session.respawnCount = 0
-    }
+    // shell at the old root on purpose: a running server, watcher, or REPL
+    // belongs to the user, not to navigation, and navigation never kills it.
+    // The panel shows the stale-scope notice while the two differ, with an
+    // explicit restart action; a respawn (shell exit, Ctrl-D) already lands in
+    // the current scope via spawnTargetOf().
     await this.ensurePty(session, projectId, binding.threadId, binding.scopeBucketId)
     this.focusIfRequested(session, options)
   }
@@ -233,13 +238,24 @@ class TerminalSessionManager {
     threadId: string,
     script: string,
     variables: Record<string, string>,
-    scopeBucketId?: string,
+    scopeBucketId: string | undefined,
+    live: boolean,
     options: TerminalAttachOptions = {}
   ): Promise<void> {
     if (session.host.parentElement !== container) container.replaceChildren(session.host)
     fitSession(session)
-    if (!session.ptySpawned) {
+    if (live && !session.ptySpawned) {
+      // The run is live but this session has no PTY yet, so the attach spawns
+      // it. A run that already finished must never respawn here: its terminal
+      // re-attaching (panel toggle, thread switch, a rebuilt session map) only
+      // shows the history it still has. And a run that IS live with a spawned
+      // session is left completely untouched: a panel toggle or thread switch
+      // must never restart a running action. The action store keys a run by
+      // its action id and keeps the same terminalId for the run's lifetime, so
+      // the session here is the run's own and its PTY keeps streaming
+      // regardless of whether the panel is mounted.
       session.projectId = projectId
+      session.threadId = threadId
       session.ptySpawned = true
       try {
         await invoke(

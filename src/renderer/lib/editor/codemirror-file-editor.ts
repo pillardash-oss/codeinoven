@@ -33,8 +33,8 @@ export interface FileEditorRangeViewportRect {
  * content layer, so there is nothing to desync.
  *
  * All CodeMirror modules are loaded through dynamic `import()`, so they land in
- * a lazy chunk fetched only when a file editor opens; the eager renderer bundle
- * and the PWA initial closure are untouched.
+ * a lazy chunk fetched only when a file editor opens, so the eager renderer
+ * bundle stays untouched.
  */
 
 export interface FileEditorController {

@@ -24,7 +24,6 @@ export type SettingsSection =
   | 'computer-use'
   | 'sound'
   | 'keymap'
-  | 'remote'
   | 'cloud-deployments'
   | 'about'
 
@@ -46,7 +45,6 @@ export type MainView =
   | 'settings-computer-use'
   | 'settings-sound'
   | 'settings-keymap'
-  | 'settings-remote'
   | 'settings-cloud-deployments'
   | 'settings-about'
 
@@ -153,7 +151,6 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-utilities',
   'settings-sound',
   'settings-keymap',
-  'settings-remote',
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -169,7 +166,6 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'computer-use',
   'sound',
   'keymap',
-  'remote',
   'cloud-deployments',
   'about'
 ]

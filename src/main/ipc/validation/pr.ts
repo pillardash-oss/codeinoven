@@ -59,6 +59,11 @@ const WORKFLOW_RERUN_MODES = new Set<import('../../../lib/types').WorkflowRerunM
   'all',
   'failed'
 ])
+/** How an agent assignment was opened. */
+const PR_AGENT_ASSIGNMENT_KINDS = new Set<import('../../../lib/types').PrAgentAssignmentKind>([
+  'triage',
+  'comment'
+])
 
 /** Validate a PR merge method (merge|squash|rebase). */
 export function validateMergeMethod(value: unknown): import('../../../lib/types').PrMergeMethod {
@@ -120,6 +125,60 @@ export function validatePrCreateInput(value: unknown): import('../../../lib/type
 /** Validate a pull request number. */
 export function validatePrNumber(value: unknown): number {
   return validateBoundedInteger(value, 'Pull request number', 1, MAX_GITHUB_NUMERIC_ID)
+}
+
+/**
+ * Validate the label names one write replaces a pull request's set with.
+ *
+ * GitHub caps a label name at 50 characters and the list is bounded well below
+ * its own per-issue limit, because a longer list is a caller bug rather than a
+ * user choice. Duplicates are dropped instead of rejected: the result is a set,
+ * so sending one twice cannot mean anything different from sending it once.
+ */
+export function validatePrLabelNames(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Label names must be an array')
+  if (value.length > 50) throw new TypeError('Label names must be 50 at most')
+  const seen = new Set<string>()
+  const labels: string[] = []
+  value.forEach((entry, index) => {
+    const name = validateBoundedString(entry, `Label name[${index}]`, 1, 50)
+    const key = name.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    labels.push(name)
+  })
+  return labels
+}
+
+/**
+ * Validate the logins one write replaces a pull request's assignees with.
+ *
+ * Ten is GitHub's own cap on how many accounts one issue may carry, and the
+ * alphabet check keeps an arbitrary string out of the request body: a login is
+ * always letters, digits and dashes, plus the bracketed `[bot]` suffix app
+ * accounts use.
+ */
+export function validatePrAssigneeLogins(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Assignee logins must be an array')
+  if (value.length > 10) throw new TypeError('A pull request can carry 10 assignees at most')
+  const seen = new Set<string>()
+  const logins: string[] = []
+  value.forEach((entry, index) => {
+    const login = validateBoundedString(entry, `Assignee login[${index}]`, 1, 64)
+    if (!/^[A-Za-z0-9-]+(?:\[bot\])?$/u.test(login)) {
+      throw new TypeError(`Invalid assignee login[${index}]`)
+    }
+    const key = login.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    logins.push(login)
+  })
+  return logins
+}
+
+/** Validate the milestone number a pull request is attached to. */
+export function validatePrMilestoneNumber(value: unknown): number {
+  return validateBoundedInteger(value, 'Milestone number', 1, MAX_GITHUB_NUMERIC_ID)
 }
 
 /** Validate a merge/rebase target branch or ref. */
@@ -354,4 +413,52 @@ export function validateStashId(value: unknown): string | undefined {
     throw new TypeError('Stash id must look like stash@{0}')
   }
   return trimmed
+}
+
+/**
+ * Validate what a new agent assignment is asked to do.
+ *
+ * The title is what the reader's report list shows, so it is required and short.
+ * The URL is the permalink of the comment the assignment was opened from, and it
+ * is bounded rather than validated as a URL: it is only ever the link the provider
+ * itself handed us, and it is stored, never fetched.
+ */
+export function validatePrAgentAssignmentInput(
+  value: unknown
+): import('../../../lib/types').PrAgentAssignmentInput {
+  const input = assertRecord(value, 'Agent assignment')
+  rejectUnknownFields(input, new Set(['kind', 'title', 'url']), 'agent assignment')
+  return {
+    kind: assertEnum(input.kind, PR_AGENT_ASSIGNMENT_KINDS, 'Agent assignment kind'),
+    title: validateBoundedString(input.title, 'Agent assignment title', 1, 120),
+    ...(input.url === undefined || input.url === null
+      ? {}
+      : { url: validateBoundedString(input.url, 'Agent assignment url', 1, 512) })
+  }
+}
+
+/**
+ * Validate the pull request numbers a batch of row summaries is asked about.
+ *
+ * A page of rows is at most twenty, and a hundred is the ceiling because this is a
+ * batch read of the user's own disk: a caller asking for more than a page is a
+ * caller bug, and duplicates would only make the same read twice.
+ */
+export function validatePrNumbers(value: unknown): number[] {
+  if (!Array.isArray(value)) throw new TypeError('Pull request numbers must be an array')
+  if (value.length > 100) throw new TypeError('At most 100 pull request numbers are read at once')
+  const seen = new Set<number>()
+  const numbers: number[] = []
+  value.forEach((entry, index) => {
+    const number = validateBoundedInteger(
+      entry,
+      `Pull request number[${index}]`,
+      1,
+      MAX_GITHUB_NUMERIC_ID
+    )
+    if (seen.has(number)) return
+    seen.add(number)
+    numbers.push(number)
+  })
+  return numbers
 }

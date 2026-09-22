@@ -2,6 +2,7 @@ import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
   ComputerUsePipState,
+  CuaUpdateProgress,
   ProviderConnectionInfo,
   Thread
 } from '../types'
@@ -19,14 +20,12 @@ import type {
   SystemNotificationPermissionStatus,
   ThreadClickedPayload
 } from './notifications'
-import type { RemoteModeStatus, RemotePendingStepUpApproval } from './remote'
 import type { UpdaterStatus } from './updater'
+import type { SkillUpdateStatus } from '../types/utility'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
-  /** Emitted after browser sign-in changes the shared desktop account. */
-  'account:profileChanged': [] as unknown as [state: import('../types').AccountProfileState],
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
@@ -111,8 +110,16 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  /** Background pass over the skills CodeInOven installed (progress and result). */
+  'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * Progress of an in-app Cua Driver update. The update itself answers over
+   * `computerUse:updateCua`; this stream carries the installer's milestones so a
+   * multi-minute download never looks like a hang.
+   */
+  'computerUse:cuaUpdate': [] as unknown as [progress: CuaUpdateProgress],
   /**
    * Emitted for every computer-use operation an agent performs, and again with
    * `active: false` when that thread's turn ends. Thread rows use this (not the
@@ -139,13 +146,6 @@ export const IPC_EVENT_CONTRACT = {
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],
-  /** Remote-mode status changes from the main process. */
-  'remote:status': [] as unknown as [status: RemoteModeStatus],
-  /**
-   * Pending single-use local step-up approvals awaiting desktop disposition.
-   * Emitted whenever a high-risk remote operation requires local approval.
-   */
-  'remote:stepUpPending': [] as unknown as [approvals: RemotePendingStepUpApproval[]],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

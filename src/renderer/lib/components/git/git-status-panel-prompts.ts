@@ -10,11 +10,181 @@ import type {
   PullRequestSummary
 } from '$shared/types'
 
-/** The first message the review agent receives   explicit about isolation and output. */
-export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
+/**
+ * The comment a temporary explain / quick chat is anchored on, resolved to the
+ * few facts the chat needs. The comment body itself never travels here: it is
+ * attached to the chat as the selection.
+ */
+export interface PrCommentChatSubject {
+  /** Login that wrote the comment, as the provider declared it. */
+  author: string
+  /** Permalink GitHub itself uses for this exact comment. */
+  url: string
+  /** Human label for what kind of entry it is, e.g. `inline review`. */
+  kindLabel: string
+  /** Inline anchor `path:line`, present only for an inline review comment. */
+  location?: string
+  /**
+   * The unified diff hunk GitHub showed with an inline comment, present only
+   * when the comment came with one. It is the version of the code the comment
+   * was written against, which the live working tree may no longer match.
+   */
+  diffHunk?: string | null
+}
+
+/**
+ * A fence a body cannot close early.
+ *
+ * A comment that quotes code carries its own triple backticks, and a fixed fence
+ * would end the quote at the first line of the example, leaving the rest of the
+ * comment loose in the brief. So the fence is one backtick longer than anything the
+ * text already contains.
+ */
+function fenceFor(text: string): string {
+  const longest = /`{3,}/gu.exec(text)?.[0].length ?? 0
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
+/**
+ * The pinned context a temporary chat opened on a pull request comment is
+ * anchored with.
+ *
+ * A side chat normally rides the parent conversation's transcript, but a
+ * comment opened from the reader has no such transcript behind it. What gives
+ * the agent its bearings instead is the pull request the comment belongs to
+ * and the comment's own permalink, which is also the canonical way back to the
+ * remote copy of anything the comment references.
+ */
+export function prCommentChatContext(
+  comment: PrCommentChatSubject,
+  pr: PullRequestSummary,
+  repository: string
+): string {
   return [
-    `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
-    `PR URL: ${pr.url}`,
+    'The user opened this comment from the pull request reader and is asking about it. Everything below is read-only context for that question.',
+    `Pull request: #${pr.number} "${pr.title}" in ${repository} (${pr.headRef} \u2192 ${pr.baseRef})`,
+    `Comment: ${comment.kindLabel} by @${comment.author}`,
+    `Comment link: ${comment.url}`,
+    ...(comment.location ? [`Inline location: ${comment.location}`] : []),
+    ...(comment.diffHunk
+      ? [
+          '',
+          'The diff GitHub showed with this comment, which is the code the comment was written against:',
+          `${fenceFor(comment.diffHunk)}diff`,
+          comment.diffHunk.trim(),
+          fenceFor(comment.diffHunk)
+        ]
+      : []),
+    'The comment body is attached to this chat as the selection.'
+  ].join('\n')
+}
+
+/**
+ * The instruction a temporary explain chat receives when it is opened from a
+ * pull request comment.
+ *
+ * The point of the brief is grounding. A comment refers to code that may exist
+ * in the working tree, only on the pull request's head, or nowhere the agent
+ * can read. The agent has read-only tools only, so fetching the remote copy is
+ * a deliberate step the user authorizes, not something the agent does on its
+ * own.
+ */
+export function prCommentExplainPrompt(comment: PrCommentChatSubject): string {
+  return [
+    'Explain the attached pull request comment (its link is in the context above).',
+    '',
+    'Ground every claim in code you have actually read:',
+    '- Look for what the comment references (a file, symbol, or behaviour) in the current working tree with the read, glob, and grep tools, and cite the exact project-relative path and line you read.',
+    ...(comment.location
+      ? [
+          `- The comment is anchored at ${comment.location}; start there and confirm it still matches what you read.`
+        ]
+      : []),
+    ...(comment.diffHunk
+      ? [
+          '- The diff GitHub showed with this comment is in the context above. It is the code the comment was written against, so use it to identify exactly which lines are meant, and check whether the working tree still matches it.'
+        ]
+      : []),
+    '- If the referenced code is not in the working tree, say plainly that it is missing here and name what is missing. It then lives only on the remote: the pull request head, another branch, or another repository.',
+    '- Do not fetch the remote copy on your own. When grounding needs it, state exactly which remote file or link you would fetch and ask the user whether to fetch it. Only after the user agrees, read it with the web fetch tool: the file as it exists on the pull request head lives at `https://raw.githubusercontent.com/<owner>/<repo>/<headRef>/<path>` (repository and head are in the context above), and the comment link is the reference for the comment itself.',
+    '- Never describe code or line numbers you have not read, and do not pad the answer with guesses.',
+    '',
+    'Then explain what the comment is saying and why it matters for this pull request, in everyday language and without unnecessary jargon.',
+    'Stay read-only: do not modify files, commit, push, or run mutating commands.'
+  ].join('\n')
+}
+
+/**
+ * The pinned context a temporary chat opened on a pull request from the list is
+ * anchored with.
+ *
+ * The list holds a summary and nothing else: the body, the diff, and the checks
+ * all live behind the detail bundle, which opening this chat deliberately does not
+ * pay for. So the context names what the row itself knows, and the explain brief
+ * says plainly that the diff was not supplied rather than letting the agent assume
+ * it was.
+ */
+export function prSummaryChatContext(pr: PullRequestSummary, repository: string): string {
+  const labels = (pr.labels ?? []).map((label) => label.name)
+  const assignees = (pr.assignees ?? []).map((entry) => `@${entry.login}`)
+  return [
+    'The user opened this pull request from the list and is asking about it. Everything below is read-only context for that question.',
+    `Pull request: #${pr.number} "${pr.title}" in ${repository} (${pr.headRef} \u2192 ${pr.baseRef})`,
+    `State: ${pr.state}${pr.draft ? ' (draft)' : ''}, opened ${pr.createdAt || 'at an unknown time'} by @${pr.authorLogin}`,
+    `Pull request link: ${pr.url}`,
+    ...(labels.length > 0 ? [`Labels: ${labels.join(', ')}`] : []),
+    ...(assignees.length > 0 ? [`Assigned to: ${assignees.join(', ')}`] : []),
+    ...(pr.milestone ? [`Milestone: ${pr.milestone.title}`] : []),
+    'The pull request description, diff, and checks are not part of this context: they were never fetched from the provider.',
+    'The visible row text is attached to this chat as the selection.'
+  ].join('\n')
+}
+
+/**
+ * The instruction a temporary explain chat receives when it is opened from a
+ * pull request in the list.
+ *
+ * Same contract as the comment brief: ground every claim in code actually read,
+ * and treat the remote copy as something the user authorizes rather than something
+ * the agent reaches for. The difference is what is missing here, which is the whole
+ * pull request, so the agent is told that and asked to say what it needs.
+ */
+export function prSummaryExplainPrompt(pr: PullRequestSummary): string {
+  return [
+    'Explain the attached pull request (its link is in the context above).',
+    '',
+    'The diff was not supplied, so work from what you can read and be explicit about the rest:',
+    `- Start in the current working tree. Look for the branch \`${pr.headRef}\`, files or symbols this pull request is likely to touch, and cite the exact project-relative path and line you read.`,
+    ...(pr.baseRef
+      ? [
+          `- The pull request targets \`${pr.baseRef}\`, so anything you claim about behaviour is a claim about that branch plus the head, not about whatever is checked out now.`
+        ]
+      : []),
+    '- If the head branch is not in the working tree, say plainly that it is missing here and name what is missing.',
+    '- Do not fetch the remote copy on your own. When grounding needs the diff or a file as it exists on the head, state exactly what you would fetch and ask the user first. Only after the user agrees, read it with the web fetch tool: the changed files are on the pull request at the link above, and a file as it exists on the head lives at `https://raw.githubusercontent.com/<owner>/<repo>/<headRef>/<path>` (repository and head are in the context above).',
+    '- Never describe a change, file, or line number you have not read.',
+    '',
+    'Then explain in everyday language what this pull request appears to change, what it is for, and what a reviewer should look at first. Where the list row does not tell you something, say so instead of filling the gap.',
+    'Stay read-only: do not modify files, commit, push, or run mutating commands.'
+  ].join('\n')
+}
+
+/**
+ * The work order every agent assignment shares.
+ *
+ * An assignment is a thread with a mandate and a report file, whether it was opened
+ * from a pull request or from one comment on it. The isolation, the testing
+ * judgement, the report, and the stop before anything irreversible are the same in
+ * both cases, so they are written once here and the two briefs differ only in what
+ * they ask the agent to work out.
+ */
+function agentAssignmentPrompt(
+  pr: PullRequestSummary,
+  reportPath: string,
+  mandate: string[]
+): string {
+  return [
+    ...mandate,
     '',
     'Work in isolation so my current working tree is never touched. I am asking you for that, so',
     'set up an app-managed worktree scope: it is deliberately not in your tool list, so call',
@@ -24,18 +194,101 @@ export function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: strin
     'branch, health and threads.',
     `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
     `2. \`${APP_SCOPE_UTILITY_ID}\` operation "create" with input`,
-    `   { "title": "Review PR #${pr.number}", "baseBranch": "pr-${pr.number}" } so the scope owns`,
+    `   { "title": "Agent on PR #${pr.number}", "baseBranch": "pr-${pr.number}" } so the scope owns`,
     '   the checkout and this thread moves into it.',
-    `3. Review the diff against \`${pr.baseRef}\` inside that scope   correctness, edge cases,`,
-    '   security, test coverage, and anything that would break existing behavior.',
-    '4. Run the project checks/tests that are relevant to the changed files.',
+    `3. Read the diff against \`${pr.baseRef}\` inside that scope.`,
+    '4. Test when the change warrants it. That judgement is yours: run the project checks that cover',
+    '   the changed files, and if you decide testing is not warranted, say why in the report.',
     '',
-    `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
-    'ordered most severe first with file:line references and concrete failure scenarios.',
+    `Write your findings to \`${reportPath}\`. That file is what I read and approve from, so it has`,
+    'to stand on its own:',
+    '- A verdict line first: what this change is, and what you recommend I do with it.',
+    '- Then the evidence, most important first, with file:line references you actually read.',
+    '- Then the risk: what could break, and what you could not verify.',
+    '- End with the exact next action you recommend, so I can approve it or send you back.',
+    '',
+    'Stop there. Do not push, merge, close, or comment on the pull request: the decision is mine,',
+    'and I will give you the go-ahead in this thread.',
     `When you are done, hand the scope back: \`${APP_SCOPE_UTILITY_ID}\` operation "delete_scope"`,
     'with input { "threads": "move-to-default", "deleteBranch": true }, then drop the fetched',
-    `branch with \`git branch -D pr-${pr.number}\`. Do not push anything and do not merge the PR.`
+    `branch with \`git branch -D pr-${pr.number}\`.`
   ].join('\n')
+}
+
+/**
+ * The brief a pull request handed to an agent receives.
+ *
+ * Triage rather than review: a review says whether the code is good, and what I need
+ * from an assignment is what this pull request is, where it came from, and whether
+ * it is safe to take, so the report can end in a decision I can approve.
+ */
+export function prTriagePrompt(pr: PullRequestSummary, reportPath: string): string {
+  return agentAssignmentPrompt(pr, reportPath, [
+    `Triage pull request #${pr.number}: "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
+    `Pull request link: ${pr.url}`,
+    '',
+    'Work out what this pull request actually is, why it exists, and whether it is safe to take:',
+    '- What it changes, and what the change is for. A title and a diff rarely say the same thing.',
+    '- Where it came from. If it is a dependency bump, read the release notes or changelog for the',
+    '  versions it moves between and check for breaking changes, deprecations, and advisories. The',
+    '  upstream changelog and the package registry are fair game to read; the title alone is not',
+    '  evidence.',
+    '- What it touches here, and whether anything in this repository still uses the changed code.',
+    '- Whether the checks already on the pull request agree with what you find.',
+    '- Whether it is a duplicate, a superseded change, or something that should be closed instead.'
+  ])
+}
+
+/**
+ * The brief a comment handed to an agent receives.
+ *
+ * The comment is the task, so everything about it is written into the brief: which
+ * pull request it belongs to, its permalink, where it sits, the diff GitHub showed
+ * with it, and its text. A read-only side chat can ride the comment as a selection,
+ * but this is a real thread that has to still make sense after a restart, so nothing
+ * is left to a transient attachment.
+ */
+export function prCommentAssignmentPrompt(
+  comment: PrCommentChatSubject,
+  body: string,
+  pr: PullRequestSummary,
+  repository: string,
+  reportPath: string
+): string {
+  return agentAssignmentPrompt(pr, reportPath, [
+    `Handle one comment on pull request #${pr.number}: "${pr.title}" (${pr.headRef} → ${pr.baseRef}) in ${repository}.`,
+    `Pull request link: ${pr.url}`,
+    '',
+    `The comment is a ${comment.kindLabel} by @${comment.author}.`,
+    `Comment link: ${comment.url}`,
+    ...(comment.location ? [`Inline location: ${comment.location}`] : []),
+    ...(comment.diffHunk
+      ? [
+          '',
+          'The diff GitHub showed with this comment, which is the code it was written against:',
+          `${fenceFor(comment.diffHunk)}diff`,
+          comment.diffHunk.trim(),
+          fenceFor(comment.diffHunk)
+        ]
+      : []),
+    '',
+    'The comment, verbatim:',
+    fenceFor(body),
+    body.trim(),
+    fenceFor(body),
+    '',
+    'Work out what the comment is asking for before you do anything:',
+    '- It may ask for a fix, a clarification, a revert, a test, or a second opinion. Read it against',
+    '  the diff above and against the pull request as a whole, then say which one you concluded it is',
+    '  and why.',
+    '- If it is a question, answer it from code you have actually read. If it is a claim, check it and',
+    '  say whether it holds.',
+    '- If it points at something outside this repository, name exactly what you would need to read and',
+    '  ask me, rather than guessing.',
+    '- If it needs no action, say that plainly and recommend nothing.',
+    '- If a reply is the right answer, draft it in the report word for word, so I can approve it as',
+    '  written.'
+  ])
 }
 
 /**

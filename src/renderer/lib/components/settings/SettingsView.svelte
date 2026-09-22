@@ -24,6 +24,7 @@
   import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { flashElement } from '$lib/reveal-flash'
   import {
     AlertCircle,
     AlertTriangle,
@@ -55,7 +56,6 @@
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
-  import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
@@ -207,16 +207,6 @@
       keywords: entry.keywords
     }))
   )
-
-  /** Flashes a block's border three times to draw the eye after navigation. */
-  function flashElement(element: HTMLElement): void {
-    element.classList.remove('settings-flash')
-    void element.offsetWidth // restart cleanly if a flash is already mid-run
-    element.classList.add('settings-flash')
-    element.addEventListener('animationend', () => element.classList.remove('settings-flash'), {
-      once: true
-    })
-  }
 
   async function handleSettingsSearch(selection: ActionSelection): Promise<void> {
     const entry = settingsSearchIndex.get(selection.action.id)
@@ -1049,8 +1039,6 @@
       <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
-    {:else if section === 'remote'}
-      <RemoteSettingsTab />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
@@ -1074,6 +1062,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
+              data-external-url={WEBSITE_URL}
               onclick={() => void openInBrowser(WEBSITE_URL)}
             >
               <VendorIcon name="CodeInOven" size={15} />
@@ -1083,6 +1072,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
+              data-external-url={GITHUB_URL}
               onclick={() => void openInBrowser(GITHUB_URL)}
             >
               <VendorIcon name="GitHub" size={15} />
@@ -1092,6 +1082,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
+              data-external-url={X_URL}
               onclick={() => void openInBrowser(X_URL)}
             >
               <svg

@@ -8,10 +8,23 @@
  * party that knows, because it holds each in-flight turn's owner process, so it
  * pushes the set and this store is the renderer's projection of it.
  */
+import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 import { logRendererError } from '$lib/system/renderer-logger'
 import type { ForeignRunNotice } from '$shared/types'
+
+/**
+ * Which transfer requests are in flight, and how the last one failed.
+ *
+ * `ok` is never stored: a successful transfer removes the thread from the
+ * foreign set, which removes the card that would render this state at all.
+ */
+export interface ForeignTransferState {
+  pending: boolean
+  error: string | null
+}
+
+const IDLE_TRANSFER_STATE: ForeignTransferState = { pending: false, error: null }
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -32,20 +45,57 @@ class ForeignRunsStore {
   #revision = 0
   /** Reactive cache of `projectId:threadId` keys. */
   runs = $state(new Set<string>())
+  /** Reactive cache of transfer state, keyed the same way. */
+  transferStates = new SvelteMap<string, ForeignTransferState>()
 
   constructor() {
     subscribe('thread:foreignRuns', (...args: unknown[]) => {
       this.#revision += 1
       this.replace((args[0] ?? []) as ForeignRunNotice[])
     })
-    // A phone peer connects to exactly one desktop, so "another instance" is not
-    // a state it can be shown, and the hydration channel is desktop-only.
-    if (!isRemotePwaRuntime()) void this.#hydrate()
+    void this.#hydrate()
   }
 
   /** Whether another instance is running this thread's turn right now. */
   isForeign(projectId: string, threadId: string): boolean {
     return this.runs.has(threadKey(projectId, threadId))
+  }
+
+  /** Transfer progress and the last failure, for the transfer card. */
+  transferState(projectId: string, threadId: string): ForeignTransferState {
+    return this.transferStates.get(threadKey(projectId, threadId)) ?? IDLE_TRANSFER_STATE
+  }
+
+  /**
+   * Ask the owning instance to hand this thread's run over, then resume it
+   * here. The main-process push drops the thread from the foreign set once this
+   * instance owns the turn, which is what swaps the card back for the composer.
+   */
+  async transfer(projectId: string, threadId: string): Promise<void> {
+    const key = threadKey(projectId, threadId)
+    if (this.transferStates.get(key)?.pending) return
+    this.#setTransferState(key, { pending: true, error: null })
+    try {
+      const result = await invoke('thread:transferRun', projectId, threadId)
+      // A push that arrived while the request was in flight already removed the
+      // thread (this instance owns it now), so there is no card to update.
+      if (!this.runs.has(key)) return
+      this.#setTransferState(key, {
+        pending: false,
+        error: result.ok ? null : result.reason
+      })
+    } catch (error) {
+      logRendererError('Cross-instance thread transfer failed', error)
+      if (!this.runs.has(key)) return
+      this.#setTransferState(key, {
+        pending: false,
+        error: 'The transfer could not be completed.'
+      })
+    }
+  }
+
+  #setTransferState(key: string, state: ForeignTransferState): void {
+    this.transferStates.set(key, state)
   }
 
   async #hydrate(): Promise<void> {
@@ -66,6 +116,11 @@ class ForeignRunsStore {
     if (sameKeys(keys, this.#keys)) return
     this.#keys = keys
     this.runs = new Set(keys)
+    // A thread that is no longer foreign (this instance took it over, or it
+    // settled) has no card left to show a transfer verdict on.
+    for (const key of [...this.transferStates.keys()]) {
+      if (!keys.has(key)) this.transferStates.delete(key)
+    }
   }
 }
 

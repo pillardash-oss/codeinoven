@@ -110,6 +110,11 @@ export const invokeAgentContract = {
     [projectId: string, coordinatorThreadId: string, workerThreadId: string],
     AssignmentPlan
   >,
+  /** Switch a not-reporting worker back on and ask it to report to the Sr. Engineer. */
+  'agent:reportWorkerToCoordinator': {} as Contract<
+    [projectId: string, coordinatorThreadId: string, workerThreadId: string],
+    AssignmentPlan
+  >,
   'agent:resumeAssignmentAttention': {} as Contract<
     [projectId: string, coordinatorThreadId: string],
     AssignmentPlan

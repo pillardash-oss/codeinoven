@@ -343,17 +343,6 @@ class WorkspaceState {
     return this.pendingProjectFileOpen
   }
 
-  /** Incremented to signal Workspace that a thread was moved to a different project. */
-  pendingMoveThreadId: string | null = $state(null)
-  pendingMoveThread: Thread | null = $state(null)
-  moveThreadCount = $state(0)
-
-  requestMoveThread(oldThreadId: string, newThread: Thread): void {
-    this.pendingMoveThreadId = oldThreadId
-    this.pendingMoveThread = newThread
-    this.moveThreadCount++
-  }
-
   /** Incremented to signal ProjectCreateControl to open the add-project dialog. */
   requestAddProjectCount = $state(0)
   private consumedAddProjectRequestCount = 0

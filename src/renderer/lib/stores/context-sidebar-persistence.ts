@@ -79,18 +79,25 @@ function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[]
     ) {
       continue
     }
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      continue
-    }
-    if (
-      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
-      parsed.username !== '' ||
-      parsed.password !== ''
-    ) {
-      continue
+    let normalizedUrl: string
+    if (url === '') {
+      // A blank tab persists with no address and restores blank.
+      normalizedUrl = ''
+    } else {
+      let parsed: URL
+      try {
+        parsed = new URL(url)
+      } catch {
+        continue
+      }
+      if (
+        (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+        parsed.username !== '' ||
+        parsed.password !== ''
+      ) {
+        continue
+      }
+      normalizedUrl = parsed.href
     }
     restored.push({
       id,
@@ -98,7 +105,7 @@ function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[]
       title,
       projectId,
       threadId,
-      url: parsed.href
+      url: normalizedUrl
     })
   }
   return restored

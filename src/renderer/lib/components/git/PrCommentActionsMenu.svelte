@@ -1,7 +1,11 @@
 <script lang="ts">
   /**
-   * Per-comment actions, matching the set github.com offers on one of its own
-   * comments.
+   * Per-comment actions. Most match the set github.com offers on one of its own
+   * comments; Explain, Quick chat and Assign to an agent are this app's own
+   * additions. The first two open a read-only side chat anchored on the comment,
+   * while the third hands it to an agent with a worktree and a report to write.
+   * Reply here is the one that answers the comment where it stands instead of in
+   * the panel's composer.
    *
    * Two rules shape what appears. GitHub only lets an author edit or delete a
    * comment, so those rows exist only for the viewer's own; and blocking is
@@ -15,11 +19,15 @@
    */
   import {
     Ban,
+    Bot,
     ClipboardCopy,
     Flag,
     Link2,
+    MessageCircleDashed,
+    MessageSquareDashed,
     MessageSquareQuote,
     MessageSquarePlus,
+    MessageSquareReply,
     Pencil,
     Trash2
   } from '@lucide/svelte'
@@ -59,6 +67,24 @@
     onCopyLink: () => void
     onCopyMarkdown: () => void
     onQuote: () => void
+    /**
+     * Answer this exact comment where it stands. Omitted when the surface has no
+     * reply box to open, so the row is never drawn for an action that could not
+     * run.
+     */
+    onReply?: () => void
+    /** Open a read-only temporary side chat that explains this comment.
+     *  Omitted when the entry has no body to anchor a chat on (an empty review). */
+    onExplain?: () => void
+    /** Open an empty read-only temporary side chat with this comment attached.
+     *  Omitted for the same reason as `onExplain`. */
+    onQuickChat?: () => void
+    /**
+     * Hand this comment to an agent as an assignment: a real thread of its own, a
+     * worktree to test in, and a brief built from this comment. Omitted for the same
+     * reason as `onExplain`, since a comment with no body is nothing to hand over.
+     */
+    onAssignAgent?: () => void
     onReferenceInNewIssue: () => void
     onEdit: () => void
     onDelete: () => void
@@ -78,6 +104,10 @@
     onCopyLink,
     onCopyMarkdown,
     onQuote,
+    onReply,
+    onExplain,
+    onQuickChat,
+    onAssignAgent,
     onReferenceInNewIssue,
     onEdit,
     onDelete,
@@ -106,6 +136,34 @@
   const canBlock = $derived(viewerLogin !== null && viewerLogin !== author)
 </script>
 
+<!--
+  The side-chat and assignment rows sit above the clipboard rows: they are the only
+  actions here that do something inside the app rather than hand the comment off, so
+  they read first. A review with no body has nothing to anchor a chat or an
+  assignment on, so all three rows disappear together there.
+-->
+{#if onExplain}
+  <Menu.Item class={itemClass} onSelect={onExplain} disabled={busy}>
+    <MessageCircleDashed size={12} class="shrink-0 text-dimmed" />
+    Explain
+  </Menu.Item>
+{/if}
+{#if onQuickChat}
+  <Menu.Item class={itemClass} onSelect={onQuickChat} disabled={busy}>
+    <MessageSquareDashed size={12} class="shrink-0 text-dimmed" />
+    Quick chat
+  </Menu.Item>
+{/if}
+{#if onAssignAgent}
+  <Menu.Item class={itemClass} onSelect={onAssignAgent} disabled={busy}>
+    <Bot size={12} class="shrink-0 text-dimmed" />
+    Assign to an agent
+  </Menu.Item>
+{/if}
+{#if onExplain || onQuickChat || onAssignAgent}
+  <Menu.Separator class="my-1 h-px bg-border" />
+{/if}
+
 <Menu.Item class={itemClass} onSelect={onCopyLink} disabled={busy}>
   <Link2 size={12} class="shrink-0 text-dimmed" />
   Copy link
@@ -118,6 +176,12 @@
   <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
   Quote reply
 </Menu.Item>
+{#if onReply}
+  <Menu.Item class={itemClass} onSelect={onReply} disabled={busy}>
+    <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+    Reply here
+  </Menu.Item>
+{/if}
 <Menu.Item
   class={itemClass}
   data-external-url={externalUrls.reference}

@@ -2,48 +2,10 @@ import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { createHash } from 'node:crypto'
-import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
-import type { Plugin, PluginOption, PreviewServer, ViteDevServer } from 'vite'
+import type { PluginOption } from 'vite'
 import packageJson from './package.json'
-
-const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
-const pwaManifest = JSON.parse(readFileSync(pwaManifestPath, 'utf8')) as Record<string, unknown>
-const versionedPwaManifest = `${JSON.stringify(
-  { ...pwaManifest, version: packageJson.version },
-  null,
-  2
-)}\n`
-
-function serveVersionedPwaManifest(server: PreviewServer | ViteDevServer): void {
-  server.middlewares.use((request, response, next) => {
-    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
-    if (pathname !== '/manifest.webmanifest') {
-      next()
-      return
-    }
-    response.statusCode = 200
-    response.setHeader('Content-Type', 'application/manifest+json; charset=utf-8')
-    response.setHeader('Cache-Control', 'no-store')
-    response.end(versionedPwaManifest)
-  })
-}
-
-/** Keep every served PWA manifest on the same version source as the desktop and remote UI. */
-function pwaManifestVersionPlugin(): Plugin {
-  return {
-    name: 'codeinoven-pwa-manifest-version',
-    configureServer: serveVersionedPwaManifest,
-    configurePreviewServer: serveVersionedPwaManifest,
-    generateBundle() {
-      this.emitFile({
-        type: 'asset',
-        fileName: 'manifest.webmanifest',
-        source: versionedPwaManifest
-      })
-    }
-  }
-}
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
 // packaging and passes it here so the splash/about surfaces show the exact
@@ -105,9 +67,9 @@ function resolveRendererPort(root: string): number {
   return WORKTREE_PORT_BASE + (digest.readUInt32BE(0) % WORKTREE_PORT_POOL)
 }
 
-/** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
- *  standalone Vite dev server for the phone PWA stays in sync with the real
- *  electron-vite renderer config instead of drifting out of a duplicate. */
+/** Renderer root/aliases/plugins, shared by the builders so any additional
+ *  renderer bundle stays in sync with the real electron-vite renderer config
+ *  instead of drifting out of a duplicate. */
 export const rendererDefine = {
   __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion)
 }
@@ -130,11 +92,7 @@ export const rendererDedupe = [
   '@lezer/lr'
 ]
 export function rendererPlugins(): PluginOption[] {
-  return [
-    pwaManifestVersionPlugin(),
-    svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-    tailwindcss()
-  ]
+  return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
 }
 
 export default defineConfig(({ mode }) => {
@@ -145,13 +103,6 @@ export default defineConfig(({ mode }) => {
     'RENDERER_VITE_',
     'CODEINOVEN_'
   ])
-  // Only a production build talks to the hosted mobile gateway by default.
-  // Every other mode falls back to the local `services/remote-control` dev
-  // server (see services/remote-control/runtime-config.ts), so `bun dev`
-  // never reaches production unless MAIN_VITE_REMOTE_API_ORIGIN /
-  // MAIN_VITE_ACCOUNT_AUTH_ORIGIN are set explicitly.
-  const defaultRemoteOrigin =
-    mode === 'production' ? 'https://mobile.codeinoven.com' : 'http://localhost:8877'
   return {
     main: {
       define: {
@@ -162,19 +113,6 @@ export default defineConfig(({ mode }) => {
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
         __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''),
-        // Development keeps persisted Remote mode off unless the developer
-        // explicitly opts into the LAN listeners for a phone test.
-        __CODEINOVEN_DEV_REMOTE_MODE__: JSON.stringify(env.CODEINOVEN_DEV_REMOTE_MODE === '1'),
-        // Public endpoint baked into packaged desktops. Release CI maps the
-        // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
-        __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_REMOTE_API_ORIGIN ?? defaultRemoteOrigin
-        ),
-        // Keep interactive account authentication on the stable mobile gateway
-        // in production; every other mode targets the local dev server above.
-        __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? defaultRemoteOrigin
-        ),
         // Public, isolated origin for generated Engineering prototype previews.
         // There is deliberately no production default.
         __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: JSON.stringify(
@@ -260,10 +198,7 @@ export default defineConfig(({ mode }) => {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {
           input: {
-            index: resolve(__dirname, 'src/renderer/index.html'),
-            // Installable phone client (PWA): served by the LAN gateway in
-            // production, or by the Vite dev server in development.
-            remote: resolve(__dirname, 'src/renderer/remote.html')
+            index: resolve(__dirname, 'src/renderer/index.html')
           }
         }
       }

@@ -31,6 +31,9 @@
     saveLabel: string
     fullscreen: boolean
     onSetView: (view: ProjectFileView) => void
+    onInfo: () => void
+    /** File info is disabled for files that no longer exist on disk. */
+    infoDisabled?: boolean
     onUndo: () => void
     onRedo: () => void
     onReload: () => void
@@ -62,6 +65,8 @@
     saveLabel,
     fullscreen,
     onSetView,
+    onInfo,
+    infoDisabled = false,
     onUndo,
     onRedo,
     onReload,
@@ -151,6 +156,8 @@
     {showUndoRedo}
     {beautifyLabel}
     {fullscreen}
+    {onInfo}
+    {infoDisabled}
     {onUndo}
     {onRedo}
     {onReload}

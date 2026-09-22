@@ -9,9 +9,12 @@ import {
   validateMergeCommitMessage,
   validateMergeCommitTitle,
   validateMergeMethod,
+  validatePrAssigneeLogins,
   validatePrCommentBody,
   validatePrCreateInput,
+  validatePrLabelNames,
   validatePrListRequest,
+  validatePrMilestoneNumber,
   validatePrNumber,
   validatePrPage,
   validatePrState,
@@ -257,6 +260,78 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
       )
     }
   )
+
+  ipcMain.handle(
+    'pr:setLabels',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      labels: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const safeLabels = validatePrLabelNames(labels)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.setPullRequestLabels({ ...target, labels: safeLabels })
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:setAssignees',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      logins: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const safeLogins = validatePrAssigneeLogins(logins)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.setPullRequestAssignees({ ...target, logins: safeLogins })
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:setMilestone',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      milestone: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const safeMilestone = milestone === null ? null : validatePrMilestoneNumber(milestone)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.setPullRequestMilestone({ ...target, milestone: safeMilestone })
+      )
+    }
+  )
+
+  ipcMain.handle('pr:labels', async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+    const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+    if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+    return provider.listRepositoryLabels({
+      owner: validateBoundedString(owner, 'PR owner', 1, 128),
+      repo: validateBoundedString(repo, 'PR repository', 1, 128)
+    })
+  })
+
+  ipcMain.handle('pr:milestones', async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+    const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+    if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+    return provider.listRepositoryMilestones({
+      owner: validateBoundedString(owner, 'PR owner', 1, 128),
+      repo: validateBoundedString(repo, 'PR repository', 1, 128)
+    })
+  })
 
   ipcMain.handle(
     'pr:page',

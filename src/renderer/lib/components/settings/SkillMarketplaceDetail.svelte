@@ -3,6 +3,7 @@
   import {
     ArrowLeft,
     CalendarDays,
+    Check,
     Download,
     ExternalLink,
     FolderKanban,
@@ -11,11 +12,15 @@
     Loader2,
     ShieldCheck,
     SquareTerminal,
-    Star
+    Star,
+    Trash2
   } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
+  import { installedSkillState } from '$lib/stores/installed-skills.svelte'
+  import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
   import {
     harnessGlobalSkillPath,
     SHARED_GLOBAL_SKILL_PATH,
@@ -27,10 +32,11 @@
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
+  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import type {
     Project,
@@ -64,9 +70,12 @@
   }
 
   let { entry, backLabel, onBack }: Props = $props()
+  const cioIconUrl = publicAssetUrl('icon.svg')
   let detail = $state<SkillMarketDetail | null>(null)
   let loading = $state(true)
   let installing = $state(false)
+  let uninstalling = $state(false)
+  let confirmingUninstall = $state(false)
   let error = $state('')
   let installedMessage = $state('')
   let manager = $state<InstallManager>('native')
@@ -148,6 +157,49 @@
     return `${harnessCount || 'No'} harness${harnessCount === 1 ? '' : 'es'} selected`
   })
 
+  /** Every place this skill is already installed, newest read first. */
+  let installedLocations = $derived(installedSkillState.locationsFor(entry.skillId))
+
+  /**
+   * True when the owner and scope on screen is already covered by an installed
+   * copy. Installing the same skill into another project or harness stays
+   * possible, which a plain "is it installed anywhere" check would block.
+   */
+  let selectionInstalled = $derived.by(() => {
+    if (installedLocations.length === 0) return false
+    if (manager === 'cio') {
+      // Activation is part of the request, so switching between on-demand and
+      // always-available has to keep the install action available.
+      const managed = installedLocations.filter(
+        (location) => location.manager === 'cio' && location.activation === activation
+      )
+      if (scope === 'global') return managed.some((location) => location.scope === 'global')
+      if (selectedProjectIds.length === 0) return false
+      return selectedProjectIds.every((projectId) =>
+        managed.some((location) => location.scope === 'project' && location.projectId === projectId)
+      )
+    }
+    const native = installedLocations.filter((location) => location.manager === 'native')
+    if (scope === 'global') return native.some((location) => location.scope === 'global')
+    if (scope === 'projects') {
+      if (selectedProjectIds.length === 0) return false
+      return selectedProjectIds.every((projectId) =>
+        native.some((location) => location.scope === 'project' && location.projectId === projectId)
+      )
+    }
+    if (selectedHarnessIds.length === 0) return false
+    return selectedHarnessIds.every((harnessId) =>
+      native.some(
+        (location) =>
+          (location.scope === 'harness' && location.harnessId === harnessId) ||
+          // A harness that shares the canonical skills folder is covered by the
+          // shared global copy, which is exactly where its install lands.
+          (location.scope === 'global' &&
+            harnessGlobalSkillPath(harnessId) === SHARED_GLOBAL_SKILL_PATH)
+      )
+    )
+  })
+
   function auditClass(status: SkillMarketDetail['audits'][number]['status']): string {
     if (status === 'pass') return 'bg-success/10 text-success'
     if (status === 'warn') return 'bg-warning/10 text-warning'
@@ -214,12 +266,43 @@
         ...(manager === 'cio' ? { activation } : {})
       }
       await invoke('utilities:installMarketSkill', request)
-      installedMessage = `${entry.name} installed successfully · ${destinationSummary}`
+      // The install changed the registry and the skill folders on disk, so the
+      // shared installed-state read is refreshed before the button flips over.
+      await installedSkillState.refresh()
+      // The install record is what the background updater owns, so its count is
+      // re-read here too.
+      void skillUpdateState.refresh()
+      installedMessage = `${entry.name} installed.`
     } catch (installError) {
       error =
         installError instanceof Error ? installError.message : 'The skill could not be installed.'
     } finally {
       installing = false
+    }
+  }
+
+  /**
+   * Removes the skill from every place it was installed: main drops all the
+   * CodeInOven entries that manage it and hands the native copies to the Skills
+   * CLI, so one action clears global, harness, and project copies alike.
+   */
+  async function uninstallSkill(): Promise<void> {
+    uninstalling = true
+    error = ''
+    installedMessage = ''
+    try {
+      await invoke('utilities:uninstallMarketSkill', entry.skillId)
+      await installedSkillState.refresh()
+      void skillUpdateState.refresh()
+      installedMessage = `${entry.name} uninstalled.`
+    } catch (uninstallError) {
+      error =
+        uninstallError instanceof Error
+          ? uninstallError.message
+          : 'The skill could not be uninstalled.'
+    } finally {
+      uninstalling = false
+      confirmingUninstall = false
     }
   }
 
@@ -230,6 +313,7 @@
       loading = false
     }
     void providerStore.init()
+    void installedSkillState.ensureLoaded()
     void loadProjects().catch((projectError) => {
       error = projectError instanceof Error ? projectError.message : 'Projects could not load.'
     })
@@ -245,6 +329,25 @@
       })
   })
 </script>
+
+<!--
+  One scope destination per row: they are independent choices, so a shared row
+  made them read as one segmented selector.
+-->
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Globe2)}
+  <button
+    type="button"
+    class="flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {scope ===
+    id
+      ? 'border-primary bg-primary/10 text-primary'
+      : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+    aria-pressed={scope === id}
+    onclick={() => selectScope(id)}
+  >
+    <Icon size={13} />
+    {label}
+  </button>
+{/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
   <!--
@@ -271,7 +374,10 @@
     </div>
 
     <p class="mt-4 font-mono text-xs text-muted">{entry.source}</p>
-    <h1 class="mt-1 break-words text-xl font-bold tracking-tight">{entry.name}</h1>
+    <h1 class="mt-1 flex flex-wrap items-center gap-2 text-xl font-bold tracking-tight">
+      <span class="break-words">{entry.name}</span>
+      {#if installedLocations.length > 0}<SkillInstalledBadge />{/if}
+    </h1>
     <p class="mt-2 text-sm leading-relaxed text-muted">
       {detail?.description ||
         (loading
@@ -349,19 +455,20 @@
             aria-pressed={manager === 'cio'}
             onclick={() => selectManager('cio')}
           >
-            <VendorIcon name={APP_NAME} size={16} />
-            {APP_NAME}
+            <!-- The same mark the utilities page pairs with its "CIO" scope tag. -->
+            <img class="h-4 w-4 shrink-0 object-contain" src={cioIconUrl} alt="" />
+            <span class="truncate">{APP_NAME}</span>
           </button>
           <button
             type="button"
-            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium transition-colors {manager ===
+            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium whitespace-nowrap transition-colors {manager ===
             'native'
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'}"
             aria-pressed={manager === 'native'}
             onclick={() => selectManager('native')}
           >
-            <SquareTerminal size={12} /> Native harnesses
+            <SquareTerminal size={12} /> Harnesses
           </button>
         </div>
 
@@ -400,41 +507,13 @@
 
         <div class="mt-4 space-y-2">
           <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Scope</p>
-          <div class="grid gap-2 {manager === 'native' ? 'grid-cols-3' : 'grid-cols-2'}">
-            <button
-              type="button"
-              class="flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors {scope ===
-              'global'
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-              aria-pressed={scope === 'global'}
-              onclick={() => selectScope('global')}
-            >
-              <Globe2 size={13} /> Global
-            </button>
-            <button
-              type="button"
-              class="flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors {scope ===
-              'projects'
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-              aria-pressed={scope === 'projects'}
-              onclick={() => selectScope('projects')}
-            >
-              <FolderKanban size={13} /> Projects
-            </button>
+          <!-- One destination per row: each scope is a separate decision, and
+               side-by-side chips read as one shared choice. -->
+          <div class="grid gap-2">
+            {@render scopeOption('global', 'Global', Globe2)}
+            {@render scopeOption('projects', 'Projects', FolderKanban)}
             {#if manager === 'native'}
-              <button
-                type="button"
-                class="flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors {scope ===
-                'harnesses'
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                aria-pressed={scope === 'harnesses'}
-                onclick={() => selectScope('harnesses')}
-              >
-                <SquareTerminal size={13} /> Harnesses
-              </button>
+              {@render scopeOption('harnesses', 'Harnesses', SquareTerminal)}
             {/if}
           </div>
           {#if scope === 'projects'}
@@ -521,14 +600,27 @@
             ? 'mt-3'
             : 'mt-4'}"
           type="button"
-          disabled={installing || selectionIncomplete}
+          disabled={installing || selectionInstalled || selectionIncomplete}
           onclick={() => void installSkill()}
         >
-          {#if installing}<Loader2 size={13} class="animate-spin" />{:else}<Download
-              size={13}
-            />{/if}
-          {installing ? 'Installing…' : 'Install skill'}
+          {#if installing}<Loader2 size={13} class="animate-spin" />{:else if selectionInstalled}
+            <Check size={13} />{:else}<Download size={13} />{/if}
+          {installing ? 'Installing…' : selectionInstalled ? 'Installed' : 'Install skill'}
         </button>
+
+        {#if installedLocations.length > 0}
+          <button
+            class="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-danger/40 px-4 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            type="button"
+            disabled={uninstalling}
+            onclick={() => (confirmingUninstall = true)}
+          >
+            {#if uninstalling}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+                size={13}
+              />{/if}
+            {uninstalling ? 'Uninstalling…' : 'Uninstall'}
+          </button>
+        {/if}
       </section>
 
       <section class="rounded-xl border bg-surface p-4" aria-label="Skill facts">
@@ -569,6 +661,7 @@
               class="mt-1 flex max-w-full items-center gap-1 text-left font-mono text-xs hover:underline"
               type="button"
               title="Open {entry.source} on GitHub"
+              data-external-url={detail?.repositoryUrl ?? entry.url}
               onclick={() => void openInBrowser(detail?.repositoryUrl ?? entry.url)}
             >
               <span class="truncate">{entry.source}</span><ExternalLink
@@ -608,6 +701,7 @@
           class="mt-5 flex items-center gap-1.5 text-xs font-medium text-muted hover:text-foreground"
           type="button"
           title="Open this skill on skills.sh"
+          data-external-url={entry.url}
           onclick={() => void openInBrowser(entry.url)}
         >
           View on skills.sh <ExternalLink size={12} />
@@ -616,3 +710,20 @@
     </aside>
   </div>
 </div>
+
+<ConfirmDialog
+  open={confirmingUninstall}
+  title="Uninstall skill"
+  confirmLabel="Uninstall"
+  note="This cannot be undone."
+  busy={uninstalling}
+  onCancel={() => (confirmingUninstall = false)}
+  onConfirm={uninstallSkill}
+>
+  <p>
+    Remove <strong class="text-foreground">{entry.name}</strong> from every place it is installed?
+  </p>
+  <p class="mt-2">
+    This deletes the skill files on disk and every {APP_NAME} entry that manages it.
+  </p>
+</ConfirmDialog>

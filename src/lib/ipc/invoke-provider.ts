@@ -9,6 +9,7 @@ import type {
   ComputerUseActivity,
   ComputerUsePipState,
   CuaBridgeStatus,
+  CuaUpdateCheck,
   DiscoveredBaseUrlModel,
   HarnessAccount,
   HarnessInstallHandoff,
@@ -28,9 +29,12 @@ import type {
   ResolvedUtility,
   SkillMarketDetail,
   SkillMarketInstallRequest,
+  InstalledSkillLocation,
   SkillMarketLeaderboard,
   SkillMarketSearchResult,
   SkillMarketView,
+  SkillUninstallReport,
+  SkillUpdateStatus,
   ThreadSettings,
   UtilityBundleInstallRequest,
   UtilityCatalog,
@@ -185,6 +189,10 @@ export const invokeProviderContract = {
   'utilities:listSkillMarket': {} as Contract<[view: SkillMarketView], SkillMarketLeaderboard>,
   'utilities:getSkillMarketDetail': {} as Contract<[id: string], SkillMarketDetail>,
   'utilities:installMarketSkill': {} as Contract<[request: SkillMarketInstallRequest], string>,
+  'utilities:installedSkillLocations': {} as Contract<[], InstalledSkillLocation[]>,
+  'utilities:uninstallMarketSkill': {} as Contract<[skillId: string], SkillUninstallReport>,
+  'utilities:skillUpdateStatus': {} as Contract<[], SkillUpdateStatus>,
+  'utilities:checkSkillUpdates': {} as Contract<[], SkillUpdateStatus>,
   'utilities:update': {} as Contract<
     [id: string, patch: UtilityDefinitionPatch],
     UtilityDefinition
@@ -201,6 +209,18 @@ export const invokeProviderContract = {
   'utilities:resolve': {} as Contract<[context: UtilityResolutionContext], ResolvedUtility[]>,
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
+  /**
+   * Asks the installed driver whether Cua published a newer release. Null when
+   * no driver is installed. `skipCache` forces a fresh GitHub round trip instead
+   * of the driver's 20-hour on-disk cache.
+   */
+  'computerUse:checkCuaUpdate': {} as Contract<[skipCache?: boolean], CuaUpdateCheck | null>,
+  /**
+   * Updates the installed driver in place through Cua's own updater and answers
+   * with the refreshed bridge status. Long-running: the settings surface follows
+   * `computerUse:cuaUpdate` while it runs.
+   */
+  'computerUse:updateCua': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:pipGetState': {} as Contract<[], ComputerUsePipState>,
   /** Every thread whose agent is currently driving the computer, so a renderer
    *  that reloads mid-run re-seeds its row indicators. */

@@ -11,7 +11,6 @@ useDefault = true
 [allowlist]
 description = 'Fake credentials in test fixtures, plus the published installed-app OAuth client secret'
 paths = [
-  '''^src/main/remote/remote-gateway\.test\.ts$''',
   '''^tests/main/utilities/cio-diagnostics-service\.test\.ts$'''
 ]
 # Antigravity's installed-application OAuth client secret, pinned in

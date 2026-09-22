@@ -129,24 +129,6 @@ export class InstanceRegistry {
     return () => this.checkpointListeners.delete(listener)
   }
 
-  /**
-   * Elect the newest live process as the sole owner of shared remote
-   * transports. The process the user opened most recently takes over remote
-   * access, which keeps an older packaged build from pinning a newer instance
-   * in standby.
-   */
-  isPreferredRemoteOwner(): boolean {
-    try {
-      const entries = this.liveEntries()
-      if (entries.length === 0) return true
-      entries.sort((left, right) => right.startedAt - left.startedAt || right.pid - left.pid)
-      return entries[0]?.pid === this.selfEntry.pid
-    } catch {
-      // Registry failures must not make remote mode unavailable.
-      return true
-    }
-  }
-
   /** Wake services that may need to take over after another process exits. */
   onLiveInstancesChanged(listener: () => void): () => void {
     this.liveInstanceListeners.add(listener)

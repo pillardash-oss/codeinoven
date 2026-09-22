@@ -35,6 +35,7 @@ import type { GitService } from '../../git/git-service'
 import type { GitProvider } from '../../git/git-provider.interface'
 import type { SecretVault } from '../../storage/secret-vault'
 import type { GitHubAuthService } from '../../git/github-auth-service'
+import type { SkillUpdateService } from '../../utilities/skill-updates'
 import type { DiagnosticsService } from '../../system/diagnostics-service'
 import type { MemoryService } from '../../chat/memory-service'
 import type { HarnessManifestService } from '../../agents/harness-manifest-service'
@@ -72,6 +73,17 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+  /**
+   * Credential vault and GitHub auth, created by the composition root so main
+   * services outside the IPC layer (the skill updater) resolve the same token.
+   */
+  vault?: SecretVault
+  githubAuthService?: GitHubAuthService
+  /**
+   * Background skill updater, owned by the composition root because it rides
+   * the app-update check cycle rather than a scheduler of its own.
+   */
+  skillUpdates?: SkillUpdateService
   /** Receives the privileged scoped-path resolver so other main-process
    *  boundaries (the `appfile://` preview protocol) authorize paths exactly
    *  like privileged IPC does. */
@@ -135,6 +147,8 @@ export interface IpcHandlerContext {
   vault: SecretVault
   gitCredentialRef: (projectId: string) => string
   githubAuthService: GitHubAuthService
+  /** Background skill updater; absent only in tests that build a bare handler set. */
+  skillUpdates?: SkillUpdateService
   diagnosticsService: DiagnosticsService
   memoryService: MemoryService
   attachmentGrantRepo: AttachmentGrantRepo

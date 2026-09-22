@@ -1,3 +1,5 @@
+import type { AgentProviderIssue } from './agent-events'
+
 /** Filter for pull request listings. */
 export type PrState = 'open' | 'closed' | 'all'
 
@@ -117,6 +119,18 @@ export interface PullRequestSummary {
   /** Labels in GitHub's own order. Absent when the payload did not carry them. */
   labels?: PullRequestLabel[]
   /**
+   * Accounts assigned to the pull request, in the provider's order. Same shape as
+   * the mention directory's accounts on purpose: GitHub answers both from the same
+   * assignable-accounts collection, so a person is described the same way whether
+   * they are being assigned or @-mentioned, and one picker renders both.
+   */
+  assignees?: RepositoryMentionUser[]
+  /**
+   * The milestone the pull request belongs to, or null when it has none. Absent
+   * for a summary built outside a listing, the same as `labels`.
+   */
+  milestone?: PullRequestMilestone | null
+  /**
    * Rolled-up check state for the head commit, with the counts behind it. Absent
    * for a summary built outside a listing: the detail fetches its own checks.
    */
@@ -180,6 +194,12 @@ export interface PullRequestCompare {
 /** Full pull request view, loaded when one is opened in the sidebar. */
 export interface PullRequestDetail extends PullRequestSummary {
   body: string
+  /**
+   * What the pull request's author is to the repository. The description is a
+   * comment like any other in the conversation, so it carries the same role
+   * badge its author's comments do.
+   */
+  authorAssociation: PrAuthorAssociation | null
   /** Null when the provider has not finished computing mergeability yet. */
   mergeable: boolean | null
   merged: boolean
@@ -205,6 +225,36 @@ export interface PullRequestCommit {
  * ids, so every comment mutation has to say which one it means.
  */
 export type PrCommentKind = 'issue' | 'review'
+
+/**
+ * Which side of a diff a line number belongs to.
+ *
+ * GitHub numbers a comment by the file it is anchored in: a comment on an added
+ * or context line carries a line of the file after the change (`right`), while a
+ * comment on a removed line carries one of the file before it (`left`). The two
+ * numberings overlap, so without this a deletion comment is read against the
+ * wrong line.
+ */
+export type PrCommentSide = 'left' | 'right'
+
+/**
+ * What an account is to the repository a comment was written in.
+ *
+ * GitHub reports this beside every comment as `author_association`, and the
+ * conversation row labels the commenter with it, the same way github.com does.
+ * These are GitHub's own eight values: `MANNEQUIN` is the placeholder it keeps
+ * for an account that no longer exists, and `NONE` is an account with no
+ * relationship to the repository, which is why neither of them earns a label.
+ */
+export type PrAuthorAssociation =
+  | 'OWNER'
+  | 'MEMBER'
+  | 'COLLABORATOR'
+  | 'CONTRIBUTOR'
+  | 'FIRST_TIMER'
+  | 'FIRST_TIME_CONTRIBUTOR'
+  | 'MANNEQUIN'
+  | 'NONE'
 
 /**
  * An account whose picture the UI wants.
@@ -234,6 +284,8 @@ export interface PullRequestComment {
   authorAvatarUrl: string | null
   /** True for app/bot accounts, so the row can draw GitHub's `Bot` badge. */
   authorIsBot: boolean
+  /** What the commenter is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   body: string
   createdAt: string
   /** Last edit time, null when the comment has never been edited. */
@@ -277,6 +329,8 @@ export interface PullRequestReview {
   authorLogin: string
   authorAvatarUrl: string | null
   authorIsBot: boolean
+  /** What the reviewer is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
   state: string
   body: string
@@ -297,15 +351,57 @@ export interface PullRequestReviewComment {
   authorLogin: string
   authorAvatarUrl: string | null
   authorIsBot: boolean
+  /** What the commenter is to the repository, for the row's role badge. */
+  authorAssociation: PrAuthorAssociation | null
   body: string
   path: string
   /** Line in the file the comment anchors to; null once outdated. */
   line: number | null
+  /** Which file `line` numbers, or null when the provider did not say. */
+  side: PrCommentSide | null
+  /**
+   * The review this comment was submitted with, or null when the provider did
+   * not attribute it. GitHub submits a review's inline comments and its summary
+   * together, so this is what keeps a review's threads next to its verdict
+   * instead of floating loose in the chronological stream.
+   */
+  reviewId: number | null
+  /**
+   * The comment this one answers, or null for the comment that opened the
+   * thread. GitHub nests a reply under its parent, so this is what decides
+   * whether a comment starts a thread or continues one.
+   */
+  inReplyToId: number | null
+  /**
+   * The diff GitHub showed when the comment was written, as a unified hunk
+   * header plus its lines. It is the code the reader has to see to judge the
+   * comment, and it survives the line going outdated, which the live file
+   * would not.
+   */
+  diffHunk: string | null
   createdAt: string
   updatedAt: string | null
   nodeId: string | null
   /** Permalink to the inline comment inside the pull request conversation. */
   url: string
+}
+
+/**
+ * One review thread's GitHub-side state.
+ *
+ * GitHub hangs resolution on the thread rather than on any of its comments, and
+ * exposes it only through GraphQL, so the REST comment list cannot say whether a
+ * thread is settled. This carries that state beside the comments the reader
+ * renders, which is what lets a thread be resolved without leaving the app.
+ */
+export interface PullRequestReviewThread {
+  /** GraphQL global id, the only handle resolve and unresolve accept. */
+  nodeId: string
+  isResolved: boolean
+  /** True once the line the thread was written about has left the diff. */
+  isOutdated: boolean
+  /** Ids of the comments in the thread, which is how a built thread finds it. */
+  commentIds: number[]
 }
 
 /** One CI check or commit status on the PR head. */
@@ -360,6 +456,30 @@ export interface PullRequestLabel {
   name: string
   /** Six hex digits without `#`, which is exactly what a chip's colour needs. */
   color: string
+  /**
+   * The label's own description from the repository catalog. Only the catalog
+   * read fills this in: a label carried on a pull request payload has no room for
+   * it, and a chip never draws it.
+   */
+  description?: string | null
+}
+
+/**
+ * One milestone a repository exposes, for a picker and for what a pull request
+ * reports it is attached to.
+ *
+ * A milestone is an issue field on GitHub, not a pull request field, so both the
+ * catalog and the assignment travel through the issues endpoints.
+ */
+export interface PullRequestMilestone {
+  number: number
+  title: string
+  /** `open` for a milestone still accepting work, `closed` once it is finished. */
+  state: 'open' | 'closed'
+  /** The milestone's own description, when it publishes one. */
+  description: string | null
+  /** Due date as the provider declares it, or null when none is set. */
+  dueOn: string | null
 }
 
 /**
@@ -374,21 +494,83 @@ export interface PullRequestBundle {
   comments: PullRequestComment[]
   reviews: PullRequestReview[]
   reviewComments: PullRequestReviewComment[]
+  /** Resolution state per inline thread, which only GraphQL reports. */
+  reviewThreads: PullRequestReviewThread[]
   files: PullRequestFile[]
   checks: PullRequestChecks
   /** Epoch ms this bundle was fetched, for cache staleness display. */
   fetchedAt: number
 }
 
-/** An agent's review report read back from `.cio/git/pr/<number>/review.md`. */
+/** What an agent assignment was asked to work on. */
+export type PrAgentAssignmentKind = 'triage' | 'comment'
+
+/**
+ * One agent assignment's report, read back from `.cio/git/pr/<number>/`.
+ *
+ * An assignment is one thread with one report file, so a pull request can hold
+ * several at once: a triage, then one for each comment handed to an agent. Each
+ * keeps its own `review-<id>.md`, which is what stops a second assignment from
+ * overwriting the first.
+ */
 export interface PrAgentReport {
+  /** Identity of the assignment, and the `<id>` in `review-<id>.md`. */
+  id: string
+  kind: PrAgentAssignmentKind
+  /** What the assignment addressed, e.g. `Triage` or `Comment by @dependabot`. */
+  title: string
   /** Absolute path to the report file. */
   path: string
   content: string
   /** Epoch ms of the last write, or null when no report exists yet. */
   updatedAt: number | null
-  /** Thread the review was handed to, so the UI can jump back into it. */
+  /** Epoch ms the assignment was made, so the list can order and label it. */
+  createdAt: number | null
+  /** Thread the assignment was handed to, so the UI can jump back into it. */
   threadId: string | null
+  /** Permalink of the comment the assignment was opened from, when there was one. */
+  url: string | null
+}
+
+/**
+ * What the list needs to draw one row's assignment chip.
+ *
+ * Deliberately a count and the newest assignment rather than the reports
+ * themselves: a page of rows wants to know whether an agent is on a pull request
+ * and how to get back to it, not the text of every report ever written.
+ */
+export interface PrAgentAssignmentSummary {
+  /** How many assignments the pull request holds. */
+  count: number
+  /** Newest assignment's thread, for a jump back into it. */
+  threadId: string | null
+  /** Newest assignment's title. */
+  title: string
+  /** Epoch ms the newest assignment was made. */
+  createdAt: number | null
+}
+
+/** What an agent assignment is asked to do when it is created. */
+export interface PrAgentAssignmentInput {
+  kind: PrAgentAssignmentKind
+  /** What the assignment addresses, shown in the report list. */
+  title: string
+  /** Permalink of the comment the assignment was opened from, when there is one. */
+  url?: string
+}
+
+/**
+ * A created assignment's files, so the caller can name the report path in the
+ * brief it hands the agent. The path is composed in the main process: the
+ * renderer never builds a filesystem path of its own.
+ */
+export interface PrAgentAssignmentWorkspace {
+  /** Identity of the assignment, and the `<id>` in `review-<id>.md`. */
+  id: string
+  /** The pull request's report directory. */
+  directory: string
+  /** Absolute path of the report the agent should write. */
+  reportPath: string
 }
 
 /** An agent-composed PR title/description produced by a disposable virtual task. */
@@ -398,6 +580,19 @@ export interface PrComposeReport {
   /** Disposable task that produced the report; it is not a persisted Thread id. */
   taskId: string
 }
+
+/**
+ * What one disposable PR-compose task produced.
+ *
+ * A compose failure is an expected outcome, not an exception. The agent runs on
+ * a harness the user picked, and that harness can be missing, unauthenticated,
+ * rate-limited, or unable to start at all. Returning the failure as a value
+ * keeps it inside the app's provider-issue vocabulary, so the sheet can render
+ * the same title and actions every other harness failure gets instead of a
+ * thrown string that names nothing the user can do.
+ */
+export type PrComposeOutcome =
+  { status: 'completed'; report: PrComposeReport } | { status: 'failed'; issue: AgentProviderIssue }
 
 /** Branch selection and optional existing copy for one isolated PR composition. */
 export interface PrComposeInput {

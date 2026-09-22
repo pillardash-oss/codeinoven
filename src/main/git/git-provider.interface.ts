@@ -18,8 +18,11 @@ import type {
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestReview,
   PullRequestReviewComment,
+  PullRequestReviewThread,
   PullRequestPage,
   PullRequestReference,
   RepositoryMentionUser,
@@ -90,12 +93,40 @@ export interface UpdatePrCommentInput extends PrCommentTarget {
 }
 
 /**
+ * Answer an inline review comment inside that comment's thread.
+ *
+ * A reply is not a new thread: GitHub files it under the comment it answers, so
+ * the id is the comment being replied to   and GitHub only accepts the id of the
+ * comment that opened a thread, never one of its replies, so a reply to a reply
+ * belongs to the same thread as the reply it answers and is posted against that
+ * thread's opening comment. Conversation comments have no threading on GitHub at
+ * all, which is why this only exists for the inline collection.
+ */
+export interface ReplyPrReviewCommentInput extends PullRequestTarget {
+  /** The top-level comment whose thread receives the reply. */
+  commentId: number
+  body: string
+}
+
+/**
  * Hide a comment behind GitHub's "minimised" treatment. GraphQL-only, so the
  * caller supplies the node id rather than the numeric one.
  */
 export interface MinimizePrCommentInput {
   nodeId: string
   reason: PrMinimizeReason
+}
+
+/**
+ * Settle or reopen one inline thread.
+ *
+ * Resolution belongs to the thread rather than to any comment in it, and GitHub
+ * exposes the transition only through GraphQL, so the caller supplies the
+ * thread's node id as the read reported it.
+ */
+export interface ResolvePrReviewThreadInput {
+  nodeId: string
+  resolved: boolean
 }
 
 /** Submit a review verdict on a pull request. */
@@ -144,12 +175,25 @@ export interface GitProvider {
   updatePullRequestReviewComment(input: UpdatePrCommentInput): Promise<PullRequestReviewComment>
   /** Permanently delete an inline diff comment. Only the author may do this. */
   deletePullRequestReviewComment(input: PrCommentTarget): Promise<void>
+  /** Answer an inline diff comment inside its thread. */
+  replyToPullRequestReviewComment(
+    input: ReplyPrReviewCommentInput
+  ): Promise<PullRequestReviewComment>
   /**
    * Hide a comment behind GitHub's minimised treatment. There is no equivalent
    * REST endpoint   only the GraphQL `minimizeComment` mutation.
    */
   minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void>
   createPullRequestReview(input: CreatePrReviewInput): Promise<void>
+  /**
+   * Resolution state for each inline thread on the pull request.
+   *
+   * Kept apart from `listPullRequestReviewComments` because GitHub splits them:
+   * the comments are REST and the threads they hang in are GraphQL-only.
+   */
+  listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]>
+  /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
+  setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
@@ -160,6 +204,29 @@ export interface GitProvider {
     owner: string
     repo: string
   }): Promise<RepositoryMentionUser[]>
+  /**
+   * Replace the labels a pull request carries, returning the labels it now has.
+   * One write for the whole set rather than an add or a remove per label, so a
+   * picker that toggles several chips costs one round trip and the result is the
+   * provider's own answer instead of a locally reconstructed guess.
+   */
+  setPullRequestLabels(input: PullRequestTarget & { labels: string[] }): Promise<PullRequestLabel[]>
+  /** Replace a pull request's assignees, returning the accounts it now has. */
+  setPullRequestAssignees(
+    input: PullRequestTarget & { logins: string[] }
+  ): Promise<RepositoryMentionUser[]>
+  /**
+   * Attach or clear a pull request's milestone. A milestone is an issue field on
+   * GitHub rather than a pull request field, which is why both the catalog and the
+   * assignment travel through the issues endpoints.
+   */
+  setPullRequestMilestone(
+    input: PullRequestTarget & { milestone: number | null }
+  ): Promise<PullRequestMilestone | null>
+  /** The repository's own label catalog, for a label picker. */
+  listRepositoryLabels(input: { owner: string; repo: string }): Promise<PullRequestLabel[]>
+  /** The repository's open milestones, for a milestone picker. */
+  listRepositoryMilestones(input: { owner: string; repo: string }): Promise<PullRequestMilestone[]>
   /** Recent workflow runs and deployments for read-only repository monitoring. */
   getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
   /** Rich in-app deployment detail: status history, linked run, jobs/steps. */

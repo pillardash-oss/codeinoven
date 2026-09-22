@@ -35,9 +35,11 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import ForeignRunCard from './ForeignRunCard.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
+  import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -250,7 +252,6 @@
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
-  import { isRemotePwaRuntime } from '$lib/runtime-context'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
@@ -536,6 +537,10 @@
       .filter((text) => text.trim().length > 0)
   )
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
+  /** Another live instance owns this thread's in-flight turn. Its stream never
+   *  reaches this window, so the composer cannot drive the run and is replaced
+   *  by the transfer card instead. */
+  let foreignRunActive = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
   let conversationBusy = $derived(
     (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
   )
@@ -900,7 +905,7 @@
   }
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
-   *  session, an app restart, or a relay drop mid-turn). The trace renders the
+   *  session, or an app restart mid-turn). The trace renders the
    *  last-known saved parts with an explicit saved-activity note instead of the
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
@@ -2401,6 +2406,7 @@
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
   let assignmentWorkerRetryingId = $state<string | null>(null)
+  let assignmentWorkerReportingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
   /** A retry may only follow a completed, non-error assistant response for the
@@ -2487,6 +2493,16 @@
    *  auditor child. Null for every normal, user-facing thread. */
   const coordinatorParentId = $derived(
     isOrchestrationChildThread(thread) ? (thread.coordinatorThreadId ?? null) : null
+  )
+  /** The open thread is a worker of this Assignment whose reporting the user
+   *  switched off, so it can be asked to hand its finished work back now. */
+  const workerCanReportToCoordinator = $derived(
+    coordinatorParentId !== null &&
+      thread.assignmentRole === 'worker' &&
+      assignment !== null &&
+      assignment.status !== 'draft' &&
+      assignment.status !== 'stopped' &&
+      settings.reportToCoordinator === false
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
@@ -2626,7 +2642,10 @@
           onResume: resumeAssignmentCoordination,
           onStop: stopAssignment,
           onResumeAssignment: resumeStoppedAssignment,
-          onBackToCoordinator
+          onBackToCoordinator,
+          onReportToCoordinator: workerCanReportToCoordinator
+            ? reportWorkerToCoordinator
+            : undefined
         }
       }
     }
@@ -2670,6 +2689,7 @@
           running: independentAuditRunning,
           auditThread: durableAuditThread,
           reportAvailable: auditReport !== null,
+          partialReport: auditReport?.evidenceValidation === 'partial',
           selectedThreadId: thread.id,
           auditorSettings: auditSettings,
           providers,
@@ -2781,7 +2801,7 @@
     }
   })
 
-  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
+  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed' | 'partial'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
     const cycleStatus = assignment?.auditCycle?.status
@@ -2796,7 +2816,11 @@
       return assignment?.status === 'completed' ? 'offered' : undefined
     }
     if (cycleStatus === 'running') return 'running'
-    if (cycleStatus === 'report_ready') return 'report_ready'
+    // A report that was generated but whose verification evidence could not be
+    // fully validated surfaces as the half-report card instead of a final one.
+    if (cycleStatus === 'report_ready') {
+      return auditReport?.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     if (
       cycleStatus === 'planning_rework' ||
       cycleStatus === 'awaiting_rework_approval' ||
@@ -2804,7 +2828,9 @@
     )
       return 'reworking'
     if (cycleStatus === 'completed') return undefined
-    if (auditState === 'report_ready' && auditReport) return 'report_ready'
+    if (auditState === 'report_ready' && auditReport) {
+      return auditReport.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     return auditState
   })
   let assignmentReworkCycle = $derived(assignment?.auditCycle?.reworkCycle)
@@ -3882,7 +3908,7 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        // Another renderer (notably the PWA) can create or resume the harness
+        // Another renderer window can create or resume the harness
         // session while this desktop view stays mounted. Adopt that persisted
         // binding before its stream arrives, then reconcile the user message
         // that the remote renderer optimistically owns in its own cache.
@@ -4383,61 +4409,101 @@
     return loadPromise
   }
 
-  function switchProject(targetProjectId: string): void {
+  /** True while a move is in flight. Choosing a second project before the first
+   *  create settles would otherwise leave an orphan thread behind in the project
+   *  the user skipped past. */
+  let switchingProject = false
+
+  /**
+   * Hand this not-yet-used thread to another project.
+   *
+   * A thread is owned by exactly one project, so handing it over is a create and
+   * a delete, in that order: the destination project gets a thread that inherits
+   * this one's provider, settings and title, the unsent draft moves across
+   * object-to-object (never through the clipboard), and only once the new thread
+   * owns the draft is the source thread deleted. The sidebar needs no special
+   * handling   opening the new thread puts its row in the list, and the
+   * `thread:deleted` broadcast removes the old row, exactly as they do for every
+   * other thread.
+   */
+  async function switchProject(targetProjectId: string): Promise<void> {
+    if (switchingProject) return
     const oldProjectId = thread.projectId
     const oldThreadId = thread.id
+    // Picking the project the thread already lives in is not a move: without this
+    // guard it would churn the thread id for nothing.
+    if (targetProjectId === oldProjectId) return
+
+    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
+    if (!targetProject) return
+
     const oldTitle = thread.title
+    const providerId = thread.providerId
+    const settings = thread.settings
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)
     const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
     const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
-    rendererRecovery.clearDraft(oldProjectId, oldThreadId)
-    publishDraftActivity(oldProjectId, oldThreadId, false)
+    const hasDraftContent =
+      draft.length > 0 ||
+      attachments.length > 0 ||
+      references.length > 0 ||
+      taskReferences.length > 0 ||
+      promptReferences.length > 0
 
-    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
-    if (!targetProject) return
+    switchingProject = true
+    try {
+      let newThread: Thread
+      try {
+        newThread = await invoke('thread:create', {
+          projectId: targetProjectId,
+          providerId,
+          title: oldTitle,
+          workingDirectory: targetProject.path,
+          settings,
+          scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+        })
+      } catch (error) {
+        // The source thread and its draft are untouched, so the composer still
+        // holds whatever the user had typed and the move can simply be retried.
+        reportError(error, 'The thread could not be moved.')
+        return
+      }
 
-    invoke('thread:create', {
-      projectId: targetProjectId,
-      providerId: thread.providerId,
-      title: oldTitle,
-      workingDirectory: targetProject.path,
-      settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        if (
-          draft ||
-          attachments.length > 0 ||
-          references.length > 0 ||
-          taskReferences.length > 0 ||
-          promptReferences.length > 0
-        ) {
-          rendererRecovery.setDraft(
-            targetProjectId,
-            newThread.id,
-            draft,
-            attachments,
-            references,
-            taskReferences,
-            promptReferences
-          )
-        }
-        workspaceState.requestMoveThread(oldThreadId, newThread)
-        invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
-        scopeState.removeThread(oldThreadId)
-        workspaceState.openThread(newThread, targetProject)
-        scopeState.updateThread(newThread)
-        scopeState.activeProjectId = targetProjectId
-        void scopeState.ensureBoardLoaded(targetProjectId)
-        invoke('project:getIcon', targetProjectId)
-          .then((url) => {
-            projectIconUrl = url
-          })
-          .catch(() => {})
-      })
-      .catch(() => {})
+      if (hasDraftContent) {
+        rendererRecovery.setDraft(
+          targetProjectId,
+          newThread.id,
+          draft,
+          attachments,
+          references,
+          taskReferences,
+          promptReferences
+        )
+      }
+      // Only now that the new thread owns the draft is the source cleared.
+      // Clearing it up front would silently destroy the user's unsent text
+      // whenever the create failed.
+      rendererRecovery.clearDraft(oldProjectId, oldThreadId)
+
+      // Fire-and-forget: main owns the outcome and toasts either way   it restores
+      // the row when the delete failed, and broadcasts `thread:deleted` when the row
+      // is gone, so this side never has to guess which state the thread is in.
+      invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
+      scopeState.removeThread(oldThreadId)
+      workspaceState.openThread(newThread, targetProject)
+      scopeState.updateThread(newThread)
+      scopeState.activeProjectId = targetProjectId
+      void scopeState.ensureBoardLoaded(targetProjectId)
+      invoke('project:getIcon', targetProjectId)
+        .then((url) => {
+          projectIconUrl = url
+        })
+        .catch(() => {})
+    } finally {
+      switchingProject = false
+    }
   }
 
   /** Retry after an error or a paused provider retry   replace the live turn first. */
@@ -4714,6 +4780,7 @@
         if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
           providerStatus = null
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -4735,6 +4802,7 @@
             errorMessage = event.error ?? 'The harness session failed.'
           }
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         break
       }
@@ -4905,6 +4973,7 @@
   async function refreshCompletedTurn(): Promise<void> {
     const staleMessageRefresh = refreshMessagesInFlight
     const checkpointRefresh = refreshCheckpoints()
+    void refreshStreamTailAfterTurn()
     if (staleMessageRefresh) await staleMessageRefresh
     await Promise.all([refreshMessages(), checkpointRefresh])
   }
@@ -7200,46 +7269,6 @@
   }
 
   async function openPrototypePreview(previewPath: string): Promise<void> {
-    if (isRemotePwaRuntime()) {
-      const configuredOrigin = await invoke('prototypePreview:getOrigin')
-      if (!configuredOrigin) {
-        throw new Error('Prototype preview origin is not configured for this deployment.')
-      }
-      let offset = 0
-      let size = 0
-      let mime = 'text/html; charset=utf-8'
-      const chunks: ArrayBuffer[] = []
-      while (offset === 0 || offset < size) {
-        const chunk = await invoke(
-          'prototypePreview:readChunk',
-          thread.projectId,
-          thread.id,
-          previewPath,
-          offset
-        )
-        if (
-          chunk.nextOffset <= offset ||
-          chunk.size < 1 ||
-          chunk.size > 25 * 1024 * 1024 ||
-          chunk.nextOffset > chunk.size
-        ) {
-          throw new Error('The prototype preview returned invalid chunk metadata.')
-        }
-        const binary = atob(chunk.base64)
-        const bytes = new Uint8Array(binary.length)
-        for (let index = 0; index < binary.length; index += 1) {
-          bytes[index] = binary.charCodeAt(index)
-        }
-        chunks.push(bytes.buffer)
-        offset = chunk.nextOffset
-        size = chunk.size
-        mime = chunk.mime
-      }
-      const url = URL.createObjectURL(new Blob(chunks, { type: mime }))
-      window.open(url, '_blank', 'noopener,noreferrer')
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      return
-    }
     const origin = await invoke('prototypePreview:getOrigin')
     if (!origin) {
       errorMessage = 'Prototype preview origin is not configured for this deployment.'
@@ -7824,6 +7853,18 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
+  /** The live thread a dispatched task currently runs in. A reassigned task
+   *  points at its newest worker, so resolution needs no history; an unassigned
+   *  or deleted thread resolves to nothing and its review badge stays inert. */
+  function resolveAssignmentTaskThread(threadId: string | undefined): Thread | undefined {
+    if (!threadId) return undefined
+    if (threadId === thread.id) return thread
+    return (
+      assignmentThreads.find((candidate) => candidate.id === threadId) ??
+      (assignmentCoordinatorThread?.id === threadId ? assignmentCoordinatorThread : undefined)
+    )
+  }
+
   /** Leave a worker/auditor view for the coordinator that owns it. The child is
    *  hidden from every thread list, so this control is the way back. */
   function openCoordinatorParent(): void {
@@ -7990,6 +8031,34 @@
       errorMessage = error instanceof Error ? error.message : 'The worker could not be retried.'
     } finally {
       assignmentWorkerRetryingId = null
+    }
+  }
+
+  /**
+   * Ask the open not-reporting worker to hand its finished work back. The main
+   * process switches reporting on and prompts the worker, so this mirrors the
+   * setting locally: the composer control and this button reflect it at once
+   * instead of waiting for the thread broadcast.
+   */
+  async function reportWorkerToCoordinator(): Promise<void> {
+    const current = assignment
+    if (!current || assignmentWorkerReportingId) return
+    assignmentWorkerReportingId = thread.id
+    try {
+      assignment = await invoke(
+        'agent:reportWorkerToCoordinator',
+        current.projectId,
+        current.coordinatorThreadId,
+        thread.id
+      )
+      updateSettings({ ...settings, reportToCoordinator: true })
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The worker could not be asked to report.'
+      throw error
+    } finally {
+      assignmentWorkerReportingId = null
     }
   }
 
@@ -10013,6 +10082,13 @@
    *  Activity-only user messages are transparent to the turn span. */
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
 
+  /** What "find in conversation" reads: every message plus the composer's own
+   *  draft, so a word can be located in what was said and in what is being
+   *  written. The draft lives in the bottom chrome rather than the transcript
+   *  scroller, which is why the surface is searched as a whole instead of just
+   *  its scrolling message list. */
+  const CONVERSATION_FIND_SELECTOR = `[data-conversation-searchable], ${COMPOSER_DRAFT_SELECTOR}`
+
   function closeFind(): void {
     findNavState.closeConversationFind()
   }
@@ -10054,6 +10130,32 @@
       if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
     } catch {
       // Transient read failure   keep what we have and try again next tick.
+    }
+  }
+
+  /**
+   * One bounded durable read at a turn boundary. The 1s poll dies the moment
+   * `busy` flips false, so task-list checkoffs that streamed into the log in
+   * the last poll gap — or the whole tail that streamed while this view sat
+   * inactive — would otherwise never reach the card, and the stale snapshot
+   * outranks the fresher message cache because the synthetic stream message is
+   * appended last and a todo-list snapshot replaces the whole task map. A turn
+   * boundary is the one moment the card must read the durable truth, so a
+   * finished thread can still clear its card on its own.
+   */
+  async function refreshStreamTailAfterTurn(): Promise<void> {
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+      if (!alive || page.kind !== 'window') return
+      streamParts = mergeWorkingParts(streamParts, page.parts)
+      streamHasOlder = page.hasOlder
+      streamTodoParts = page.todoParts
+      streamCursor = page.cursor
+    } catch {
+      // Best-effort: the message cache still carries the checkoffs, and the
+      // next turn's poll or mount read rebuilds the fold again.
     }
   }
 
@@ -10367,6 +10469,8 @@
           onTaskScopeChange={updateAssignmentTaskScope}
           onWorkerScopeChange={updateAssignmentWorkerScope}
           {assignmentScopeBucketId}
+          onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+          resolveTaskThread={resolveAssignmentTaskThread}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -10450,9 +10554,9 @@
   {:else}
     {#if showFind}
       <FindInSurface
-        container={scrollEl ?? null}
+        container={threadViewElement}
         focusTrigger={findNavState.conversationFindFocusTrigger}
-        searchSelector="[data-conversation-searchable]"
+        searchSelector={CONVERSATION_FIND_SELECTOR}
         placeholder="Find in conversation…"
         label="Find in conversation"
         onClose={closeFind}
@@ -10890,8 +10994,11 @@
                       {#if !conversationBusy || !isLatest || turnAuditReport}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
-                            state="report_ready"
+                            state={turnAuditReport.evidenceValidation === 'partial'
+                              ? 'partial'
+                              : 'report_ready'}
                             version={turnAuditReport.version}
+                            validationIssues={turnAuditReport.evidenceIssues ?? []}
                             settings={auditSettings}
                             {providers}
                             projectId={thread.projectId}
@@ -11806,6 +11913,27 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
+            {:else if assignmentAuditState === 'partial' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+              <AuditGeneratedCard
+                state="partial"
+                version={auditReport.version}
+                validationIssues={auditReport.evidenceIssues ?? []}
+                retryLabel="Ask auditor to validate facts"
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                busy={auditBusy}
+                onRetry={generateDurableAssignmentAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
             {:else if assignmentAuditState === 'offered' && assignmentAuditOwner && !assignmentAuditOfferDismissed && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
@@ -11908,6 +12036,8 @@
                   onTaskScopeChange={updateAssignmentTaskScope}
                   onWorkerScopeChange={updateAssignmentWorkerScope}
                   {assignmentScopeBucketId}
+                  onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+                  resolveTaskThread={resolveAssignmentTaskThread}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -11969,204 +12099,210 @@
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}
-                {#key composerRestoreKey}
-                  <ChatComposer
-                    bind:this={composer}
-                    placeholder={activePlanningEntry === 'brainstorm'
-                      ? 'Add details to the Brainstorm discussion…'
-                      : activePlanningEntry === 'spec'
-                        ? 'Sr. Engineer is preparing the specification…'
-                        : assignmentFormulating
-                          ? 'Sr. Engineer is preparing the Assignment…'
-                          : specFormulating
-                            ? 'Formulating specification…'
-                            : delegatedWorkBusy
-                              ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                              : busy
-                                ? `${APP_NAME} is working   type to queue a message`
-                                : 'Send a message...'}
-                    disabled={specFormulating}
-                    working={busy}
-                    onStop={abortRun}
-                    autofocus
-                    showEngineeringMode={!chatMode && !orchestrationChild}
-                    engineeringLifecycle={pendingLifecycleDisplay}
-                    engineeringActive={engineeringOn}
-                    onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                    {independentAuditAvailable}
-                    independentAuditEnabled={independentAuditDisplayEnabled}
-                    onIndependentAuditToggle={toggleIndependentAudit}
-                    engineeringToolboxHidden={independentAuditDisplayEnabled}
-                    showChatModes={chatMode}
-                    {settings}
-                    onSettingsChange={updateSettings}
-                    onAccountSelected={rememberSelectedAccount}
-                    {providers}
-                    harnessId={settings.harnessId}
-                    actions={activeActions}
-                    onActionSelect={handleActionSelection}
-                    onSlashCommand={executeHarnessCommand}
-                    usageCreditsCommandId={usageCreditsCommand?.id}
-                    contextUsage={contextUsageDisplay}
-                    efficiencyKpis={storedEfficiencyKpis}
-                    onRevealUsage={revealContextUsage}
-                    onHideUsage={hideContextUsage}
-                    usageRefreshing={accountUsageCache.refreshing}
-                    {harnessUsage}
-                    canCompact={supportsManualCompaction(
-                      settings.harnessId,
-                      providerStore.providers
-                    ) && !busy}
-                    {compacting}
-                    onCompact={() => void compactWork()}
-                    onActivateBankedReset={() => {
-                      showBankedResetConfirm = true
-                    }}
-                    projectId={thread.projectId}
-                    threadId={thread.id}
-                    {scopeShoe}
-                    attachmentStorage={{
-                      kind: chatMode ? 'chat' : 'project',
-                      projectId: thread.projectId,
-                      threadId: thread.id
-                    }}
-                    fileTagProjectId={project?.source === 'local' && project.path
-                      ? thread.projectId
-                      : undefined}
-                    assignmentId={assignment?.id}
-                    assignmentTasks={assignment?.content.tasks ?? []}
-                    initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
-                    initialAttachments={rendererRecovery.attachmentsFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialProjectReferences={rendererRecovery.projectReferencesFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialTaskReferences={rendererRecovery.taskReferencesFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    onValueChange={(value) => {
-                      rendererRecovery.setDraft(thread.projectId, thread.id, value)
-                      publishDraftActivity(
+                {#if foreignRunActive}
+                  <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
+                {:else}
+                  {#key composerRestoreKey}
+                    <ChatComposer
+                      bind:this={composer}
+                      placeholder={activePlanningEntry === 'brainstorm'
+                        ? 'Add details to the Brainstorm discussion…'
+                        : activePlanningEntry === 'spec'
+                          ? 'Sr. Engineer is preparing the specification…'
+                          : assignmentFormulating
+                            ? 'Sr. Engineer is preparing the Assignment…'
+                            : specFormulating
+                              ? 'Formulating specification…'
+                              : delegatedWorkBusy
+                                ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                : busy
+                                  ? `${APP_NAME} is working   type to queue a message`
+                                  : 'Send a message...'}
+                      disabled={specFormulating}
+                      working={busy}
+                      onStop={abortRun}
+                      autofocus
+                      showEngineeringMode={!chatMode && !orchestrationChild}
+                      engineeringLifecycle={pendingLifecycleDisplay}
+                      engineeringActive={engineeringOn}
+                      onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                      {independentAuditAvailable}
+                      independentAuditEnabled={independentAuditDisplayEnabled}
+                      onIndependentAuditToggle={toggleIndependentAudit}
+                      engineeringToolboxHidden={independentAuditDisplayEnabled}
+                      showChatModes={chatMode}
+                      {settings}
+                      onSettingsChange={updateSettings}
+                      onAccountSelected={rememberSelectedAccount}
+                      {providers}
+                      harnessId={settings.harnessId}
+                      actions={activeActions}
+                      onActionSelect={handleActionSelection}
+                      onSlashCommand={executeHarnessCommand}
+                      usageCreditsCommandId={usageCreditsCommand?.id}
+                      contextUsage={contextUsageDisplay}
+                      efficiencyKpis={storedEfficiencyKpis}
+                      onRevealUsage={revealContextUsage}
+                      onHideUsage={hideContextUsage}
+                      usageRefreshing={accountUsageCache.refreshing}
+                      {harnessUsage}
+                      canCompact={supportsManualCompaction(
+                        settings.harnessId,
+                        providerStore.providers
+                      ) && !busy}
+                      {compacting}
+                      onCompact={() => void compactWork()}
+                      onActivateBankedReset={() => {
+                        showBankedResetConfirm = true
+                      }}
+                      projectId={thread.projectId}
+                      threadId={thread.id}
+                      {scopeShoe}
+                      attachmentStorage={{
+                        kind: chatMode ? 'chat' : 'project',
+                        projectId: thread.projectId,
+                        threadId: thread.id
+                      }}
+                      fileTagProjectId={project?.source === 'local' && project.path
+                        ? thread.projectId
+                        : undefined}
+                      assignmentId={assignment?.id}
+                      assignmentTasks={assignment?.content.tasks ?? []}
+                      initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
+                      initialAttachments={rendererRecovery.attachmentsFor(
                         thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onAttachmentsChange={(files) => {
-                      rendererRecovery.setDraft(
+                        thread.id
+                      )}
+                      initialProjectReferences={rendererRecovery.projectReferencesFor(
                         thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        files
-                      )
-                      publishDraftActivity(
+                        thread.id
+                      )}
+                      initialTaskReferences={rendererRecovery.taskReferencesFor(
                         thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onProjectReferencesChange={(projectReferences) => {
-                      rendererRecovery.setDraft(
+                        thread.id
+                      )}
+                      initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
                         thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                        projectReferences
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onTaskReferencesChange={(taskReferences) => {
-                      rendererRecovery.setDraft(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                        rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
-                        taskReferences
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onStartAfterThreadsChange={(startAfterThreads) => {
-                      rendererRecovery.setStartAfterThreads(
-                        thread.projectId,
-                        thread.id,
-                        startAfterThreads
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                    references={composerReferences}
-                    onRemoveReference={removeComposerReference}
-                    onRemoveAllReferences={clearComposerReferences}
-                    onEditReference={controller ? undefined : editResponseReference}
-                    onSend={sendComposerMessage}
-                    onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
-                    historyMessages={composerHistoryTexts}
-                    onHistoryNavigateStart={() => void refreshUserMessageHistory()}
-                    hidePermissionSelector={chatMode}
-                    favoriteModels={chatMode
-                      ? rendererRecovery.chatFavoriteModels
-                      : rendererRecovery.favoriteModels}
-                    onToggleFavorite={(providerId, modelId, harnessId) =>
-                      chatMode
-                        ? rendererRecovery.toggleChatFavorite(
-                            modelKey(harnessId, providerId, modelId)
-                          )
-                        : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                    onReorderFavorite={(draggedKey, targetKey, position) =>
-                      chatMode
-                        ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                        : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                    recentModels={chatMode
-                      ? rendererRecovery.chatRecentModels
-                      : rendererRecovery.recentModels}
-                    onRemoveRecent={(key) =>
-                      chatMode
-                        ? rendererRecovery.removeChatRecentModel(key)
-                        : rendererRecovery.removeRecentModel(key)}
-                    onModelUsed={(modelKey) =>
-                      chatMode
-                        ? rendererRecovery.addChatRecentModel(modelKey)
-                        : rendererRecovery.addRecentModel(modelKey)}
-                    imageDescriptorDefault={agentDefaults.imageDescriptor}
-                    {imageDescriptorAskAgain}
-                    onImageDescriptorDefaultChange={setImageDescriptorDefault}
-                    onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
-                  />
-                  {#if centeredComposer}
-                    <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
-                      {#each suggestedPrompts as prompt (prompt)}
-                        <button
-                          type="button"
-                          class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                          onclick={() => composer?.setComposerText(prompt)}
-                        >
-                          {prompt}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/key}
+                        thread.id
+                      )}
+                      onValueChange={(value) => {
+                        rendererRecovery.setDraft(thread.projectId, thread.id, value)
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onAttachmentsChange={(files) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          files
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onProjectReferencesChange={(projectReferences) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                          projectReferences
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onTaskReferencesChange={(taskReferences) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                          rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
+                          taskReferences
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onStartAfterThreadsChange={(startAfterThreads) => {
+                        rendererRecovery.setStartAfterThreads(
+                          thread.projectId,
+                          thread.id,
+                          startAfterThreads
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                      references={composerReferences}
+                      onRemoveReference={removeComposerReference}
+                      onRemoveAllReferences={clearComposerReferences}
+                      onEditReference={controller ? undefined : editResponseReference}
+                      onSend={sendComposerMessage}
+                      onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
+                      historyMessages={composerHistoryTexts}
+                      onHistoryNavigateStart={() => void refreshUserMessageHistory()}
+                      hidePermissionSelector={chatMode}
+                      favoriteModels={chatMode
+                        ? rendererRecovery.chatFavoriteModels
+                        : rendererRecovery.favoriteModels}
+                      onToggleFavorite={(providerId, modelId, harnessId) =>
+                        chatMode
+                          ? rendererRecovery.toggleChatFavorite(
+                              modelKey(harnessId, providerId, modelId)
+                            )
+                          : rendererRecovery.toggleFavorite(
+                              modelKey(harnessId, providerId, modelId)
+                            )}
+                      onReorderFavorite={(draggedKey, targetKey, position) =>
+                        chatMode
+                          ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                          : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                      recentModels={chatMode
+                        ? rendererRecovery.chatRecentModels
+                        : rendererRecovery.recentModels}
+                      onRemoveRecent={(key) =>
+                        chatMode
+                          ? rendererRecovery.removeChatRecentModel(key)
+                          : rendererRecovery.removeRecentModel(key)}
+                      onModelUsed={(modelKey) =>
+                        chatMode
+                          ? rendererRecovery.addChatRecentModel(modelKey)
+                          : rendererRecovery.addRecentModel(modelKey)}
+                      imageDescriptorDefault={agentDefaults.imageDescriptor}
+                      {imageDescriptorAskAgain}
+                      onImageDescriptorDefaultChange={setImageDescriptorDefault}
+                      onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                    />
+                    {#if centeredComposer}
+                      <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                        {#each suggestedPrompts as prompt (prompt)}
+                          <button
+                            type="button"
+                            class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            onclick={() => composer?.setComposerText(prompt)}
+                          >
+                            {prompt}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  {/key}
+                {/if}
               {/if}
             {/if}
           </div>

@@ -24,6 +24,14 @@ export interface ResumableDownloadRequest {
   signal: AbortSignal
   /** Bytes already safely on disk from an earlier interrupted download (possibly a previous app launch). */
   resumeFromBytes?: number
+  /**
+   * Abort an attempt that has not produced response headers within this many
+   * milliseconds. Only the connection and header exchange are bounded   a slow
+   * body is never cut short   so a source that black-holes the request fails
+   * fast instead of stalling a caller that has another source to try. Omit for
+   * no deadline.
+   */
+  responseTimeoutMs?: number
   onProgress?: (receivedSoFar: number) => void
 }
 
@@ -34,26 +42,64 @@ export interface ResumableDownloadRequest {
  */
 export class PermanentDownloadError extends Error {}
 
-/** Feed the first `byteCount` bytes of a partial download into a running hash. */
-async function hashPrefix(path: string, byteCount: number, hash: Hash): Promise<void> {
-  const handle = await open(path, 'r')
-  try {
-    const chunkSize = 1024 * 1024
-    const buffer = Buffer.alloc(chunkSize)
-    let offset = 0
-    while (offset < byteCount) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(chunkSize, byteCount - offset),
-        offset
-      )
-      if (bytesRead === 0) throw new Error('The partial download shrank between attempts.')
-      hash.update(buffer.subarray(0, bytesRead))
-      offset += bytesRead
+/**
+ * The source could not serve this download at all (an HTTP status failure, or no
+ * response within the deadline). The bytes already on disk were never contradicted,
+ * so a caller with another source keeps them and resumes there; only a checksum or
+ * size violation means the bytes themselves are unusable.
+ */
+export class DownloadSourceError extends PermanentDownloadError {}
+
+/**
+ * Incremental digest of a download in progress. It is restartable because a
+ * resumed transfer can be forced back to zero bytes (a server that ignores the
+ * Range request), and the digest must then cover the file from the start   not
+ * the discarded prefix plus the fresh body.
+ */
+class RunningHash {
+  private hash: Hash
+  private readonly checksum: DownloadChecksum
+
+  constructor(checksum: DownloadChecksum) {
+    this.checksum = checksum
+    this.hash = createHash(checksum.algorithm)
+  }
+
+  /** Discard everything hashed so far (the bytes it covered are gone from disk too). */
+  reset(): void {
+    this.hash = createHash(this.checksum.algorithm)
+  }
+
+  update(chunk: Uint8Array): void {
+    this.hash.update(chunk)
+  }
+
+  /** Digest of everything fed since the last reset, in the checksum's encoding. */
+  read(): string {
+    return this.hash.digest(this.checksum.encoding)
+  }
+
+  /** Feed the first `byteCount` bytes of a partial download into the running hash. */
+  async feedPrefix(path: string, byteCount: number): Promise<void> {
+    const handle = await open(path, 'r')
+    try {
+      const chunkSize = 1024 * 1024
+      const buffer = Buffer.alloc(chunkSize)
+      let offset = 0
+      while (offset < byteCount) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(chunkSize, byteCount - offset),
+          offset
+        )
+        if (bytesRead === 0) throw new Error('The partial download shrank between attempts.')
+        this.update(buffer.subarray(0, bytesRead))
+        offset += bytesRead
+      }
+    } finally {
+      await handle.close()
     }
-  } finally {
-    await handle.close()
   }
 }
 
@@ -78,10 +124,10 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
     if (signal.aborted) throw new Error('Download cancelled.')
     // Streamed hash of the bytes already on disk so a resumed download can
     // still be checksum-verified as a whole at the end.
-    let hash = createHash(checksum.algorithm)
+    const hash = new RunningHash(checksum)
     if (state.received > 0) {
       try {
-        await hashPrefix(destination, state.received, hash)
+        await hash.feedPrefix(destination, state.received)
       } catch (cause) {
         // The partial file vanished or shrank between attempts (cache
         // cleared, disk cleanup): a resume offset is no longer meaningful,
@@ -92,9 +138,9 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
         )
         state.received = 0
         await rm(destination, { force: true }).catch(() => undefined)
-        // hashPrefix may have fed part of the prefix into the hash before
+        // feedPrefix may have fed part of the prefix into the hash before
         // failing; rebuild it so the fresh download hashes a clean stream.
-        hash = createHash(checksum.algorithm)
+        hash.reset()
       }
     }
     try {
@@ -105,9 +151,10 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
         state,
         hash,
         signal,
-        onProgress
+        onProgress,
+        request.responseTimeoutMs
       )
-      const digest = hash.digest(checksum.encoding)
+      const digest = hash.read()
       if (digest !== checksum.digest)
         throw new PermanentDownloadError(
           'The downloaded file does not match its expected checksum.'
@@ -140,6 +187,44 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
 }
 
 /**
+ * Fetch the download, bounding only the wait for response headers. A source
+ * that never answers (dead host, black-holed connection) fails immediately as
+ * permanent, so a caller with a fallback source does not sit through the
+ * transient retry ladder; a caller cancellation still aborts at any point.
+ */
+async function fetchWithResponseDeadline(
+  url: string,
+  signal: AbortSignal,
+  resumeFromBytes: number,
+  responseTimeoutMs?: number
+): Promise<Response> {
+  const deadline = new AbortController()
+  const timer =
+    responseTimeoutMs === undefined || responseTimeoutMs <= 0
+      ? null
+      : setTimeout(() => {
+          deadline.abort(new Error('The download source did not respond in time.'))
+        }, responseTimeoutMs)
+  try {
+    return await fetch(url, {
+      signal: AbortSignal.any([signal, deadline.signal]),
+      redirect: 'follow',
+      ...(resumeFromBytes > 0 ? { headers: { range: `bytes=${resumeFromBytes}-` } } : {})
+    })
+  } catch (cause) {
+    if (deadline.signal.aborted && !signal.aborted) {
+      throw new DownloadSourceError(
+        `The download source did not respond within ${String(responseTimeoutMs)}ms.`,
+        { cause }
+      )
+    }
+    throw cause
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
+}
+
+/**
  * One resumable transfer pass over HTTP: issues a plain GET for a fresh file
  * or a Range GET to continue an interrupted one, and streams the body to
  * disk while feeding the running hash. Throws a transient error on network
@@ -150,27 +235,32 @@ async function downloadRange(
   destination: string,
   expectedBytes: number,
   state: { received: number },
-  hash: Hash,
+  hash: RunningHash,
   signal: AbortSignal,
-  onProgress?: (receivedSoFar: number) => void
+  onProgress?: (receivedSoFar: number) => void,
+  responseTimeoutMs?: number
 ): Promise<number> {
   let received = state.received
   let start = received
   const resuming = received > 0
-  const response = await fetch(url, {
+  const response = await fetchWithResponseDeadline(
+    url,
     signal,
-    redirect: 'follow',
-    ...(resuming ? { headers: { range: `bytes=${received}-` } } : {})
-  })
+    resuming ? received : 0,
+    responseTimeoutMs
+  )
   if (!response.ok || !response.body) {
-    throw new PermanentDownloadError(`Download failed with HTTP ${response.status}.`)
+    throw new DownloadSourceError(`Download failed with HTTP ${response.status}.`)
   }
   if (resuming && response.status !== 206) {
     // Server ignored the Range request; restart from zero rather than
-    // corrupt the file by appending a full body to a partial prefix.
+    // corrupt the file by appending a full body to a partial prefix. The hash
+    // has to be reset with it: the prefix it covered is gone from disk, and a
+    // digest over prefix + full body would fail against the feed's checksum.
     received = 0
     state.received = 0
     start = 0
+    hash.reset()
     await rm(destination, { force: true })
   }
   let stream: WriteStream

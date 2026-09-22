@@ -2,12 +2,15 @@ import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import { Logger } from '../system/logger'
 import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
+import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
-  resolveUpdateArtifact,
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
+  selectUpdateArtifact,
+  updateDownloadSources,
+  type ResolvedUpdateArtifact,
   type UpdateArtifactInfo
 } from './updater-download'
 
@@ -53,8 +56,15 @@ export class UpdaterService {
   private changelogCache: { changelog: UpdaterChangelog | null; fetchedAt: number } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
+  /** Channel the last check resolved, so the seed picks the matching mirror directory. */
+  private activeChannel: ReleaseChannel = 'stable'
   /** True while a download (seed or electron-updater) is in flight. */
   private downloadInFlight = false
+  /**
+   * Runs at the start of every update-check cycle (startup, periodic, explicit).
+   * Skill freshness rides this cadence instead of running a timer of its own.
+   */
+  private checkCycleHook: ((explicit: boolean) => void) | null = null
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -146,6 +156,15 @@ export class UpdaterService {
     this.activitySources.push(source)
   }
 
+  /**
+   * Observe every update-check cycle. Used by the skill updater so installed
+   * skills are looked at exactly when the user's "is there something newer"
+   * expectation is met, without a second scheduler.
+   */
+  setCheckCycleHook(hook: ((explicit: boolean) => void) | null): void {
+    this.checkCycleHook = hook
+  }
+
   get status(): UpdaterStatus {
     return { ...this._status }
   }
@@ -194,6 +213,15 @@ export class UpdaterService {
    * leaves a permanent error badge in the sidebar.
    */
   async checkForUpdates(explicit = false): Promise<UpdaterStatus> {
+    // The cycle is announced before the `canAutoUpdate` guard on purpose: that
+    // flag only gates the app's own binary feed (it is false in development and
+    // wherever the updater is inactive), while installed skills still need
+    // keeping fresh. The hook is fire-and-forget and never blocks the check.
+    try {
+      this.checkCycleHook?.(explicit)
+    } catch (error: unknown) {
+      Logger.error('Updater: check-cycle hook failed', error)
+    }
     if (!this._status.canAutoUpdate) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true
@@ -245,6 +273,7 @@ export class UpdaterService {
       const config = await this.storage.getConfig()
       const nightly = config.updateChannel === 'nightly'
       const channel = nightly ? 'nightly' : null
+      this.activeChannel = nightly ? 'nightly' : 'stable'
       if (autoUpdater.channel !== channel) {
         autoUpdater.channel = channel
         Logger.dev('Updater: channel set to', channel ?? 'latest')
@@ -345,6 +374,11 @@ export class UpdaterService {
    * (sha512) and skips the network entirely. A dropped connection then resumes
    * from the received byte offset instead of restarting from zero.
    *
+   * The bytes come from the CodeInOven download mirror when the mirror proves it
+   * holds the same artifact as the update feed, and from GitHub Releases
+   * otherwise or as the fallback (see `updateDownloadSources`), so an update is
+   * served from our own origin without ever depending on it being up.
+   *
    * Returns true when the cache is seeded, false when seeding could not be
    * set up (no artifact resolved, no cache dir). The caller always finishes
    * with `autoUpdater.downloadUpdate()`, which on a seeded cache validates it
@@ -355,16 +389,20 @@ export class UpdaterService {
   private async seedResumableDownload(): Promise<boolean> {
     const info = this.pendingUpdateInfo
     if (info === null) return false
-    const artifact = resolveUpdateArtifact(
-      info,
-      process.platform,
-      process.arch,
-      GITHUB_RELEASES_DOWNLOAD_URL
-    )
-    const cacheLocation = artifact === null ? null : resolveUpdaterCacheLocation()
-    if (artifact === null || cacheLocation === null) {
+    const selection = selectUpdateArtifact(info, process.platform, process.arch)
+    const cacheLocation = selection === null ? null : resolveUpdaterCacheLocation()
+    if (selection === null || cacheLocation === null) {
       Logger.dev('Updater: resumable seed not available, using electron-updater download')
       return false
+    }
+    const artifact: ResolvedUpdateArtifact = {
+      ...selection,
+      sources: await updateDownloadSources({
+        version: info.version,
+        channel: this.activeChannel,
+        githubBase: GITHUB_RELEASES_DOWNLOAD_URL,
+        artifact: selection
+      })
     }
     const seedProgress = (receivedBytes: number, totalBytes: number): void => {
       if (totalBytes <= 0) return

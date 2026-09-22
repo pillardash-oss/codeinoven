@@ -1,6 +1,5 @@
 import type { RendererLogEntry, RendererLogLevel } from '$shared/ipc-contract'
 import type { AppBridge } from '../../../preload/index'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 
 declare global {
   interface Window {
@@ -35,10 +34,7 @@ function send(
   stack: string | undefined,
   source: RendererLogEntry['source']
 ): void {
-  // The phone PWA talks to the desktop through a capability-scoped RPC bridge;
-  // `renderer:log` is an Electron IPC channel, not a remote capability, so it is
-  // intentionally skipped there.
-  if (typeof window === 'undefined' || isRemotePwaRuntime() || !window.api) return
+  if (typeof window === 'undefined' || !window.api) return
   const entry: RendererLogEntry = {
     level,
     message: clip(message, MAX_MESSAGE_CHARS),

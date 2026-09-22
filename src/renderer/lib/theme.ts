@@ -1,17 +1,16 @@
 /**
- * Theme resolution shared by the desktop shell and the phone client.
+ * Theme resolution for the renderer shell.
  *
  * The stylesheet's dark tokens live under a `.dark` class on `<html>`, so a
  * surface that never toggles that class renders in light mode no matter what
- * the user configured. Keeping the resolution here means the phone cannot drift
- * from the desktop's appearance.
+ * the user configured.
  */
 
 import { schemeState } from '$lib/stores/scheme.svelte'
 
 export type ResolvedTheme = 'light' | 'dark'
 
-/** `--color-app` for each theme, mirrored into the mobile status-bar colour. */
+/** `--color-app` for each theme, mirrored into the browser chrome colour. */
 const APP_BACKGROUND: Record<ResolvedTheme, string> = {
   light: '#f7f6f2',
   dark: '#0b0b0d'
@@ -20,9 +19,8 @@ const APP_BACKGROUND: Record<ResolvedTheme, string> = {
 /**
  * Apply the resolved theme to the document.
  *
- * Also updates `meta[name="theme-color"]`, which drives the browser chrome and
- * status bar on a phone   a fixed value there leaves the notch area clashing
- * with the page whenever the theme changes.
+ * Also updates `meta[name="theme-color"]` so browser chrome tracks the theme
+ * instead of keeping a stale fixed colour.
  *
  * The scheme is also recorded in `schemeState`, which is what provider markdown
  * reads: a `<picture>` in a comment selects its artwork with

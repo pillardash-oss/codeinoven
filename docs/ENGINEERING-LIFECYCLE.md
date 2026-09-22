@@ -52,6 +52,8 @@ The setting lives on the thread (`ThreadSettings.reportToCoordinator`) and appli
 
 The coordinator panel marks the state without opening a thread: a task whose worker has reporting off carries an amber **Not reporting** badge next to the worker name in the task row, in the same tooltip and accessible name as the row itself.
 
+Reporting can be switched back on from the board too. While the open worker has reporting off, the Assignment coordinator board shows a **Report to Sr. Engineer** button above **Back to Sr. Engineer**. It switches reporting back on, reactivates the task, and prompts the worker to submit fresh baseline and check evidence and report through the Assignment API, which is what hands the work to the Sr. Engineer for audit and feedback. The button carries a loading state and is disabled while it runs, and it disappears the moment the thread reports again. A stopped Assignment cannot take a worker report, so the button is not offered there.
+
 Because such a worker never hands its task back, the Assignment lifecycle is frozen for it. A live worker turn no longer flips the task to `running`: `AssignmentEngine.markWorkerSteered` returns the plan untouched when the worker's reporting is off, so the task stays wherever the user left it instead of sitting on `running` forever with no report coming to settle it. The row shows the worker thread's own live status next to the badge instead, using the same indicator, colour, and wording as the thread row (Working, Waiting to retry, Needs approval, Spec ready, Needs attention, Unread, Done, New), and the frozen lifecycle pill is hidden for that row because it can no longer advance.
 
 Read tracking belongs to the same split. Only a non-reporting worker carries a read state at all: a reporting worker's progress is visible through the Assignment lifecycle, so its `read` flag stays untouched and nothing ever settles it. Opening or selecting a non-reporting worker marks it read through the same `thread:markRead` flow as a regular thread, so its chip moves from Unread (green) to Done once the user has seen it. The Sr. Engineer's own row aggregates this: it reads as unread while any of its non-reporting workers is unread, and it clears only once the coordinator itself and all of those workers are read.
@@ -120,18 +122,17 @@ Canonical files live at `.cio/specs/<feature-slug>/prototypes/<prototype-id>/`. 
 
 ## Preview deployment
 
-`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production and remote access require an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
+`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production requires an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
 
-`REMOTE_API_ORIGIN` and `ACCOUNT_AUTH_ORIGIN` retain their existing meanings and are never preview-origin fallbacks. A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
+A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
 
-Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. Remote and mobile clients request 192 KiB chunks through the authenticated, encrypted workflow RPC and assemble a bounded Blob locally; ownership is checked against the active Brainstorm metadata before any canonical file is read. The relay's existing 1 MiB frame cap remains unchanged, and neither the account origin nor arbitrary filesystem RPC is used for prototype delivery.
+Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. The preview origin serves the canonical prototype files to the desktop's own browser surface.
 
 ## Recovery
 
 - Generation failure: keep the lifecycle selected, fix the provider or validation failure, and retry from the persisted stage.
 - Invalid preview link: verify the feature-scoped artifact, manifest, preview link target, and configured public origin.
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
-- Remote disconnection: reconnect the paired client and reload the persisted lifecycle before resuming.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
 
 ### Stop outranks every auto-resume

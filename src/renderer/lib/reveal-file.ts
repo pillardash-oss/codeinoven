@@ -104,17 +104,21 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
  * hand-off opens correctly whichever project happens to be on screen. Returns
  * whether the file was opened, so the caller can fall back to the standalone
  * viewer when the path no longer resolves inside the project.
+ *
+ * `focusLine` places the caret on one line, which is what a pull request thread
+ * needs: its path and line are the only way back to the code being discussed.
  */
 export async function openProjectFileFromAbsolutePath(
   projectId: string,
-  relativePath: string
+  relativePath: string,
+  focusLine?: number
 ): Promise<boolean> {
   // Resolve on disk before preparing anything: a path that no longer exists must
   // not switch the project's file surface on.
   const entry = await exactEntry(projectId, relativePath)
   if (!entry) return false
   await ensureProjectFilesReady(projectId)
-  await revealEntry(projectId, entry)
+  await revealEntry(projectId, entry, focusLine)
   return true
 }
 

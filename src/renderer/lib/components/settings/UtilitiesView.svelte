@@ -25,9 +25,13 @@
   import { invoke } from '$lib/ipc.svelte'
   import { agentToolsStore } from '$lib/stores/agent-tools.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { installedSkillState } from '$lib/stores/installed-skills.svelte'
+  import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
+  import { relativeTime } from '$lib/format/relative-time'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
+  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -402,6 +406,35 @@
     activeTab === 'tools' ? filteredToolGroups.length : filteredRows.length
   )
 
+  /** The skill updater covers installed marketplace skills, not MCP or tools. */
+  let showsSkillUpdates = $derived(
+    activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'
+  )
+
+  /** One short line of what the background pass last did, in plain words. */
+  let skillUpdateSummary = $derived.by(() => {
+    const status = skillUpdateState.status
+    if (status.running) return 'Checking installed skills for updates…'
+    if (status.error) return status.error
+    if (status.lastCheckedAt === null) {
+      return status.tracked === 0
+        ? `Skills installed from ${APP_NAME} are kept up to date with the app update check.`
+        : `${status.tracked} installed ${status.tracked === 1 ? 'skill' : 'skills'} kept up to date with the app update check.`
+    }
+    const failed = status.results.filter((result) => result.outcome === 'failed').length
+    const updated =
+      status.updated > 0
+        ? `Updated ${status.updated} ${status.updated === 1 ? 'skill' : 'skills'}`
+        : 'Skills up to date'
+    return [
+      updated,
+      failed > 0 ? `${failed} source${failed === 1 ? '' : 's'} unreachable` : '',
+      `checked ${relativeTime(status.lastCheckedAt)}`
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  })
+
   function replaceUtility(updated: UtilityDefinition): void {
     utilities = utilities.some((utility) => utility.id === updated.id)
       ? utilities.map((utility) => (utility.id === updated.id ? updated : utility))
@@ -519,6 +552,7 @@
 
   onMount(() => {
     void load()
+    void installedSkillState.ensureLoaded()
     void providerStore.init()
     void agentToolsStore.load()
   })
@@ -546,6 +580,23 @@
   <div class="min-w-0">
     <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
     <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+    {#if showsSkillUpdates}
+      <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <span class={skillUpdateState.status.error ? 'text-danger' : 'text-dimmed'}>
+          {skillUpdateSummary}
+        </span>
+        <button
+          type="button"
+          class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          disabled={skillUpdateState.status.running}
+          title="Check the skills installed by CodeInOven for updates now"
+          onclick={() => void skillUpdateState.checkNow()}
+        >
+          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Check
+          now
+        </button>
+      </div>
+    {/if}
   </div>
 
   <!-- Actions and tabs share one row: buttons first, then the section tabs. -->
@@ -793,6 +844,9 @@
                     >
                       Marketplace
                     </span>
+                    {#if installedSkillState.isInstalled(row.entry.skillId)}
+                      <SkillInstalledBadge />
+                    {/if}
                     {#if row.entry.isOfficial}
                       <span
                         class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"

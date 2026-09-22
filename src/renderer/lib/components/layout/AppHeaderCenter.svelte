@@ -35,7 +35,6 @@
     chats: 'Chats',
     'settings-harnesses': 'Harnesses',
     'settings-profile': 'Profile',
-    remote: 'Remote',
     settings: 'Settings',
     scope: 'Scope Board',
     threads: 'Threads'

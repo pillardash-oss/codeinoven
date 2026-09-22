@@ -5,9 +5,7 @@
  *
  *  - `icon.png`                       → electron-builder source for win/linux
  *  - `favicon.ico`                    → multi-size Windows/browser favicon
- *  - `favicon.png`, `icon-192.png`,
- *    `icon-512.png`                   → renderer favicon + PWA manifest
- *  - `icon-maskable-512.png`          → full-bleed PWA maskable variant
+ *  - `favicon.png`                    → renderer favicon
  *  - `macos/AppIcon*.png` + `.icns`   → macOS Dock/Finder (via `iconutil`)
  *  - `logo.png`                       → large opaque logo raster
  *
@@ -28,20 +26,6 @@ const staticDir = join(root, 'src/renderer/static')
 const macosDir = join(staticDir, 'macos')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
 
-/** Exact geometry strings from the master SVG that the maskable variant retargets. */
-const TILE_GEOMETRY = 'x="112" y="112" width="800"'
-/** Corner radius of the squircle — maskable tiles must be fully square so the
- * launcher's mask never reveals transparent slivers at the canvas corners. */
-const TILE_RADIUS = 'rx="184" ry="184"'
-const MARK_TRANSFORM = 'translate(215.6,215.6) scale(0.474)'
-
-/** Full-bleed maskable variant: tile covers the whole canvas, mark shrunk into
- * the PWA safe zone (well inside the centered 80% circle). */
-const maskable = master
-  .replaceAll(TILE_GEOMETRY, 'x="0" y="0" width="1024"')
-  .replaceAll(TILE_RADIUS, 'rx="0" ry="0"')
-  .replace(MARK_TRANSFORM, 'translate(316,316) scale(0.31)')
-
 /** Render an SVG string to a PNG buffer at the requested pixel size. */
 function renderPng(svg: string, size: number): Buffer {
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()
@@ -61,9 +45,6 @@ function renderOpaque(svg: string, size: number, backdrop: string): Buffer {
 const outputs: Array<[string, Buffer]> = [
   ['icon.png', renderPng(master, 1024)],
   ['favicon.png', renderPng(master, 180)],
-  ['icon-192.png', renderPng(master, 192)],
-  ['icon-512.png', renderPng(master, 512)],
-  ['icon-maskable-512.png', renderPng(maskable, 512)],
   // Opaque rasters: Windows shows taskbar/window icons over arbitrary
   // surfaces, and the historic flat black look came from a fully opaque
   // square — keep those rasters opaque but let the squircle corners show the

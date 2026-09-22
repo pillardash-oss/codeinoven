@@ -19,6 +19,8 @@
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
@@ -39,12 +41,20 @@
   import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
   import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
+  import { assignAgentToComment } from './git-status-panel-agent-actions'
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
+  import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
   import {
     buildConversation,
+    conversationKindLabel,
     conversationQuoteBlock,
     type ConversationEntry
   } from './git-pull-request-detail-format'
+  import {
+    prCommentChatContext,
+    prCommentExplainPrompt,
+    type PrCommentChatSubject
+  } from './git-status-panel-prompts'
   import { PR_DETAIL_VIEWS, prViewCount, type PrDetailTabId } from './pr-view'
   import {
     mentionCandidates,
@@ -63,12 +73,14 @@
 
   interface Props {
     projectId: string
+    /** Thread whose sidebar hosts the comment side chats this reader opens. */
+    threadId: string
     identity: { owner: string; repo: string }
     summary: PullRequestSummary
     onBack: () => void
-    /** Hand this PR to an agent for a worktree review. */
-    onAgentReview: (pr: PullRequestSummary) => void
-    /** Reopen the thread that owns this PR's agent review. */
+    /** Hand this pull request to an agent to triage, test, and report back on. */
+    onAssignAgent: (pr: PullRequestSummary) => void
+    /** Reopen the thread that owns this pull request's agent assignment. */
     onOpenThread: (threadId: string) => void
     /** Reveal a GitHub Actions check in the in-app Deployments tab. */
     onOpenWorkflowRun: (runId: number) => void
@@ -93,10 +105,11 @@
 
   let {
     projectId,
+    threadId,
     identity,
     summary,
     onBack,
-    onAgentReview,
+    onAssignAgent,
     onOpenThread,
     onOpenWorkflowRun,
     onResolveLocally,
@@ -195,7 +208,13 @@
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
-  let agentReport = $state<PrAgentReport | null>(null)
+  /** Every agent assignment on this pull request, newest first. */
+  let agentReports = $state<PrAgentReport[]>([])
+  /**
+   * A conversation entry an agent report asked to be shown, with a token that
+   * changes on every request so asking twice for the same comment still jumps.
+   */
+  let commentReveal = $state<{ url: string; token: number } | null>(null)
 
   const number = $derived(summary.number)
   /**
@@ -269,13 +288,13 @@
   const tabs = $derived(
     PR_DETAIL_VIEWS.map((view) => ({
       ...view,
-      count: prViewCount(view.id, bundle, (agentReport?.content ?? '').trim().length > 0)
+      count: prViewCount(view.id, bundle, agentReports.length)
     }))
   )
 
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
-    agentReport = await gitState.loadAgentReport(projectId, number)
+    agentReports = await gitState.loadAgentReports(projectId, number)
   }
 
   async function postComment(): Promise<void> {
@@ -295,6 +314,63 @@
       notice = 'Comment posted'
       await refresh()
     }
+  }
+
+  /**
+   * The facts the comment-shaped actions need, resolved once.
+   *
+   * Both the side chats and the agent assignment describe the same comment, so the
+   * mapping from a conversation entry to a subject lives here rather than being
+   * written out twice and drifting.
+   */
+  function commentSubject(entry: ConversationEntry): PrCommentChatSubject {
+    return {
+      author: githubDisplayLogin(entry.author),
+      url: entry.url,
+      kindLabel: conversationKindLabel(entry.kind, entry.meta),
+      ...(entry.kind === 'inline' && entry.meta ? { location: entry.meta } : {}),
+      ...(entry.diffHunk ? { diffHunk: entry.diffHunk } : {})
+    }
+  }
+
+  /**
+   * Open a read-only sidebar side chat anchored on one comment.
+   *
+   * The comment rides as the selection, and the pinned context carries the pull
+   * request plus the comment's own permalink, so the agent can look the thread
+   * up and, when the user agrees, ground its answer in the remote copy of what
+   * the comment references. Explain auto-sends the grounding brief; Quick chat
+   * opens with the comment attached and the reader writing the question.
+   */
+  function openCommentChat(entry: ConversationEntry, mode: 'explain' | 'quick'): void {
+    const subject = commentSubject(entry)
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode === 'explain' ? 'elaborate' : 'quick',
+      entry.body,
+      prCommentChatContext(subject, summary, `${identity.owner}/${identity.repo}`),
+      threadSettings.lastUsed,
+      true,
+      mode === 'explain' ? prCommentExplainPrompt(subject) : undefined
+    )
+  }
+
+  /**
+   * Hand one comment to an agent as an assignment.
+   *
+   * Done here rather than through a prop, unlike the pull request-level action: the
+   * reader is the only surface that knows which entry a menu row belongs to, and it
+   * already owns the other comment-shaped work on this pull request.
+   */
+  function assignCommentToAgent(entry: ConversationEntry): void {
+    void assignAgentToComment(
+      projectId,
+      summary,
+      `${identity.owner}/${identity.repo}`,
+      commentSubject(entry),
+      entry.body
+    )
   }
 
   /**
@@ -528,21 +604,40 @@
     }
   }
 
-  /** Post the agent's report into the PR conversation, verbatim. */
-  async function postAgentReport(): Promise<void> {
-    if (!agentReport?.content.trim()) return
+  /**
+   * Post an agent's report into the PR conversation, verbatim.
+   *
+   * The report is named by the caller rather than read from a selection: the
+   * Agent view shows every assignment at once, so there is no "current" report
+   * for this to pick up.
+   */
+  async function postAgentReport(report: PrAgentReport): Promise<void> {
+    if (!report.content.trim()) return
     const created = await gitState.commentOnPullRequest(
       projectId,
       identity.owner,
       identity.repo,
       number,
-      agentReport.content
+      report.content
     )
     if (created) {
-      notice = 'Agent review posted to the pull request'
+      notice = 'Agent report posted to the pull request'
       tab = 'conversation'
       await refresh()
     }
+  }
+
+  /**
+   * Take an agent report's reader to the comment it answered.
+   *
+   * The conversation is what holds the comment, so this switches views and hands
+   * the permalink down; the conversation scrolls to that entry and flashes it,
+   * which is the difference between opening a view and finding the thing.
+   */
+  function showReportComment(report: PrAgentReport): void {
+    if (!report.url) return
+    commentReveal = { url: report.url, token: (commentReveal?.token ?? 0) + 1 }
+    tab = 'conversation'
   }
 
   $effect(() => {
@@ -562,8 +657,8 @@
 
   $effect(() => {
     const pull = number
-    void gitState.loadAgentReport(projectId, pull).then((report) => {
-      agentReport = report
+    void gitState.loadAgentReports(projectId, pull).then((reports) => {
+      agentReports = reports
     })
   })
 </script>
@@ -877,12 +972,17 @@
       </div>
     {:else if tab === 'conversation'}
       <GitPullRequestDetailConversation
-        entries={conversation}
+        nodes={conversation}
+        files={bundle?.files ?? []}
         {projectId}
         {identity}
         {number}
         authorLogin={summary.authorLogin}
+        reveal={commentReveal}
+        onRevealDone={() => (commentReveal = null)}
         onQuote={(entry) => void quoteEntry(entry)}
+        onCommentChat={openCommentChat}
+        onAssignAgent={assignCommentToAgent}
         onNotice={(message) => (notice = message)}
         onRefresh={refresh}
       />
@@ -913,12 +1013,14 @@
     {:else}
       <GitPullRequestDetailAgentReport
         {number}
+        {projectId}
         {summary}
-        {agentReport}
+        reports={agentReports}
         {posting}
         {onOpenThread}
-        {onAgentReview}
-        onPostReport={() => void postAgentReport()}
+        {onAssignAgent}
+        onShowInConversation={showReportComment}
+        onPostReport={(report) => void postAgentReport(report)}
       />
     {/if}
   </div>
@@ -1189,15 +1291,21 @@
 <GitPullRequestDetailMergeDialogs
   {number}
   {summary}
-  {method}
-  checksFailure={checks?.state === 'failure'}
-  {mergeFieldSuffix}
-  bind:mergeOpen={mergeConfirm}
   bind:closeOpen={closeConfirm}
   bind:resolveOpen={resolveConfirm}
-  bind:commitTitle
-  bind:commitMessage
-  onMerge={() => void merge()}
   onResolveLocally={() => onResolveLocally?.(summary)}
   onClosePullRequest={() => void closePullRequest()}
+/>
+
+<PrMergeConfirmDialog
+  {number}
+  {summary}
+  {method}
+  checksFailure={checks?.state === 'failure'}
+  fieldSuffix={mergeFieldSuffix}
+  busy={merging}
+  bind:open={mergeConfirm}
+  bind:commitTitle
+  bind:commitMessage
+  onConfirm={() => void merge()}
 />

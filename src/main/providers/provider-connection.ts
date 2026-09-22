@@ -7,7 +7,6 @@ import {
   listHarnesses,
   type HarnessDescriptor
 } from '../agents/harness-registry'
-import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   discoverHarnessRuntimes,
@@ -194,7 +193,6 @@ export class ProviderConnectionService {
     for (const win of BrowserWindow.getAllWindows()) {
       sendToRenderer(win.webContents, 'providers:status', payload)
     }
-    forwardRemoteEvent('providers:status', payload)
   }
 
   /** Resolve the binary, then verify it actually responds to a version probe. */

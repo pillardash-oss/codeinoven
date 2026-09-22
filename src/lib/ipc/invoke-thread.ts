@@ -15,6 +15,7 @@ import type {
   ThreadMessagePage,
   ThreadSettings,
   ThreadStatus,
+  ThreadTransferResult,
   TurnCheckpointFileDiff,
   TurnCheckpointSummary,
   UsageEfficiencyKpis,
@@ -245,5 +246,11 @@ export const invokeThreadContract = {
    * the push stream: a window that mounts after the last change still learns the
    * current set without polling.
    */
-  'thread:listForeignRuns': {} as Contract<[], ForeignRunNotice[]>
+  'thread:listForeignRuns': {} as Contract<[], ForeignRunNotice[]>,
+  /**
+   * Ask the instance currently running this thread to hand the run over, then
+   * resume it here. Resolves once this window owns the turn (or with the reason
+   * it could not be moved).
+   */
+  'thread:transferRun': {} as Contract<[projectId: string, threadId: string], ThreadTransferResult>
 }

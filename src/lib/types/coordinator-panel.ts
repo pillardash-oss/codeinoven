@@ -7,7 +7,7 @@ export interface AssignmentCoordinatorPanelProps {
   assignment: AssignmentPlan
   threads: Thread[]
   auditThread?: Thread
-  auditState?: Thread['auditState'] | 'failed'
+  auditState?: Thread['auditState'] | 'failed' | 'partial'
   finalComplete?: boolean
   reportAvailable?: boolean
   selectedThreadId: string
@@ -23,6 +23,9 @@ export interface AssignmentCoordinatorPanelProps {
   /** Present only when the open thread is a worker/auditor child: returns to
    *  the Sr. Engineer that owns this Assignment. */
   onBackToCoordinator?: () => void
+  /** Present only while the open thread is a not-reporting worker: switches its
+   *  reporting back on and asks it to hand its finished work to the Sr. Engineer. */
+  onReportToCoordinator?: () => Promise<void>
 }
 
 /** Props for the Achievement / durable-Audit coordinator board. */
@@ -62,6 +65,9 @@ export interface IndependentAuditCoordinatorPanelProps {
   running?: boolean
   auditThread?: Thread
   reportAvailable?: boolean
+  /** True when the latest report was generated but its verification evidence
+   *  could not be fully validated against the auditor transcript. */
+  partialReport?: boolean
   selectedThreadId: string
   auditorSettings: ThreadSettings
   providers: ProviderCatalog[]

@@ -26,7 +26,6 @@ import { listPiCatalogProviders } from './pi-catalog'
 import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
-import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { Logger } from '../system/logger'
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
@@ -790,7 +789,6 @@ export class ProviderAccountOrchestrator {
     for (const win of BrowserWindow.getAllWindows()) {
       sendToRenderer(win.webContents, 'providerAccounts:oauthEvent', { loginId, ...payload })
     }
-    forwardRemoteEvent('providerAccounts:oauthEvent', { loginId, ...payload })
   }
 
   async getStatus(

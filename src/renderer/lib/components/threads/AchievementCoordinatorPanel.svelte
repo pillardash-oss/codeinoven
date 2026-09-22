@@ -218,6 +218,7 @@
           {recentModels}
           {onRemoveRecent}
           side="bottom"
+          fullWidth
           disabled={modelLocked}
           label="Change model"
           variant="action"

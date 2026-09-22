@@ -14,8 +14,10 @@ import type {
   Project,
   PullRequestSummary
 } from '$shared/types'
+import type { PrCommentChatSubject } from './git-status-panel-prompts'
 import {
-  agentReviewPrompt,
+  prCommentAssignmentPrompt,
+  prTriagePrompt,
   conflictResolutionPrompt,
   deploymentJobDiagnosisPrompt,
   workflowJobDiagnosisPrompt
@@ -103,36 +105,95 @@ export function diagnoseDeployment(
 }
 
 /**
- * Hand a pull request to an agent.
+ * Open the thread an agent assignment runs in, or null when it could not be made.
  *
- * The agent gets a fresh thread whose first message tells it to review the PR
- * in a throwaway worktree and leave its report in `.cio/git/pr/<number>/`, so
- * the working tree the user is sitting in never gets touched.
+ * The thread exists before the assignment does, because the assignment records the
+ * thread that owns it. Both are made from one user action, so a thread left behind
+ * by a failed assignment is a stray the user can delete, never a report that claims
+ * work no thread ever did.
  */
-export async function startAgentReview(projectId: string, pr: PullRequestSummary): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
-  const reportDirectory = await gitState.createPrReviewWorkspace(projectId, pr.number)
-  if (!reportDirectory) return
-
-  const thread = await invoke('thread:create', {
+async function createAssignmentThread(projectId: string, projectPath: string, title: string) {
+  return invoke('thread:create', {
     projectId,
     providerId: 'pi',
-    title: `Review PR #${pr.number}`,
-    workingDirectory: project.path,
+    title,
+    workingDirectory: projectPath,
     settings: { ...threadSettings.lastUsed }
   }).catch(() => null)
-  if (!thread) return
+}
 
-  // Record the owning thread so the PR's Agent tab can jump back into it later.
-  await gitState.createPrReviewWorkspace(projectId, pr.number, thread.id)
-  await gitState.loadAgentReport(projectId, pr.number)
-  rendererRecovery.setDraft(projectId, thread.id, agentReviewPrompt(pr, reportDirectory), [], [])
+/**
+ * Hand a pull request to an agent as an assignment.
+ *
+ * The agent gets a fresh thread, its own report file, and a brief that tells it to
+ * triage the pull request in a throwaway worktree and stop for a go-ahead. The report
+ * lands in `.cio/git/pr/<number>/review-<id>.md`, which is what the reader's Agent
+ * tab lists, and the thread is recorded as the assignment's owner so the tab can jump
+ * back into it.
+ *
+ * The brief opens as a draft rather than sending itself: an assignment is a large
+ * action, and this is the moment the user can add to it before the agent starts.
+ */
+export async function assignAgentToPullRequest(
+  projectId: string,
+  pr: PullRequestSummary
+): Promise<void> {
+  const project = await invoke('project:get', projectId).catch(() => null)
+  if (!project) return
+  const title = `Triage PR #${pr.number}`
+  const thread = await createAssignmentThread(projectId, project.path, title)
+  if (!thread) return
+  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+    kind: 'triage',
+    title
+  })
+  if (!assignment) return
+  rendererRecovery.setDraft(projectId, thread.id, prTriagePrompt(pr, assignment.reportPath), [], [])
   workspaceState.openThread(thread, project)
 }
 
-/** Reopen the thread that owns a PR's agent review. */
-export async function openReviewThread(projectId: string, threadId: string): Promise<void> {
+/**
+ * Hand one comment to an agent as an assignment.
+ *
+ * Same mechanics as the pull request assignment, and a different task: the comment is
+ * what the agent has to make sense of, so the brief carries the comment's text, its
+ * permalink, its anchor and the diff GitHub showed with it, and asks the agent to
+ * work out what the comment is asking for before it decides anything.
+ */
+export async function assignAgentToComment(
+  projectId: string,
+  pr: PullRequestSummary,
+  repository: string,
+  comment: PrCommentChatSubject,
+  body: string
+): Promise<void> {
+  const project = await invoke('project:get', projectId).catch(() => null)
+  if (!project) return
+  const title = `Comment by @${comment.author}`
+  const thread = await createAssignmentThread(
+    projectId,
+    project.path,
+    `${title} on PR #${pr.number}`
+  )
+  if (!thread) return
+  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+    kind: 'comment',
+    title,
+    url: comment.url
+  })
+  if (!assignment) return
+  rendererRecovery.setDraft(
+    projectId,
+    thread.id,
+    prCommentAssignmentPrompt(comment, body, pr, repository, assignment.reportPath),
+    [],
+    []
+  )
+  workspaceState.openThread(thread, project)
+}
+
+/** Reopen the thread that owns a pull request's agent assignment. */
+export async function openAgentThread(projectId: string, threadId: string): Promise<void> {
   const [project, thread] = await Promise.all([
     invoke('project:get', projectId).catch(() => null),
     invoke('thread:get', projectId, threadId).catch(() => null)

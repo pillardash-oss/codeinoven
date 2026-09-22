@@ -81,7 +81,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoInstallUpdates',
   'updateChannel',
   'keepAwakeWhileWorking',
-  'keepAwakeWhileRemoteConnected',
   'imageDescriptorAskAgain',
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
@@ -492,13 +491,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('keepAwakeWhileWorking must be a boolean')
     }
     patch.keepAwakeWhileWorking = value.keepAwakeWhileWorking
-  }
-
-  if ('keepAwakeWhileRemoteConnected' in value) {
-    if (typeof value.keepAwakeWhileRemoteConnected !== 'boolean') {
-      throw new TypeError('keepAwakeWhileRemoteConnected must be a boolean')
-    }
-    patch.keepAwakeWhileRemoteConnected = value.keepAwakeWhileRemoteConnected
   }
 
   if ('imageDescriptorAskAgain' in value) {

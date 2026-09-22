@@ -48,8 +48,8 @@ export class AppHeaderNavigationController {
 
   /** Track the primary view (Projects/Threads/Chats) the user was on before
    *  entering the scope view, so the header Scope Board button can toggle
-   *  between scope view and whatever came last. All other views (settings,
-   *  remote…) keep the previous primary view. */
+   *  between scope view and whatever came last. All other views (settings and
+   *  the other takeover pages) keep the previous primary view. */
   lastViewBeforeScope: PrimaryView = $state('projects')
 
   /** Last option shown while a primary view was active. */
@@ -246,8 +246,8 @@ export class AppHeaderNavigationController {
     return 'projects'
   })
 
-  /** Views whose header maps to a real view-switcher option. Settings, remote
-   *  and other takeover views must not, or the trigger would flash "Projects". */
+  /** Views whose header maps to a real view-switcher option. Settings and the
+   *  other takeover views must not, or the trigger would flash "Projects". */
   showsPrimaryOption = $derived.by(() => {
     const activeView = this.getActiveView()
     return (
@@ -260,7 +260,7 @@ export class AppHeaderNavigationController {
   })
 
   /** The option the trigger and menu reflect: live on primary views, the last
-   *  primary option while settings/remote take over the header. */
+   *  primary option while a takeover page owns the header. */
   shownHeaderViewOption = $derived(
     this.showsPrimaryOption ? this.activeHeaderViewOption : this.lastPrimaryHeaderViewOption
   )

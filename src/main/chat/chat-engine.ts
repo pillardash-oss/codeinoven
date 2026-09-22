@@ -234,6 +234,7 @@ import type {
   ThreadStatus,
   Thread,
   ThreadSettings,
+  ThreadTransferResult,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
   TurnStreamPartsChange,
@@ -295,7 +296,6 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
-import { readPrototypePreviewChunk } from '../prototypes/prototype-preview-service'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
@@ -350,6 +350,7 @@ import type {
   AuxiliaryRoute,
   AssignmentWorkerContext,
   AssignmentWorkerRoutingResult,
+  FallbackRankingJudgeRoute,
   ChildSessionInfo,
   CoordinatorHandoffQueue,
   HeldSteer,
@@ -449,6 +450,8 @@ import {
   SPEC_MEMORY_MAX_LESSONS,
   SYSTEM_LAYER_RESERVE_TOKENS,
   TOOL_CATALOG_TTL_MS,
+  TRANSFER_SETTLE_POLL_MS,
+  TRANSFER_SETTLE_TIMEOUT_MS,
   USAGE_RESET_FALLBACK_RETRY_MS,
   USER_TERMINAL_SETTLE_MS,
   assertHarnessRequestCapabilities,
@@ -568,6 +571,7 @@ import {
   toRankingCandidate,
   turnStreamPath,
   userInstructionText,
+  auditCheckIsExempt,
   validateAssignmentAuditExecutionEvidence,
   validatePromptReferences,
   validateQuestionAnswers,
@@ -620,6 +624,18 @@ export type { VirtualTaskOptions } from './chat-engine/chat-engine-types'
  * The renderer subscribes to `agent:event` for streaming AgentEvents; this
  * class broadcasts driver events to all windows through a bounded stream buffer.
  */
+
+/** An open user-activity window for one in-app terminal, rooted in that
+ *  terminal's worktree so it can only ever apply to turns in the same root. */
+interface UserTerminalWindow {
+  /** Baseline fingerprint of the terminal's own worktree, captured at first keystroke. */
+  fingerprint: Promise<ProjectFingerprint | null>
+  /** Real path of the terminal's worktree, resolved once at window open. */
+  projectRoot: Promise<string | null>
+  lastInput: number
+  timer: NodeJS.Timeout
+}
+
 export class ChatEngine {
   /** Close deadline: an untouched conversation is graded after this much inactivity. */
   private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
@@ -756,13 +772,11 @@ export class ChatEngine {
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
 
-  /** Per-project user-terminal activity: an open fingerprint window while the
-   *  user is typing commands, so their shell-driven edits are never swept into
-   *  a concurrent agent turn's bash-window diff. */
-  private userTerminalWindows = new Map<
-    string,
-    { fingerprint: Promise<ProjectFingerprint | null>; lastInput: number; timer: NodeJS.Timeout }
-  >()
+  /** Per-project user-terminal activity: while the user is typing commands in
+   *  an in-app terminal, an open fingerprint window (one per terminal worktree
+   *  root) records what their shell moved, so those edits are never swept into
+   *  a concurrent agent turn's bash-window diff or final checkpoint. */
+  private userTerminalWindows = new Map<string, Map<string, UserTerminalWindow>>()
 
   /** Harness sessions implementing an approved specification until its contract is fulfilled. */
   private engineeringImplementationSessions = new Set<string>()
@@ -1187,6 +1201,18 @@ export class ChatEngine {
    */
   private rankingJudgeFailures = new Map<string, number>()
 
+  /**
+   * Native graded-harness judge strikes. Set once a harness's own grading
+   * route failed one row, cleared only when that route scores again. While a
+   * harness carries a strike, its queue stops spending harness processes on
+   * its own candidates and judges through the harness-agnostic fallback lane
+   * (see `resolveFallbackRankingJudge`). Deliberately in-memory like
+   * `rankingJudgeFailures`: a restart gives the native route one fresh
+   * attempt, which is cheap, and the fallback lane keeps that attempt from
+   * ever duplicating the held-back herd of a permanently unusable account.
+   */
+  private rankingNativeJudgeStrikes = new Map<string, number>()
+
   private utilityTurns = new Map<
     string,
     {
@@ -1479,27 +1505,6 @@ export class ChatEngine {
     this.prototypePreviewRegistrar = registrar
   }
 
-  async readPrototypePreviewChunk(
-    projectId: string,
-    threadId: string,
-    previewPath: string,
-    offset: number
-  ) {
-    projectId = validateEntityId(projectId, 'Project ID')
-    threadId = validateEntityId(threadId, 'Thread ID')
-    previewPath = validateBoundedString(previewPath, 'Prototype preview path', 1, 512)
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError('Invalid preview offset')
-    const brainstorm = await this.brainstormEngine.getActive(projectId, threadId)
-    const prototype = brainstorm?.content.prototypes?.find(
-      (candidate) => candidate.previewPath === previewPath
-    )
-    if (!prototype) throw new Error('Prototype preview is not owned by this Brainstorm')
-    const projectRoot = requireLocalProject(this.database, projectId).path
-    const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
-    const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, prototype.id)
-    return readPrototypePreviewChunk(paths.canonicalRoot, prototype.entryFile, offset)
-  }
-
   private cioPrompt(id: CioPromptId): Promise<string> {
     return this.storage.getCioPrompt(id)
   }
@@ -1669,6 +1674,11 @@ export class ChatEngine {
         this.retryAssignmentWorker(projectId, coordinatorThreadId, workerThreadId)
     )
     ipcMain.handle(
+      'agent:reportWorkerToCoordinator',
+      (_, projectId: string, coordinatorThreadId: string, workerThreadId: string) =>
+        this.reportWorkerToCoordinator(projectId, coordinatorThreadId, workerThreadId)
+    )
+    ipcMain.handle(
       'agent:resumeAssignmentAttention',
       (_, projectId: string, coordinatorThreadId: string) =>
         this.resumeAssignmentAttention(projectId, coordinatorThreadId)
@@ -1779,11 +1789,6 @@ export class ChatEngine {
         attachments: PromptAttachment[],
         userMessageId: string
       ) => this.generatePrd(projectId, threadId, settings, instructions, attachments, userMessageId)
-    )
-    ipcMain.handle(
-      'prototypePreview:readChunk',
-      (_, projectId: string, threadId: string, previewPath: string, offset: number) =>
-        this.readPrototypePreviewChunk(projectId, threadId, previewPath, offset)
     )
     ipcMain.handle(
       'agent:steerPrompt',
@@ -4930,31 +4935,53 @@ export class ChatEngine {
     // Command-backed terminals (harness logins/updates) carry no project id;
     // there is no checkpoint to attribute their shell commands to.
     if (!projectId) return
-    const existing = this.userTerminalWindows.get(projectId)
+    // The window is scoped to the terminal's own worktree root, not just the
+    // project: a terminal running in one scope worktree must never affect
+    // attribution of a turn (or another terminal) in a different root.
+    let roots = this.userTerminalWindows.get(projectId)
+    if (!roots) {
+      roots = new Map()
+      this.userTerminalWindows.set(projectId, roots)
+    }
+    const windowKey = projectPath
+    const existing = roots.get(windowKey)
     if (existing) {
       existing.lastInput = Date.now()
       clearTimeout(existing.timer)
       existing.timer = setTimeout(() => {
-        const current = this.userTerminalWindows.get(projectId)
-        if (current?.timer === existing.timer) {
-          this.userTerminalWindows.delete(projectId)
-        }
+        const current = this.userTerminalWindows.get(projectId)?.get(windowKey)
+        if (current?.timer !== existing.timer) return
+        const roots = this.userTerminalWindows.get(projectId)
+        if (!roots) return
+        roots.delete(windowKey)
+        if (roots.size === 0) this.userTerminalWindows.delete(projectId)
       }, USER_TERMINAL_SETTLE_MS)
       return
     }
-    const window = {
-      fingerprint: this.checkpointManager.fingerprint(projectId, projectPath).catch((error) => {
+    const fingerprint = this.checkpointManager
+      .fingerprint(projectId, projectPath)
+      .catch((error) => {
         Logger.error('user-terminal fingerprint failed:', error)
         return null
-      }),
+      })
+    const window: UserTerminalWindow = {
+      fingerprint,
+      // Resolved from the same fingerprint: the tracker real-paths the cwd, so
+      // this is the canonical worktree root the window applies to. A failed
+      // baseline also resolves to null, which excludes the window everywhere.
+      projectRoot: fingerprint.then((baseline) => baseline?.projectRoot ?? null),
       lastInput: Date.now(),
       timer: setTimeout(() => undefined, 0)
     }
     window.timer = setTimeout(() => {
-      const current = this.userTerminalWindows.get(projectId)
-      if (current?.timer === window.timer) this.userTerminalWindows.delete(projectId)
+      const current = this.userTerminalWindows.get(projectId)?.get(windowKey)
+      if (current?.timer !== window.timer) return
+      const roots = this.userTerminalWindows.get(projectId)
+      if (!roots) return
+      roots.delete(windowKey)
+      if (roots.size === 0) this.userTerminalWindows.delete(projectId)
     }, USER_TERMINAL_SETTLE_MS)
-    this.userTerminalWindows.set(projectId, window)
+    roots.set(windowKey, window)
   }
 
   /** Delete a harness-native or app-managed skill. */
@@ -5139,6 +5166,82 @@ export class ChatEngine {
   ): Promise<AssignmentPlan> {
     this.touchUserActivity()
     return this.retryAssignmentWorkerInternal(projectId, coordinatorThreadId, workerThreadId)
+  }
+
+  /**
+   * Hand a not-reporting worker's finished work back to the Sr. Engineer.
+   *
+   * Reporting off is a private iteration loop the user drives, so nothing is
+   * ever handed back on its own. This action is the user asking for the
+   * hand-back now: it switches the worker's reporting back on, reactivates its
+   * task, and prompts the worker to submit fresh evidence and report through the
+   * Assignment API. That report is what wakes the Sr. Engineer's audit, so the
+   * two cards settle into the ordinary review loop again.
+   */
+  async reportWorkerToCoordinator(
+    projectId: string,
+    coordinatorThreadId: string,
+    workerThreadId: string
+  ): Promise<AssignmentPlan> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    workerThreadId = validateEntityId(workerThreadId, 'Worker thread ID')
+    const assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const task = assignment.content.tasks.find(
+      (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
+    )
+    if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
+    const worker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (
+      !worker?.settings ||
+      worker.assignmentId !== assignment.id ||
+      worker.assignmentRole !== 'worker' ||
+      worker.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      throw new AssignmentEngineError('not_found', 'Assignment worker thread not found')
+    }
+    if (assignment.status === 'stopped') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'A stopped Assignment cannot take a worker report'
+      )
+    }
+    // Switch reporting on before anything else: the reactivation and the report
+    // contract both read it, and the worker's own composer control must agree.
+    const settings = validateThreadSettings({ ...worker.settings, reportToCoordinator: true })
+    await this.threadManager.updateSettings(projectId, workerThreadId, settings)
+    const reactivated = await this.assignmentEngine.markWorkerSteered(assignment.id, workerThreadId)
+    await this.ensureAssignmentApi()
+    const reportInstruction = this.workerReportInstruction({
+      assignmentId: assignment.id,
+      threadId: worker.id,
+      taskId: task.id,
+      settings,
+      completion: 'When your verification is current'
+    })
+    await this.sendPrompt(
+      projectId,
+      workerThreadId,
+      settings,
+      [
+        'Reporting to the Sr. Engineer is switched back on for this thread.',
+        `Submit baseline and check evidence for your task “${task.title}” and report it through the Assignment API so the Sr. Engineer can audit it and give feedback.`,
+        reportInstruction
+      ].join('\n\n'),
+      [],
+      undefined,
+      createMessageId(),
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      { action: `Report to Sr. Engineer · ${task.workerName ?? worker.title}`.slice(0, 120) }
+    )
+    const refreshedWorker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (refreshedWorker) broadcastThreadUpdate(refreshedWorker)
+    return reactivated
   }
 
   private async retryAssignmentWorkerInternal(
@@ -10040,6 +10143,117 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * The harness-agnostic fallback judge lane, resolved only when the graded
+   * harness's own candidates and any auxiliary assignment cannot grade.
+   * Candidate probes are tried in this order:
+   *
+   * 1. The model and account of a session that currently has an active turn:
+   *    the judge the user is using right now, already authenticated and
+   *    freshly exercised.
+   * 2. The harness of any other registered session.
+   * 3. Any other installed harness with a resolvable account, judged through
+   *    that harness's own cheap-model candidates.
+   *
+   * A probe whose provider reported its usage window closed is demoted behind
+   * free probes rather than dropped, so a fallback that exists always runs
+   * even while every lane is congested. A probe that fails to resolve
+   * (driver unavailable, account removed) is skipped silently; a null result
+   * simply keeps the caller's existing failure path.
+   */
+  private async resolveFallbackRankingJudge(
+    workingDirectory: string,
+    excludeHarnessIds: readonly string[]
+  ): Promise<FallbackRankingJudgeRoute | null> {
+    const excluded = new Set(excludeHarnessIds)
+    interface FallbackProbe {
+      harnessId: string
+      accountId?: string
+      /** Provider that owns the probe model, when read from a live session. */
+      providerId?: string
+      /** The exact model of the conversation the user has open, when known. */
+      inUseModelId?: string
+    }
+    const active: FallbackProbe[] = []
+    const idle: FallbackProbe[] = []
+    for (const session of this.sessionRegistry.values()) {
+      if (!session.driverId || excluded.has(session.driverId)) continue
+      const probe: FallbackProbe = { harnessId: session.driverId, accountId: session.accountId }
+      // A live session carries the exact model of the conversation the user is
+      // in: read its settings back so the judge candidate is that model.
+      if (session.projectId !== INBOX_PROJECT_ID && session.threadId) {
+        const thread = await this.threadManager.getThread(session.projectId, session.threadId)
+        if (thread?.settings && thread.settings.providerId && thread.settings.modelId) {
+          probe.providerId = thread.settings.providerId
+          probe.inUseModelId = thread.settings.modelId
+        }
+      }
+      if (session.activeTurnId) active.push(probe)
+      else idle.push(probe)
+    }
+    const harnessProbes: FallbackProbe[] = [...this.drivers.keys()]
+      .filter((harnessId) => !excluded.has(harnessId))
+      .map((harnessId) => ({ harnessId }))
+
+    const resolved: Array<{ route: FallbackRankingJudgeRoute; untilMs: number | null }> = []
+    const skipped: Array<{ route: FallbackRankingJudgeRoute; untilMs: number | null }> = []
+    for (const probe of [...active, ...idle, ...harnessProbes]) {
+      try {
+        const account = await this.accountRegistry.resolve(probe.harnessId, probe.accountId)
+        const driver = await this.driverForAccount(probe.harnessId, account.id)
+        // The probe's exact conversation model is the first candidate when
+        // the user has a live session on it; otherwise the harness's own
+        // cheap-model discovery, which the shared one-shot runner also
+        // de-duplicates against the settings fallback.
+        const modelToCandidate = new Map<string, AuxiliaryModelCandidate>()
+        if (probe.providerId && probe.inUseModelId) {
+          modelToCandidate.set(probe.inUseModelId, {
+            providerId: probe.providerId,
+            modelId: probe.inUseModelId
+          })
+        }
+        for (const candidate of driver.auxiliaryRouteCandidates?.() ?? []) {
+          if (candidate.modelId) modelToCandidate.set(candidate.modelId, candidate)
+        }
+        const candidates = [...modelToCandidate.values()]
+        if (candidates.length === 0) continue
+        const modelId = candidates[0].modelId
+        const candidateProviderId = candidates[0].providerId
+        const settings: ThreadSettings = {
+          harnessId: probe.harnessId,
+          accountId: account.id,
+          providerId: candidateProviderId,
+          modelId,
+          thinkingLevel: 'minimal',
+          permissionLevel: 'auto_review',
+          assignmentMode: false,
+          loopMode: false
+        }
+        const untilMs = this.windowUntil(driver, candidates)
+        const entry = {
+          route: {
+            driver,
+            harnessId: probe.harnessId,
+            providerId: candidateProviderId,
+            modelId,
+            accountId: account.id,
+            candidates,
+            settings
+          },
+          untilMs
+        }
+        if (untilMs === null) resolved.push(entry)
+        else skipped.push(entry)
+      } catch (error) {
+        Logger.dev('Ranking fallback judge probe skipped:', {
+          harnessId: probe.harnessId,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+    return resolved[0]?.route ?? skipped[0]?.route ?? null
+  }
+
   /** Delegate one-shot title generation and model fallback to the selected driver. */
   private async generateTitleWithModel(
     projectId: string,
@@ -10436,15 +10650,29 @@ export class ChatEngine {
     return computePromptBudget({ contextWindow }).availableInputTokens
   }
 
-  /** Abort the thread's running session. */
-  async abort(projectId: string, threadId: string): Promise<void> {
+  /**
+   * Abort the thread's running session.
+   *
+   * `reason: 'transfer'` is the cross-instance hand-off stop: it tears the run
+   * down exactly like a user Stop, except it never latches the user-stop flag,
+   * because the run is not ending   it is moving to the instance that asked for
+   * it, and that instance must be able to resume it automatically.
+   */
+  async abort(
+    projectId: string,
+    threadId: string,
+    options: { reason?: 'user' | 'transfer' } = {}
+  ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     // Latch the stop immediately so a failure that arrives mid-teardown cannot
-    // re-track an auto-retry between this point and the status write below.
-    await this.threadManager.markStoppedByUser(projectId, threadId)
+    // re-track an auto-retry between this point and the status write below. A
+    // transfer deliberately skips the latch: the run continues elsewhere.
+    if (options.reason !== 'transfer') {
+      await this.threadManager.markStoppedByUser(projectId, threadId)
+    }
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     if (activeBrainstorm) {
@@ -10578,6 +10806,122 @@ export class ChatEngine {
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     clearNotificationAborting(projectId, threadId)
+  }
+
+  /**
+   * Stop this process's run for a thread another instance asked to take over.
+   *
+   * Nothing here is inferred: the shared `active_turns` ledger already names
+   * this process as the owner, so the release is a deliberate stop (the same
+   * teardown a user Stop performs, minus the user-stop latch) followed by a
+   * deterministic settle of the turn. The turn must be fully settled before the
+   * caller acks, because the adopting instance writes its own ledger row the
+   * moment it resumes   a late settle event from this process would delete it.
+   */
+  async releaseThreadForTransfer(
+    projectId: string,
+    threadId: string
+  ): Promise<{ released: boolean; reason?: string }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { released: false, reason: 'The thread no longer exists.' }
+    if (!thread.sessionId || !thread.settings) {
+      return { released: false, reason: 'This thread has no resumable session to transfer.' }
+    }
+    if (
+      thread.assignmentRole === 'coordinator' ||
+      thread.achievementRole === 'coordinator' ||
+      isOrchestrationChildThread(thread)
+    ) {
+      return {
+        released: false,
+        reason: 'This thread belongs to a coordinated workflow and cannot be moved while it runs.'
+      }
+    }
+    const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+    if (ownerPid !== process.pid) {
+      return { released: false, reason: 'This instance is no longer running that thread.' }
+    }
+    await this.abort(projectId, threadId, { reason: 'transfer' })
+    await this.settleThreadTurnForTransfer(projectId, threadId)
+    instanceRegistry.publishTurnActivity()
+    return { released: true }
+  }
+
+  /**
+   * Resume a thread whose run just arrived from another instance.
+   *
+   * The departing instance already stopped its harness and settled the turn, so
+   * this process continues the persisted session exactly as restart recovery
+   * would, with the busy probe and stop latch bypassed because the hand-off is
+   * explicit and this process cannot see the sibling's harness.
+   */
+  async adoptTransferredThread(projectId: string, threadId: string): Promise<ThreadTransferResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { ok: false, reason: 'The thread no longer exists.' }
+    if (!thread.sessionId || !thread.settings) {
+      return { ok: false, reason: 'This thread has no resumable session.' }
+    }
+    try {
+      let resumed = await this.resumeThreadFromPersistedSession(thread, { force: true })
+      if (!resumed && thread.settings.loopMode === true) {
+        // An Achievement loop resumes through its own driver, not a plain
+        // Continue; mirror the loop branch restart recovery uses.
+        const activeSpec = await this.getActiveSpec(projectId, threadId)
+        if (activeSpec?.status === 'approved') {
+          void this.continueLoop(projectId, threadId)
+          resumed = true
+        }
+      }
+      if (!resumed) {
+        return { ok: false, reason: 'This thread cannot be resumed on this instance.' }
+      }
+      instanceRegistry.publishTurnActivity()
+      return { ok: true }
+    } catch (error) {
+      Logger.error('Transferred thread resume failed:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        ok: false,
+        reason: `The transfer could not resume this run: ${rawErrorMessage(error)}`
+      }
+    }
+  }
+
+  /**
+   * Wait for the aborted turn to release the shared ledger row, forcing the
+   * release if the harness never reported its terminal settle, then detach this
+   * process's turn bookkeeping so no late event can touch the row again.
+   */
+  private async settleThreadTurnForTransfer(projectId: string, threadId: string): Promise<void> {
+    const deadline = Date.now() + TRANSFER_SETTLE_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if ((await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)) === null) break
+      await new Promise((resolve) => setTimeout(resolve, TRANSFER_SETTLE_POLL_MS))
+    }
+    await this.checkpointManager.markActiveInterrupted(projectId, threadId)
+    this.detachThreadTurnBookkeeping(projectId, threadId)
+  }
+
+  /** Drop this process's in-flight turn state for a thread it just handed off. */
+  private detachThreadTurnBookkeeping(projectId: string, threadId: string): void {
+    for (const info of this.sessionRegistry.values()) {
+      if (info.projectId !== projectId || info.threadId !== threadId) continue
+      info.activeTurnId = undefined
+      info.activeTurnUserMessageId = undefined
+      info.changedPaths = undefined
+      info.preciseChangedPaths = undefined
+      info.userTouchedPaths = undefined
+      info.openUnboundedTools = undefined
+      info.unboundedToolObserved = undefined
+      info.unboundedWindowStart = undefined
+    }
   }
 
   /**
@@ -14963,6 +15307,14 @@ export class ChatEngine {
     const auditStartedAt = Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     let lastError: Error | null = null
+    /** The most recent structurally-valid report content plus the evidence
+     *  gaps that kept it from full validation. When the correction attempts are
+     *  exhausted this is persisted as a partial report instead of discarding
+     *  a generated report. */
+    let partialCandidate: {
+      content: AuditReportContent
+      issues: string[]
+    } | null = null
     // A previous failed run leaves the auditor's durable session intact, so
     // the next run continues from where it stopped instead of re-auditing
     // the whole thread from scratch.
@@ -15094,12 +15446,31 @@ export class ChatEngine {
                   { requireVerification: true }
                 )
         }
-        const checkInvocations = validateAssignmentAuditExecutionEvidence({
+        // Most recent structurally-valid content, kept as the partial fallback
+        // whenever the evidence matcher still leaves gaps on that response.
+        partialCandidate = { content, issues: [] }
+        const evidence = validateAssignmentAuditExecutionEvidence({
           content,
           messages: await driver.loadMessages(projectPath, sessionId),
           auditStartedAt,
           utilitySearchRequired: utilityTurn.runtimeAvailable
         })
+        const checkInvocations = evidence.checkInvocations
+        const evidenceIssues = evidence.issues
+        if (evidenceIssues.length > 0) {
+          // The auditor still has its correction attempts; this content is kept
+          // as the partial fallback if every attempt stays unvalidated.
+          partialCandidate = { content, issues: evidenceIssues }
+          content = await this.persistAssignmentAuditCheckEvidence({
+            projectId,
+            threadId: coordinatorThreadId,
+            runId,
+            content,
+            checkInvocations,
+            requireInvocations: false
+          })
+          throw new AuditReportValidationError(evidenceIssues)
+        }
         content = await this.persistAssignmentAuditCheckEvidence({
           projectId,
           threadId: coordinatorThreadId,
@@ -15173,6 +15544,51 @@ export class ChatEngine {
           auditorThread.id,
           sessionId
         )
+      }
+    }
+
+    // The auditor generated a structurally-valid report but every correction
+    // attempt still left evidence gaps in the transcript. Persist it as a
+    // partial report instead of discarding the work: it stays viewable in Spec
+    // Studio, and the half-report card offers re-validation or a model change.
+    if (partialCandidate !== null && partialCandidate.issues.length > 0) {
+      const report = await this.auditEngine.create({
+        projectId,
+        threadId: coordinatorThreadId,
+        independent: true,
+        content: partialCandidate.content,
+        outcome: auditRequiresRework(partialCandidate.content) ? 'rework_required' : 'passed',
+        evidenceValidation: 'partial',
+        evidenceIssues: partialCandidate.issues,
+        provenance: {
+          source: 'agent',
+          actor: 'auditor',
+          harnessId: auditorSettings.harnessId,
+          providerId: auditorSettings.providerId,
+          modelId: auditorSettings.modelId
+        }
+      })
+      await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
+        id: report.id,
+        version: report.version
+      })
+      await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+        read: false
+      })
+      await this.loadMessages(projectId, auditorThread.id)
+      await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
+      Logger.error('Independent audit persisted with unvalidated evidence', {
+        projectId,
+        threadId: coordinatorThreadId,
+        reportId: report.id,
+        version: report.version,
+        issues: partialCandidate.issues.length,
+        error: (lastError ?? new Error('Evidence validation failed.')).message
+      })
+      return {
+        report,
+        auditorThread:
+          (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
       }
     }
 
@@ -15893,6 +16309,10 @@ export class ChatEngine {
     runId: string
     content: AuditReportContent
     checkInvocations: Map<string, Extract<AgentPart, { type: 'tool' }>>
+    /** False when persisting a partial (evidence-unvalidated) report: executed
+     *  checks without a matched invocation keep their model-written evidence and
+     *  no evidencePath instead of aborting. */
+    requireInvocations?: boolean
   }): Promise<AuditReportContent> {
     const verification = input.content.verification
     if (!verification) return input.content
@@ -15901,7 +16321,9 @@ export class ChatEngine {
     const versions = new Map<AuditVerificationCheckKind, number>()
     const checks: AuditVerificationCheck[] = []
     for (const check of verification.checks) {
-      if (check.status === 'not_applicable') {
+      // A check that did not run (or that the auditor justified in writing)
+      // keeps its model-written evidence and never needs an evidence file.
+      if (auditCheckIsExempt(check)) {
         checks.push({
           ...check,
           evidence: check.evidence.replace(/\s+/gu, ' ').trim().slice(0, 320)
@@ -15910,6 +16332,13 @@ export class ChatEngine {
       }
       const invocation = input.checkInvocations.get(check.id)
       if (!invocation) {
+        if (input.requireInvocations === false) {
+          checks.push({
+            ...check,
+            evidence: check.evidence.replace(/\s+/gu, ' ').trim().slice(0, 320)
+          })
+          continue
+        }
         throw new AuditReportValidationError([
           `verification.checks ${check.id} has no matched invocation to persist`
         ])
@@ -15977,6 +16406,10 @@ export class ChatEngine {
     content: AuditReportContent
     auditorThread: Thread
     auditorSettings: ThreadSettings
+    /** Partial evidence-validation stamp for reports persisted after the
+     *  evidence matcher could still not back every claim. */
+    evidenceValidation?: AuditReport['evidenceValidation']
+    evidenceIssues?: string[]
   }): Promise<{ report: AuditReport; auditorThread: Thread }> {
     const report = await this.auditEngine.create({
       projectId: input.projectId,
@@ -15987,6 +16420,8 @@ export class ChatEngine {
       reworkCycle: input.assignment.auditCycle?.reworkCycle,
       content: input.content,
       outcome: auditRequiresRework(input.content) ? 'rework_required' : 'passed',
+      evidenceValidation: input.evidenceValidation,
+      evidenceIssues: input.evidenceIssues,
       provenance: {
         source: 'agent',
         actor: 'auditor',
@@ -16097,6 +16532,12 @@ export class ChatEngine {
         : [])
     ].join('\n\n')
     let terminalFailure: Error
+    /** Latest shape-valid attempt content plus its remaining evidence gaps,
+     *  persisted as a partial report when the repair loop exhausts. */
+    let partialCandidate: {
+      content: AuditReportContent
+      issues: string[]
+    } | null = null
     const resumingAudit = assignment.auditCycle?.status === 'running'
     const auditStartedAt =
       resumingAudit && assignment.auditCycle?.startedAt !== undefined
@@ -16153,19 +16594,22 @@ export class ChatEngine {
             coordinatorThreadId,
             recoveredAttempt.relativePath
           )
-          const checkInvocations = validateAssignmentAuditExecutionEvidence({
+          const evidence = validateAssignmentAuditExecutionEvidence({
             content: recoveredContent,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: false
           })
+          if (evidence.issues.length > 0) {
+            throw new AuditReportValidationError(evidence.issues)
+          }
           recoveredContent = await this.persistAssignmentAuditCheckEvidence({
             projectId,
             threadId: coordinatorThreadId,
             runId,
             content: recoveredContent,
-            checkInvocations
+            checkInvocations: evidence.checkInvocations
           })
           await this.writeAssignmentAuditRepairManifest({
             schemaVersion: 1,
@@ -16334,19 +16778,25 @@ export class ChatEngine {
             coordinatorThreadId,
             persistedAttempt.relativePath
           )
-          const checkInvocations = validateAssignmentAuditExecutionEvidence({
+          const evidence = validateAssignmentAuditExecutionEvidence({
             content,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: utilityRuntimeAvailable
           })
+          if (evidence.issues.length > 0) {
+            // The repair loop still gets its feedback; this content is kept as
+            // the partial fallback if no later attempt validates fully.
+            partialCandidate = { content, issues: evidence.issues }
+            throw new AuditReportValidationError(evidence.issues)
+          }
           content = await this.persistAssignmentAuditCheckEvidence({
             projectId,
             threadId: coordinatorThreadId,
             runId,
             content,
-            checkInvocations
+            checkInvocations: evidence.checkInvocations
           })
         } catch (error) {
           const errors =
@@ -16429,6 +16879,31 @@ export class ChatEngine {
         auditorThreadId: auditorThread.id
       })
       throw failure
+    }
+    // The auditor generated a shape-valid report but every repair attempt still
+    // left evidence gaps. Persist it as a partial report so the card and Spec
+    // Studio surface it instead of discarding the generated work.
+    if (partialCandidate !== null && partialCandidate.issues.length > 0) {
+      const completed = await this.completeAssignmentAudit({
+        projectId,
+        coordinatorThreadId,
+        spec,
+        assignment,
+        content: partialCandidate.content,
+        auditorThread,
+        auditorSettings,
+        evidenceValidation: 'partial',
+        evidenceIssues: partialCandidate.issues
+      })
+      Logger.error('Assignment audit persisted with unvalidated evidence', {
+        projectId,
+        threadId: coordinatorThreadId,
+        reportId: completed.report.id,
+        version: completed.report.version,
+        issues: partialCandidate.issues.length,
+        error: failure.message
+      })
+      return completed
     }
     Logger.error('Assignment audit failed', {
       projectId,
@@ -17054,61 +17529,7 @@ export class ChatEngine {
     if (config.resumeWorkOnRestart === false) return
     for (const thread of recovered) {
       try {
-        if (thread.archived) continue
-        if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
-          continue
-        }
-        if (isOrchestrationChildThread(thread)) continue
-        if (!thread.settings || !thread.sessionId) continue
-        // A deliberate user stop before the restart vetoes the hidden Continue;
-        // the user can still resume by hand (Retry or any prompt).
-        if (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id)) {
-          Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
-            projectId: thread.projectId,
-            threadId: thread.id
-          })
-          continue
-        }
-        const current = this.sessionStatuses.get(thread.sessionId)
-        if (current?.state === 'working' || current?.state === 'waiting') continue
-        // The in-memory status map is empty right after a restart, but the
-        // harness process may have survived it and still be running the
-        // pre-restart turn. Resuming a live session spawns a second concurrent
-        // run that interleaves outputs and derails both turns, so probe the
-        // driver first and leave genuinely-busy sessions alone (their events
-        // keep flowing and will complete the turn normally).
-        if (thread.sessionHarnessId) {
-          try {
-            const driver = await this.resolve(thread.projectId, thread.sessionHarnessId, thread.id)
-            if (
-              driver.driver.isSessionBusy &&
-              (await driver.driver.isSessionBusy(driver.projectPath, thread.sessionId))
-            ) {
-              continue
-            }
-          } catch (error) {
-            // Driver unavailable or probe failed   resume anyway (legacy path).
-            Logger.dev('Recovered-thread busy probe skipped:', {
-              threadId: thread.id,
-              error: rawErrorMessage(error)
-            })
-          }
-        }
-        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
-        const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
-        await this.sendPrompt(
-          thread.projectId,
-          thread.id,
-          validateThreadSettings(thread.settings),
-          resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
-          [],
-          resumesSpecContract ? 'implement' : undefined,
-          createMessageId(),
-          undefined,
-          undefined,
-          undefined,
-          'internal'
-        )
+        await this.resumeThreadFromPersistedSession(thread)
       } catch (error) {
         // Leave the thread in its interrupted state; the user can still Retry manually.
         Logger.error('Recovered thread resume failed (non-fatal):', {
@@ -17118,6 +17539,83 @@ export class ChatEngine {
         })
       }
     }
+  }
+
+  /**
+   * Continue one thread's persisted harness session through the normal
+   * sendPrompt pipeline.
+   *
+   * This is the single resumption path shared by restart recovery and a
+   * cross-instance transfer, so the two can never drift apart in what they
+   * skip or how they resume. It returns whether a prompt was actually
+   * dispatched, which lets a caller that must not silently do nothing (a
+   * transfer) report the refusal instead of leaving the thread interrupted.
+   *
+   * `force` is set by a transfer: the owning instance has already stopped the
+   * run and released the thread, so this process's own busy probe cannot see it
+   * and a stale user-stop latch must not veto the explicit hand-off.
+   */
+  private async resumeThreadFromPersistedSession(
+    thread: Thread,
+    options: { force?: boolean } = {}
+  ): Promise<boolean> {
+    const force = options.force === true
+    if (thread.archived) return false
+    if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
+      return false
+    }
+    if (isOrchestrationChildThread(thread)) return false
+    if (!thread.settings || !thread.sessionId) return false
+    // A deliberate user stop before the restart vetoes the hidden Continue;
+    // the user can still resume by hand (Retry or any prompt).
+    if (!force && (await this.threadManager.wasStoppedByUser(thread.projectId, thread.id))) {
+      Logger.info('Recovered-thread resume suppressed: the user stopped this thread', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      })
+      return false
+    }
+    const current = this.sessionStatuses.get(thread.sessionId)
+    if (current?.state === 'working' || current?.state === 'waiting') return false
+    // The in-memory status map is empty right after a restart, but the
+    // harness process may have survived it and still be running the
+    // pre-restart turn. Resuming a live session spawns a second concurrent
+    // run that interleaves outputs and derails both turns, so probe the
+    // driver first and leave genuinely-busy sessions alone (their events
+    // keep flowing and will complete the turn normally).
+    if (!force && thread.sessionHarnessId) {
+      try {
+        const driver = await this.resolve(thread.projectId, thread.sessionHarnessId, thread.id)
+        if (
+          driver.driver.isSessionBusy &&
+          (await driver.driver.isSessionBusy(driver.projectPath, thread.sessionId))
+        ) {
+          return false
+        }
+      } catch (error) {
+        // Driver unavailable or probe failed   resume anyway (legacy path).
+        Logger.dev('Recovered-thread busy probe skipped:', {
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+    const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+    const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+    await this.sendPrompt(
+      thread.projectId,
+      thread.id,
+      validateThreadSettings(thread.settings),
+      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
+      [],
+      resumesSpecContract ? 'implement' : undefined,
+      createMessageId(),
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
+    return true
   }
 
   /** Repair specifications persisted before their ready lifecycle finished. */
@@ -22501,10 +22999,11 @@ export class ChatEngine {
    * Decide what this pass may judge, before any row is claimed or any harness
    * process is spent.
    *
-   * A row is held back only when every route it would take is inside a provider
-   * usage window the provider already reported closed: the user-assigned
-   * auxiliary model when one exists, and otherwise the graded harness's own
-   * discovered candidates. Everything else   a driver that cannot be resolved
+   * A row is held back only when every judge route it would take is inside a
+   * provider usage window the provider already reported closed: the
+   * user-assigned auxiliary model when one exists, the graded harness's own
+   * discovered candidates, and the harness-agnostic fallback judge (see
+   * `resolveFallbackRankingJudge`). Everything else   a driver that cannot be resolved
    * or cannot name its route, no auxiliary assignment, one free candidate, a
    * window that already reopened   keeps the row judgeable, so a wrong guess can
    * only ever postpone a row whose route was genuinely closed.
@@ -22515,6 +23014,7 @@ export class ChatEngine {
     const projectPath = await this.auxiliaryWorkingDirectory()
     const drivers = new Map<string, Promise<HarnessDriver | null>>()
     const routes = new Map<string, Promise<AuxiliaryRoute | null>>()
+    const fallbacks = new Map<string, Promise<FallbackRankingJudgeRoute | null>>()
     // One resolution per harness for the whole window: the routes and their
     // drivers are the same for every row of a harness, only the graded model
     // differs, and re-resolving them per row would re-read the config.
@@ -22532,12 +23032,29 @@ export class ChatEngine {
       routes.set(harnessId, pending)
       return pending
     }
+    // One fallback resolution per harness: the graded harness and its
+    // auxiliary assignment are excluded, and the fallback's drivers are the
+    // same for every row, so only the exclusion set differs per harness.
+    const fallbackFor = (
+      harnessId: string,
+      exclude: readonly string[]
+    ): Promise<FallbackRankingJudgeRoute | null> => {
+      const cached = fallbacks.get(harnessId)
+      if (cached) return cached
+      const pending = this.resolveFallbackRankingJudge(projectPath, exclude).catch(() => null)
+      fallbacks.set(harnessId, pending)
+      return pending
+    }
     const claimIds: string[] = []
     const heldBack = new Map<number, string[]>()
     for (const row of head) {
       const native = await driverFor(row.harness_id)
       const auxiliary = await routeFor(row.harness_id)
-      const untilMs = this.rankingRowBlockedUntil(row, native, auxiliary)
+      const fallback = await fallbackFor(
+        row.harness_id,
+        auxiliary ? [row.harness_id, auxiliary.harnessId] : [row.harness_id]
+      )
+      const untilMs = this.rankingRowBlockedUntil(row, native, auxiliary, fallback)
       if (untilMs === null) {
         claimIds.push(row.id)
         // A full batch ends the pass: the window is scanned again one pass
@@ -22562,19 +23079,42 @@ export class ChatEngine {
   private rankingRowBlockedUntil(
     row: RankingQueueHead,
     native: HarnessDriver | null,
-    auxiliary: AuxiliaryRoute | null
+    auxiliary: AuxiliaryRoute | null,
+    fallback: FallbackRankingJudgeRoute | null
   ): number | null {
     const nativeUntil = this.nativeRouteWindowUntil(row, native)
-    if (!auxiliary) return nativeUntil
     // An auxiliary assignment pins exactly one candidate, so its route is known
     // in full and needs no discovery.
-    const auxiliaryUntil = this.windowUntil(auxiliary.driver, [
-      { providerId: auxiliary.providerId, modelId: auxiliary.modelId }
+    const auxiliaryUntil = auxiliary
+      ? this.windowUntil(auxiliary.driver, [
+          { providerId: auxiliary.providerId, modelId: auxiliary.modelId }
+        ])
+      : null
+    const fallbackUntil = fallback ? this.windowUntil(fallback.driver, fallback.candidates) : null
+    // Either free route being enough: a held auxiliary or native window still
+    // falls through, and a fallback judge keeps rows judgeable however blocked
+    // the graded harness's routes are. `undefined` marks a lane that does not
+    // exist at all, so an absent lane can never rescue a closed one.
+    return this.blockedUntilOf([
+      auxiliary ? auxiliaryUntil : undefined,
+      nativeUntil,
+      fallback ? fallbackUntil : undefined
     ])
-    // Either route being free is enough: an auxiliary judge held back by its own
-    // window still falls through to the graded harness's candidates.
-    if (auxiliaryUntil === null || nativeUntil === null) return null
-    return Math.min(auxiliaryUntil, nativeUntil)
+  }
+
+  /**
+   * The moment the judge routes of one row reopen, or null while one lane can
+   * still judge it. A resolvable route with no window knowledge is treated as
+   * free, so a row is held back only when every existing route sits inside a
+   * window the provider itself reported closed.
+   */
+  private blockedUntilOf(lando: ReadonlyArray<number | null | undefined>): number | null {
+    const closed = lando.filter(
+      (until): until is number => typeof until === 'number' && until < Number.POSITIVE_INFINITY
+    )
+    if (closed.length === 0) return null
+    if (lando.some((until) => until === null)) return null
+    return Math.min(...closed)
   }
 
   /**
@@ -22789,32 +23329,89 @@ export class ChatEngine {
       }
       // The snapshot is self-contained: grading judges the conversation payload,
       // never the project, so a deleted or renamed project cannot block it.
-      const driver = await this.driverForAccount(candidate.harnessId)
+      // A harness whose own route already failed once is struck out of the
+      // native lane, but only when a harness-agnostic fallback judge is
+      // actually resolvable to take the row: a strike with no fallback is not
+      // actionable, so the native lane still runs rather than burning the
+      // row's attempt cap without a single grading call.
+      const excludeHarnessIds = auxiliary
+        ? [candidate.harnessId, auxiliary.harnessId]
+        : [candidate.harnessId]
+      const struckOut = (this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) > 0
+      const struckOutFallback = struckOut
+        ? await this.resolveFallbackRankingJudge(workingDirectory, excludeHarnessIds)
+        : null
+      let nativeScore: number | null = null
+      if (!struckOut || struckOutFallback === null) {
+        try {
+          const driver = await this.driverForAccount(candidate.harnessId)
+          judge = {
+            score: null,
+            judgeHarnessId: candidate.harnessId,
+            judgeModelId: candidate.modelId,
+            viaAuxiliary: false
+          }
+          const score = await driver.gradeTurn(workingDirectory, {
+            settings: {
+              harnessId: candidate.harnessId,
+              providerId: candidate.providerId,
+              modelId: candidate.modelId,
+              thinkingLevel: candidate.thinkingLevel,
+              permissionLevel: 'auto_review'
+            },
+            userMessage: candidate.userMessage,
+            assistantOutput: candidate.assistantOutput,
+            followUp: candidate.followUp
+          })
+          // A driver that violates its number-or-null contract is a judge
+          // failure, not a score.
+          nativeScore = typeof score === 'number' ? score : null
+        } catch (error) {
+          Logger.dev('Ranking grading failed on the graded harness:', {
+            harnessId: candidate.harnessId,
+            modelId: candidate.modelId,
+            error: rawErrorMessage(error)
+          })
+          nativeScore = null
+        }
+        if (nativeScore === null) {
+          this.rankingNativeJudgeStrikes.set(
+            candidate.harnessId,
+            (this.rankingNativeJudgeStrikes.get(candidate.harnessId) ?? 0) + 1
+          )
+        } else {
+          this.rankingNativeJudgeStrikes.delete(candidate.harnessId)
+          Logger.dev('Ranking grading completed', {
+            harnessId: candidate.harnessId,
+            modelId: candidate.modelId,
+            score: nativeScore
+          })
+          return { ...judge, score: nativeScore }
+        }
+      }
+      // No harness-native judge is available. Ranking measures the graded
+      // model, so the judge's harness is an implementation detail: fall back
+      // to the model and account the user is actively using, or to any other
+      // resolvable harness's cheap candidates.
+      const fallback =
+        struckOutFallback ??
+        (await this.resolveFallbackRankingJudge(workingDirectory, excludeHarnessIds))
+      if (!fallback) return judge
       judge = {
         score: null,
-        judgeHarnessId: candidate.harnessId,
-        judgeModelId: candidate.modelId,
-        viaAuxiliary: false
+        judgeHarnessId: fallback.harnessId,
+        judgeModelId: fallback.modelId,
+        viaAuxiliary: true
       }
-      const score = await driver.gradeTurn(workingDirectory, {
-        settings: {
-          harnessId: candidate.harnessId,
-          providerId: candidate.providerId,
-          modelId: candidate.modelId,
-          thinkingLevel: candidate.thinkingLevel,
-          permissionLevel: 'auto_review'
-        },
+      const fallbackScore = await fallback.driver.gradeTurn(workingDirectory, {
+        settings: fallback.settings,
+        candidates: fallback.candidates,
         userMessage: candidate.userMessage,
         assistantOutput: candidate.assistantOutput,
         followUp: candidate.followUp
       })
-      Logger.dev('Ranking grading completed', {
-        harnessId: candidate.harnessId,
-        modelId: candidate.modelId,
-        score
-      })
       // A driver that violates its number-or-null contract is a judge failure.
-      return { ...judge, score: typeof score === 'number' ? score : null }
+      return { ...judge, score: typeof fallbackScore === 'number' ? fallbackScore : null }
     } catch (error) {
       Logger.dev('Ranking grading failed:', rawErrorMessage(error))
       return judge
@@ -23373,17 +23970,30 @@ export class ChatEngine {
     this.closeUnboundedToolWindow(session)
   }
 
+  /** The open user-terminal windows for this session's project. Root
+   *  matching happens per window when its fingerprint resolves: a window
+   *  rooted in another scope's worktree never applies to this session. */
+  private matchingUserTerminalWindows(session: SessionInfo): UserTerminalWindow[] {
+    const roots = this.userTerminalWindows.get(session.projectId)
+    if (!roots) return []
+    return [...roots.values()]
+  }
+
   private closeUnboundedToolWindow(session: SessionInfo): void {
     const start = session.unboundedWindowStart
     session.unboundedWindowStart = undefined
     session.openUnboundedTools?.clear()
     if (!start) return
     const turnId = session.activeTurnId
-    // Snapshot any open user-terminal window for this project: paths that
-    // moved while the user was typing commands in the in-app terminal are the
-    // user's edits, not this turn's bash work.
-    const userWindow = this.userTerminalWindows.get(session.projectId)
-    const userBefore = userWindow ? userWindow.fingerprint : undefined
+    // Snapshot any open user-terminal windows for this project: paths that
+    // moved while the user was typing commands in an in-app terminal are the
+    // user's edits, not this turn's bash work. Only windows rooted in the
+    // turn's own worktree apply.
+    const userWindows = this.matchingUserTerminalWindows(session)
+    const userBefore = userWindows.map((entry) => ({
+      fingerprint: entry.fingerprint,
+      projectRoot: entry.projectRoot
+    }))
     const pendingScans = (session.pendingWindowScans ??= new Set())
     const scan = (async (): Promise<void> => {
       try {
@@ -23394,13 +24004,27 @@ export class ChatEngine {
           session.projectPath
         )
         if (session.activeTurnId !== turnId) return
+        // A turn whose project root changed mid-window (scope switch, worktree
+        // move) has no comparable baseline: drop the window instead of letting
+        // the cross-root comparison throw and kill the whole scan.
+        if (before.projectRoot !== after.projectRoot) {
+          Logger.dev('turn change window skipped: project root changed mid-window')
+          return
+        }
         let userMoved: Set<string> | undefined
-        if (userBefore) {
-          const userStart = await userBefore
-          if (userStart) {
-            userMoved = new Set(
-              this.checkpointManager.diffFingerprints(session.projectId, userStart, after)
-            )
+        for (const entry of userBefore) {
+          const [userStart, windowRoot] = await Promise.all([entry.fingerprint, entry.projectRoot])
+          // A window whose baseline failed, or whose terminal worktree differs
+          // from the turn's root, does not apply here: those edits stay
+          // unattributed rather than being claimed by either side.
+          if (!userStart || !windowRoot || windowRoot !== after.projectRoot) continue
+          userMoved ??= new Set()
+          for (const path of this.checkpointManager.diffFingerprints(
+            session.projectId,
+            userStart,
+            after
+          )) {
+            userMoved.add(path)
           }
         }
         session.changedPaths ??= new Set()
@@ -23426,6 +24050,55 @@ export class ChatEngine {
       .finally(() => pendingScans.delete(scan))
   }
 
+  /**
+   * Paths the user's in-app terminal commands moved during this turn, in the
+   * turn's own worktree. Computed by diffing each matching terminal window's
+   * baseline against a fresh fingerprint, so a turn that never ran a shell
+   * tool still excludes the user's shell edits from its final checkpoint.
+   */
+  private async userTerminalChangedPaths(session: SessionInfo): Promise<Set<string>> {
+    // No active turn means nothing to attribute at all; the empty set keeps
+    // completion's project-wide snapshot behavior. The whole scan is also
+    // skipped unless a shell tool ran (only then does completion use the
+    // full-turn diff that exclusions apply to) and a window is open at all.
+    if (!session.activeTurnId || !session.unboundedToolObserved) return new Set()
+    if (!this.userTerminalWindows.get(session.projectId)?.size) return new Set()
+    const after = await this.checkpointManager
+      .fingerprint(session.projectId, session.projectPath)
+      .catch((error) => {
+        Logger.error('user-terminal completion scan failed:', error)
+        return null
+      })
+    if (!after) return new Set()
+    const changed = new Set<string>()
+    for (const entry of this.matchingUserTerminalWindows(session)) {
+      const [userStart, windowRoot] = await Promise.all([entry.fingerprint, entry.projectRoot])
+      // Only windows rooted in the turn's worktree apply (see
+      // closeUnboundedToolWindow); anything else cannot be compared safely.
+      if (!userStart || !windowRoot || windowRoot !== after.projectRoot) continue
+      for (const path of this.checkpointManager.diffFingerprints(
+        session.projectId,
+        userStart,
+        after
+      )) {
+        changed.add(path)
+      }
+    }
+    return changed
+  }
+
+  /** Merge in-app editor saves with terminal-window paths for completion exclusion. */
+  private withUserTerminalPaths(
+    userTouchedPaths: ReadonlySet<string> | undefined,
+    userTerminalPaths: ReadonlySet<string>
+  ): Set<string> | undefined {
+    if (userTerminalPaths.size === 0)
+      return userTouchedPaths ? new Set(userTouchedPaths) : undefined
+    const merged = new Set(userTouchedPaths ?? [])
+    for (const path of userTerminalPaths) merged.add(path)
+    return merged
+  }
+
   private async finishCheckpoint(
     sessionId: string,
     info: SessionInfo | undefined,
@@ -23438,6 +24111,10 @@ export class ChatEngine {
     if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
     if (info.pendingWindowScans?.size) await Promise.all([...info.pendingWindowScans])
     const ownThreadIds = await this.selfFamilyThreadIds(info.projectId, info.threadId)
+    // Edits the user made from an in-app terminal during this turn are the
+    // user's work, not the thread's: exclude them from the final checkpoint
+    // just like in-app editor saves.
+    const userTerminalPaths = await this.userTerminalChangedPaths(info)
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -23458,7 +24135,7 @@ export class ChatEngine {
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
           ownThreadIds,
-          excludedPaths: info.userTouchedPaths
+          excludedPaths: this.withUserTerminalPaths(info.userTouchedPaths, userTerminalPaths)
         }
       )
       info.activeTurnId = undefined

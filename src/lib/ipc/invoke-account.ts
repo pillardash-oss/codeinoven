@@ -5,13 +5,6 @@ export const invokeAccountContract = {
     [range: import('../types').LocalProfileAnalyticsRange],
     import('../types').LocalProfileAnalytics
   >,
-  'account:getProfile': {} as Contract<[], import('../types').AccountProfileState>,
-  'account:beginSignIn': {} as Contract<
-    [provider: import('../types').AccountAuthProvider],
-    import('../types').AccountSignInStart
-  >,
-  'account:syncProfile': {} as Contract<[], import('../types').AccountProfileState>,
-  'account:signOut': {} as Contract<[], void>,
   'memory:getLayers': {} as Contract<
     [projectId: string, threadId: string],
     import('../types').BehaviorLayer[]

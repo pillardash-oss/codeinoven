@@ -25,6 +25,10 @@ export interface CreateAuditReportInput {
   assignmentVersion?: number
   reworkCycle?: number
   outcome?: AuditReport['outcome']
+  /** Evidence-validation stamp; `partial` marks a generated report whose
+   *  verification claims could not be fully matched to transcript evidence. */
+  evidenceValidation?: AuditReport['evidenceValidation']
+  evidenceIssues?: AuditReport['evidenceIssues']
   content: AuditReportContent
   provenance: Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
 }
@@ -64,6 +68,8 @@ export class AuditEngine {
       reworkCycle: input.reworkCycle,
       version: (previous?.version ?? 0) + 1,
       outcome: input.outcome,
+      evidenceValidation: input.evidenceValidation,
+      evidenceIssues: input.evidenceIssues === undefined ? undefined : [...input.evidenceIssues],
       content: structuredClone(input.content),
       annotations: [],
       provenance: {

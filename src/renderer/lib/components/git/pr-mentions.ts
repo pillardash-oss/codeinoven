@@ -104,11 +104,16 @@ export function mentionKeyAction(key: string, candidateCount: number): MentionKe
  * Participants lead because they are the likeliest target in a PR conversation
  * and they arrive before the directory does, so the list never reshuffles
  * underneath the user once the fetch lands: it only grows.
+ *
+ * `limit` is the caller's, because how many candidates are worth showing depends
+ * on how much room the surface has: the composer's popover shows a dock's worth,
+ * while the assignment picker has a dialog to scroll.
  */
 export function mentionCandidates(
   participants: readonly RepositoryMentionUser[],
   directory: readonly RepositoryMentionUser[],
-  query: string
+  query: string,
+  limit = MENTION_LIMIT
 ): RepositoryMentionUser[] {
   const normalized = query.trim().toLowerCase()
   const seen = new Set<string>()
@@ -119,7 +124,7 @@ export function mentionCandidates(
     seen.add(key)
     if (!matchesQuery(user, normalized)) continue
     candidates.push(user)
-    if (candidates.length >= MENTION_LIMIT) break
+    if (candidates.length >= limit) break
   }
   return candidates
 }

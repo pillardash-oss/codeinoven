@@ -7,10 +7,7 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../src/lib/prototypes/prototype-artifacts'
-import {
-  PrototypePreviewService,
-  readPrototypePreviewChunk
-} from '../../src/main/prototypes/prototype-preview-service'
+import { PrototypePreviewService } from '../../src/main/prototypes/prototype-preview-service'
 
 const roots: string[] = []
 const services: PrototypePreviewService[] = []
@@ -52,8 +49,6 @@ describe('prototype artifacts and preview service', () => {
     const service = new PrototypePreviewService()
     services.push(service)
     await expect(service.registerProject(projectRoot)).resolves.toBe(1)
-    const chunk = await readPrototypePreviewChunk(paths.canonicalRoot, 'index.html', 0)
-    expect(Buffer.from(chunk.base64, 'base64').toString('utf8')).toContain('LoFi')
     const port = await service.start()
     const response = await fetch(`http://127.0.0.1:${port}/${prototype.previewPath}`)
     expect(response.status).toBe(200)
@@ -134,7 +129,5 @@ describe('prototype artifacts and preview service', () => {
       entryFile: 'index.html'
     })
     expect(rebuilt.previewPath).toBe('cio/toolbox-h1/')
-    const chunk = await readPrototypePreviewChunk(paths.canonicalRoot, 'index.html', 0)
-    expect(Buffer.from(chunk.base64, 'base64').toString('utf8')).toContain('v2')
   })
 })

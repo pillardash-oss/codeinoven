@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { ArrowLeft, ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import {
+    ArrowLeft,
+    ArrowUpRight,
+    ClipboardCheck,
+    Loader2,
+    Network,
+    Play,
+    Rows3,
+    Square
+  } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
@@ -30,7 +39,8 @@
     onResume,
     onStop,
     onResumeAssignment,
-    onBackToCoordinator
+    onBackToCoordinator,
+    onReportToCoordinator
   }: AssignmentCoordinatorPanelProps = $props()
 
   let showStopConfirmation = $state(false)
@@ -38,6 +48,8 @@
   let stopError = $state('')
   let resumeBusy = $state(false)
   let resumeError = $state('')
+  let reportBusy = $state(false)
+  let reportError = $state('')
 
   const completed = $derived(
     assignment.content.tasks.filter((task) => task.status === 'completed').length
@@ -158,6 +170,23 @@
       resumeError = error instanceof Error ? error.message : 'The Assignment could not be resumed.'
     } finally {
       resumeBusy = false
+    }
+  }
+
+  /** Ask the open not-reporting worker to hand its finished work back. Reporting
+   *  flips on in the main process, so the button unmounts once the action
+   *  resolves; the busy guard stops a second click while it runs. */
+  async function reportToCoordinator(): Promise<void> {
+    if (reportBusy || !onReportToCoordinator) return
+    reportBusy = true
+    reportError = ''
+    try {
+      await onReportToCoordinator()
+    } catch (error) {
+      reportError =
+        error instanceof Error ? error.message : 'The worker could not be asked to report.'
+    } finally {
+      reportBusy = false
     }
   }
 </script>
@@ -402,18 +431,44 @@
     </section>
   </div>
 
-  {#if onBackToCoordinator}
-    <footer class="shrink-0 border-t border-border p-3">
-      <button
-        type="button"
-        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
-        title="Back to the Sr. Engineer thread that owns this Assignment"
-        aria-label="Back to the Sr. Engineer thread that owns this Assignment"
-        onclick={onBackToCoordinator}
-      >
-        <ArrowLeft size={13} aria-hidden="true" />
-        Back to Sr. Engineer
-      </button>
+  {#if onBackToCoordinator || onReportToCoordinator}
+    <footer class="shrink-0 space-y-2 border-t border-border p-3">
+      {#if onReportToCoordinator}
+        <!-- Shown only while the open worker has reporting off: the user is
+             asking it to hand its finished work back, so reporting is switched
+             on again and the worker submits its report. -->
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          title="Switch reporting back on and ask this worker to report its finished work to the Sr. Engineer"
+          aria-label="Report this worker's finished work to the Sr. Engineer"
+          disabled={reportBusy}
+          onclick={() => void reportToCoordinator()}
+        >
+          {#if reportBusy}
+            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            Reporting…
+          {:else}
+            <ClipboardCheck size={13} aria-hidden="true" />
+            Report to Sr. Engineer
+          {/if}
+        </button>
+      {/if}
+      {#if onBackToCoordinator}
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+          title="Back to the Sr. Engineer thread that owns this Assignment"
+          aria-label="Back to the Sr. Engineer thread that owns this Assignment"
+          onclick={onBackToCoordinator}
+        >
+          <ArrowLeft size={13} aria-hidden="true" />
+          Back to Sr. Engineer
+        </button>
+      {/if}
+      {#if reportError}
+        <p class="text-xs text-danger" role="alert">{reportError}</p>
+      {/if}
     </footer>
   {/if}
 </div>

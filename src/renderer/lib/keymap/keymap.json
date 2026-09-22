@@ -66,7 +66,7 @@
           "keys": ["mod", "n"],
           "label": "New thread / chat / file",
           "description": "Creates a new thread, chat, or scoped thread depending on the current view; creates a file when the file tree is focused.",
-          "scenario": "Projects, Chats, Threads, or Scope view."
+          "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
           "id": "nav-close-surface",
@@ -136,6 +136,13 @@
           "label": "Dictate with voice",
           "description": "Starts voice dictation in whatever input with a microphone is on view   the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording.",
           "scenario": "Anywhere a microphone input is visible."
+        },
+        {
+          "id": "chat-focus-composer",
+          "keys": ["double-mod"],
+          "label": "Focus the chat composer",
+          "description": "Taps the primary modifier twice in quick succession (⌘ on macOS, Ctrl elsewhere) to move keyboard focus into the chat composer from anywhere in the app, restoring the caret where you left it. Stays inert while a modal, sheet, or palette is open.",
+          "scenario": "A chat composer is on screen."
         },
         {
           "id": "chat-history-previous",
@@ -381,8 +388,8 @@
           "id": "files-save",
           "keys": ["mod", "s"],
           "label": "Save file",
-          "description": "Saves the active file tab, or an edited file opened from the operating system.",
-          "scenario": "A file tab is open and has unsaved changes."
+          "description": "Saves the active file tab, or an edited file opened from the operating system. In the conflict resolution editor the press first saves the resolved progress as a draft, and only once there is no draft left to write does it replace the original file and mark it resolved.",
+          "scenario": "A file tab is open and has unsaved changes, or a conflicted file is open in the conflict resolution editor."
         },
         {
           "id": "files-goto-line",

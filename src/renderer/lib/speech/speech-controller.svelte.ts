@@ -1,7 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
-import { mobileState } from '$lib/remote/mobile-state.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
@@ -14,7 +13,6 @@ import {
   voiceScopeTarget
 } from './voice-send'
 import { logRendererError } from '../system/renderer-logger'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 import type {
   SpeechDictationSpan,
   SpeechPlaybackState,
@@ -241,7 +239,7 @@ class SpeechController {
         return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
       }
     }
-    const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
+    const viewed = workspaceState.selectedThread
     if (!viewed || viewed.id !== scope.threadId) return false
     if (scope.kind === 'project') return viewed.projectId === scope.projectId
     return true
@@ -447,7 +445,7 @@ class SpeechController {
 
   /** The dictation an arming gesture applies to (see the selector module). */
   private voiceSendCandidate(targetId?: string): VoiceTranscriptionRecord | null {
-    const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
+    const viewed = workspaceState.selectedThread
     return selectVoiceSendCandidate(this.transcribing, this.voiceSends, targetId, viewed)
   }
 
@@ -538,9 +536,7 @@ class SpeechController {
     // async pipeline step below has a failure path that settles into `failed`.
     this.state = { state: 'starting', targetId: target.id }
 
-    const nativeStarted = isRemotePwaRuntime()
-      ? null
-      : await invoke('speech:beginNativeCapture', scope).catch(() => null)
+    const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(() => null)
     if (nativeStarted?.ok) {
       const capture: ActiveCapture = {
         target,

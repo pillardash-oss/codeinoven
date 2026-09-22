@@ -148,7 +148,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)
     }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
-    options.powerWakeService?.setRemoteEnabled(config.keepAwakeWhileRemoteConnected)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
     if (patch.sound && options.speechService) {
       options.speechService.updateUnloadOptions({

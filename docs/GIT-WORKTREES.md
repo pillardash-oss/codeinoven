@@ -472,8 +472,8 @@ throwaway instance, not for opening the worktree you want to review.
 
 ### 10.3 Chromium profile
 
-Cookies, embedded-browser partitions, and the remote pairing material live in
-the platform Electron profile, which instances share. `--user-data-dir` splits
+Cookies and embedded-browser partitions live in the platform Electron profile,
+which instances share. `--user-data-dir` splits
 it (electron-vite appends `ELECTRON_CLI_ARGS` to the dev Electron command):
 
 ```
@@ -493,9 +493,6 @@ root `.env` files are copied by creation (section 5).
 
 ### 10.5 Concurrent-instance caveats
 
-- Remote mode stays off in dev unless `CODEINOVEN_DEV_REMOTE_MODE=1`. With it on
-  in two instances, keep them apart with `LAN_PORT` and `LAN_LOCAL_PORT`.
-- `bun dev:remote-pwa` owns its own port, overridable with `REMOTE_PWA_DEV_PORT`.
 - Settings, logs, the gateway plugin data directory, and the speech process
   journal are single files under the config root, so two instances writing them
   concurrently is last-write-wins. Give an instance its own

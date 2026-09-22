@@ -1,6 +1,5 @@
 import type { ThinkingLevel } from './common'
 import type { AccountActivityDay, AccountUsageBreakdown } from './usage'
-import type { MemoryEntry } from './settings'
 
 /** Inclusive/exclusive local analytics window supplied by the Profile page. */
 export interface LocalProfileAnalyticsRange {
@@ -161,70 +160,4 @@ export interface LocalProfileModelRanking {
 /** All-time priced cost of the ranked sessions (aggregate is not period-scoped). */
 export interface LocalProfileGradingSpend {
   costUsd: number
-}
-
-/** Account identity plus the cloud-backed workstation profile data. */
-export interface AccountProfile {
-  id: string
-  email: string
-  displayName: string
-  image: string | null
-  /** Per-device usage snapshots keyed by the desktop device id. */
-  usageByDevice: Record<string, SyncedDeviceUsage>
-  globalMemories: MemoryEntry[]
-  /** Deleted global memory ids; deletions propagate to every device. */
-  globalMemoryTombstones: MemoryTombstone[]
-  updatedAt: number
-}
-
-export type AccountProfileState =
-  | { status: 'signed-out'; profile: null }
-  | { status: 'pending'; profile: null }
-  | { status: 'error'; profile: null; message: string }
-  | { status: 'signed-in'; profile: AccountProfile }
-
-export type AccountAuthProvider = 'google' | 'apple'
-
-export interface AccountSignInStart {
-  url: string
-}
-
-/** A memory entry this device deleted; newer than the entry's `updatedAt` it wins. */
-export interface MemoryTombstone {
-  id: string
-  deletedAt: number
-}
-
-/** Compact per-project usage row synced inside a device usage snapshot. */
-export interface SyncedDeviceProject {
-  id: string
-  name: string
-  messageCount: number
-  costUsd: number
-  tokens: number
-  durationMs: number
-  threadCount: number
-}
-
-/** Compact per-device usage snapshot synced to the account profile. */
-export interface SyncedDeviceUsage {
-  deviceId: string
-  deviceLabel: string
-  platform: string
-  messageCount: number
-  costUsd: number
-  tokens: number
-  durationMs: number
-  activeDays: number
-  projects: SyncedDeviceProject[]
-  updatedAt: number
-}
-
-export interface AccountProfileSyncPayload {
-  deviceId: string
-  deviceLabel: string
-  platform: string
-  usage: SyncedDeviceUsage
-  globalMemories: MemoryEntry[]
-  globalMemoryTombstones: MemoryTombstone[]
 }

@@ -38,16 +38,16 @@ export async function handleFatalStartup(
         close: () => void state.chatEngine?.dispose()
       },
       {
-        name: 'remoteMode',
-        close: () => void state.remoteMode?.dispose()
-      },
-      {
         name: 'ptyService',
         close: () => state.ptyService?.destroyAll()
       },
       {
         name: 'updaterService',
         close: () => state.updaterService?.stop()
+      },
+      {
+        name: 'skillUpdateService',
+        close: () => state.skillUpdateService?.stop()
       },
       {
         name: 'notificationService',

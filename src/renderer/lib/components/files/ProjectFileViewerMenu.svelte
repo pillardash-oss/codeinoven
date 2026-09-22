@@ -4,6 +4,7 @@
     Braces,
     Check,
     Ellipsis,
+    Info,
     ListOrdered,
     Maximize2,
     Pencil,
@@ -23,6 +24,12 @@
     /** Show undo/redo buttons ahead of the wrap button; only the file editor
      *  (editable source view) sets this. */
     showUndoRedo?: boolean
+    /** Open the same File info dialog the file tree's context menu shows for
+     *  the active file. Disabled (greyed out) while infoDisabled is set. */
+    onInfo: () => void
+    /** File info reads the file from disk, so it is unavailable for files that
+     *  no longer exist on disk (deleted at checkpoint). */
+    infoDisabled?: boolean
     /** Format label the active file can be beautified as ("JSON"), or null when
      *  the editor cannot reformat it. Drives the menu item and, in fullscreen,
      *  the toolbar button beside the wrap button. */
@@ -49,6 +56,8 @@
     showUndoRedo = false,
     beautifyLabel = null,
     fullscreen = false,
+    onInfo,
+    infoDisabled = false,
     onUndo,
     onRedo,
     onReload,
@@ -171,6 +180,10 @@
             Beautify {beautifyLabel}
           </DropdownMenu.Item>
         {/if}
+        <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
+          <Info size={13} class="text-muted" />
+          File info
+        </DropdownMenu.Item>
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
           <Pencil size={13} class="text-muted" />

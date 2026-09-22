@@ -2,8 +2,9 @@ import keymapData from './keymap.json'
 
 /**
  * A single shortcut entry in the keymap registry. `keys` uses symbolic tokens:
- * `mod` (⌘ on macOS / Ctrl elsewhere), `shift`, `alt`, `cmd`, `ctrl`, and plain
- * keys like `enter`, `escape`, `tab`, `space`, `backspace`, `arrowup`,
+ * `mod` (⌘ on macOS / Ctrl elsewhere), `shift`, `alt`, `cmd`, `ctrl`,
+ * `double-mod` (the primary modifier tapped twice in quick succession), and
+ * plain keys like `enter`, `escape`, `tab`, `space`, `backspace`, `arrowup`,
  * `arrowdown`, `arrowleft`, `arrowright`, `home`, `end`, `click`, letters, and
  * digits.
  */
@@ -46,6 +47,8 @@ export function keyTokenLabel(key: string, isMac: boolean): string {
       return '⌘'
     case 'ctrl':
       return 'Ctrl'
+    case 'double-mod':
+      return isMac ? '⌘ ⌘' : 'Ctrl Ctrl'
     case 'enter':
       return 'Enter'
     case 'escape':

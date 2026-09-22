@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import {
     AlertTriangle,
+    ArrowUpCircle,
+    CheckCircle2,
     CodeXml,
     Download,
     ExternalLink,
@@ -10,9 +12,16 @@
     ShieldCheck,
     SquareTerminal
   } from '@lucide/svelte'
-  import type { CuaBridgeStatus, CuaInstallationSource } from '$shared/types'
-  import { invoke } from '$lib/ipc.svelte'
+  import type {
+    CuaBridgeStatus,
+    CuaInstallationSource,
+    CuaUpdateCheck,
+    CuaUpdateProgress
+  } from '$shared/types'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Switch from '../ui/Switch.svelte'
 
   const cuaLogoUrl = publicAssetUrl('assets/cua-logo.svg')
@@ -21,6 +30,13 @@
   let loading = $state(true)
   let saving = $state(false)
   let error = $state('')
+  let update = $state<CuaUpdateCheck | null>(null)
+  let updateProgress = $state<CuaUpdateProgress | null>(null)
+  let updateError = $state('')
+  let checkingUpdate = $state(false)
+  let confirmingUpdate = $state(false)
+  let updating = $derived(updateProgress?.state === 'updating')
+  let updatedVersion = $derived(updateProgress?.version ?? status?.version ?? '')
   let selectedInstallation = $derived(
     status?.installations.find((installation) => installation.selected) ?? null
   )
@@ -73,11 +89,51 @@
     error = ''
     try {
       status = await invoke('computerUse:getCuaStatus')
+      // Every status read asks the driver's own release check again, so the
+      // update row can never describe a version that is no longer installed.
+      if (status.installed) void checkForUpdates()
     } catch (loadError) {
-      error = loadError instanceof Error ? loadError.message : 'Cua Driver could not be inspected.'
+      error = errorMessage(loadError, 'Cua Driver could not be inspected.')
     } finally {
       loading = false
     }
+  }
+
+  /**
+   * Ask the driver whether Cua published a newer release.
+   *
+   * `skipCache` reaches GitHub instead of the driver's 20-hour on-disk answer,
+   * which is what an explicit "check again" has to mean.
+   */
+  async function checkForUpdates(skipCache = false): Promise<void> {
+    if (!status?.installed || updating) return
+    checkingUpdate = true
+    updateError = ''
+    try {
+      update = await invoke('computerUse:checkCuaUpdate', skipCache)
+      if (updateProgress?.state === 'failed') updateProgress = null
+    } catch (checkError) {
+      updateError = errorMessage(checkError, 'Cua Driver updates could not be checked.')
+    } finally {
+      checkingUpdate = false
+    }
+  }
+
+  async function applyUpdate(): Promise<void> {
+    confirmingUpdate = false
+    updateError = ''
+    updateProgress = { state: 'updating', detail: "Starting Cua's installer" }
+    try {
+      status = await invoke('computerUse:updateCua')
+      update = await invoke('computerUse:checkCuaUpdate', true)
+    } catch (updateFailure) {
+      updateError = errorMessage(updateFailure, 'Cua Driver could not be updated.')
+    }
+  }
+
+  function openUpdateReleaseNotes(): void {
+    const url = update?.releaseNotesUrl
+    if (url) void openExternal(url)
   }
 
   async function setEnabled(enabled: boolean): Promise<void> {
@@ -86,8 +142,7 @@
     try {
       status = await invoke('computerUse:setCuaEnabled', enabled)
     } catch (saveError) {
-      error =
-        saveError instanceof Error ? saveError.message : 'The Cua bridge could not be updated.'
+      error = errorMessage(saveError, 'The Cua bridge could not be updated.')
     } finally {
       saving = false
     }
@@ -97,8 +152,12 @@
     try {
       await invoke('shell:openExternal', url)
     } catch (openError) {
-      error = openError instanceof Error ? openError.message : 'The link could not be opened.'
+      error = errorMessage(openError, 'The link could not be opened.')
     }
+  }
+
+  function errorMessage(cause: unknown, fallback: string): string {
+    return cause instanceof Error && cause.message ? cause.message : fallback
   }
 
   function openStatusUrl(
@@ -108,9 +167,18 @@
     if (currentStatus) void openExternal(currentStatus[key])
   }
 
+  let unsubscribeUpdate: (() => void) | null = null
+
   onMount(() => {
+    // Installer milestones for an update this window did not start (another
+    // window can) still land here, so the row reflects the real run either way.
+    unsubscribeUpdate = subscribe('computerUse:cuaUpdate', (progress) => {
+      updateProgress = progress
+    })
     void loadStatus()
   })
+
+  onDestroy(() => unsubscribeUpdate?.())
 </script>
 
 <div class="space-y-5 p-6 pb-24">
@@ -174,7 +242,9 @@
           <p class="mt-1 text-sm font-medium">{status.supportedVersionRange}</p>
         </div>
         <div class="rounded-xl bg-elevated px-3 py-2.5">
-          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Permissions</p>
+          <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+            Permissions
+          </p>
           <p class="mt-1 text-sm font-medium">
             {status.permissionStatus === 'not_required'
               ? 'Platform managed'
@@ -247,6 +317,151 @@
     {/if}
   </section>
 
+  {#if status?.installed}
+    <section class="rounded-2xl border bg-surface p-5">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold">Driver updates</h2>
+          <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted">
+            CodeInOven updates the installed copy through Cua's own signed installer, so the app and
+            the CLI always move together. Cua verifies the new bundle's signature and restores the
+            previous copy when that check fails.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          disabled={checkingUpdate || updating}
+          title="Check Cua releases again"
+          onclick={() => void checkForUpdates(true)}
+        >
+          <RefreshCw size={14} class={checkingUpdate ? 'animate-spin' : ''} /> Check again
+        </button>
+      </div>
+
+      {#if updateProgress?.state === 'updating'}
+        <div class="mt-4">
+          <DownloadProgress
+            indeterminate
+            label="Updating Cua Driver…"
+            detail={updateProgress.detail}
+            hint="Cua's installer replaces CuaDriver.app and the CLI, then stops the running daemon."
+            ariaLabel="Cua Driver update progress"
+          />
+        </div>
+      {:else if updateProgress?.state === 'installed'}
+        <div
+          class="mt-4 flex items-start gap-2 rounded-lg bg-success/10 px-3 py-2 text-xs text-success"
+        >
+          <CheckCircle2 size={14} class="mt-0.5 shrink-0" />
+          <span>
+            {updatedVersion
+              ? `Cua Driver ${updatedVersion} is installed.`
+              : 'The update is installed.'} New agent sessions pick it up; a session that is already running
+            keeps the driver it started with.
+          </span>
+        </div>
+      {:else if updateProgress?.state === 'failed' || updateError}
+        <div class="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
+          <div class="flex items-start gap-2">
+            <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+            <span class="whitespace-pre-line break-words">
+              {updateProgress?.state === 'failed' ? updateProgress.error : updateError}
+            </span>
+          </div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="flex h-8 items-center gap-2 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              title="Check Cua releases again"
+              onclick={() => void checkForUpdates(true)}
+            >
+              <RefreshCw size={13} /> Check again
+            </button>
+            {#if update?.updateAvailable}
+              <button
+                type="button"
+                class="flex h-8 items-center gap-2 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                title={`Try updating Cua Driver to ${update.latestVersion} again`}
+                onclick={() => (confirmingUpdate = true)}
+              >
+                <ArrowUpCircle size={13} /> Try the update again
+              </button>
+            {/if}
+          </div>
+        </div>
+      {:else if update?.updateAvailable}
+        <div
+          class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-elevated px-3 py-3"
+        >
+          <div>
+            <p class="text-sm font-medium">Cua {update.latestVersion} is available</p>
+            <p class="mt-0.5 text-[0.6875rem] text-muted">
+              Installed {update.currentVersion}{update.channel
+                ? ` · ${update.channel} channel`
+                : ''}{update.cached ? ' · cached release check' : ''}
+            </p>
+          </div>
+          <div class="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+              title={`Update Cua Driver to ${update.latestVersion}`}
+              onclick={() => (confirmingUpdate = true)}
+            >
+              <ArrowUpCircle size={14} /> Update to {update.latestVersion}
+            </button>
+            {#if update.releaseNotesUrl}
+              <button
+                type="button"
+                class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium hover:bg-overlay"
+                title={`Read the Cua ${update.latestVersion} release notes`}
+                onclick={openUpdateReleaseNotes}
+              >
+                Release notes <ExternalLink size={12} />
+              </button>
+            {/if}
+          </div>
+        </div>
+      {:else if checkingUpdate}
+        <p class="mt-4 flex items-center gap-2 text-xs text-muted">
+          <Loader2 size={14} class="animate-spin" /> Checking Cua for a newer release…
+        </p>
+      {:else if update}
+        <p class="mt-4 text-xs text-muted">
+          Cua Driver {update.currentVersion} is the newest release on the {update.channel ??
+            'stable'}
+          channel.
+        </p>
+      {/if}
+
+      {#if status.updateCommand}
+        <div class="mt-4 border-t pt-4">
+          <div class="flex items-start gap-2">
+            <SquareTerminal size={15} class="mt-0.5 shrink-0 text-muted" />
+            <div>
+              <p class="text-xs font-semibold">Prefer a terminal?</p>
+              <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+                This is the same updater CodeInOven runs for you.
+              </p>
+            </div>
+          </div>
+          <code class="mt-2 block select-all break-all rounded-lg bg-elevated px-3 py-2 text-xs">
+            {status.updateCommand}
+          </code>
+          <button
+            type="button"
+            class="mt-2 flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+            title="Open Cua Driver update instructions"
+            onclick={() => openStatusUrl('updateUrl')}
+          >
+            Read update instructions <ExternalLink size={12} />
+          </button>
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   {#if status && selectedInstallation}
     <section class="rounded-xl border bg-surface p-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
@@ -276,41 +491,16 @@
       {#if selectedInstallation.source === 'homebrew'}
         <p class="mt-3 text-xs leading-relaxed text-warning">
           This executable is on a Homebrew path. Cua does not document a Homebrew formula or
-          <code>brew upgrade</code> workflow; use Cua's updater below so the driver and supporting files
+          <code>brew upgrade</code> workflow; use the updater above so the driver and supporting files
           stay together.
         </p>
       {/if}
 
-      {#if status.updateCommand}
-        <div class="mt-4 border-t pt-4">
-          <div class="flex items-start gap-2">
-            <SquareTerminal size={15} class="mt-0.5 shrink-0 text-muted" />
-            <div>
-              <p class="text-xs font-semibold">Update the installed copy</p>
-              <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
-                Run this exact command in a terminal. It uses Cua's supported updater and updates
-                the app and CLI together.
-              </p>
-            </div>
-          </div>
-          <code class="mt-2 block select-all break-all rounded-lg bg-elevated px-3 py-2 text-xs">
-            {status.updateCommand}
-          </code>
-          <button
-            type="button"
-            class="mt-2 flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
-            title="Open Cua Driver update instructions"
-            onclick={() => openStatusUrl('updateUrl')}
-          >
-            Read update instructions <ExternalLink size={12} />
-          </button>
-        </div>
-      {/if}
-
       {#if !status.compatible}
         <p class="mt-4 rounded-lg bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning">
-          Downloading or extracting a newer archive does not install it. Complete the operating
-          system steps below, replace the old installation, then refresh this page.
+          This copy is older than the driver contract CodeInOven targets. Use Update in the Driver
+          updates card above; if that cannot run, replace the installation by hand and refresh this
+          page.
         </p>
       {/if}
 
@@ -383,3 +573,22 @@
     </div>
   </section>
 </div>
+
+<ConfirmDialog
+  open={confirmingUpdate}
+  title="Update Cua Driver"
+  confirmLabel={`Update to ${update?.latestVersion ?? 'the latest release'}`}
+  busy={updating}
+  onCancel={() => (confirmingUpdate = false)}
+  onConfirm={() => void applyUpdate()}
+>
+  <p>
+    Cua's signed installer downloads the newest release and replaces
+    <code>CuaDriver.app</code> together with the <code>cua-driver</code> CLI. Cua verifies the new bundle's
+    signature and restores the previous copy if that check fails.
+  </p>
+  <p>
+    Any agent driving the desktop through Cua is interrupted while the driver restarts, and macOS
+    may ask you to grant Accessibility and Screen Recording again afterwards.
+  </p>
+</ConfirmDialog>

@@ -153,7 +153,6 @@ async function hasBinary(binary: string): Promise<boolean> {
 
 function buildEnv(): Record<string, string> {
   const env: Record<string, string> = {}
-  env.MAIN_VITE_REMOTE_API_ORIGIN = 'https://mobile.codeinoven.com'
   env.CODEINOVEN_GITHUB_CLIENT_ID = process.env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''
   return env
 }

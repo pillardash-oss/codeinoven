@@ -39,8 +39,8 @@ class TrafficLightState {
       this.side = info.side
       this.present = info.present
     } else if (!hasDesktopBridge) {
-      // No bridge (plain browser / phone client) — preserve the historical
-      // browser-shell layout. A desktop bridge with absent controls stays at 0.
+      // No bridge (plain browser) — preserve the historical browser-shell
+      // layout. A desktop bridge with absent controls stays at 0.
       this.offset = TRAFFIC_LIGHT_OFFSET
       this.side = 'left'
       this.present = true

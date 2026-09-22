@@ -16,7 +16,6 @@ import {
   ListTree,
   MessageSquarePlus,
   MessagesSquare,
-  Server,
   SlidersHorizontal,
   SquarePen,
   Terminal,
@@ -119,11 +118,10 @@ export const settingsTabs: Array<{
     keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
     icon: Keyboard
   },
-  { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
   {
     id: 'profile',
     label: 'Usage',
-    keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
+    keywords: ['usage', 'activity', 'tokens', 'cost', 'rankings'],
     icon: ChartColumn
   },
   {
@@ -167,7 +165,15 @@ export interface PaletteContextInput {
 export function buildPaletteContextActions(input: PaletteContextInput): ActionDefinition[] {
   const { activeView, projectRecords, activeProjectId, sidebarContext } = input
   const workspaceVisible =
-    activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
+    activeView === 'projects' ||
+    activeView === 'projects-scope' ||
+    activeView === 'chats' ||
+    activeView === 'threads'
+  // The scoped threads view is the docked scope sidebar: the shell reports it
+  // either as its own `projects-scope` view or as `projects` with a live sidebar
+  // context, so the new-thread action follows the docked scope in both cases.
+  const scopedThreadsActive =
+    (activeView === 'projects' || activeView === 'projects-scope') && Boolean(sidebarContext)
   const hasLocalProjects = projectRecords.some(
     (project) => !project.hidden && project.source === 'local' && project.path
   )
@@ -237,7 +243,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       shortcut: ['Ctrl', 'N'],
       keywords: ['task', 'conversation', 'project']
     })
-  } else if (activeView === 'projects-scope' && sidebarContext) {
+  } else if (scopedThreadsActive && sidebarContext) {
     const project = projectRecords.find((candidate) => candidate.id === sidebarContext.projectId)
     actions.unshift({
       id: 'app:new-thread',

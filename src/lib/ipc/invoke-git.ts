@@ -29,12 +29,14 @@ import type {
   GitSyncPeerOption,
   GitSyncResult,
   MergeSummary,
-  PrAgentReport,
   PrCommentKind,
-  PrComposeReport,
   PrCreateInput,
   PrListRequest,
   PrMergeMethod,
+  PrAgentAssignmentInput,
+  PrAgentAssignmentSummary,
+  PrAgentAssignmentWorkspace,
+  PrAgentReport,
   PrMinimizeReason,
   PrResolveOptions,
   PrReviewEvent,
@@ -44,8 +46,11 @@ import type {
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestPage,
   PullRequestReference,
+  PullRequestReviewComment,
   PullRequestReviewResult,
   RepositoryMentionUser,
   ThreadSettings,
@@ -347,6 +352,38 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string, pullNumber: number],
     GitHubMutationResult<PullRequestReference>
   >,
+  /**
+   * Replace the labels a pull request carries, returning the labels it now has.
+   * One write for the whole set rather than an add or a remove per label, so a
+   * picker that toggles several chips costs one round trip and its result is the
+   * server's own answer instead of a locally reconstructed guess.
+   */
+  'pr:setLabels': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, labels: string[]],
+    GitHubMutationResult<PullRequestLabel[]>
+  >,
+  /** Replace a pull request's assignees, returning the accounts it now has. */
+  'pr:setAssignees': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, logins: string[]],
+    GitHubMutationResult<RepositoryMentionUser[]>
+  >,
+  /**
+   * Attach or clear a pull request's milestone.
+   *
+   * `null` clears it, because a milestone is an issue field on GitHub and the
+   * issues endpoint reads an explicit null as "detach".
+   */
+  'pr:setMilestone': {} as Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, milestone: number | null],
+    GitHubMutationResult<PullRequestMilestone | null>
+  >,
+  /** The repository's own label catalog, for the label picker. */
+  'pr:labels': {} as Contract<[projectId: string, owner: string, repo: string], PullRequestLabel[]>,
+  /** The repository's open milestones, for the milestone picker. */
+  'pr:milestones': {} as Contract<
+    [projectId: string, owner: string, repo: string],
+    PullRequestMilestone[]
+  >,
   'pr:update': {} as Contract<
     [
       projectId: string,
@@ -590,8 +627,21 @@ export const invokeGitContract = {
     [projectId: string, owner: string, repo: string],
     RepositoryMentionUser[]
   >,
-  /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
-  'pr:agentReport': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport>,
+  /** Every agent assignment report a pull request holds, newest first. */
+  'pr:agentReports': {} as Contract<[projectId: string, pullNumber: number], PrAgentReport[]>,
+  /**
+   * Assignment summaries for the rows a listing is about to draw. Batched on
+   * purpose: a page of twenty rows must not be twenty round trips.
+   */
+  'pr:agentAssignments': {} as Contract<
+    [projectId: string, numbers: number[]],
+    Record<string, PrAgentAssignmentSummary>
+  >,
+  /** Open a new agent assignment on a pull request and return its report path. */
+  'pr:createAgentAssignment': {} as Contract<
+    [projectId: string, pullNumber: number, threadId: string, input: PrAgentAssignmentInput],
+    PrAgentAssignmentWorkspace
+  >,
   'pr:comment': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     GitHubMutationResult<PullRequestComment>
@@ -625,6 +675,21 @@ export const invokeGitContract = {
     ],
     GitHubMutationResult<boolean>
   >,
+  /**
+   * Answer an inline review comment, keeping the answer in that comment's thread.
+   * Only inline comments thread on GitHub, so this carries no `kind`.
+   */
+  'pr:commentReply': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      commentId: number,
+      body: string
+    ],
+    GitHubMutationResult<PullRequestReviewComment>
+  >,
   /** Hide a comment behind GitHub's minimised treatment, by GraphQL node id. */
   'pr:commentMinimize': {} as Contract<
     [
@@ -634,6 +699,22 @@ export const invokeGitContract = {
       pullNumber: number,
       nodeId: string,
       reason: PrMinimizeReason
+    ],
+    GitHubMutationResult<boolean>
+  >,
+  /**
+   * Settle or reopen one inline thread. GitHub keeps resolution on the thread
+   * rather than on its comments, and only GraphQL can read or write it, so the
+   * caller passes the thread's node id.
+   */
+  'pr:threadResolve': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      threadNodeId: string,
+      resolved: boolean
     ],
     GitHubMutationResult<boolean>
   >,
@@ -648,12 +729,14 @@ export const invokeGitContract = {
     ],
     PullRequestReviewResult
   >,
-  /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
-  'pr:reviewWorkspace': {} as Contract<
-    [projectId: string, pullNumber: number, threadId?: string],
-    string
-  >,
-  /** Run the PR-compose agent virtually and consume its temporary report. */
+  /**
+   * Run the PR-compose agent virtually and consume its temporary report.
+   *
+   * Resolves to a `failed` outcome rather than rejecting when the agent cannot
+   * run: a harness that is missing, unauthenticated, rate-limited or unable to
+   * start is an expected result of the user's own choice, and its cause has to
+   * reach the sheet as data so it can offer the way out.
+   */
   'pr:composeWithAgent': {} as Contract<
     [
       projectId: string,
@@ -662,7 +745,7 @@ export const invokeGitContract = {
       settings: ThreadSettings,
       input: import('../types').PrComposeInput
     ],
-    PrComposeReport
+    import('../types').PrComposeOutcome
   >,
   'github:authStatus': {} as Contract<[], GitHubAuthStatus>,
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,

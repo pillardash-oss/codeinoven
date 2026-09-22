@@ -12,7 +12,8 @@
     AssignmentTask,
     ProviderCatalog,
     ScopeChoice,
-    ThinkingLevel
+    ThinkingLevel,
+    Thread
   } from '$shared/types'
 
   interface Props {
@@ -58,6 +59,13 @@
     annotations?: AssignmentAnnotation[]
     onOpenAnnotation?: (annotation: AssignmentAnnotation) => void
     onAnnotateSection?: (section: string, title: string, event: MouseEvent) => void
+    /** Opens a dispatched task's worker thread. Absent keeps every badge inert. */
+    onOpenTaskThread?: (threadId: string) => void | Promise<void>
+    /** Resolves a task's thread as it exists right now. A task whose thread was
+     *  deleted (or that was never dispatched) resolves to nothing, so its badge
+     *  renders without a click. Reassignment needs no extra state: the plan's
+     *  `threadId` always points at the newest worker. */
+    resolveTaskThread?: (threadId: string | undefined) => Thread | undefined
   }
 
   let {
@@ -87,8 +95,17 @@
     onReorderFavorite,
     annotations = [],
     onOpenAnnotation,
-    onAnnotateSection
+    onAnnotateSection,
+    onOpenTaskThread,
+    resolveTaskThread
   }: Props = $props()
+
+  /** The badge text for a task: the assigned worker's name when dispatched,
+   *  otherwise what the card has always shown. */
+  function taskOwnerBadge(task: AssignmentTask): string {
+    if (task.owner === 'senior') return 'Sr. Engineer'
+    return task.workerName ?? 'Unassigned'
+  }
 
   function graphMarkdown(): string {
     const lines = ['```mermaid', 'flowchart LR']
@@ -668,6 +685,7 @@
           {@const displayedReworkCycle = taskReworkCycle(task)}
           {@const workerScopeName = workerScopeBadgeName(task)}
           {@const taskScope = taskInheritScope(task)}
+          {@const taskThread = resolveTaskThread?.(task.threadId)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -703,9 +721,29 @@
                   ><MessageSquarePlus size={13} /></button
                 >
               {/if}
-              <span class="rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted">
-                {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
-              </span>
+              {#if taskThread && onOpenTaskThread}
+                <button
+                  type="button"
+                  class="shrink-0 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  title={`Open the ${taskThread.title} thread`}
+                  aria-label={`Open the ${taskThread.title} thread`}
+                  onclick={() => onOpenTaskThread?.(taskThread.id)}
+                >
+                  {taskOwnerBadge(task)}
+                </button>
+              {:else}
+                <span
+                  class="shrink-0 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"
+                  title={taskThread
+                    ? undefined
+                    : task.workerName
+                      ? 'The worker thread is no longer available'
+                      : 'Not assigned to a worker yet'}
+                  aria-label={`${taskOwnerBadge(task)}${taskThread ? '' : ' (no worker thread to open)'}`}
+                >
+                  {taskOwnerBadge(task)}
+                </span>
+              {/if}
               {#if workerScopeName}
                 <span
                   class="flex shrink-0 items-center gap-1 rounded bg-overlay px-1.5 py-0.5 text-[0.625rem] text-muted"

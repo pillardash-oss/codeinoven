@@ -14,7 +14,15 @@ import {
   MessagesSquare,
   ShieldCheck
 } from '@lucide/svelte'
-import type { PrListFilter, PrListSort, PullRequestBundle, PullRequestChecks } from '$shared/types'
+import type {
+  PrListFilter,
+  PrListSort,
+  PrMergeMethod,
+  PullRequestBundle,
+  PullRequestChecks,
+  PullRequestSummary
+} from '$shared/types'
+import { buildConversation, conversationEntryCount } from './git-pull-request-detail-format'
 
 /** The views the pull request detail reader switches between. */
 export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
@@ -38,27 +46,60 @@ export const PR_DETAIL_VIEWS: Array<{
 
 /**
  * How many entries a view holds, for the switcher's counts. The conversation
- * count mirrors the reader's own stream: a description, a comment or an inline
- * note counts once it has something to read, and a review always counts, since a
- * bare approval is still part of the conversation.
+ * count comes from the same builder the reader renders, so a review's inline
+ * threads count the way the stream shows them rather than drifting from it.
  */
 export function prViewCount(
   view: PrDetailTabId,
   bundle: PullRequestBundle | null | undefined,
-  hasAgentReport: boolean
+  agentAssignments: number
 ): number {
+  // Assignments are read from disk on their own rather than out of the fetched
+  // bundle, so this view counts before the bundle arrives.
+  if (view === 'agent') return agentAssignments
   if (!bundle) return 0
   if (view === 'commits') return bundle.commits.length
   if (view === 'files') return bundle.files.length
   if (view === 'checks') return bundle.checks.checks.length
-  if (view === 'agent') return hasAgentReport ? 1 : 0
-  return (
-    (bundle.detail.body.trim() ? 1 : 0) +
-    bundle.comments.filter((comment) => comment.body.trim()).length +
-    bundle.reviews.length +
-    bundle.reviewComments.filter((comment) => comment.body.trim()).length
-  )
+  return conversationEntryCount(buildConversation(bundle))
 }
+
+/**
+ * Which piece of pull request metadata a picker edits.
+ *
+ * The members are also the action kinds the list emits, so a row menu cannot offer
+ * a picker that has no implementation and the picker cannot address metadata the row
+ * menu never names.
+ */
+export type PrMetadataMode = 'labels' | 'assignees' | 'milestone'
+
+/**
+ * One action a pull request list row offers, already resolved to the rows it applies
+ * to.
+ *
+ * The scope travels inside the action rather than alongside it so no caller can
+ * dispatch one without saying what it acts on: a batch close of a selection and a
+ * batch close of one row are the same call with a different list, which is what
+ * keeps the two surfaces that draw the list from disagreeing about the difference.
+ */
+export type PrListAction =
+  | { kind: 'open'; targets: PullRequestSummary[] }
+  | { kind: 'open-in-browser'; targets: PullRequestSummary[] }
+  | { kind: 'copy-links'; targets: PullRequestSummary[] }
+  | { kind: 'copy-branches'; targets: PullRequestSummary[] }
+  | { kind: 'close'; targets: PullRequestSummary[] }
+  | { kind: 'reopen'; targets: PullRequestSummary[] }
+  | { kind: 'explain'; targets: PullRequestSummary[] }
+  | { kind: 'quick-chat'; targets: PullRequestSummary[] }
+  /** Hand one pull request to an agent to triage and report on. */
+  | { kind: 'assign-agent'; targets: PullRequestSummary[] }
+  /** Jump back into the thread an agent assignment is running in. */
+  | { kind: 'open-agent-thread'; targets: PullRequestSummary[]; threadId: string }
+  | { kind: 'merge'; targets: PullRequestSummary[]; method: PrMergeMethod }
+  | { kind: 'mark-ready'; targets: PullRequestSummary[] }
+  | { kind: 'labels'; targets: PullRequestSummary[] }
+  | { kind: 'assignees'; targets: PullRequestSummary[] }
+  | { kind: 'milestone'; targets: PullRequestSummary[] }
 
 /** Badge colour for a pull request's state pill. */
 export function prStateBadgeClass(state: string): string {

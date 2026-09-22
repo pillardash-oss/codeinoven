@@ -73,7 +73,6 @@ function defaultConfig(): AppConfig {
     autoInstallUpdates: true,
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
-    keepAwakeWhileRemoteConnected: true,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
@@ -197,12 +196,12 @@ describe('UpdaterService session-safe install', () => {
     expect(service.status.state).toBe('idle')
   })
 
-  it('treats a live remote session as active work', async () => {
+  it('treats a live activity source as active work', async () => {
     const storage = makeStorage()
     const service = new UpdaterService(storage)
     service.setChatEngine(makeChatEngine(() => 0))
-    const remote = { blockedQuit: true }
-    service.addActivitySource({ activeSessionCount: () => (remote.blockedQuit ? 1 : 0) })
+    const source = { active: true }
+    service.addActivitySource({ activeSessionCount: () => (source.active ? 1 : 0) })
 
     await emitDownloaded()
 
@@ -212,8 +211,8 @@ describe('UpdaterService session-safe install', () => {
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
 
-    // Unblocking the remote session lets the deferred install proceed.
-    remote.blockedQuit = false
+    // A source going idle lets the deferred install proceed.
+    source.active = false
     await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
     expect(service.status.state).toBe('idle')

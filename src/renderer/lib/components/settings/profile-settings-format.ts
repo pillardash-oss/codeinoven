@@ -142,19 +142,6 @@ export function utilityLabel(id: string): string {
   }
 }
 
-export function platformLabel(platform: string): string {
-  switch (platform) {
-    case 'darwin':
-      return 'macOS'
-    case 'win32':
-      return 'Windows'
-    case 'linux':
-      return 'Linux'
-    default:
-      return platform
-  }
-}
-
 export function formatDateRange(range: LocalProfileAnalyticsRange): string {
   const format = new Intl.DateTimeFormat(undefined, {
     day: 'numeric',
@@ -181,16 +168,6 @@ export function formatUsageDate(value: string): string {
 export function formatHour(hour: number): string {
   const date = new SvelteDate(2000, 0, 1, hour)
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(date)
-}
-
-export function formatDateTime(value: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(value)
 }
 
 export function formatIdentifier(value: string): string {

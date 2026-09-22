@@ -1,11 +1,17 @@
 import { invoke } from '$lib/ipc.svelte'
 import type {
+  PrAgentAssignmentInput,
+  PrAgentAssignmentSummary,
+  PrAgentAssignmentWorkspace,
   PrAgentReport,
   PrListQuery,
   PrState,
   PullRequestBundle,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestPage,
+  PullRequestSummary,
   RepositoryMentionUser
 } from '$shared/types'
 import {
@@ -14,11 +20,39 @@ import {
   PR_CACHE_TTL_MS,
   PR_ERROR_COOLDOWN_MS,
   PR_PRELOAD_RETRY_MS,
+  REPO_CATALOG_TTL_MS,
   errorMessage,
   prBundleKey,
   prPageKey,
   type GitOperation
 } from './git-store-helpers'
+
+/**
+ * The fields of one cached pull request a successful mutation rewrites.
+ *
+ * Declared as a patch rather than as whole replacement rows because every writer
+ * knows only what it changed: a close knows the state, a label write knows the
+ * labels, and neither has a fresh row to substitute for the cached one.
+ */
+export interface CachedPullRequestPatch {
+  state?: PullRequestSummary['state']
+  draft?: boolean
+  labels?: PullRequestLabel[]
+  assignees?: RepositoryMentionUser[]
+  milestone?: PullRequestMilestone | null
+}
+
+/** One cached listing page, with the filter it was fetched under. */
+export interface CachedPullRequestPage {
+  page: PullRequestPage
+  fetchedAt: number
+  /**
+   * Which state filter produced this page. Kept beside the rows because a
+   * lifecycle change lands differently in each listing, and the key alone would
+   * force a string parse to find out which one a page is.
+   */
+  state: PrState
+}
 
 /**
  * Cached PR listings and detail bundles.
@@ -35,9 +69,27 @@ import {
  * state, no error banner, and no failure cooldown. See `preloadPullRequestBundle`.
  */
 export class GitPullRequestCache {
-  pages: Record<string, { page: PullRequestPage; fetchedAt: number }> = $state({})
+  pages: Record<string, CachedPullRequestPage> = $state({})
   bundles: Record<string, PullRequestBundle> = $state({})
-  agentReports: Record<string, PrAgentReport> = $state({})
+  /** Agent assignment reports per pull request number, newest first. */
+  agentReports: Record<string, PrAgentReport[]> = $state({})
+  /**
+   * What the list knows about a row's agent assignments.
+   *
+   * Three states, and the difference matters: absent means the row has not been
+   * asked about yet, `null` means it was asked about and holds no assignment, and
+   * a summary means it holds at least one. Without the explicit `null` a page that
+   * rendered before the read landed would ask about the same rows on every render.
+   */
+  agentAssignments: Record<string, PrAgentAssignmentSummary | null> = $state({})
+
+  /**
+   * Repository label and milestone catalogs, keyed by `owner/repo`. Read only if
+   * a picker opens, so they are held apart from the pull request caches they are
+   * read alongside.
+   */
+  labels: Record<string, { items: PullRequestLabel[]; fetchedAt: number }> = $state({})
+  milestones: Record<string, { items: PullRequestMilestone[]; fetchedAt: number }> = $state({})
 
   /**
    * @-mention candidates per `owner/repo`, keyed so two repositories never share
@@ -59,6 +111,13 @@ export class GitPullRequestCache {
    *  very effects that triggered the request.
    */
   private failures: Record<string, number> = {}
+
+  /**
+   * In-flight assignment-summary reads, keyed by the project and the numbers asked
+   * about. The list is mounted twice (dock and fullscreen) and both mounts load the
+   * same page, so without this the same read would be made twice over.
+   */
+  private assignmentRequests: Record<string, Promise<void> | undefined> = {}
 
   /** One request per page key, preventing duplicate IPC calls from concurrent mounts/effects. */
   private pageRequests: Record<string, Promise<void> | undefined> = {}
@@ -104,19 +163,31 @@ export class GitPullRequestCache {
     return false
   }
 
-  /** Keep list/detail caches coherent after a PR lifecycle mutation. */
-  updateDraftState(owner: string, repo: string, pullNumber: number, draft: boolean): void {
-    const pagePrefix = `${owner}/${repo}:`
+  /**
+   * Rewrite one cached pull request in place, in every listing that holds it and
+   * in its detail bundle.
+   *
+   * This is the whole coherence story for a metadata write: the server already
+   * answered with the value it stored, so the cached row is corrected rather than
+   * invalidated, and the list never has to refetch a page the user is reading.
+   */
+  patchPullRequest(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    patch: CachedPullRequestPatch
+  ): void {
+    const prefix = `${owner}/${repo}:`
     this.pages = Object.fromEntries(
       Object.entries(this.pages).map(([key, cached]) => [
         key,
-        key.startsWith(pagePrefix)
+        key.startsWith(prefix)
           ? {
               ...cached,
               page: {
                 ...cached.page,
                 items: cached.page.items.map((item) =>
-                  item.number === pullNumber ? { ...item, draft } : item
+                  item.number === pullNumber ? { ...item, ...patch } : item
                 )
               }
             }
@@ -128,9 +199,133 @@ export class GitPullRequestCache {
     if (bundle) {
       this.bundles = {
         ...this.bundles,
-        [bundleKey]: { ...bundle, detail: { ...bundle.detail, draft } }
+        [bundleKey]: { ...bundle, detail: { ...bundle.detail, ...patch } }
       }
     }
+  }
+
+  /**
+   * Apply a lifecycle state change across the cached listings.
+   *
+   * A page is cached under the state filter that produced it, so one close is not
+   * one edit but a different edit per listing: the row leaves an `open` listing,
+   * stays in an `all` listing carrying its new state, and cannot be placed
+   * correctly in a `closed` one because its position there is the server's to
+   * decide. Doing that here is what lets a batch of twenty closes drain the list
+   * as it runs, instead of leaving twenty rows that no longer exist on screen
+   * until the cache ages out.
+   */
+  applyPullRequestState(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    state: PullRequestSummary['state']
+  ): void {
+    const prefix = `${owner}/${repo}:`
+    // A `closed` listing has always meant closed and merged alike on GitHub, and
+    // `all` is the one listing with no state qualifier at all.
+    const holds = (listing: PrState): boolean =>
+      listing === 'all' || listing === state || (state === 'merged' && listing === 'closed')
+    this.pages = Object.fromEntries(
+      Object.entries(this.pages).map(([key, cached]) => {
+        if (!key.startsWith(prefix)) return [key, cached]
+        const without = cached.page.items.filter((item) => item.number !== pullNumber)
+        if (!holds(cached.state)) {
+          return [key, { ...cached, page: { ...cached.page, items: without } }]
+        }
+        if (without.length === cached.page.items.length) return [key, cached]
+        return [
+          key,
+          {
+            ...cached,
+            page: {
+              ...cached.page,
+              items: cached.page.items.map((item) =>
+                item.number === pullNumber ? { ...item, state } : item
+              )
+            }
+          }
+        ]
+      })
+    )
+    const bundleKey = prBundleKey(owner, repo, pullNumber)
+    const bundle = this.bundles[bundleKey]
+    if (bundle) {
+      this.bundles = {
+        ...this.bundles,
+        [bundleKey]: {
+          ...bundle,
+          detail: {
+            ...bundle.detail,
+            state,
+            // A merged pull request is never a draft, and neither is a closed one:
+            // the marker belongs to an open pull request that is not ready for
+            // review yet, so leaving it set would draw a draft glyph on a row that
+            // has finished.
+            ...(state === 'open' ? {} : { draft: false })
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Load one repository catalog, cache-first.
+   *
+   * The label and milestone catalogs are the same problem twice: a small list that
+   * changes slowly, read only when a picker opens, and never worth an error banner
+   * because every other action on the pull request still works without it. `read`
+   * is the only place they differ, so it is the only thing they do not share.
+   */
+  private async readCatalog<T>(
+    cached: { items: T[]; fetchedAt: number } | undefined,
+    store: (entry: { items: T[]; fetchedAt: number }) => void,
+    read: () => Promise<T[]>
+  ): Promise<T[]> {
+    if (cached && Date.now() - cached.fetchedAt < REPO_CATALOG_TTL_MS) return cached.items
+    this.markBusy('pr-catalog', true)
+    try {
+      const items = await read()
+      store({ items, fetchedAt: Date.now() })
+      return items
+    } catch {
+      // A picker that cannot list the catalog still opens, showing only what the
+      // pull request already carries, which is better than an error it cannot act
+      // on.
+      return cached?.items ?? []
+    } finally {
+      this.markBusy('pr-catalog', false)
+    }
+  }
+
+  /** The repository's own labels, for the label picker. */
+  async repositoryLabels(
+    projectId: string,
+    owner: string,
+    repo: string
+  ): Promise<PullRequestLabel[]> {
+    if (!projectId || !owner || !repo) return []
+    const key = `${owner}/${repo}`
+    return this.readCatalog(
+      this.labels[key],
+      (entry) => (this.labels = { ...this.labels, [key]: entry }),
+      () => invoke('pr:labels', projectId, owner, repo)
+    )
+  }
+
+  /** The repository's open milestones, for the milestone picker. */
+  async repositoryMilestones(
+    projectId: string,
+    owner: string,
+    repo: string
+  ): Promise<PullRequestMilestone[]> {
+    if (!projectId || !owner || !repo) return []
+    const key = `${owner}/${repo}`
+    return this.readCatalog(
+      this.milestones[key],
+      (entry) => (this.milestones = { ...this.milestones, [key]: entry }),
+      () => invoke('pr:milestones', projectId, owner, repo)
+    )
   }
 
   /**
@@ -265,9 +460,16 @@ export class GitPullRequestCache {
         sort: query.sort,
         cursor
       })
-      this.pages = { ...this.pages, [key]: { page: result, fetchedAt: Date.now() } }
+      this.pages = { ...this.pages, [key]: { page: result, fetchedAt: Date.now(), state } }
       delete this.failures[key]
       delete this.preloadFailures[key]
+      // The chips for these rows are read alongside the page, so a listing and its
+      // assignment state arrive together rather than the rows changing under the
+      // pointer a moment after they are drawn.
+      void this.ensureAgentAssignments(
+        projectId,
+        result.items.map((item) => item.number)
+      )
     } catch (reason) {
       if (silent) {
         this.preloadFailures[key] = Date.now()
@@ -418,15 +620,98 @@ export class GitPullRequestCache {
     }
   }
 
-  /** Read the agent's review report for a PR, if it has written one. */
-  async loadAgentReport(projectId: string, pullNumber: number): Promise<PrAgentReport | null> {
-    if (!projectId) return null
+  /** Read every agent assignment report a pull request holds, newest first. */
+  async loadAgentReports(projectId: string, pullNumber: number): Promise<PrAgentReport[]> {
+    if (!projectId) return []
     try {
-      const report = await invoke('pr:agentReport', projectId, pullNumber)
-      this.agentReports = { ...this.agentReports, [String(pullNumber)]: report }
-      return report
+      const reports = await invoke('pr:agentReports', projectId, pullNumber)
+      this.agentReports = { ...this.agentReports, [String(pullNumber)]: reports }
+      return reports
     } catch {
-      return null
+      return []
+    }
+  }
+
+  /**
+   * The agent assignment summaries a page of rows needs, in one batched read.
+   *
+   * A summary only ever changes when this app makes an assignment, and every one of
+   * those goes through `recordAgentAssignment`, which patches the cache in place.
+   * So a number is read once and then trusted: re-reading the disk for a chip that
+   * cannot have moved would be work for nothing.
+   */
+  async ensureAgentAssignments(projectId: string, numbers: number[]): Promise<void> {
+    if (!projectId || numbers.length === 0) return
+    const missing = numbers.filter((number) => this.agentAssignments[String(number)] === undefined)
+    if (missing.length === 0) return
+    const key = `${projectId}:${missing.join(',')}`
+    const existing = this.assignmentRequests[key]
+    if (existing) {
+      await existing
+      return
+    }
+    const request = this.readAgentAssignments(projectId, missing)
+    this.assignmentRequests[key] = request
+    try {
+      await request
+    } finally {
+      if (this.assignmentRequests[key] === request) delete this.assignmentRequests[key]
+    }
+  }
+
+  private async readAgentAssignments(projectId: string, numbers: number[]): Promise<void> {
+    try {
+      const summaries = await invoke('pr:agentAssignments', projectId, numbers)
+      const next = { ...this.agentAssignments }
+      // A row with nothing on disk is cached as a known absence, so the next render
+      // of the page does not ask about it again.
+      for (const number of numbers) next[String(number)] = summaries[String(number)] ?? null
+      this.agentAssignments = next
+    } catch {
+      // The chip is an accessory. A failed read leaves rows looking unassigned
+      // rather than failing a listing that is already on screen.
+    }
+  }
+
+  /**
+   * Record an assignment the user just made, without re-reading the disk.
+   *
+   * The row chip and the reader's report list both read from here, so an assignment
+   * shows the moment it exists rather than after the next page load. The report is
+   * seeded empty: the agent has not written it yet.
+   */
+  recordAgentAssignment(
+    pullNumber: number,
+    threadId: string,
+    input: PrAgentAssignmentInput,
+    workspace: PrAgentAssignmentWorkspace
+  ): void {
+    const key = String(pullNumber)
+    const current = this.agentAssignments[key] ?? null
+    const assignedAt = Date.now()
+    this.agentAssignments = {
+      ...this.agentAssignments,
+      [key]: {
+        count: (current?.count ?? 0) + 1,
+        threadId,
+        title: input.title,
+        createdAt: assignedAt
+      }
+    }
+    const report: PrAgentReport = {
+      id: workspace.id,
+      kind: input.kind,
+      title: input.title,
+      path: workspace.reportPath,
+      content: '',
+      updatedAt: null,
+      createdAt: assignedAt,
+      threadId,
+      url: input.url ?? null
+    }
+    this.agentReports = {
+      ...this.agentReports,
+      [key]: [report, ...(this.agentReports[key] ?? [])]
     }
   }
 }

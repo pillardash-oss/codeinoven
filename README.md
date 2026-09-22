@@ -43,7 +43,8 @@ It is designed as a starting point for software work, not a demo app.
 
 ## Quick start
 
-1. Download the app from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases) and install for macOS, Windows, or Linux.
+1. Download the app from [codeinoven.com](https://codeinoven.com), where installers are served from our own mirror at `dl.codeinoven.com`, or from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases), and install for macOS, Windows, or Linux.
+   Machine-readable download metadata for scripts and the website: [`https://dl.codeinoven.com/stable/RELEASE.json`](https://dl.codeinoven.com/stable/RELEASE.json).
 2. Open a repository in **Projects**.
 3. Start a new thread, choose your preferred coding harness, and describe your goal.
 4. Review and approve the generated spec, then run implementation.
@@ -183,7 +184,6 @@ Release builds are available for:
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.
-- Remote phone support is available through the built-in LAN pairing flow (QR) and optional relay mode.
 
 ### Packaging and release notes
 

@@ -13,13 +13,13 @@
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
   import {
+    assignAgentToPullRequest as assignAgentToPullRequestAction,
     diagnoseDeployment,
     diagnoseWorkflowJob,
-    openReviewThread as openReviewThreadAction,
+    openAgentThread as openAgentThreadAction,
     preparePrConflictSession,
     resolveCurrentConflictsWithAgent,
-    resolvePrConflictsWithAgent,
-    startAgentReview as startAgentReviewAction
+    resolvePrConflictsWithAgent
   } from './git-status-panel-agent-actions'
   import type {
     GitBranchInfo,
@@ -102,14 +102,23 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import PrBatchDialog from './PrBatchDialog.svelte'
+  import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
+  import PrMetadataDialog from './PrMetadataDialog.svelte'
+  import { prSummaryChatContext, prSummaryExplainPrompt } from './git-status-panel-prompts'
   import PrViewSwitcher from './PrViewSwitcher.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
-  import { PR_DETAIL_VIEWS, prViewCount } from './pr-view'
+  import {
+    PR_DETAIL_VIEWS,
+    prViewCount,
+    type PrDetailTabId,
+    type PrListAction,
+    type PrMetadataMode
+  } from './pr-view'
   import GitViewMenu from './GitViewMenu.svelte'
   import PrIdentityRow from './PrIdentityRow.svelte'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
-  import { type PrDetailTabId } from './pr-view'
 
   import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -117,7 +126,15 @@
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import type { PrListFilter, PrListSort, PrState, PullRequestSummary } from '$shared/types'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { githubDisplayLogin } from '$lib/format/github-login'
+  import type {
+    PrListFilter,
+    PrListSort,
+    PrMergeMethod,
+    PrState,
+    PullRequestSummary
+  } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -255,6 +272,29 @@
   let prListFilter = $state<PrListFilter>(savedView.prListFilter)
   let prListSort = $state<PrListSort>(savedView.prListSort)
   let prListPage = $state(1)
+  /**
+   * Which rows of the PR list are selected.
+   *
+   * Panel state, like the filter and the page, because the list is mounted twice
+   * (dock and full screen reader) and both mounts draw the same listing: a selection
+   * held inside the list would let the two disagree about what a batch acts on.
+   */
+  let prListSelection = $state<Record<number, boolean>>({})
+  /**
+   * The lifecycle batch waiting on its confirmation, running, or reporting.
+   *
+   * Held as one subject rather than two dialogs, so the numbers the user confirmed
+   * are the numbers the result line counts.
+   */
+  let prBatch = $state<{ mode: 'close' | 'reopen'; targets: PullRequestSummary[] } | null>(null)
+  /** The pull request a metadata picker is editing, or null when none is open. */
+  let prMetadata = $state<{ pr: PullRequestSummary; mode: PrMetadataMode } | null>(null)
+  /** The merge a row menu asked for, with the method the user chose. */
+  let prMerge = $state<{ pr: PullRequestSummary; method: PrMergeMethod } | null>(null)
+  let prMergeOpen = $state(false)
+  let prMergeTitle = $state('')
+  let prMergeMessage = $state('')
+  let prMergeBusy = $state(false)
   /**
    * The view the detail reader is showing, mirrored so the header's check pill
    * can open Checks without reaching into the reader.
@@ -718,12 +758,12 @@
     )
   }
 
-  function startAgentReview(pr: PullRequestSummary): void {
-    void startAgentReviewAction(projectId, pr)
+  function assignAgentToPullRequest(pr: PullRequestSummary): void {
+    void assignAgentToPullRequestAction(projectId, pr)
   }
 
-  function openReviewThread(threadId: string): void {
-    void openReviewThreadAction(projectId, threadId)
+  function openAgentThread(threadId: string): void {
+    void openAgentThreadAction(projectId, threadId)
   }
 
   /**
@@ -862,14 +902,40 @@
   }
 
   /**
+   * Take the branch trigger's status badge to the work it names: the Changes view
+   * with any commit that was open closed, so the click lands on the working tree
+   * instead of the commit sheet the view would otherwise still be showing. The
+   * click itself is left to bubble to the trigger, which closes a picker that
+   * was already open before the view beneath it changes.
+   */
+  function openWorkingChanges(): void {
+    clearSelectedCommit()
+    selectTab('changes')
+  }
+
+  /**
+   * Every state badge is a control, so Enter and Space do what a click does. Both
+   * keys are consumed here: the trigger toggles the picker from its own keydown,
+   * and a cancelled key is what keeps it out of that path.
+   */
+  function activateWorkingChangesFromKeyboard(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    event.stopPropagation()
+    openWorkingChanges()
+  }
+
+  /**
    * Switch which pull requests the PR view lists. The filter is the panel's, so
    * the page it belonged to goes with it: page 4 of the closed list has nothing
-   * to do with page 4 of the open one.
+   * to do with page 4 of the open one. The selection goes with it for the same
+   * reason: "close 5 selected" must never mean five rows the user can no longer see.
    */
   function selectPrListState(next: PrState): void {
     if (next === prListState) return
     prListState = next
     prListPage = 1
+    prListSelection = {}
   }
 
   /**
@@ -881,12 +947,157 @@
     if (next === prListFilter) return
     prListFilter = next
     prListPage = 1
+    prListSelection = {}
   }
 
   function selectPrListSort(next: PrListSort): void {
     if (next === prListSort) return
     prListSort = next
     prListPage = 1
+    prListSelection = {}
+  }
+
+  /** A different page is a different set of rows, so the selection goes with it. */
+  function selectPrListPage(next: number): void {
+    if (next === prListPage) return
+    prListPage = next
+    prListSelection = {}
+  }
+
+  /**
+   * Where a pull request list action becomes something real.
+   *
+   * The list hands over one action plus the rows it applies to and knows nothing
+   * else, which is what keeps the two mounts of the list identical and keeps every
+   * confirmation, picker, and batch in the panel that owns the state behind them.
+   */
+  function handlePrListAction(action: PrListAction): void {
+    if (action.kind === 'open') {
+      const target = action.targets[0]
+      if (target) selectedPullRequest = target
+      return
+    }
+    if (action.kind === 'open-in-browser') {
+      const target = action.targets[0]
+      if (target) void openInBrowser(target.url)
+      return
+    }
+    if (action.kind === 'copy-links' || action.kind === 'copy-branches') {
+      const text = action.targets
+        .map((target) => (action.kind === 'copy-links' ? target.url : target.headRef))
+        .join('\n')
+      void copyText(text).catch(() => undefined)
+      return
+    }
+    if (action.kind === 'close' || action.kind === 'reopen') {
+      if (action.targets.length === 0) return
+      prBatch = { mode: action.kind, targets: action.targets }
+      return
+    }
+    const target = action.targets[0]
+    if (!target) return
+    if (action.kind === 'explain' || action.kind === 'quick-chat') {
+      openPrChat(target, action.kind === 'explain' ? 'explain' : 'quick')
+      return
+    }
+    if (action.kind === 'assign-agent') {
+      assignAgentToPullRequest(target)
+      return
+    }
+    if (action.kind === 'open-agent-thread') {
+      openAgentThread(action.threadId)
+      return
+    }
+    if (action.kind === 'mark-ready') {
+      void markPrReady(target)
+      return
+    }
+    if (action.kind === 'merge') {
+      openPrMerge(target, action.method)
+      return
+    }
+    prMetadata = { pr: target, mode: action.kind }
+  }
+
+  /**
+   * Anchor a read-only side chat on one pull request, the same panel the comment
+   * actions open.
+   *
+   * The visible row is the selection and the pull request's own facts are the
+   * pinned context, because a list row carries no transcript to ride and no diff to
+   * quote. That gap is named in the context rather than papered over, so the agent
+   * says what it cannot see instead of guessing.
+   */
+  function openPrChat(pr: PullRequestSummary, mode: 'explain' | 'quick'): void {
+    const identity = githubIdentity
+    if (!identity) return
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode === 'explain' ? 'elaborate' : 'quick',
+      [
+        `#${pr.number} ${pr.title}`,
+        `by ${githubDisplayLogin(pr.authorLogin)} · ${pr.headRef} → ${pr.baseRef}`,
+        pr.url
+      ].join('\n'),
+      prSummaryChatContext(pr, `${identity.owner}/${identity.repo}`),
+      threadSettings.lastUsed,
+      true,
+      mode === 'explain' ? prSummaryExplainPrompt(pr) : undefined
+    )
+  }
+
+  async function markPrReady(pr: PullRequestSummary): Promise<void> {
+    const identity = githubIdentity
+    if (!identity) return
+    await gitState.markPullRequestReadyForReview(
+      projectId,
+      identity.owner,
+      identity.repo,
+      pr.number
+    )
+  }
+
+  /**
+   * Open the merge confirmation with the method the row menu chose.
+   *
+   * The title is seeded the way GitHub seeds it and the message is left empty: the
+   * list never fetched the pull request body, and an empty message is what tells
+   * GitHub to keep its own. Both are then the user's to edit before merging.
+   */
+  function openPrMerge(pr: PullRequestSummary, method: PrMergeMethod): void {
+    prMergeTitle =
+      method === 'merge' ? `Merge pull request #${pr.number} from ${pr.headRef}` : pr.title
+    prMergeMessage = ''
+    prMerge = { pr, method }
+    prMergeOpen = true
+  }
+
+  async function confirmPrMerge(): Promise<void> {
+    const pending = prMerge
+    const identity = githubIdentity
+    if (!pending || !identity) return
+    prMergeBusy = true
+    try {
+      const merged = await gitState.mergePullRequest(
+        projectId,
+        identity.owner,
+        identity.repo,
+        pending.pr.number,
+        pending.method,
+        pending.method === 'rebase' ? undefined : prMergeTitle.trim() || undefined,
+        pending.method === 'rebase' ? undefined : prMergeMessage.trim() || undefined
+      )
+      if (merged) {
+        // The row has left every open listing, so the selection it may have been
+        // part of no longer describes anything on screen.
+        prListSelection = {}
+        prMerge = null
+      }
+    } finally {
+      prMergeBusy = false
+      prMergeOpen = false
+    }
   }
 
   function openCommitSearch(): void {
@@ -1467,11 +1678,9 @@
       count: prViewCount(
         view.id,
         pullRequestBundle,
-        (
-          (selectedPullRequest
-            ? gitState.prAgentReports[String(selectedPullRequest.number)]?.content
-            : '') ?? ''
-        ).trim().length > 0
+        selectedPullRequest
+          ? (gitState.prAgentReports[String(selectedPullRequest.number)]?.length ?? 0)
+          : 0
       )
     }))
   )
@@ -1637,12 +1846,22 @@
   )
   const showsActionRow = $derived(showsViewContext || showsRemoteActions)
 
+  /** The working tree's state as a badge names it, most urgent first. */
+  type WorktreeState = 'clean' | 'dirty' | 'conflicted'
+
+  /**
+   * Every state that names work waiting in the Changes view. The branch
+   * trigger's badge offers exactly these as controls; a clean tree has nothing
+   * behind it, so it stays a mark.
+   */
+  type WorktreeActionState = Exclude<WorktreeState, 'clean'>
+
   /**
    * Working-tree state as the branch picker's leading glyph, in the order the
    * states ask for attention: conflicts first, then uncommitted changes, then
    * clean. Null while there is no status to describe.
    */
-  const worktreeState = $derived.by((): 'clean' | 'dirty' | 'conflicted' | null => {
+  const worktreeState = $derived.by((): WorktreeState | null => {
     if (!status) return null
     if (conflicted.length > 0) return 'conflicted'
     return status.clean ? 'clean' : 'dirty'
@@ -1723,8 +1942,14 @@
       peer: { kind: 'root' },
       strategy
     })
-    if (gitState.error) {
-      syncMainError = gitState.error
+    // The returned result is this operation's own answer, so it alone decides
+    // whether the chooser closes. `gitState.error` is shared with every other
+    // git read the panel runs, so a concurrent refresh can set it while the sync
+    // actually landed; keying the modal on it reopened the dialog with the
+    // strategy buttons replaced, leaving the user staring at a merge that had
+    // already happened.
+    if (!result) {
+      syncMainError = gitState.error ?? 'The sync could not be completed'
       gitState.error = null
       syncDirection = direction
       syncMainOpen = true
@@ -1735,7 +1960,6 @@
       void refreshStatus()
       return
     }
-    if (!result) return
     syncMainOpen = false
     syncMainError = ''
     void refreshStatus()
@@ -2345,10 +2569,77 @@
    * wrapper's inset is what lines their outer edge up with the rows above.
    */
   const paneClass = 'flex flex-col p-1'
+
+  /**
+   * The `dirty` chip, shared by the trigger's badge and the picker's own row
+   * mark so both read identically. It keeps the geometry of the 12px slot it
+   * sits in, which is tighter than the shared `StatusPill`.
+   */
+  const dirtyBadgeClass =
+    'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
+
+  /**
+   * What a state badge says once the trigger renders it as a control. The state
+   * supplies the words and its own tone, nothing else: every state but clean is
+   * work waiting in the Changes view, so every one of them opens it. The hover
+   * halo takes the state's colour at the weight the chip already uses for its
+   * face, so a hover reads as that badge lighting up rather than as the row.
+   */
+  const statusActionCopy: Record<
+    WorktreeActionState,
+    { title: string; ariaLabel: string; hoverClass: string }
+  > = {
+    conflicted: {
+      title: 'Conflicts to resolve. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the conflicts in this working tree',
+      hoverClass: 'hover:bg-danger/20'
+    },
+    dirty: {
+      title: 'Uncommitted changes in this branch. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the uncommitted changes in this branch',
+      hoverClass: 'hover:bg-warning/20'
+    }
+  }
 </script>
 
-{#snippet branchStatusIcon()}
-  {#if worktreeState === 'conflicted'}
+<!--
+  The trigger's copy of a state badge: a control, not a mark. The state the user
+  is looking at is the work they are about to do, so the badge itself is the
+  shortest way to the Changes view.
+
+  The hit area is padded and pulled back by the same amount, so a 12px glyph is
+  a 20px target without widening the row it sits in. `data-status-action` is the
+  contract with `BranchPicker`, the trigger's owner: a gesture that starts on the
+  badge must not open the branch list, and a click here must close a picker that
+  was already open.
+-->
+{#snippet worktreeStatusAction(state: WorktreeActionState)}
+  {@const copy = statusActionCopy[state]}
+  <span
+    class={[
+      '-m-1 flex shrink-0 cursor-pointer items-center rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+      copy.hoverClass
+    ]}
+    role="button"
+    tabindex="0"
+    data-status-action
+    title={copy.title}
+    aria-label={copy.ariaLabel}
+    onclick={openWorkingChanges}
+    onkeydown={activateWorkingChangesFromKeyboard}
+  >
+    {#if state === 'conflicted'}
+      <TriangleAlert size={12} class="shrink-0 text-danger" aria-hidden="true" />
+    {:else}
+      <span class={dirtyBadgeClass}>dirty</span>
+    {/if}
+  </span>
+{/snippet}
+
+{#snippet branchStatusIcon(interactive: boolean)}
+  {#if interactive && worktreeState !== null && worktreeState !== 'clean'}
+    {@render worktreeStatusAction(worktreeState)}
+  {:else if worktreeState === 'conflicted'}
     <TriangleAlert
       size={12}
       class="shrink-0 text-danger"
@@ -2359,13 +2650,10 @@
   {:else if worktreeState === 'dirty'}
     <!--
       A badge rather than a ring: at 12px an outlined circle reads as a bullet,
-      where the amber chip reads as the state it names. The same snippet marks the
-      dirty branch in the picker's own list.
+      where the amber chip reads as the state it names. The picker's own list
+      marks the dirty branch with the same chip.
     -->
-    <span
-      class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
-      title="Uncommitted changes in this branch">dirty</span
-    >
+    <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
   {:else}
     <CircleCheck
       size={12}
@@ -3218,15 +3506,6 @@
                     {/if}
                   {/if}
                   <DropdownMenu.Item
-                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
-                    disabled={remotes.length === 0 || fetching}
-                    onSelect={() => void gitState.fetch(projectId)}
-                  >
-                    <Download size={12} class="shrink-0 text-dimmed" />
-                    Fetch
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                  <DropdownMenu.Item
                     class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                     onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
                   >
@@ -3240,6 +3519,15 @@
                   >
                     <GitMerge size={12} class="shrink-0 text-dimmed" />
                     Merge or rebase…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                    disabled={remotes.length === 0 || fetching}
+                    onSelect={() => void gitState.fetch(projectId)}
+                  >
+                    <Download size={12} class="shrink-0 text-dimmed" />
+                    Fetch
                   </DropdownMenu.Item>
                   <DropdownMenu.Separator class="my-1 h-px bg-border" />
                   <DropdownMenu.Item
@@ -3457,13 +3745,14 @@
           {#if selectedPullRequest && githubIdentity}
             <GitPullRequestDetail
               {projectId}
+              {threadId}
               identity={githubIdentity}
               summary={selectedPullRequest}
               bind:tab={prDetailTab}
               onBack={() => (selectedPullRequest = null)}
               onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
-              onAgentReview={(pr) => void startAgentReview(pr)}
-              onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+              onOpenThread={(threadId) => void openAgentThread(threadId)}
               onOpenWorkflowRun={openWorkflowRunFromCheck}
               onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
@@ -3482,10 +3771,13 @@
               sort={prListSort}
               page={prListPage}
               showControls={false}
+              selected={prListSelection}
+              onSelectionChange={(next) => (prListSelection = next)}
+              onAction={handlePrListAction}
               onStateChange={selectPrListState}
               onFilterChange={selectPrListFilter}
               onSortChange={selectPrListSort}
-              onPageChange={(next) => (prListPage = next)}
+              onPageChange={selectPrListPage}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onFullscreen={() => openPullRequestFullscreen(null)}
               onSignIn={() => (showGitHubSignIn = true)}
@@ -3653,6 +3945,53 @@
 />
 
 <!--
+  Row-menu surfaces. They are siblings of the panel's own layout for the same
+  reason the full screen reader is: a confirmation has to sit above the sidebar it
+  was opened from rather than inside its clipping column.
+-->
+{#if githubIdentity}
+  {#if prBatch}
+    <PrBatchDialog
+      batch={prBatch}
+      {projectId}
+      owner={githubIdentity.owner}
+      repo={githubIdentity.repo}
+      onClose={() => {
+        prBatch = null
+        // Whatever is left selected is a set the user has just acted on, so it goes
+        // with the batch rather than inviting a second close of the same rows.
+        prListSelection = {}
+      }}
+    />
+  {/if}
+
+  {#if prMetadata}
+    <PrMetadataDialog
+      pr={prMetadata.pr}
+      mode={prMetadata.mode}
+      {projectId}
+      owner={githubIdentity.owner}
+      repo={githubIdentity.repo}
+      onClose={() => (prMetadata = null)}
+    />
+  {/if}
+
+  {#if prMerge}
+    <PrMergeConfirmDialog
+      number={prMerge.pr.number}
+      summary={prMerge.pr}
+      method={prMerge.method}
+      fieldSuffix="pr-list"
+      busy={prMergeBusy}
+      bind:open={prMergeOpen}
+      bind:commitTitle={prMergeTitle}
+      bind:commitMessage={prMergeMessage}
+      onConfirm={() => void confirmPrMerge()}
+    />
+  {/if}
+{/if}
+
+<!--
   Full screen pull request reader. It is a sibling of the panel's own layout so
   it can cover the whole window, and it is mounted only while a tab is active.
 -->
@@ -3674,12 +4013,13 @@
       {#if fullscreenActivePullRequest && githubIdentity}
         <GitPullRequestDetail
           {projectId}
+          {threadId}
           identity={githubIdentity}
           summary={fullscreenActivePullRequest}
           variant="fullscreen"
           onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
-          onAgentReview={(pr) => void startAgentReview(pr)}
-          onOpenThread={(threadId) => void openReviewThread(threadId)}
+          onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+          onOpenThread={(threadId) => void openAgentThread(threadId)}
           onOpenWorkflowRun={openWorkflowRunFromCheck}
           onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
           onResolveWithAgent={(pr) => void startConflictResolution(pr)}
@@ -3693,10 +4033,13 @@
           filter={prListFilter}
           sort={prListSort}
           page={prListPage}
+          selected={prListSelection}
+          onSelectionChange={(next) => (prListSelection = next)}
+          onAction={handlePrListAction}
           onStateChange={selectPrListState}
           onFilterChange={selectPrListFilter}
           onSortChange={selectPrListSort}
-          onPageChange={(next) => (prListPage = next)}
+          onPageChange={selectPrListPage}
           onOpen={(pr) => openPullRequestFullscreen(pr)}
           onSignIn={() => (showGitHubSignIn = true)}
           onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}

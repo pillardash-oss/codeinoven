@@ -2,12 +2,11 @@
  * Ordered disposal executed once the quit lifecycle begins.
  *
  * 1. Renderer notification + 500ms grace period
- * 2. Remote mode torn down (gateway, Tray, keep-alive, event forwarder)
- * 3. PTY sessions destroyed
- * 4. Notification service stopped
- * 5. Chat engine / driver processes disposed
- * 6. Log buffer flushed
- * 7. app.quit()   re-enters before-quit, but the guard skips cleanup
+ * 2. PTY sessions destroyed
+ * 3. Notification service stopped
+ * 4. Chat engine / driver processes disposed
+ * 5. Log buffer flushed
+ * 6. app.quit()   re-enters before-quit, but the guard skips cleanup
  *    and Electron proceeds to close windows → will-quit → exit.
  */
 
@@ -32,18 +31,16 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   // Give the renderer a moment to process window:beforeQuit.
   await new Promise<void>((resolve) => setTimeout(resolve, 500))
 
-  // Close the phone gateway, destroy the Tray, and disarm keep-alive first so
-  // closing the app disconnects every remote session and leaves nothing behind.
-  try {
-    await state.remoteMode?.dispose()
-  } catch (error) {
-    Logger.error('Remote mode cleanup failed during shutdown:', error)
-  }
-
   try {
     state.updaterService?.stop()
   } catch (error) {
     Logger.error('Updater service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.skillUpdateService?.stop()
+  } catch (error) {
+    Logger.error('Skill update service cleanup failed during shutdown:', error)
   }
 
   try {
@@ -127,15 +124,15 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     Logger.error('Speech service cleanup failed during shutdown:', error)
   }
 
-  state.stopRemoteOwnershipListener?.()
-  state.stopRemoteOwnershipListener = null
-
   // A take-over pass must never start while the process is shutting down.
   state.stopInstanceTakeOverListener?.()
   state.stopInstanceTakeOverListener = null
 
   state.foreignRuns?.dispose()
   state.foreignRuns = null
+
+  state.threadTransfer?.dispose()
+  state.threadTransfer = null
 
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.

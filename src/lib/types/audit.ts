@@ -29,6 +29,11 @@ export interface AuditVerificationCheck {
   evidence: string
   /** Project-relative, platform-written full command output for this check. */
   evidencePath?: string
+  /** Auditor-written reason a check was not executed (status `not_applicable`)
+   *  or why the exact reported command does not exist in this repository. A
+   *  substantive justification exempts the check from transcript matching: the
+   *  report records the declared reason instead of failing validation. */
+  justification?: string
   findingIds: string[]
 }
 
@@ -95,6 +100,13 @@ export interface AuditReport {
   version: number
   /** Auditor verdict stamped at generation time; absent on legacy reports. */
   outcome?: 'rework_required' | 'passed'
+  /** Whether the platform could match every executed verification claim to tool
+   *  evidence in the auditor transcript. `partial` means the report is usable
+   *  but some claims could not be validated; absent on legacy/fully-validated
+   *  reports. */
+  evidenceValidation?: 'verified' | 'partial'
+  /** The unmatched verification claims, when `evidenceValidation` is `partial`. */
+  evidenceIssues?: string[]
   content: AuditReportContent
   annotations: AuditAnnotation[]
   provenance: SpecProvenance

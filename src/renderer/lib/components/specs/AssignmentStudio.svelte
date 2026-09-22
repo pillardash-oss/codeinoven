@@ -24,7 +24,8 @@
     AssignmentPlan,
     AssignmentPlanContent,
     ProviderCatalog,
-    ScopeChoice
+    ScopeChoice,
+    Thread
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -99,6 +100,11 @@
     onResolveAnnotation?: (annotationId: string) => Promise<AssignmentPlan | null>
     onExplainSelection?: (selection: string, documentContext: string) => void
     onQuickChatSelection?: (selection: string, documentContext: string) => void
+    /** Opens a dispatched task's current worker thread. */
+    onOpenTaskThread?: (threadId: string) => void | Promise<void>
+    /** Resolves a task's thread as it exists right now; undefined when the task
+     *  is unassigned or its worker thread was deleted. */
+    resolveTaskThread?: (threadId: string | undefined) => Thread | undefined
   }
 
   let {
@@ -149,12 +155,14 @@
     onUpdateAnnotation,
     onResolveAnnotation,
     onExplainSelection,
-    onQuickChatSelection
+    onQuickChatSelection,
+    onOpenTaskThread,
+    resolveTaskThread
   }: Props = $props()
 
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let selectedSection = $state('overview')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  /** Narrow layout only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // The effect reconciles a saved assignment version with the local editing buffer.
   // svelte-ignore state_referenced_locally
@@ -685,6 +693,8 @@
         assignment.status === 'attention'}
       {onToggleFavorite}
       {onReorderFavorite}
+      {onOpenTaskThread}
+      {resolveTaskThread}
     />
   </div>
 </StudioShell>

@@ -2,7 +2,7 @@
   import { FileDiff, GitCommitHorizontal, Loader2 } from '@lucide/svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
-  import { patchLineClass } from './git-pull-request-detail-format'
+  import PrDiffHunk from './PrDiffHunk.svelte'
 
   interface Props {
     mode: 'commits' | 'files'
@@ -56,11 +56,13 @@
       </button>
       {#if expandedFile === fileKey}
         {#if file.patch}
-          <pre
-            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[0.5625rem] leading-relaxed"><!--
-         -->{#each file.patch.split('\n') as line, index (index)}<span
-                class="block {patchLineClass(line)}">{line || ' '}</span
-              >{/each}</pre>
+          <!-- The same code renderer an inline thread uses, unwindowed: a file's
+               patch is the whole story, so there is no anchor to centre on. -->
+          <PrDiffHunk
+            patch={file.patch}
+            context={null}
+            class="border-t border-border/40 bg-elevated/20 py-1"
+          />
         {:else}
           <p class="px-3 py-2 text-[0.625rem] text-dimmed">
             No inline diff for this file (binary or too large).

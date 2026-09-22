@@ -69,7 +69,6 @@ jobs:
     timeout-minutes: 60
     needs: validate
     env:
-      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false

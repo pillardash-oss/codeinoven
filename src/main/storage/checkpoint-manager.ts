@@ -337,6 +337,24 @@ export class CheckpointManager {
     await this.save({ ...checkpoint, sourceMessageId })
   }
 
+  /**
+   * The process that recorded the thread's in-flight turn, or `null` when no
+   * turn is in flight. `null` also covers a row written before `owner_pid`
+   * existed, which no instance can claim as its own.
+   */
+  async activeTurnOwnerPid(projectId: string, threadId: string): Promise<number | null> {
+    assertId(projectId)
+    assertId(threadId)
+    const active = this.db.get<{ owner_pid: number | null }>(
+      'SELECT owner_pid FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active) return null
+    const owner = Number(active.owner_pid)
+    return Number.isInteger(owner) && owner > 0 ? owner : null
+  }
+
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
     const active = this.db.get<{ turn_id: string | null }>(
       'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',

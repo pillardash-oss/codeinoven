@@ -1,83 +1,81 @@
 <script lang="ts">
-  import { Bot, Send } from '@lucide/svelte'
-  import { relativeTime } from '$lib/format/relative-time'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import { Bot } from '@lucide/svelte'
+  import PrAgentReportCard from './PrAgentReportCard.svelte'
   import type { PrAgentReport, PullRequestSummary } from '$shared/types'
 
+  /**
+   * The agent assignments on one pull request, newest first.
+   *
+   * A pull request can hold several at once: a triage, then one for each comment
+   * handed to an agent, so this is a list of independent cards rather than a list
+   * plus one report on show. Each card carries its own fold, which is what lets a
+   * reader move between them by scrolling instead of reading one enormous report
+   * and losing the rest.
+   *
+   * Nothing here starts an agent. The row menu, a comment's own menu and the
+   * empty state's button do that, and a report appears here when the agent writes
+   * it. That separation is why the empty state explains what an assignment is
+   * instead of hiding it behind an icon, and why no assignment button is drawn
+   * once there is one: assigning again is a row menu action, and the count this
+   * view used to repeat is already in the view switcher's own menu.
+   */
   interface Props {
     number: number
+    projectId: string
     summary: PullRequestSummary
-    agentReport: PrAgentReport | null
-    /** True while the report is being posted as a PR comment. */
+    /** Every assignment on this pull request, newest first. */
+    reports: PrAgentReport[]
+    /** True while a report is being posted as a pull request comment. */
     posting: boolean
     onOpenThread: (threadId: string) => void
-    onAgentReview: (pr: PullRequestSummary) => void
-    onPostReport: () => void
+    onAssignAgent: (pr: PullRequestSummary) => void
+    /** Show the conversation entry an assignment answered, in the reader. */
+    onShowInConversation: (report: PrAgentReport) => void
+    onPostReport: (report: PrAgentReport) => void
   }
 
-  let { number, summary, agentReport, posting, onOpenThread, onAgentReview, onPostReport }: Props =
-    $props()
+  let {
+    number,
+    projectId,
+    summary,
+    reports,
+    posting,
+    onOpenThread,
+    onAssignAgent,
+    onShowInConversation,
+    onPostReport
+  }: Props = $props()
 </script>
 
-{#if agentReport?.content.trim()}
-  <div class="px-3 py-2">
-    <div class="mb-2 flex items-center gap-2">
-      <p class="flex-1 truncate text-[0.5625rem] text-dimmed">
-        {agentReport.path} · {relativeTime(agentReport.updatedAt)}
-      </p>
-      {#if agentReport.threadId}
-        <button
-          type="button"
-          class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title="Open the thread that produced this review"
-          onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-        >
-          <Bot size={12} />
-          Open thread
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title="Post this report as a comment on the pull request"
-        disabled={posting}
-        onclick={onPostReport}
-      >
-        <Send size={12} />
-        Post to PR
-      </button>
-    </div>
-    <MarkdownView text={agentReport.content} class="text-[0.6875rem] leading-relaxed" />
-  </div>
-{:else}
+{#if reports.length === 0}
   <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
     <Bot size={18} class="text-dimmed" />
     <p class="text-[0.6875rem] leading-relaxed text-muted">
-      No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
-      worktree and writes its findings to <span class="font-mono"
-        >.cio/git/pr/{number}/review.md</span
-      >. The report shows up here when it lands.
+      No agent assignment yet. Assigning an agent opens a thread where it triages this pull request
+      in a worktree of its own, tests it when that is warranted, and writes its findings to
+      <span class="font-mono">.cio/git/pr/{number}/review-&lt;id&gt;.md</span>. The report shows up
+      here, and nothing is pushed, merged, or closed without your go-ahead.
     </p>
-    <div class="flex items-center gap-2">
-      {#if agentReport?.threadId}
-        <button
-          type="button"
-          class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-          title="Open the review thread already running for this pull request"
-          onclick={() => onOpenThread(agentReport?.threadId ?? '')}
-        >
-          <Bot size={12} class="shrink-0" />
-          <span class="min-w-0 truncate">Open review thread</span>
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-        onclick={() => onAgentReview(summary)}
-      >
-        <Bot size={12} class="shrink-0" />
-        <span class="min-w-0 truncate">Start agent review</span>
-      </button>
-    </div>
+    <button
+      type="button"
+      class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+      onclick={() => onAssignAgent(summary)}
+    >
+      <Bot size={12} class="shrink-0" />
+      <span class="min-w-0 truncate">Assign an agent</span>
+    </button>
+  </div>
+{:else}
+  <div class="flex flex-col gap-2 p-2">
+    {#each reports as report (report.id)}
+      <PrAgentReportCard
+        {projectId}
+        {report}
+        {posting}
+        {onOpenThread}
+        {onShowInConversation}
+        {onPostReport}
+      />
+    {/each}
   </div>
 {/if}

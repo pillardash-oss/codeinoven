@@ -32,6 +32,9 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  PrAgentAssignmentInput,
+  PrAgentAssignmentSummary,
+  PrAgentAssignmentWorkspace,
   PrAgentReport,
   PrCommentKind,
   PrMinimizeReason,
@@ -195,8 +198,10 @@ export class GitState {
     scopeFor: (projectId) => this.scopeFor(projectId),
     refreshConflictIndicators: (projectId, force) =>
       void this.refreshPrConflictIndicators(projectId, force),
-    updateDraftState: (owner, repo, pullNumber, draft) =>
-      this.prs.updateDraftState(owner, repo, pullNumber, draft)
+    patchPullRequest: (owner, repo, pullNumber, patch) =>
+      this.prs.patchPullRequest(owner, repo, pullNumber, patch),
+    applyPullRequestState: (owner, repo, pullNumber, state) =>
+      this.prs.applyPullRequestState(owner, repo, pullNumber, state)
   })
 
   /** GitHub account auth calls. */
@@ -293,8 +298,13 @@ export class GitState {
     return this.prs.bundles
   }
 
-  get prAgentReports(): Record<string, PrAgentReport> {
+  get prAgentReports(): Record<string, PrAgentReport[]> {
     return this.prs.agentReports
+  }
+
+  /** Row chips: what the list knows about each pull request's agent assignments. */
+  get prAgentAssignments(): Record<string, PrAgentAssignmentSummary | null> {
+    return this.prs.agentAssignments
   }
 
   get mentionUsers(): Record<string, { users: RepositoryMentionUser[]; fetchedAt: number }> {
@@ -1068,6 +1078,71 @@ export class GitState {
     return this.prOps.closePullRequest(projectId, owner, repo, pullNumber)
   }
 
+  /** Close a batch, one at a time, reporting what succeeded and what did not. */
+  closePullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[],
+    comment: string | null = null
+  ) {
+    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment)
+  }
+
+  /** Reopen a batch, one at a time, reporting what succeeded and what did not. */
+  reopenPullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    numbers: number[],
+    comment: string | null = null
+  ) {
+    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment)
+  }
+
+  /** Replace the labels a pull request carries, from the label picker. */
+  setPullRequestLabels(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    labels: string[]
+  ) {
+    return this.prOps.setPullRequestLabels(projectId, owner, repo, pullNumber, labels)
+  }
+
+  /** Replace a pull request's assignees, from the assignee picker. */
+  setPullRequestAssignees(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    logins: string[]
+  ) {
+    return this.prOps.setPullRequestAssignees(projectId, owner, repo, pullNumber, logins)
+  }
+
+  /** Attach or clear a pull request's milestone. */
+  setPullRequestMilestone(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    milestone: number | null
+  ) {
+    return this.prOps.setPullRequestMilestone(projectId, owner, repo, pullNumber, milestone)
+  }
+
+  /** The repository's label catalog, for the label picker. */
+  repositoryLabels(projectId: string, owner: string, repo: string) {
+    return this.prs.repositoryLabels(projectId, owner, repo)
+  }
+
+  /** The repository's open milestones, for the milestone picker. */
+  repositoryMilestones(projectId: string, owner: string, repo: string) {
+    return this.prs.repositoryMilestones(projectId, owner, repo)
+  }
+
   updatePullRequest(
     projectId: string,
     owner: string,
@@ -1109,8 +1184,24 @@ export class GitState {
     return this.prOps.reviewPullRequest(projectId, owner, repo, pullNumber, event, body)
   }
 
-  createPrReviewWorkspace(projectId: string, pullNumber: number, threadId?: string) {
-    return this.prOps.createPrReviewWorkspace(projectId, pullNumber, threadId)
+  /** Open an agent assignment and hand back the report path its brief should name. */
+  async createAgentAssignment(
+    projectId: string,
+    pullNumber: number,
+    threadId: string,
+    input: PrAgentAssignmentInput
+  ): Promise<PrAgentAssignmentWorkspace | null> {
+    const assignment = await this.prOps.createAgentAssignment(
+      projectId,
+      pullNumber,
+      threadId,
+      input
+    )
+    if (!assignment) return null
+    // Recorded here rather than at each call site, so the row chip and the reader's
+    // report list show the assignment the moment it exists.
+    this.prs.recordAgentAssignment(pullNumber, threadId, input, assignment)
+    return assignment
   }
 
   // Cached pulls, deployments, and mention candidates.
@@ -1169,8 +1260,14 @@ export class GitState {
     return this.prs.getCommitFiles(projectId, owner, repo, sha)
   }
 
-  loadAgentReport(projectId: string, pullNumber: number) {
-    return this.prs.loadAgentReport(projectId, pullNumber)
+  /** Every agent assignment report a pull request holds, newest first. */
+  loadAgentReports(projectId: string, pullNumber: number) {
+    return this.prs.loadAgentReports(projectId, pullNumber)
+  }
+
+  /** The assignment summaries a page of rows needs, in one batched read. */
+  ensureAgentAssignments(projectId: string, numbers: number[]) {
+    return this.prs.ensureAgentAssignments(projectId, numbers)
   }
 
   ensureDeploymentOverview(
@@ -1278,6 +1375,44 @@ export class GitState {
     commentId: number
   ): Promise<boolean> {
     return this.prOps.deletePrComment(projectId, owner, repo, pullNumber, kind, commentId)
+  }
+
+  /**
+   * Answer an inline review comment inside its thread. Conversation comments have
+   * no threading on GitHub, so only inline ones can be answered this way.
+   */
+  replyToPrReviewComment(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    commentId: number,
+    body: string
+  ): Promise<boolean> {
+    return this.prOps.replyToPrReviewComment(projectId, owner, repo, pullNumber, commentId, body)
+  }
+
+  /**
+   * Settle or reopen one inline review thread. The thread is addressed by its
+   * GraphQL node id, because GitHub keeps resolution on the thread and only
+   * exposes it there.
+   */
+  setPrReviewThreadResolved(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    threadNodeId: string,
+    resolved: boolean
+  ): Promise<boolean> {
+    return this.prOps.setPrReviewThreadResolved(
+      projectId,
+      owner,
+      repo,
+      pullNumber,
+      threadNodeId,
+      resolved
+    )
   }
 
   /**

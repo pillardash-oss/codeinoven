@@ -10,6 +10,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import {
     rendererRecovery,
     flushAllDraftCommits,
@@ -36,6 +37,7 @@
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
+  import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -366,6 +368,50 @@
     }
   }
 
+  /**
+   * Start the "new thread" flow for whatever the shell is showing. Shared by
+   * the Cmd/Ctrl+N chord and the palette's "New thread" action so both always
+   * agree.
+   *
+   * The scoped threads view is the state with the scope sidebar docked. The
+   * shell reports it either as its own `projects-scope` view or as `projects`
+   * with a live sidebar context, so both spellings are handled here   the same
+   * test the header switcher, the sidebar and the notification router use. It
+   * targets the docked scope's project and bucket directly, exactly like the
+   * sidebar's own new-thread button, which also makes it work from the empty
+   * state where no thread (and therefore no active project) is open.
+   */
+  function requestThreadForCurrentView(): void {
+    if (activeView === 'scope') {
+      if (!scopeState.activeProjectId) return
+      scopeState.requestCreateScopedThread(
+        scopeState.sidebarContext?.bucketId ?? scopeState.buckets[0]?.id ?? DEFAULT_SCOPE_BUCKET_ID
+      )
+      return
+    }
+
+    const scopedContext = scopeState.sidebarContext
+    if ((activeView === 'projects' || activeView === 'projects-scope') && scopedContext) {
+      // Docked scoped-threads sidebar: create in the docked scope's project and
+      // bucket, never in whatever thread happens to be open.
+      workspaceState.requestCreateThread(scopedContext.bucketId)
+      return
+    }
+
+    if (activeView === 'chats') {
+      workspaceState.requestNewChat()
+      return
+    }
+    if (activeView !== 'projects' && activeView !== 'threads') return
+    if (workspaceState.activeProject && workspaceState.activeProject.id !== INBOX_PROJECT_ID) {
+      // Same-scope inheritance: the new thread inherits the open thread's scope
+      // bucket (no stale sidebar bucket, no view switch).
+      workspaceState.requestCreateThread()
+      return
+    }
+    workspaceState.requestAddProject()
+  }
+
   async function handlePaletteSelection(selection: ActionSelection): Promise<void> {
     const settingsTab = settingsTabs.find(
       (tab) => actionId(`settings:${tab.id}`) === selection.action.id
@@ -384,21 +430,7 @@
         workspaceState.requestNewChat()
         return
       case 'app:new-thread':
-        if (activeView === 'scope') {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
-          // Docked scoped-threads sidebar: create in the docked scope.
-          workspaceState.requestCreateThread(scopeState.sidebarContext.bucketId)
-        } else {
-          // Create in the current thread's scope: Workspace inherits the
-          // active thread's scope bucket onto the new thread, exactly like
-          // settings inheritance  no view or sidebar change.
-          workspaceState.requestCreateThread()
-        }
+        requestThreadForCurrentView()
         return
       case 'app:file-search':
         fileSearch.openPalette()
@@ -479,8 +511,7 @@
     if (
       !(active instanceof HTMLElement) ||
       !active.isContentEditable ||
-      !active.classList.contains('rich-markdown-editor') ||
-      !active.id.startsWith('chat-composer-')
+      !active.matches(COMPOSER_DRAFT_SELECTOR)
     ) {
       paletteFocusBookmark = null
       return
@@ -951,20 +982,26 @@
       return
     }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
-      // On the plain workspace (no studio, no dirty file tab, no edited file
-      // opened from the OS) the Cmd/Ctrl+S save chord is otherwise unused, so it
-      // folds/unfolds the left sidebar. Anywhere a save binding owns the chord (a
-      // Spec/Assignment/Brainstorm studio, a project file tab with unsaved
-      // changes, or an edited standalone file) it keeps priority: we return
-      // without preventDefault so that handler saves instead of toggling.
+      // On the plain workspace (no studio, no conflict being resolved, no dirty
+      // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
+      // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
+      // save binding owns the chord (a Spec/Assignment/Brainstorm studio, the
+      // conflict resolution editor, a project file tab with unsaved changes, or
+      // an edited standalone file) it keeps priority: we return without
+      // preventDefault so that handler saves instead of toggling.
       // Shift is excluded so Cmd/Ctrl+Shift+S reaches the right-sidebar toggle
       // above, which used to fall through to this branch and fold the left
       // sidebar instead.
       if (e.repeat) return
       const leftSidebarViews = ['projects', 'chats', 'threads']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      // The conflict editor holds resolved progress that its Save draft owns, so
+      // the chord belongs to it even while no plain file tab is dirty.
+      const conflictOpen = Boolean(document.querySelector('[data-region="conflict-editor"]'))
       const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
-      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      if (!leftSidebarViews.includes(activeView) || studioOpen || conflictOpen || dirtyFiles) {
+        return
+      }
       if (standaloneFiles.activeHasUnsavedChanges) return
       e.preventDefault()
       sidebarState.toggle()
@@ -1012,39 +1049,7 @@
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
-      if (activeView === 'scope') {
-        if (scopeState.activeProjectId) {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        }
-        return
-      }
-
-      if (activeView === 'projects-scope') {
-        // Docked scoped-threads sidebar: create a thread in the docked scope's
-        // project and bucket, same as the sidebar's new-thread action. Works
-        // from the empty state too (no thread open, so no active project).
-        const context = scopeState.sidebarContext
-        if (context) workspaceState.requestCreateThread(context.bucketId)
-        return
-      }
-
-      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
-      if (activeView === 'chats') {
-        workspaceState.requestNewChat()
-      } else if (
-        workspaceState.activeProject &&
-        workspaceState.activeProject.id !== INBOX_PROJECT_ID
-      ) {
-        // Same-scope inheritance: the new thread inherits the open thread's
-        // scope bucket (no stale sidebar bucket, no view switch).
-        workspaceState.requestCreateThread()
-      } else {
-        workspaceState.requestAddProject()
-      }
+      requestThreadForCurrentView()
     }
   }
 
@@ -1082,6 +1087,7 @@
     window.addEventListener('mousedown', onMouseHistoryButton)
     window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
+    const uninstallComposerFocusShortcut = initComposerFocusShortcut()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
     const unsubscribeIpc = installAppIpcSubscriptions({
@@ -1122,6 +1128,7 @@
       window.removeEventListener('mousedown', onMouseHistoryButton)
       window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
+      uninstallComposerFocusShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()

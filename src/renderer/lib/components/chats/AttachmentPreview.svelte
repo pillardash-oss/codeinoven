@@ -1,21 +1,12 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
-  import {
-    X,
-    Download,
-    FileQuestion,
-    Loader2,
-    RotateCcw,
-    Save,
-    WrapText,
-    ZoomIn,
-    ZoomOut
-  } from '@lucide/svelte'
+  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
@@ -51,13 +42,14 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  /** Register the attachment-editor full-window surface while the fullscreen
-   *  editor is mounted, clearing it on teardown so native surfaces are never
-   *  suppressed after the editor closes. */
-  function editorSurfaceAttachment(_node: HTMLElement): () => void {
-    const release = browserVisibility.hideWhile('attachment-editor', 'fullscreen-surface', true)
-    return () => release()
-  }
+  // The browser's native view floats above every DOM surface (see
+  // browserVisibility.hideWhile), so both branches of this preview, the modal
+  // media viewer and the fullscreen text editor, must suppress it while mounted.
+  // Registering the block only for the editor branch left the modal preview
+  // (image, video, audio, PDF, document) painting underneath a live browser tab.
+  // Keyed per instance so two previews open at once cannot clear each other.
+  const suppressionKey = `attachment-preview-${Math.random().toString(36).slice(2)}`
+  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', true))
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
   // svelte-ignore state_referenced_locally
@@ -153,10 +145,7 @@
 />
 
 {#if editableText}
-  <div
-    {@attach editorSurfaceAttachment}
-    class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-  >
+  <div class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl">
     <div
       class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
       style={trafficLightInsetStyle()}
@@ -262,44 +251,7 @@
             style={panZoom.transform}
           />
         </div>
-        <div
-          class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
-        >
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Zoom out"
-            title="Zoom out"
-            disabled={panZoom.zoom <= panZoom.min}
-            onclick={() => panZoom.zoomByButton(1 / 1.4, imageViewport)}
-          >
-            <ZoomOut size={14} />
-          </button>
-          <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
-            {Math.round(panZoom.zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Zoom in"
-            title="Zoom in"
-            disabled={panZoom.zoom >= panZoom.max}
-            onclick={() => panZoom.zoomByButton(1.4, imageViewport)}
-          >
-            <ZoomIn size={14} />
-          </button>
-          <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Reset zoom and pan"
-            title="Reset zoom and pan"
-            disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
-            onclick={() => panZoom.reset()}
-          >
-            <RotateCcw size={14} />
-          </button>
-        </div>
+        <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-3 bottom-3" />
       {:else if kind === 'video' && src}
         <video
           {src}

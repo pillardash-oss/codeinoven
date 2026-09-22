@@ -2,10 +2,8 @@
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
   import { Brain, Check, ChevronDown, RefreshCw } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import type {
-    AccountAuthProvider,
-    AccountProfileState,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
     LocalProfileModelRanking,
@@ -13,13 +11,11 @@
     LocalProfileUsageHour,
     ThinkingLevel
   } from '$shared/types'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import ProfileSettingsAccountPopover from './ProfileSettingsAccountPopover.svelte'
-  import ProfileSettingsDevices from './ProfileSettingsDevices.svelte'
   import {
     activityClass,
     analyticsRange,
@@ -60,14 +56,8 @@
   } from './profile-settings-analytics'
 
   let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
-  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')
-  let signInOpen = $state(false)
-  let signOutOpen = $state(false)
-  let accountBusy = $state(false)
-  let activeProvider = $state<AccountAuthProvider | null>(null)
-  let signInError = $state('')
   let selectedRange = $state<LocalProfileAnalyticsRange>(DEFAULT_RANGE)
   let rangePreset = $state<RangePreset>('year')
   let customStartDate = $state(dateInputValue(DEFAULT_RANGE.startAt))
@@ -76,12 +66,6 @@
   let usageRequestGeneration = 0
   let modelRankMetric = $state<ModelRankMetric>('tokens')
 
-  const accountProfile = $derived(accountState.profile)
-  const syncedDevices = $derived(
-    accountProfile
-      ? Object.values(accountProfile.usageByDevice).sort((a, b) => b.durationMs - a.durationMs)
-      : []
-  )
   const rangeLabel = $derived(formatDateRange(usage.range))
   const rangePresetLabel = $derived(
     rangePreset === 'custom'
@@ -273,83 +257,10 @@
     void loadUsage(selectedRange)
   }
 
-  async function refreshAccount(showError = false): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    if (showError) signInError = ''
-    try {
-      const state = await invoke('account:getProfile')
-      accountState = state
-      if (state.status === 'signed-in') {
-        signInOpen = false
-        accountState = await invoke('account:syncProfile')
-      } else if (showError && state.status === 'pending') {
-        signInError = 'Sign-in is not finished yet. Complete it in your browser, then check again.'
-      }
-    } catch {
-      if (showError)
-        signInError = 'The account service could not be reached. Try again in a moment.'
-    } finally {
-      accountBusy = false
-    }
-  }
-
-  async function beginSignIn(provider: AccountAuthProvider): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    activeProvider = provider
-    signInError = ''
-    try {
-      const signIn = await invoke('account:beginSignIn', provider)
-      accountState = { status: 'pending', profile: null }
-      await invoke('shell:openExternal', signIn.url)
-    } catch {
-      accountState = { status: 'signed-out', profile: null }
-      signInError = 'Sign-in could not be started. Check your connection and try again.'
-    } finally {
-      accountBusy = false
-      activeProvider = null
-    }
-  }
-
-  async function signOut(): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    signInError = ''
-    try {
-      await invoke('account:signOut')
-      accountState = { status: 'signed-out', profile: null }
-      signInOpen = false
-      signOutOpen = false
-    } catch {
-      signOutOpen = false
-      signInError = 'Sign-out could not be completed. Try again in a moment.'
-    } finally {
-      accountBusy = false
-    }
-  }
-
-  function handleWindowFocus(): void {
-    if (accountState.status === 'pending') void refreshAccount()
-  }
-
   onMount(() => {
     void loadUsage()
-    void refreshAccount()
-    return subscribe('account:profileChanged', (state) => {
-      accountState = state
-      if (state.status === 'signed-in') {
-        signInOpen = false
-        signInError = ''
-      } else if (state.status === 'error') {
-        signInOpen = true
-        signInError = state.message
-      }
-    })
   })
 </script>
-
-<svelte:window onfocus={handleWindowFocus} />
 
 <div class="w-full p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
@@ -371,18 +282,6 @@
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
         Refresh
       </button>
-
-      <ProfileSettingsAccountPopover
-        {accountState}
-        {signInOpen}
-        {accountBusy}
-        {signInError}
-        {activeProvider}
-        onSignInOpenChange={(open) => (signInOpen = open)}
-        onBeginSignIn={(provider) => void beginSignIn(provider)}
-        onRefreshAccount={(showError) => void refreshAccount(showError)}
-        onRequestSignOut={() => (signOutOpen = true)}
-      />
     </div>
   </div>
 
@@ -573,10 +472,6 @@
       </div>
     </div>
   </section>
-
-  {#if accountProfile}
-    <ProfileSettingsDevices devices={syncedDevices} />
-  {/if}
 
   {#if topModels.length > 0}
     <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
@@ -1154,36 +1049,6 @@
     </div>
   </section>
 </div>
-
-<AlertDialog.Root open={signOutOpen} onOpenChange={(open) => (signOutOpen = open)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Sign out of CodeInOven?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Your saved profile will be removed from this device and you will be signed out. You can sign
-        in again anytime.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={() => void signOut()}
-        >
-          Sign out
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
 
 <style>
   .hourly-columns {

@@ -212,6 +212,27 @@ export class PtyService {
     ipcMain.handle('pty:destroy', (_, id: string) => this.destroy(id))
   }
 
+  /** Reattach instead of respawning when a live PTY already runs under `id`.
+   *  Only the renderer can lose track of a running process (a dev hot reload
+   *  rebuilds its session map while the main side keeps the PTY alive), and
+   *  a same-id create used to destroy the old PTY first, killing a running
+   *  server or action the user never asked to stop. The new renderer session
+   *  subscribes to `pty:data:<id>` on its own, so streaming simply resumes. */
+  private reuseLiveSession(id: string): { id: string; pid: number } | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    Logger.info(
+      `[pty] Session ${id} is still live (pid ${session.process.pid}); reattaching instead of respawning`
+    )
+    void this.recordEvent({
+      type: 'reattach',
+      terminalId: id,
+      pid: session.process.pid,
+      timestamp: Date.now()
+    })
+    return { id, pid: session.process.pid }
+  }
+
   private async create(
     id: string,
     projectId: string,
@@ -220,6 +241,9 @@ export class PtyService {
     rows: number,
     scopeBucketId?: string
   ): Promise<{ id: string; pid: number }> {
+    const reused = this.reuseLiveSession(id)
+    if (reused) return reused
+
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
       throw new Error(`Terminal sessions require a local ${APP_NAME} project`)
@@ -235,9 +259,6 @@ export class PtyService {
     if (!cwd || !existsSync(cwd)) {
       throw new Error(`Project directory is unavailable`)
     }
-
-    // Tear down any existing session with the same id
-    this.destroy(id)
 
     const shell = resolveShell()
     const createdAt = Date.now()
@@ -327,7 +348,9 @@ export class PtyService {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
 
-    this.destroy(id)
+    const reused = this.reuseLiveSession(id)
+    if (reused) return reused
+
     const cwd = homedir()
     const createdAt = Date.now()
 
@@ -426,6 +449,9 @@ export class PtyService {
     rows: number,
     scopeBucketId?: string
   ): Promise<{ id: string; pid: number }> {
+    const reused = this.reuseLiveSession(id)
+    if (reused) return reused
+
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
       throw new Error(`Actions require a local ${APP_NAME} project`)
@@ -448,7 +474,6 @@ export class PtyService {
       throw new Error(`Project directory is unavailable`)
     }
 
-    this.destroy(id)
     const shell = resolveShell()
     const createdAt = Date.now()
     const proc = pty.spawn(shell, ['-lc', script], {

@@ -292,3 +292,28 @@ export function classifyProviderIssue(
   }
   return 'unknown'
 }
+
+/**
+ * The heading a provider issue is shown under.
+ *
+ * Shared so the thread's provider card and every other surface that renders a
+ * failure from the same `AgentProviderIssue` name it the same way. `waiting`
+ * distinguishes a retry the app scheduled from a failure that has stopped.
+ */
+export function providerIssueTitle(kind: AgentProviderIssueKind, waiting = false): string {
+  switch (kind) {
+    case 'rate_limit':
+    case 'quota':
+      return 'Usage limit reached'
+    case 'authentication':
+      return 'Provider sign-in required'
+    case 'billing':
+      return 'Provider billing issue'
+    case 'provider_unavailable':
+      return 'Provider temporarily unavailable'
+    case 'network':
+      return 'Provider connection interrupted'
+    default:
+      return waiting ? 'Provider retry scheduled' : 'Agent output error'
+  }
+}

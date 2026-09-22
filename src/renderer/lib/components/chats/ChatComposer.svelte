@@ -4,6 +4,7 @@
   import { fade } from 'svelte/transition'
   import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
   import { motionDuration } from '$lib/motion'
+  import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -64,7 +65,6 @@
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
-  import { isRemotePwaRuntime } from '$lib/runtime-context'
   import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
@@ -359,7 +359,6 @@
   // restored list is collapsed here before it ever reaches the markup.
   // svelte-ignore state_referenced_locally
   let attachments = $state<PromptAttachment[]>(uniqueAttachments(initialAttachments))
-  let remoteFileInput = $state<HTMLInputElement>()
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
@@ -418,7 +417,20 @@
   let dropAnchorProbe = $state<HTMLElement | null>(null)
   const captureComposerRoot: Attachment<HTMLElement> = (element) => {
     composerRoot = element
+    // Publish this composer to the app-wide focus registry so the double-tap
+    // primary-modifier gesture can return the caret here from anywhere in the
+    // app. The composer owns how it takes focus, and refuses it while it is
+    // disabled.
+    const unregister = registerComposerFocusTarget({
+      root: element,
+      focus: () => {
+        if (disabled) return false
+        focusComposerAtSavedCaret()
+        return true
+      }
+    })
     return () => {
+      unregister()
       if (composerRoot === element) composerRoot = null
     }
   }
@@ -1072,6 +1084,9 @@
     const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
     clearStartAfterThreads()
     onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
+    // The draft just left the composer, so the long-form writing surface has
+    // nothing left to hold: settle back to the compact composer.
+    expansion.collapse()
   }
 
   function handleComposerValueChange(nextValue: string): void {
@@ -1344,28 +1359,8 @@
       attachmentBlockedNotice = true
       return
     }
-    if (isRemotePwaRuntime()) {
-      remoteFileInput?.click()
-      return
-    }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
-    focusComposerAtSavedCaret()
-  }
-
-  async function handleRemoteFileSelection(event: Event): Promise<void> {
-    const input = event.currentTarget
-    if (!(input instanceof HTMLInputElement) || !input.files) return
-    for (const file of Array.from(input.files)) {
-      try {
-        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
-        if (filePath) await addFileAttachment(filePath, file)
-      } catch (error) {
-        textAttachmentError =
-          error instanceof Error ? error.message : 'The attachment could not be added.'
-      }
-    }
-    input.value = ''
     focusComposerAtSavedCaret()
   }
 
@@ -1382,12 +1377,8 @@
       try {
         const filePath = await window.api.registerFileSelection(file, attachmentStorage)
         if (filePath) await addFileAttachment(filePath, file)
-      } catch (error) {
-        // Not a local file (e.g., image dragged from a web page); skip.
-        if (isRemotePwaRuntime()) {
-          textAttachmentError =
-            error instanceof Error ? error.message : 'The attachment could not be added.'
-        }
+      } catch {
+        // Not a local file (e.g., an image dragged from a web page); skip it.
       }
     }
   }
@@ -1469,16 +1460,6 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
-
-<input
-  bind:this={remoteFileInput}
-  type="file"
-  multiple
-  class="sr-only"
-  tabindex="-1"
-  aria-hidden="true"
-  onchange={(event) => void handleRemoteFileSelection(event)}
-/>
 
 {#if preview.file}
   {@const previewAttachment = preview.file}
