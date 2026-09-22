@@ -148,6 +148,19 @@ its `cio/` branch, not the project root:
   with an actionable message, and a merge in progress in the _other_ checkout is
   reported as well because its HEAD would be detached too.
 
+  Each direction then verifies what landed: `from` diffs the commit it started
+  from against the commit it produced, and `to` diffs the peer it wrote into the
+  same way. Both report the two findings git cannot raise and nothing else would
+  surface before the checkout is next built or started
+  (`src/main/git/git/git-service-references.ts`). One is an import the
+  integration orphaned, resolved against the new tree with the checkout's own
+  tsconfig aliases, which covers the case a rebase creates and a conflict never
+  does: this side added a file, the other side deleted the module it imports, and
+  the two changes touch different paths so git reports a clean integration. The
+  other is a dependency manifest the integration rewrote, which leaves the
+  checkout's install stale because an integration installs nothing. Both are
+  reported, never errors: the commits did land.
+
   `from` reads the peer and writes this checkout: it refreshes the peer branch's
   remote-tracking ref first when the repository has a remote (vaulted token when
   present, a failed refresh is reported and never fatal), then integrates the
