@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { createHash } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
-import type { PluginOption } from 'vite'
+import type { Plugin, PluginOption } from 'vite'
 import packageJson from './package.json'
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
@@ -91,6 +91,39 @@ export const rendererDedupe = [
   '@lezer/common',
   '@lezer/lr'
 ]
+/**
+ * Refuse to emit an empty chunk in a bundle Electron boots.
+ *
+ * rolldown (Vite 8) can render a chunk that still owns its modules as an empty
+ * file: the entry keeps the `import()` that names it, the app boots, and the
+ * graph behind that import is silently missing at runtime. A packaged macOS
+ * build shipped without any feature IPC exactly that way, and nothing before
+ * the packaged startup smoke test noticed, because a chunk that lost its code
+ * is not a build error. The main and preload bundles are held to the one
+ * invariant that makes them usable: a chunk with modules has code. The
+ * renderer is left out on purpose   it already carries one pre-existing empty
+ * chunk from a dependency's browser-external shim, and widening this guard to
+ * it would fail the build on that instead of on this app's own code.
+ */
+function refuseEmptyChunks(environment: 'main' | 'preload'): Plugin {
+  return {
+    name: `codeinoven:refuse-empty-chunks:${environment}`,
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (output.type !== 'chunk') continue
+        if (output.moduleIds.length === 0) continue
+        if (output.code.trim() !== '') continue
+        this.error(
+          `${environment} chunk ${fileName} owns ${output.moduleIds.length} modules but the bundler ` +
+            'rendered no code for it, so nothing it exports can load at runtime. Re-run the build; ' +
+            'if it persists, move the heavy part of that graph behind its own nested dynamic import ' +
+            'rather than shipping this bundle.'
+        )
+      }
+    }
+  }
+}
+
 export function rendererPlugins(): PluginOption[] {
   return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
 }
@@ -105,6 +138,7 @@ export default defineConfig(({ mode }) => {
   ])
   return {
     main: {
+      plugins: [refuseEmptyChunks('main')],
       define: {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).
@@ -127,13 +161,7 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          external: [
-            'electron',
-            'node-pty',
-            'better-sqlite3',
-            'electron-updater',
-            'werift'
-          ],
+          external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
           input: {
             index: resolve(__dirname, 'src/main/index.ts')
           }
@@ -141,6 +169,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     preload: {
+      plugins: [refuseEmptyChunks('preload')],
       build: {
         outDir: 'out/preload',
         rollupOptions: {

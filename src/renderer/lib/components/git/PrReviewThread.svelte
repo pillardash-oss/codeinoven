@@ -22,6 +22,7 @@
     RotateCcw
   } from '@lucide/svelte'
   import { gitState } from '$lib/stores/git.svelte'
+  import { prThreadResolveBusyKey } from '$lib/stores/git-store-helpers'
   import { openInBrowser } from '$lib/open-in-browser'
   import { openProjectFileFromAbsolutePath } from '$lib/reveal-file'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -70,13 +71,21 @@
     onRefresh
   }: Props = $props()
 
-  /** Folded threads keep the stream scannable without losing the file they are about. */
-  let collapsed = $state(false)
+  /**
+   * The reader's fold choice for this thread, or null while they have not made
+   * one. Null is what lets the thread follow its own state instead of a stale
+   * guess: a resolved thread opens folded, so the stream reads as work that is
+   * done, and a thread the reader opens stays open until they fold it again.
+   */
+  let foldChoice = $state<boolean | null>(null)
   /** The comment a reply answers, or null while the box is closed. */
   let replyTo = $state<ConversationEntry | null>(null)
 
   const busy = $derived(gitState.isBusy('pr-comment-reply'))
-  const resolving = $derived(gitState.isBusy('pr-thread-resolve'))
+  const resolving = $derived(
+    thread.threadNodeId !== null && gitState.isBusy(prThreadResolveBusyKey(thread.threadNodeId))
+  )
+  const collapsed = $derived(foldChoice ?? thread.resolved)
   const root = $derived(thread.comments[0])
   const replies = $derived(thread.comments.length - 1)
   const outdated = $derived(thread.line === null)
@@ -117,6 +126,9 @@
    *
    * Resolution is the state the merge is gated on, and GitHub keeps it on the
    * thread rather than on any comment, so this addresses the thread's node id.
+   * Resolving drops the reader's fold choice with it: the thread refetches
+   * resolved and folds itself, which is how a settled thread leaves the reader's
+   * way, and reopening gives the reader the code back.
    */
   async function toggleResolved(): Promise<void> {
     const nodeId = thread.threadNodeId
@@ -131,6 +143,8 @@
       next
     )
     if (!saved) return
+    foldChoice = null
+    replyTo = null
     onNotice(next ? 'Thread resolved' : 'Thread reopened')
     await onRefresh()
   }
@@ -162,7 +176,7 @@
       aria-expanded={!collapsed}
       aria-label={collapsed ? 'Show this thread' : 'Fold this thread'}
       title={collapsed ? 'Show this thread' : 'Fold this thread'}
-      onclick={() => (collapsed = !collapsed)}
+      onclick={() => (foldChoice = !collapsed)}
     >
       <ChevronDown size={11} class={['shrink-0', collapsed && '-rotate-90']} />
     </button>

@@ -7,6 +7,7 @@ import type {
   GitHubDeploymentJob,
   GitHubDeploymentJobLog,
   GitHubWorkflowRun,
+  PullRequestCheck,
   PullRequestSummary
 } from '$shared/types'
 
@@ -288,6 +289,48 @@ export function prCommentAssignmentPrompt(
     '- If it needs no action, say that plainly and recommend nothing.',
     '- If a reply is the right answer, draft it in the report word for word, so I can approve it as',
     '  written.'
+  ])
+}
+
+/**
+ * The brief a failed check handed to an agent receives.
+ *
+ * A check is a claim about the pull request that has already been answered no, so
+ * the task is not to decide whether to trust it but to say what it means: whether
+ * this repository is wrong, the runner is wrong, or the check is asking for
+ * something the pull request never promised. The failing step's own output is the
+ * evidence, and the whole log rides along as an attachment so the excerpt never
+ * has to stand in for it.
+ */
+export function prCheckAssignmentPrompt(
+  pr: PullRequestSummary,
+  repository: string,
+  check: PullRequestCheck,
+  job: GitHubDeploymentJob | null,
+  log: GitHubDeploymentJobLog | null,
+  reportPath: string
+): string {
+  return agentAssignmentPrompt(pr, reportPath, [
+    `Diagnose the failed check "${check.name}" on pull request #${pr.number}: "${pr.title}" (${pr.headRef} → ${pr.baseRef}) in ${repository}.`,
+    `Pull request link: ${pr.url}`,
+    `Check state: ${check.conclusion ?? check.status}`,
+    ...(check.url ? [`Check link: ${check.url}`] : []),
+    ...(check.workflowRunId !== null ? [`Workflow run ID: ${check.workflowRunId}`] : []),
+    '',
+    ...(job
+      ? failedJobLogEvidence(job, log)
+      : [
+          'The job behind this check could not be read from here, so its log is not supplied.',
+          ...(log ? ['The raw log is attached to this message regardless.'] : [])
+        ]),
+    '',
+    'Work out why it failed before you decide anything:',
+    '- Reproduce it inside the scope where that is practical: find the workflow that runs this check, read the step that failed, and run the same command there.',
+    '- Separate the causes, and say which one you concluded it is: a defect this change introduced, a defect already on the base branch, a flake, a runner or infrastructure problem, or a check that is stricter than the code it tests.',
+    '- Blame the right side. When the check itself is wrong (a stale action version, a wrong path, a version pinned too tightly), the fix belongs in the workflow, not in the code it flagged, and it may well belong in a different pull request.',
+    '- If the cause is outside this repository (a secret, a permission, a hosted runner, a third-party service), do not guess and do not ask for credentials: name the operator action instead.',
+    '- If the log was not supplied and reading a step matters, say exactly which job or step you need and ask me first; do not fetch it on your own.',
+    '- Once you have concluded the fix, implement the smallest correct one inside the scope and run the command that failed, so the report can say whether it now passes.'
   ])
 }
 

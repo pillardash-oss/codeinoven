@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { ChevronRight, ExternalLink, Rocket, ShieldCheck } from '@lucide/svelte'
+  import { Bot, ChevronRight, ExternalLink, Loader2, Rocket, ShieldCheck } from '@lucide/svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitHubDeploymentJobLog, PullRequestCheck, PullRequestChecks } from '$shared/types'
   import GitJobLogView from './GitJobLogView.svelte'
   import RerunRunMenu from './RerunRunMenu.svelte'
+  import { jobForCheck } from './pr-check-job'
   import {
     checkClass,
     checkFailed,
@@ -20,22 +21,29 @@
     checks: PullRequestChecks | null
     /** Reveal a GitHub Actions check in the in-app Deployments tab. */
     onOpenWorkflowRun: (runId: number) => void
+    /** Hand a failed check to an agent to diagnose and report on. */
+    onAssignCheck: (check: PullRequestCheck) => Promise<void>
     /** Reload the bundle after a re-run of one of the checks. */
     onRefresh: () => Promise<void>
   }
 
-  let { projectId, identity, checks, onOpenWorkflowRun, onRefresh }: Props = $props()
+  let { projectId, identity, checks, onOpenWorkflowRun, onAssignCheck, onRefresh }: Props = $props()
 
   /** Which check's log is open, keyed the way the checks list is keyed. */
   let expandedCheck = $state<string | null>(null)
   let checkLogs = $state<Record<string, GitHubDeploymentJobLog>>({})
   let checkLogErrors = $state<Record<string, string>>({})
   let loadingCheckLogs = $state<Record<string, boolean>>({})
+  /** The check an assignment is being prepared for, keyed the same way. */
+  let assigningCheck = $state<string | null>(null)
 
   /**
    * The job behind a check. Actions names the job in the check's `details_url`,
    * which is exact even for one leg of a matrix run; when the provider only gives
    * the run, the job is matched by name so the wrong leg's log is never shown.
+   *
+   * The run detail is read only when the check does not already name a job, since
+   * this is a log toggle and the answer it needs is already in hand otherwise.
    */
   async function resolveCheckJobId(check: PullRequestCheck): Promise<number | null> {
     if (check.jobId !== null) return check.jobId
@@ -43,7 +51,25 @@
     const run = await gitState
       .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
       .catch(() => null)
-    return run?.jobs.find((job) => job.name === check.name)?.id ?? null
+    return jobForCheck(run, check)?.id ?? null
+  }
+
+  /**
+   * Prepare an assignment for one check.
+   *
+   * Preparing takes the time (the run, the job, the log) and ends by opening the
+   * new thread, so exactly one runs at a time: two in flight would race for the
+   * open thread and the reader would lose the first draft. The clicked row is the
+   * row that spins; the others wait on it rather than starting a second.
+   */
+  async function assignCheck(check: PullRequestCheck): Promise<void> {
+    if (assigningCheck !== null) return
+    assigningCheck = checkKey(check)
+    try {
+      await onAssignCheck(check)
+    } finally {
+      assigningCheck = null
+    }
   }
 
   async function toggleCheckLog(check: PullRequestCheck): Promise<void> {
@@ -114,6 +140,27 @@
           </span>
           <span class="shrink-0 text-[0.5625rem] text-dimmed">{checkStateLabel(check)}</span>
         </button>
+        {#if checkFailed(check)}
+          <!--
+            A failed check is the one thing here an agent can be asked about, and the
+            row is where that question occurs to the reader. The run detail and the job
+            log are read when the assignment is prepared, not when the row is drawn.
+          -->
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            title="Assign this failed check to an agent to diagnose and report on"
+            aria-label="Assign the {check.name} check to an agent"
+            disabled={assigningCheck !== null}
+            onclick={() => void assignCheck(check)}
+          >
+            {#if assigningCheck === key}
+              <Loader2 size={12} class="animate-spin" />
+            {:else}
+              <Bot size={12} />
+            {/if}
+          </button>
+        {/if}
         {#if checkFailed(check) && runId !== null}
           <!-- A failing check is a job with a problem, so the re-run lives on
                its row. GitHub only re-runs a whole run, which is why the menu

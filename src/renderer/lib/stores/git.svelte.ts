@@ -16,6 +16,7 @@ import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
+import type { PrBatchStepListener } from './git-store-pr-operations.svelte'
 import { GitGitHubAuth } from './git-store-github.svelte'
 import { GitLocalOperations } from './git-store-local-operations.svelte'
 import type {
@@ -56,18 +57,23 @@ export {
 } from './git-store-helpers'
 
 /**
- * How stale the remote-tracking refs may be when the git panel is opened
- * before it fetches on its own.
+ * How stale the remote-tracking refs may be before the app fetches on its own.
  *
  * `ahead` and `behind` are read from local remote-tracking refs, which only
  * move on a fetch, so without this the Pull and Push counts can sit stale for a
- * whole session. The panel-open hook fires on every refocus of the panel's rail
- * icon (files, then notifications, then back to git), so an unthrottled fetch
- * would hit the network on each flip. Five minutes keeps the counts honest at
- * the moment the user looks, without turning icon switching into network
- * traffic.
+ * whole session. The fetch is fired when a project is opened - a thread opens
+ * in it, its scope switches, or the app starts on it - so the counts are
+ * already right by the time the user reaches the panel, instead of a round trip
+ * starting under the click that asked the panel for something. The panel-open
+ * hook re-checks the same gate, so a project left open for hours cannot sit on
+ * stale counts either.
+ *
+ * Five minutes is the gate on every one of those triggers: opening a project
+ * repeatedly, and the panel's rail icon, which refires on each refocus (files,
+ * then notifications, then back to git), must never turn into a network round
+ * trip per switch.
  */
-const PANEL_FETCH_STALE_MS = 5 * 60_000
+const REMOTE_FETCH_STALE_MS = 5 * 60_000
 
 /**
  * How recently the working tree state must have been read for a hover warm-up to
@@ -139,9 +145,9 @@ export class GitState {
   /**
    * When a fetch was last attempted, keyed by project, recorded whether it
    * succeeded or not. A remote that is refusing or unreachable is then retried
-   * on the next window instead of on every panel open, which would otherwise
-   * stall the panel behind a network timeout each time the user came back to
-   * it.
+   * on the next window instead of on every project or panel open, which would
+   * otherwise stall the panel behind a network timeout each time the user came
+   * back to it.
    *
    * The key is the project rather than the scope bucket: managed scopes are
    * worktrees of one repository, and worktrees share `refs/remotes`, so a
@@ -165,6 +171,7 @@ export class GitState {
     scopedGitArgs: (projectId, ...args) => this.scopedGitArgs(projectId, ...args),
     refresh: (projectId) => this.refresh(projectId),
     readStatus: (projectId) => this.readStatus(projectId),
+    isActiveTarget: (projectId) => projectId === this.activeProjectId,
     noteFetchAttempt: (projectId) => this.noteFetchAttempt(projectId),
     refreshConflictIndicators: (projectId, force) =>
       void this.refreshPrConflictIndicators(projectId, force)
@@ -448,17 +455,23 @@ export class GitState {
   }
 
   /**
-   * Queue a status/branches/PR read for after the current view switch has
-   * painted. This only runs when the scope target actually moves   a thread
+   * Queue the project-open read for after the current view switch has
+   * painted. This only runs when the scope target actually moves - a thread
    * switch inside one scope never reaches it, because `activate` and
    * `targetChanged` both short-circuit above. When it does run it fans out to
    * six repository reads plus worktree discovery, and running all of that in
    * the same instant as the conversation mount made a scope switch feel slow.
    * Deferring it keeps the panel's data honestly late rather than the
    * conversation's paint honestly slow.
+   *
+   * The read hands off to the age-gated fetch once local state has answered, so
+   * a project opens with its remote-tracking refs already being refreshed -
+   * while the user is still reading the conversation - instead of that round
+   * trip starting later, under the click that asked the git panel for
+   * something.
    */
   private scheduleRefresh(projectId: string): void {
-    scheduleDeferredWork('git:refresh', () => void this.refresh(projectId).catch(() => {}))
+    scheduleDeferredWork('git:refresh', () => this.refreshThenFetchIfDue(projectId))
   }
 
   /**
@@ -466,7 +479,9 @@ export class GitState {
    * asynchronously - connection first (the store guarantees it), then the PR
    * indicator - even if no thread is restored yet (fresh start, or the last
    * session ended on a chat). No-ops when a thread already opened, since
-   * `notifyThreadOpened` already refreshed that project.
+   * `notifyThreadOpened` already refreshed that project. Either way this
+   * refreshes the remote-tracking refs on the same stale gate, so the first
+   * time the user opens the panel its Pull and Push counts are already right.
    */
   notifyAppStarted(project: Project | null): void {
     if (this.activeProjectId) return
@@ -474,7 +489,33 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     this.activate(project.id)
-    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
+    queueMicrotask(() => this.refreshThenFetchIfDue(project.id))
+  }
+
+  /**
+   * Read the working tree, then refresh the remote-tracking refs if they have
+   * gone stale.
+   *
+   * This is the one step every "this project is now in use" event shares - a
+   * thread opening in it, a scope switch inside it, the app starting on it, the
+   * panel opening onto it - so the ordering lives here once: local state first,
+   * because it is what the panel paints and what says whether there is a remote
+   * worth fetching from, and the fetch only when the age gate lets it through.
+   *
+   * The fetch never waits on, or is waited on by, the user's work. It is the one
+   * git operation that touches nothing in the working tree (remote-tracking refs
+   * and `FETCH_HEAD` only), so main runs it on a lane of its own rather than the
+   * status/stage/commit queue, and every caller reaches it behind a deferred or
+   * microtask hop, so it starts after the frame the user asked for has painted.
+   */
+  private refreshThenFetchIfDue(projectId: string): void {
+    void this.refresh(projectId)
+      .then(() => {
+        if (this.activeProjectId !== projectId) return
+        if (!this.fetchIsDue(projectId)) return
+        return this.fetch(projectId)
+      })
+      .catch(() => {})
   }
 
   /**
@@ -486,6 +527,12 @@ export class GitState {
    * server, or ahead of it, with nothing in the panel saying so until the user
    * went looking for Fetch in the menu.
    *
+   * The project-open hooks above normally fetched already, so a panel open that
+   * follows one inside the stale window collapses to the local re-read - which
+   * is the point of prefetching: a click on the panel is a click the user wants
+   * answered now, not the moment a network round trip may start. This gate stays
+   * as the backstop for a project left open long enough to go stale again.
+   *
    * The git tool opens from its own rail icon rather than a tab strip, so
    * this fires on every refocus (files → git, notifications → git …). It
    * must therefore never reset the claimed target: `activate(projectId)`
@@ -496,19 +543,7 @@ export class GitState {
    */
   notifyGitPanelOpened(projectId: string): void {
     if (this.activeProjectId !== projectId) return
-    queueMicrotask(() => {
-      // Local state first: it is what the panel paints, and it is also what
-      // says whether there is a remote worth fetching from. The fetch re-reads
-      // that state when it finishes, so the second read only happens on the
-      // opens the stale gate lets through.
-      void this.refresh(projectId)
-        .then(() => {
-          if (this.activeProjectId !== projectId) return
-          if (!this.fetchIsDue(projectId)) return
-          return this.fetch(projectId)
-        })
-        .catch(() => {})
-    })
+    queueMicrotask(() => this.refreshThenFetchIfDue(projectId))
   }
 
   /**
@@ -535,17 +570,17 @@ export class GitState {
   }
 
   /**
-   * Whether the age-gated panel-open fetch is due. A repository without a
-   * remote has nothing to fetch, and anything already attempted inside the
-   * window is left alone, which is what keeps repeated panel opens from
+   * Whether the age-gated fetch is due: nothing is fetched for a repository with
+   * no remote, and a project already attempted inside the window is left alone,
+   * which is what keeps repeated project opens - and repeated panel opens - from
    * becoming repeated network round trips.
    */
   private fetchIsDue(projectId: string): boolean {
     if (this.remotes.length === 0) return false
-    return Date.now() - (this.fetchAttempts[projectId] ?? 0) >= PANEL_FETCH_STALE_MS
+    return Date.now() - (this.fetchAttempts[projectId] ?? 0) >= REMOTE_FETCH_STALE_MS
   }
 
-  /** Record that a fetch was tried, so the panel-open gate can throttle it. */
+  /** Record that a fetch was tried, so the age gate can throttle the next one. */
   private noteFetchAttempt(projectId: string): void {
     this.fetchAttempts[projectId] = Date.now()
   }
@@ -1084,9 +1119,10 @@ export class GitState {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ) {
-    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment)
+    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment, onStep)
   }
 
   /** Reopen a batch, one at a time, reporting what succeeded and what did not. */
@@ -1095,9 +1131,10 @@ export class GitState {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ) {
-    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment)
+    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment, onStep)
   }
 
   /** Replace the labels a pull request carries, from the label picker. */

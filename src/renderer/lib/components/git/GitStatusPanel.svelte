@@ -125,6 +125,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -281,10 +282,9 @@
    */
   let prListSelection = $state<Record<number, boolean>>({})
   /**
-   * The lifecycle batch waiting on its confirmation, running, or reporting.
-   *
-   * Held as one subject rather than two dialogs, so the numbers the user confirmed
-   * are the numbers the result line counts.
+   * The lifecycle batch waiting on its confirmation. It is only ever the pending
+   * question: the run itself leaves as a background job (`prBatchJobs`), so nothing
+   * here holds the window while twenty pull requests are written.
    */
   let prBatch = $state<{ mode: 'close' | 'reopen'; targets: PullRequestSummary[] } | null>(null)
   /** The pull request a metadata picker is editing, or null when none is open. */
@@ -795,6 +795,7 @@
     await resolvePrConflictsWithAgent(
       projectId,
       pr,
+      scopeBucketId,
       primaryRemote?.name ?? 'origin',
       gitState.status?.branch ?? 'main',
       () => {
@@ -810,7 +811,11 @@
    * this only has to hand the agent the brief   the same brief the PR path uses.
    */
   async function resolveConflictsWithAgent(): Promise<void> {
-    await resolveCurrentConflictsWithAgent(projectId, status?.branch ?? 'this worktree')
+    await resolveCurrentConflictsWithAgent(
+      projectId,
+      scopeBucketId,
+      status?.branch ?? 'this worktree'
+    )
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -1017,6 +1022,23 @@
       return
     }
     prMetadata = { pr: target, mode: action.kind }
+  }
+
+  function confirmPrBatch(comment: string | null): void {
+    const pending = prBatch
+    if (!pending || !githubIdentity) return
+    prBatchJobs.start({
+      projectId,
+      owner: githubIdentity.owner,
+      repo: githubIdentity.repo,
+      mode: pending.mode,
+      targets: pending.targets,
+      comment
+    })
+    prBatch = null
+    // The selection has been acted on, so it goes with the batch rather than
+    // inviting a second close of the same rows.
+    prListSelection = {}
   }
 
   /**
@@ -3951,18 +3973,7 @@
 -->
 {#if githubIdentity}
   {#if prBatch}
-    <PrBatchDialog
-      batch={prBatch}
-      {projectId}
-      owner={githubIdentity.owner}
-      repo={githubIdentity.repo}
-      onClose={() => {
-        prBatch = null
-        // Whatever is left selected is a set the user has just acted on, so it goes
-        // with the batch rather than inviting a second close of the same rows.
-        prListSelection = {}
-      }}
-    />
+    <PrBatchDialog batch={prBatch} onConfirm={confirmPrBatch} onClose={() => (prBatch = null)} />
   {/if}
 
   {#if prMetadata}

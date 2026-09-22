@@ -1,4 +1,5 @@
 import { Logger } from '../../system/logger'
+import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
@@ -105,7 +106,12 @@ const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search
  * nested worker session and a disposable session are billed separately), so
  * counting them cannot double count anything.
  */
-const PROFILE_MODEL_FEATURES = "'main','audit','assignment','subagent','ephemeral'"
+const PROFILE_MODEL_FEATURES = ['main', 'audit', 'assignment', 'subagent', 'ephemeral'] as const
+
+/** Quoted feature list for the profile SQL fragments and the record purges. */
+function featureSqlList(features: readonly string[]): string {
+  return features.map((feature) => `'${feature}'`).join(',')
+}
 
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
@@ -597,14 +603,14 @@ export class HarnessUsageRepo {
               SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
               SUM(COALESCE(tokens_total, 0)) AS tokens_total,
               SUM(duration_ms) AS duration_ms`
-    const modelRange = `feature IN (${PROFILE_MODEL_FEATURES})
+    const modelRange = `feature IN (${featureSqlList(PROFILE_MODEL_FEATURES)})
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
     const utilityPlaceholders = PROFILE_UTILITY_FEATURES.map(() => '?').join(',')
     const utilityRange = `feature IN (${utilityPlaceholders})
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
-    const profileRange = `(feature IN (${PROFILE_MODEL_FEATURES}) OR feature IN (${utilityPlaceholders}))
+    const profileRange = `(feature IN (${featureSqlList(PROFILE_MODEL_FEATURES)}) OR feature IN (${utilityPlaceholders}))
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
     const params = [range.startAt, range.endAt] as const
@@ -771,6 +777,8 @@ export class HarnessUsageRepo {
     const harnessTokens = harnessRows.reduce((sum, row) => sum + row.tokens_total, 0)
     const utilityCost = utilityRows.reduce((sum, row) => sum + row.cost_usd, 0)
     const utilityTokens = utilityRows.reduce((sum, row) => sum + row.tokens_total, 0)
+    const utilityMessageCount = utilityRows.reduce((sum, row) => sum + row.message_count, 0)
+    const agentResponses = harnessRows.reduce((sum, row) => sum + row.message_count, 0)
     const projects: LocalProfileProjectBreakdown[] = projectRows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -808,7 +816,7 @@ export class HarnessUsageRepo {
     return {
       range,
       activityRange,
-      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      messageCount: agentResponses,
       responseDurationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
@@ -833,8 +841,38 @@ export class HarnessUsageRepo {
       gradingSpend: {
         costUsd: 0
       },
+      records: {
+        agentResponses,
+        utilities: utilityMessageCount,
+        // The ranking store is overlaid by the IPC layer with the same repo it
+        // reads the aggregates from, so the counts and the rows always agree.
+        modelRankings: 0,
+        pendingGrades: 0
+      },
       generatedAt: Date.now()
     }
+  }
+
+  /**
+   * Delete one Usage page ledger store's rows inside a calendar range.
+   *
+   * Batched on the maintenance worker connection, so a clean slate over tens of
+   * thousands of rows never blocks the Electron main thread. Only `usage_events`
+   * is touched: the per-thread `harness_usage` snapshots are derived from
+   * `agent_messages` and would be rebuilt by the next reconcile, so deleting
+   * them would only desynchronize the two ledgers.
+   */
+  async clearLedgerRecords(
+    store: 'agentResponses' | 'utilities',
+    range: LocalProfileAnalyticsRange
+  ): Promise<RowsPurged> {
+    const features = store === 'utilities' ? PROFILE_UTILITY_FEATURES : PROFILE_MODEL_FEATURES
+    return purgeRowsViaWorker(
+      this.db,
+      'usage_events',
+      `created_at >= ? AND created_at < ? AND feature IN (${featureSqlList(features)})`,
+      [range.startAt, range.endAt]
+    )
   }
 
   /**

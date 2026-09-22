@@ -45,6 +45,7 @@ import type { HeartbeatSchedulerService } from '../../system/heartbeat-scheduler
 import type { AttachmentGrantRepo } from '../../database/repositories/attachment-grant-repo'
 import type { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
 import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
+import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { AttachmentStorageScope } from '../../../lib/types'
@@ -65,7 +66,7 @@ export interface RegisterIpcHandlersOptions {
   hydrationHandlersRegistered?: boolean
   /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
   threadCreation?: ThreadCreationCoordinator
-  /** Optimistic thread-delete cleanup coordinator shared with remote RPC. */
+  /** Optimistic thread-delete cleanup coordinator shared with ChatEngine. */
   threadDeletion?: ThreadDeletionCoordinator
   /** Git-backed inspector shared with the managed worktree service. */
   worktreeInspector?: ManagedWorktreeInspector
@@ -154,6 +155,8 @@ export interface IpcHandlerContext {
   attachmentGrantRepo: AttachmentGrantRepo
   harnessUsageRepo: HarnessUsageRepo
   modelRankingRepo: ModelRankingRepo
+  /** Transient grading queue behind the ranking aggregates, cleared with them. */
+  rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */

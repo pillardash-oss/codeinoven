@@ -39,7 +39,12 @@ export type GitOperation =
   | 'pr-comment-delete'
   | 'pr-comment-reply'
   | 'pr-comment-hide'
-  | 'pr-thread-resolve'
+  /**
+   * One thread's resolve/reopen, keyed by the thread's node id (`pr-thread-resolve:<nodeId>`)
+   * rather than shared across the pull request: every thread draws its own control, and a
+   * single key made all of them report the one write that was in flight.
+   */
+  | `pr-thread-resolve:${string}`
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
@@ -161,6 +166,16 @@ export function prPageKey(
   page: number
 ): string {
   return `${owner}/${repo}:${state}:${filter}:${sort}:${page}`
+}
+
+/**
+ * Busy key for one inline thread's resolve/reopen.
+ *
+ * The thread's node id is part of the key, so the thread being written is the
+ * only one whose button reports the write in flight.
+ */
+export function prThreadResolveBusyKey(threadNodeId: string): GitOperation {
+  return `pr-thread-resolve:${threadNodeId}`
 }
 
 /** Cache key for one pull request's detail bundle. */

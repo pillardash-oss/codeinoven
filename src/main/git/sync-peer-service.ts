@@ -19,7 +19,7 @@ export interface SyncPeerGit {
   statusBranch(projectPath: string): Promise<string | null>
 }
 
-/** Adapter so the desktop and the remote RPC contexts share one implementation. */
+/** Adapter narrowing the shared `GitService` to the reads the peer service needs. */
 export function syncPeerGit(git: {
   listBranches(projectPath: string): Promise<GitBranchInfo[]>
   getStatus(projectPath: string): Promise<{ branch: string | null }>

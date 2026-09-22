@@ -51,6 +51,12 @@ function analytics(): LocalProfileAnalytics {
       }
     ],
     gradingSpend: { costUsd: 0.07 },
+    records: {
+      agentResponses: 0,
+      utilities: 0,
+      modelRankings: 1,
+      pendingGrades: 0
+    },
     generatedAt: now
   }
 }

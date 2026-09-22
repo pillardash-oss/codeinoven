@@ -107,7 +107,7 @@
           "keys": ["mod", "enter"],
           "label": "Send message",
           "description": "Sends the message, or queues it while the agent is busy. Enter is never a send key   plain Enter always makes a new line or list item.",
-          "scenario": "Chat composer, message editing, and remote conversation composer."
+          "scenario": "Chat composer and message editing."
         },
         {
           "id": "chat-steer",
@@ -500,13 +500,6 @@
           "label": "Find in conversation",
           "description": "Opens the in-conversation find bar.",
           "scenario": "Conversation area focused."
-        },
-        {
-          "id": "thread-rename-device",
-          "keys": ["enter"],
-          "label": "Commit device rename",
-          "description": "Commits the device name edit; Escape cancels.",
-          "scenario": "Remote connected-devices rename input."
         }
       ]
     },

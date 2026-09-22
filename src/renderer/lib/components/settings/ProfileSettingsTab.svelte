@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronDown, RefreshCw } from '@lucide/svelte'
+  import { Brain, Check, ChevronDown, RefreshCw, Trash2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type {
     LocalProfileAnalytics,
@@ -13,6 +13,7 @@
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -54,6 +55,16 @@
     compareRankings,
     groupTopModels
   } from './profile-settings-analytics'
+  import {
+    clearedRecordsSummary,
+    usageClearConfirmation,
+    usageClearInfo,
+    usageClearRecordCount,
+    USAGE_RECORD_STORES,
+    usageRecordSummary,
+    type UsageClearCopyPart,
+    type UsageClearTarget
+  } from './profile-settings-records'
 
   let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
   let loading = $state(true)
@@ -128,6 +139,18 @@
 
   let thinkingFilter = $state<ThinkingFilter>('all')
   let shotFilter = $state<ShotFilter>('all')
+  /** Clear action awaiting confirmation; null while the dialog is closed. */
+  let pendingClear = $state<UsageClearTarget | null>(null)
+  let clearBusy = $state(false)
+  let clearNotice = $state('')
+
+  // Always resolved: the dialog stays mounted so the shared modal owns initial
+  // focus on every open. While closed the copy belongs to the 'all' target and
+  // is never rendered.
+  const clearConfirmation = $derived(
+    usageClearConfirmation(pendingClear ?? 'all', usage.records, usage.range)
+  )
+  const totalRecords = $derived(usageClearRecordCount('all', usage.records))
 
   const filteredRankings = $derived(
     shotFilter === 'all'
@@ -228,6 +251,7 @@
     endOffsetDays?: number
   ): void {
     rangePreset = preset
+    clearNotice = ''
     selectedRange = analyticsRange(days, endOffsetDays)
     customStartDate = dateInputValue(selectedRange.startAt)
     customEndDate = dateInputValue(selectedRange.endAt - 1)
@@ -254,12 +278,61 @@
       return
     }
     selectedRange = { startAt: start.getTime(), endAt: end.getTime() }
+    clearNotice = ''
     void loadUsage(selectedRange)
+  }
+
+  /** Range changes and manual refreshes retire the previous clear notice. */
+  function refresh(): void {
+    clearNotice = ''
+    void loadUsage()
   }
 
   onMount(() => {
     void loadUsage()
   })
+
+  function openClear(target: UsageClearTarget): void {
+    clearNotice = ''
+    errorMessage = ''
+    pendingClear = target
+  }
+
+  function closeClear(): void {
+    if (clearBusy) return
+    pendingClear = null
+  }
+
+  /**
+   * Run the confirmed clear, then reload the analytics.
+   *
+   * The reload happens on both paths: a purge that partially ran must be
+   * reflected on screen rather than described from the counts we hoped for.
+   */
+  async function confirmClear(): Promise<void> {
+    const target = pendingClear
+    if (!target) return
+    clearBusy = true
+    let failure = ''
+    try {
+      const cleared = await invoke('account:clearLocalUsage', {
+        store: target,
+        range: usage.range
+      })
+      clearNotice =
+        usageClearRecordCount(target, cleared) === 0
+          ? 'No matching usage records were left to clear.'
+          : `Cleared ${clearedRecordsSummary(target, cleared)}.`
+    } catch {
+      failure = 'Those usage records could not be cleared. Others are unchanged.'
+    } finally {
+      pendingClear = null
+      await loadUsage(usage.range)
+      clearBusy = false
+    }
+    // Set after the reload, which owns the error line while it runs.
+    if (failure) errorMessage = failure
+  }
 </script>
 
 <div class="w-full p-6 pb-24">
@@ -273,11 +346,24 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
+        class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+        title={totalRecords > 0
+          ? 'Clear every usage record this page reads'
+          : 'No usage records to clear'}
+        aria-label="Clear all usage records"
+        disabled={loading || clearBusy || totalRecords === 0}
+        onclick={() => openClear('all')}
+      >
+        <Trash2 size={14} />
+        Clear all records
+      </button>
+      <button
+        type="button"
         class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold hover:bg-elevated disabled:opacity-50"
         title="Refresh usage analytics"
         aria-label="Refresh usage analytics"
         disabled={loading}
-        onclick={() => void loadUsage()}
+        onclick={refresh}
       >
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
         Refresh
@@ -291,6 +377,15 @@
       role="alert"
     >
       {errorMessage}
+    </p>
+  {/if}
+
+  {#if clearNotice}
+    <p
+      class="mb-4 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+      role="status"
+    >
+      {clearNotice}
     </p>
   {/if}
 
@@ -1048,7 +1143,66 @@
       {/each}
     </div>
   </section>
+
+  <section class="mt-4 rounded-xl border" aria-labelledby="usage-records-heading">
+    <div class="border-b px-4 py-3">
+      <h2 id="usage-records-heading" class="text-sm font-semibold">Usage records</h2>
+      <p class="mt-0.5 text-xs text-muted">
+        The local records this page reads. Clearing one starts its section from a clean slate on
+        this device.
+      </p>
+    </div>
+    <div class="divide-y">
+      {#each USAGE_RECORD_STORES as store (store)}
+        {@const info = usageClearInfo(store)}
+        {@const storeRecords = usageClearRecordCount(store, usage.records)}
+        {@const storeLabel = info.label.toLowerCase()}
+        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold">{info.label}</p>
+            <p class="mt-0.5 text-[0.6875rem] text-muted">{info.description}</p>
+            <p class="mt-1 text-[0.6875rem] tabular-nums text-dimmed">
+              {usageRecordSummary(store, usage.records, usage.range)}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+            title={storeRecords > 0
+              ? `Clear ${storeLabel} records`
+              : `No ${storeLabel} records to clear`}
+            aria-label={`Clear ${storeLabel} records`}
+            disabled={loading || clearBusy || storeRecords === 0}
+            onclick={() => openClear(store)}
+          >
+            <Trash2 size={13} />
+            Clear
+          </button>
+        </div>
+      {/each}
+    </div>
+  </section>
 </div>
+
+{#snippet clearCopy(parts: UsageClearCopyPart[])}
+  {#each parts as part, index (index)}{#if part.emphasis}<strong
+        class="font-semibold text-foreground">{part.text}</strong
+      >{:else}{part.text}{/if}{/each}
+{/snippet}
+
+<ConfirmDialog
+  open={pendingClear !== null}
+  title={clearConfirmation.title}
+  confirmLabel={clearConfirmation.confirmLabel}
+  note={clearConfirmation.note}
+  busy={clearBusy}
+  onCancel={closeClear}
+  onConfirm={confirmClear}
+>
+  <p>{@render clearCopy(clearConfirmation.scope)}</p>
+  <p class="mt-2">{@render clearCopy(clearConfirmation.removal)}</p>
+  <p class="mt-2 font-medium text-foreground">Are you sure you want to continue?</p>
+</ConfirmDialog>
 
 <style>
   .hourly-columns {

@@ -13,24 +13,93 @@ import {
   validateAppConfigPatch,
   validateHeartbeatCreateInput,
   validateHeartbeatPatchInput,
-  validateLocalProfileAnalyticsRange
+  validateLocalProfileAnalyticsRange,
+  validateLocalUsageClearInput
 } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { AgentRole, AppConfig } from '../../../lib/types'
+import { Logger } from '../../system/logger'
+import type {
+  AgentRole,
+  AppConfig,
+  LocalUsageClearInput,
+  LocalUsageRecordCounts
+} from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 const AGENT_ROLES = new Set<AgentRole>(['seniorEngineer', 'worker', 'auditor'])
 
+/** Human label for each clearable store, used only in the purge log line. */
+const RECORD_STORE_LABELS: Record<LocalUsageClearInput['store'], string> = {
+  all: 'all usage records',
+  agentResponses: 'agent response records',
+  utilities: 'utility records',
+  modelRankings: 'model ranking records'
+}
+
 export function registerConfigHandlers(ctx: IpcHandlerContext): void {
-  const { storage, options, harnessUsageRepo, modelRankingRepo } = ctx
+  const { storage, options, harnessUsageRepo, modelRankingRepo, rankingSnapshotRepo } = ctx
 
   // ─── Application config ────────────────────────────────────────────────
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
     const range = validateLocalProfileAnalyticsRange(input)
-    const analytics = await harnessUsageRepo.profileAnalytics(range)
+    const [analytics, pendingGrades] = await Promise.all([
+      harnessUsageRepo.profileAnalytics(range),
+      rankingSnapshotRepo.totalCount()
+    ])
     analytics.modelRankings = modelRankingRepo.analytics()
     analytics.gradingSpend = modelRankingRepo.gradingSpend()
+    // The stores the Usage page can clear are reported alongside the analytics,
+    // so the counts a clear dialog promises always match the rows on screen.
+    analytics.records.modelRankings = modelRankingRepo.recordCount()
+    analytics.records.pendingGrades = pendingGrades
     return analytics
+  })
+
+  /**
+   * Start one Usage page record store from a clean slate.
+   *
+   * Ledger stores are scoped to the supplied range. The ranking store carries
+   * no per-range timestamp, so it is cleared all-time together with the grading
+   * queue that would otherwise repopulate it. Every purge is logged, because a
+   * destructive action that empties visible history must never be silent.
+   */
+  ipcMain.handle('account:clearLocalUsage', async (_, input: unknown) => {
+    const request = validateLocalUsageClearInput(input)
+    const cleared: LocalUsageRecordCounts = {
+      agentResponses: 0,
+      utilities: 0,
+      modelRankings: 0,
+      pendingGrades: 0
+    }
+    if (request.store === 'all' || request.store === 'agentResponses') {
+      const result = await harnessUsageRepo.clearLedgerRecords('agentResponses', request.range)
+      if (!result.ok) {
+        throw new Error(result.error ?? 'Agent response records could not be cleared')
+      }
+      cleared.agentResponses = result.deleted
+    }
+    if (request.store === 'all' || request.store === 'utilities') {
+      const result = await harnessUsageRepo.clearLedgerRecords('utilities', request.range)
+      if (!result.ok) {
+        throw new Error(result.error ?? 'Utility records could not be cleared')
+      }
+      cleared.utilities = result.deleted
+    }
+    if (request.store === 'all' || request.store === 'modelRankings') {
+      cleared.modelRankings = modelRankingRepo.clearAll()
+      const queue = await rankingSnapshotRepo.clearAllViaWorker()
+      if (!queue.ok) {
+        throw new Error(queue.error ?? 'The ranking grading queue could not be cleared')
+      }
+      cleared.pendingGrades = queue.deleted
+    }
+    Logger.info('Local usage records cleared', {
+      store: RECORD_STORE_LABELS[request.store],
+      rangeStartAt: request.range.startAt,
+      rangeEndAt: request.range.endAt,
+      cleared
+    })
+    return cleared
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())

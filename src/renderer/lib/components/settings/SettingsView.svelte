@@ -121,6 +121,10 @@
    */
   let marketplaceVisited = $state(false)
 
+  /** The mounted catalog, so returning to it can re-read what the marketplace
+   *  may have installed or uninstalled while the catalog sat behind it. */
+  let utilitiesCatalog: UtilitiesView | undefined = $state(undefined)
+
   function currentSettingsLocation(): SettingsHistoryEntry {
     return { section, utilitiesRoute }
   }
@@ -141,7 +145,15 @@
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
     if (nextRoute.page === 'marketplace') marketplaceVisited = true
+    applyUtilitiesRoute(nextRoute)
+  }
+
+  /** Moves the utilities route and re-reads the catalog when the route returns to
+   *  it, because the marketplace can change what belongs in the list. */
+  function applyUtilitiesRoute(nextRoute: UtilitiesRoute): void {
+    const returningToCatalog = utilitiesRoute.page !== 'catalog' && nextRoute.page === 'catalog'
     utilitiesRoute = nextRoute
+    if (returningToCatalog) utilitiesCatalog?.reload()
   }
 
   /** Section tabs are one page, so switching them replaces the route, never the history. */
@@ -169,7 +181,7 @@
       return
     }
     settingsHistory = settingsHistory.slice(0, -1)
-    utilitiesRoute = previous.utilitiesRoute
+    applyUtilitiesRoute(previous.utilitiesRoute)
     if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
     if (previous.section !== section) onNavigateSection(previous.section)
   }
@@ -1003,6 +1015,7 @@
             : 'invisible'}"
         >
           <UtilitiesView
+            bind:this={utilitiesCatalog}
             activeTab={catalogTab}
             onSelectTab={selectUtilitiesTab}
             onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}

@@ -8,7 +8,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { prComposeAgentSettings } from '$lib/stores/pr-compose-agent-settings.svelte'
-  import { classifyProviderIssue } from '$shared/provider-issue'
+  import { classifyProviderIssue, providerIssueTitle } from '$shared/provider-issue'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import {
@@ -183,6 +183,8 @@
    * switch the agent or retry instead of reading a thrown string.
    */
   let composeIssue = $state<AgentProviderIssue | null>(null)
+  /** Open state of the footer's compose menu, so the failure notice can open it. */
+  let composeOpen = $state(false)
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
   let composeCompleteTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -573,11 +575,14 @@
       const project = await invoke('project:get', projectId).catch(() => null)
       if (!project) throw new Error('Could not open this project for the agent')
       const settings = { ...threadSettings.lastUsed }
+      // The thread belongs to the scope this sheet drafts in, so a worktree's
+      // diverged branch is resolved in that worktree, not the project root.
       const thread = await invoke('thread:create', {
         projectId,
         providerId: settings.harnessId,
         title: `Resolve diverged branch ${head}`,
         workingDirectory: project.path,
+        scopeBucketId,
         settings
       }).catch(() => null)
       if (!thread) throw new Error('Could not create the resolution thread')
@@ -856,14 +861,48 @@
         </p>
       {/if}
 
-      {#if originIdentity && !sameBranch && head && base}
-        <GitPullRequestSheetCompose
-          {projectId}
-          providers={composeProviders}
-          {composePhase}
-          bind:issue={composeIssue}
-          onCompose={() => void runCompose()}
-        />
+      {#if composeIssue}
+        <!--
+          The failure stays in the body rather than in the footer: an alert needs
+          the width to state what went wrong, while the footer is a one-line action
+          bar. Both ways out are here, because a harness that cannot start will not
+          start on a retry either   changing the model is the fix, and retrying is
+          for a failure that was transient.
+        -->
+        <div
+          class="flex flex-wrap items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5"
+          role="alert"
+        >
+          <TriangleAlert size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+          <div class="min-w-0 flex-1">
+            <p class="text-[0.625rem] font-semibold text-warning">
+              {providerIssueTitle(composeIssue.kind)}
+            </p>
+            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-warning select-text">
+              {composeIssue.message}
+            </p>
+          </div>
+          <div class="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              class="cursor-pointer rounded-md px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
+              title="Choose a different model or harness for Compose PR"
+              onclick={() => {
+                composeOpen = true
+              }}
+            >
+              Change model
+            </button>
+            <button
+              type="button"
+              class="cursor-pointer rounded-md px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
+              title="Run Compose PR again"
+              onclick={() => void runCompose()}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
       {/if}
     {/if}
 
@@ -960,6 +999,24 @@
 
   {#snippet footer()}
     {#if !result}
+      <!--
+        `mr-auto` is what puts Compose with agent on the footer's left edge: the
+        footer lays its children out to the end, and an auto margin on the first
+        child absorbs the free space. It is rendered only while a pull request is
+        still being created, alongside the create and dismiss actions.
+      -->
+      {#if originIdentity && !sameBranch && head && base}
+        <div class="mr-auto">
+          <GitPullRequestSheetCompose
+            {projectId}
+            providers={composeProviders}
+            {composePhase}
+            bind:issue={composeIssue}
+            bind:open={composeOpen}
+            onCompose={() => void runCompose()}
+          />
+        </div>
+      {/if}
       <button
         type="button"
         data-modal-dismiss

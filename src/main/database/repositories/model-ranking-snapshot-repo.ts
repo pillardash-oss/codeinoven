@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
+import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
 import type { Database } from '../database'
 import type { ModelRankingSnapshotRow, RankingShotCategory } from '../../../lib/types'
 
@@ -509,6 +510,37 @@ export class ModelRankingSnapshotRepo {
        WHERE status IN ('pending','processing')`
     )
     return row?.count ?? 0
+  }
+
+  /**
+   * Every queue row in any state, including ones parked as `failed` for
+   * recovery. A user-requested clean slate reports and removes all of them,
+   * because a surviving row would be graded later and repopulate the ranking
+   * aggregates the user just cleared.
+   */
+  async totalCount(): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      'SELECT COUNT(*) AS count FROM model_ranking_snapshots',
+      [],
+      1
+    )
+    const value = result.rows[0]?.['count']
+    return typeof value === 'number' ? value : 0
+  }
+
+  /**
+   * Drop every queue row in bounded worker batches.
+   *
+   * This is the one place a row is discarded without a score, and it is
+   * deliberate: an explicit user purge must not leave conversations that would
+   * later restore the cleared aggregates. Rows a drain has already claimed stop
+   * matching its claim token once deleted, so an in-flight grade result is
+   * dropped instead of resurrecting the slate.
+   */
+  clearAllViaWorker(): Promise<RowsPurged> {
+    // `1 = 1` is the whole-table filter; the purge helper takes a predicate so
+    // range-scoped purges and this one share a single batched implementation.
+    return purgeRowsViaWorker(this.db, 'model_ranking_snapshots', '1 = 1', [])
   }
 }
 

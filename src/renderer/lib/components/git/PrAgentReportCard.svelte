@@ -24,6 +24,10 @@
    * its own. It arrives folded to five lines, because one assignment can write
    * thousands of them and several assignments share this tab.
    *
+   * The kinds differ only in what they can point back at: a `triage` answers the
+   * pull request itself, a `comment` answers one comment, and a `check` answers one
+   * failed check.
+   *
    * The fold is measured rather than guessed. Only the laid-out height knows
    * whether a report fits, so the clamp is compared against what it hides and the
    * expander is drawn only while it is hiding something.
@@ -52,12 +56,21 @@
   const hasBody = $derived(report.content.trim().length > 0)
 
   /**
-   * A triage assignment answers the pull request rather than one comment, so it
-   * carries no permalink and both controls that lead back to a comment are absent
-   * for it. Both are read through a local so the narrowing survives into the click
-   * handlers.
+   * Where an assignment can lead back to.
+   *
+   * `Show comment` is the conversation lookup, so it exists only for a comment
+   * assignment: it matches on the permalink against the entries the reader draws.
+   * The external control exists whenever the assignment names a provider page,
+   * which is the comment for a comment assignment and the check for a check one,
+   * and it is titled for the page it actually opens.
    */
-  const commentUrl = $derived(report.url)
+  const commentUrl = $derived(report.kind === 'comment' ? report.url : null)
+  const externalUrl = $derived(report.url)
+  const externalLabel = $derived(
+    report.kind === 'check'
+      ? 'Open the failed check on GitHub'
+      : 'Open the comment this assignment answered on GitHub'
+  )
   const threadId = $derived(report.threadId)
 
   /**
@@ -97,7 +110,7 @@
     Two rows, because the card answers two questions: what this assignment was,
     and where its answer can be read. The first row names it, the second carries
     when it was written and every control that leads back to the assignment or to
-    its output. The permalink is the only control that leaves the app, so it is the
+    its output. The external control is the only one that leaves the app, so it is the
     only icon-only one, and it declares its address for the app's link context menu
     to find.
   -->
@@ -150,14 +163,14 @@
           <FileText size={11} class="shrink-0" />
           Report
         </button>
-        {#if commentUrl}
+        {#if externalUrl}
           <button
             type="button"
             class={iconActionClass}
-            data-external-url={commentUrl}
-            title="Open the comment this assignment answered on GitHub"
-            aria-label="Open the comment this assignment answered on GitHub"
-            onclick={() => void openInBrowser(commentUrl)}
+            data-external-url={externalUrl}
+            title={externalLabel}
+            aria-label={externalLabel}
+            onclick={() => void openInBrowser(externalUrl)}
           >
             <ExternalLink size={11} />
           </button>

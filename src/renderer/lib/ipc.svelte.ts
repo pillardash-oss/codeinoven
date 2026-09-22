@@ -9,6 +9,7 @@ import type {
   InvokeResult
 } from '../../preload/index'
 import {
+  isGitInvocationSuccess,
   isGitRefusedOperation,
   type GitInvocationValue,
   type GitRefusingChannel
@@ -95,8 +96,14 @@ export async function invokeGit<Channel extends GitRefusingChannel>(
 ): Promise<GitInvocationValue<InvokeResult<Channel>>> {
   const result: unknown = await invoke(channel, ...args)
   if (isGitRefusedOperation(result)) throw new Error(result.refusal)
-  // The guard above is what proves the shape at runtime; the compiler cannot see
-  // through the generic channel lookup, so the unwrapped value is asserted here.
+  // A channel that honoured its contract returns the `{ ok: true, value }`
+  // envelope on success, so the value the caller asked for is one level down.
+  if (isGitInvocationSuccess(result)) {
+    return result.value as GitInvocationValue<InvokeResult<Channel>>
+  }
+  // A handler that returned the plain value (no envelope) passes through
+  // untouched; the compiler cannot see through the generic channel lookup,
+  // so the result is asserted either way.
   return result as GitInvocationValue<InvokeResult<Channel>>
 }
 

@@ -460,7 +460,7 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-70 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
                 {@const active = thinkingLevel === preset.id}
@@ -510,7 +510,7 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-70 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#if accountLoading}
                 <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
@@ -562,13 +562,21 @@
       {/if}
     </div>
 
+    <!--
+      `z-90`, not `z-70`. This picker is used from inside `DockableModal layer="top"`
+      panels (the pull request sheet), which paint at `z-80`. At `z-70` the popover
+      opened behind the panel and no model in it could be clicked. `z-90` is the
+      app's documented rung for a portaled menu that must clear a `top` panel, and
+      the thinking and account menus below are on it for the same reason. Do not
+      lower this back: the picker would silently stop working in that panel again.
+    -->
     <Popover.Portal>
       <Popover.Content
         {side}
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-70 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-90 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         role="dialog"
         aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}

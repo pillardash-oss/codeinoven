@@ -423,20 +423,6 @@ export const invokeAgentContract = {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >,
-  'attachment:beginRemoteUpload': {} as Contract<
-    [scope: AttachmentStorageScope, filename: string, size: number],
-    string
-  >,
-  'attachment:appendRemoteUpload': {} as Contract<
-    [uploadId: string, offset: number, base64Chunk: string],
-    number
-  >,
-  'attachment:finishRemoteUpload': {} as Contract<[uploadId: string], string>,
-  'attachment:cancelRemoteUpload': {} as Contract<[uploadId: string], void>,
-  'attachment:readRemoteChunk': {} as Contract<
-    [path: string, offset: number],
-    { base64: string; nextOffset: number; size: number }
-  >,
   'heartbeat:list': {} as Contract<[], HeartbeatConfig[]>,
   'heartbeat:create': {} as Contract<
     [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],

@@ -151,7 +151,10 @@ export class GitPrConflictIndicators {
         sort: 'updated',
         cursor: null
       })
-      if (page.accessError) return
+      // A page GitHub could not answer proves nothing about conflicts, so an
+      // access failure and a transient transport failure both leave the last
+      // known conflict state alone.
+      if (page.accessError || page.transientError) return
       // `mergeable` is frequently null in list payloads (GitHub computes it
       // lazily); `mergeable_state` (e.g. `dirty`) is the reliable list signal,
       // so a PR counts if either flags it. PRs with no computed state probe

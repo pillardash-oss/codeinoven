@@ -667,6 +667,7 @@
             bind:value={reviewNotes}
             placeholder="Optional rework instructions"
             ariaLabel="Audit rework instructions"
+            onSubmit={() => void submitReview()}
           />
         </label>
         <button

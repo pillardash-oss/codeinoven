@@ -239,22 +239,24 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       )
       // A checkout git refuses (local changes it would overwrite) is a state the
       // panel resolves, so it returns as data and the branch bookkeeping below
-      // only runs for a checkout that actually happened.
+      // only runs for a checkout that actually happened. The envelope is the
+      // contract result, so it is returned whole: invokeGit unwraps the value
+      // on the renderer side.
       const outcome = await gitInvocation(() =>
         gitService.checkout(projectPath, validateBranchName(branch))
       )
-      if (!outcome.ok) return outcome
-      const status = outcome.value
-      // Keep thread.branch coherent when the app drives a checkout (D7): update
-      // every owned thread whose working directory is this project.
-      const threads = await threadManager.listThreads(safeProjectId)
-      for (const thread of threads) {
-        if (thread.workingDirectory) {
-          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      if (outcome.ok) {
+        // Keep thread.branch coherent when the app drives a checkout (D7): update
+        // every owned thread whose working directory is this project.
+        const threads = await threadManager.listThreads(safeProjectId)
+        for (const thread of threads) {
+          if (thread.workingDirectory) {
+            const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+          }
         }
       }
-      return status
+      return outcome
     }
   )
   ipcMain.handle(
@@ -268,16 +270,16 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       const outcome = await gitInvocation(() =>
         gitService.createBranch(projectPath, validateBranchName(name))
       )
-      if (!outcome.ok) return outcome
-      const status = outcome.value
-      const threads = await threadManager.listThreads(safeProjectId)
-      for (const thread of threads) {
-        if (thread.workingDirectory) {
-          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      if (outcome.ok) {
+        const threads = await threadManager.listThreads(safeProjectId)
+        for (const thread of threads) {
+          if (thread.workingDirectory) {
+            const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+          }
         }
       }
-      return status
+      return outcome
     }
   )
   ipcMain.handle(
@@ -303,16 +305,16 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
           validateBranchName(localName, 'Local branch')
         )
       )
-      if (!outcome.ok) return outcome
-      const status = outcome.value
-      const threads = await threadManager.listThreads(safeProjectId)
-      for (const thread of threads) {
-        if (thread.workingDirectory) {
-          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      if (outcome.ok) {
+        const threads = await threadManager.listThreads(safeProjectId)
+        for (const thread of threads) {
+          if (thread.workingDirectory) {
+            const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+          }
         }
       }
-      return status
+      return outcome
     }
   )
   ipcMain.handle(

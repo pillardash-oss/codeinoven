@@ -4175,8 +4175,8 @@ export class ChatEngine {
         }
       }
       // The desktop view adopts ensureSession's return value directly. Publish
-      // the persisted binding too so remote renderers can route the very first
-      // streamed part from a new or replacement harness session.
+      // the persisted binding too so every other window can route the very
+      // first streamed part from a new or replacement harness session.
       broadcastThreadUpdate(boundThread)
       if (rotatedPlanningSession) {
         this.preparedImplementationSessions.add(sessionId)
@@ -20804,7 +20804,7 @@ export class ChatEngine {
   }
 
   /**
-   * Broadcast an agent event to every renderer window and the remote peer.
+   * Broadcast an agent event to every renderer window.
    *
    * Provider token streams can emit hundreds of snapshots/deltas per second.
    * Renderers only need the newest part snapshot and the concatenated deltas

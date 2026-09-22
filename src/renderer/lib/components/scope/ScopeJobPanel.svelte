@@ -1,6 +1,14 @@
 <script lang="ts">
-  import { Circle, CircleCheck, Loader2, TriangleAlert } from '@lucide/svelte'
-  import DockableModal from '$lib/components/ui/DockableModal.svelte'
+  /**
+   * One worktree run, as the shared job panel draws it.
+   *
+   * This adapter owns everything scope-specific: the heading a create, adopt or
+   * remove run deserves, how a step's state is derived from the run's active step,
+   * and the branch and folder the finished run leaves behind. The panel and its
+   * dockable behaviour are shared with the pull request batches.
+   */
+  import JobPanel from '$lib/components/ui/JobPanel.svelte'
+  import type { JobStatus, JobStepView } from '$lib/components/ui/job-view'
   import {
     scopeJobActiveStepId,
     scopeJobStatusLabel,
@@ -19,19 +27,22 @@
 
   const running = $derived(job.status === 'running')
   const done = $derived(job.status === 'succeeded')
-  const failed = $derived(job.status === 'failed')
   const removing = $derived(job.kind === 'remove')
   /** Step the run is on right now, or the one it stopped on. */
   const active = $derived(scopeJobActiveStepId(job))
 
+  const status = $derived<JobStatus>(
+    job.status === 'running' ? 'running' : job.status === 'succeeded' ? 'succeeded' : 'failed'
+  )
+
   /** Panel title: who the run belongs to and where it stands. */
-  function headingFor(job: ScopeJob): string {
+  function headingFor(run: ScopeJob): string {
     const outcome =
-      job.kind === 'remove'
+      run.kind === 'remove'
         ? { present: 'Deleting', done: 'is deleted', failed: 'could not be deleted' }
-        : job.kind === 'create'
+        : run.kind === 'create'
           ? { present: 'Creating', done: 'is ready', failed: 'could not be created' }
-          : job.kind === 'agent'
+          : run.kind === 'agent'
             ? {
                 present: 'An agent is preparing',
                 done: 'is ready',
@@ -42,21 +53,21 @@
                 done: 'has a worktree',
                 failed: 'could not adopt the worktree'
               }
-    if (running) return `${outcome.present} “${job.title}”…`
-    return done ? `“${job.title}” ${outcome.done}` : `“${job.title}” ${outcome.failed}`
+    if (running) return `${outcome.present} “${run.title}”…`
+    return done ? `“${run.title}” ${outcome.done}` : `“${run.title}” ${outcome.failed}`
   }
 
   const heading = $derived(headingFor(job))
 
   /** Where one checklist step sits relative to the run. */
-  function stateFor(step: ScopeJobStepId): 'complete' | 'active' | 'failed' | 'pending' {
+  function stateFor(step: ScopeJobStepId): JobStepView['state'] {
     if (done) return 'complete'
     if (!active) return 'pending'
     const activeIndex = job.steps.findIndex((candidate) => candidate.id === active)
     const index = job.steps.findIndex((candidate) => candidate.id === step)
     if (index < activeIndex) return 'complete'
     if (index > activeIndex) return 'pending'
-    return failed ? 'failed' : 'active'
+    return job.status === 'failed' ? 'failed' : 'active'
   }
 
   /** Setup commands run in order; `detail` carries the 1-based command number. */
@@ -67,6 +78,14 @@
   )
 
   const statusLabel = $derived(`${scopeJobStatusLabel(job)}${setupProgress}`)
+
+  const steps = $derived<JobStepView[]>(
+    job.steps.map((step) => ({
+      id: step.id,
+      label: step.label,
+      state: stateFor(step.id)
+    }))
+  )
 
   /** What the finished run leaves behind, stated for its kind. */
   const doneNote = $derived(
@@ -79,71 +98,31 @@
         : 'This scope shares the project directory with the Default scope.'
   )
 
-  const openNote = $derived(
-    removing
-      ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
-      : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
+  const note = $derived(
+    running
+      ? 'You can keep working. The run continues in the background.'
+      : done
+        ? doneNote
+        : removing
+          ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
+          : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
   )
 </script>
 
-<DockableModal
-  open
+<JobPanel
   title={heading}
+  {status}
+  {statusLabel}
+  {steps}
+  error={job.error}
+  {note}
   minimized={job.minimized}
-  closable={!running}
   {onMinimize}
   {onClose}
   {storageKey}
-  defaultHeight={420}
   dragLabel="Drag to move the worktree run"
 >
-  <div class="space-y-3">
-    <p class="flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
-      {#if running}
-        <Loader2 size={13} class="animate-spin text-info" aria-hidden="true" />
-        <span class="text-info">{statusLabel}</span>
-      {:else if done}
-        <CircleCheck size={13} class="text-success" aria-hidden="true" />
-        <span class="text-success">{statusLabel}</span>
-      {:else}
-        <TriangleAlert size={13} class="text-danger" aria-hidden="true" />
-        <span class="text-danger">{statusLabel}</span>
-      {/if}
-    </p>
-
-    <ol class="space-y-1.5">
-      {#each job.steps as step (step.id)}
-        {@const state = stateFor(step.id)}
-        <li class="flex items-center gap-2 text-[0.6875rem]">
-          {#if state === 'complete'}
-            <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
-          {:else if state === 'active'}
-            <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
-          {:else if state === 'failed'}
-            <TriangleAlert size={12} class="shrink-0 text-danger" aria-hidden="true" />
-          {:else}
-            <Circle size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
-          {/if}
-          <span class={state === 'pending' ? 'text-dimmed' : 'text-foreground'}>
-            {step.label}{step.id === 'setup' && state === 'active' ? setupProgress : ''}
-          </span>
-          {#if state === 'complete'}
-            <span class="sr-only">completed</span>
-          {:else if state === 'failed'}
-            <span class="sr-only">failed</span>
-          {/if}
-        </li>
-      {/each}
-    </ol>
-
-    {#if job.error}
-      <p
-        class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[0.6875rem] text-danger"
-      >
-        {job.error}
-      </p>
-    {/if}
-
+  {#snippet details()}
     {#if job.result}
       <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
         <p class="flex min-w-0 items-center gap-1.5">
@@ -156,39 +135,5 @@
         </p>
       </div>
     {/if}
-
-    <p class="text-[0.6875rem] text-dimmed">
-      {running
-        ? 'You can keep working. The run continues in the background.'
-        : done
-          ? doneNote
-          : openNote}
-    </p>
-  </div>
-
-  <!--
-    The host renders one unified dock row for every minimized run, so this panel
-    contributes no chip of its own (mirrors `GitPullRequestSheet`).
-  -->
-  {#snippet dock()}{/snippet}
-
-  {#snippet footer()}
-    {#if running}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
-        onclick={onMinimize}
-      >
-        Run in background
-      </button>
-    {:else}
-      <button
-        type="button"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
-        onclick={onClose}
-      >
-        Done
-      </button>
-    {/if}
   {/snippet}
-</DockableModal>
+</JobPanel>

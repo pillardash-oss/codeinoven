@@ -5,6 +5,10 @@ export const invokeAccountContract = {
     [range: import('../types').LocalProfileAnalyticsRange],
     import('../types').LocalProfileAnalytics
   >,
+  'account:clearLocalUsage': {} as Contract<
+    [input: import('../types').LocalUsageClearInput],
+    import('../types').LocalUsageRecordCounts
+  >,
   'memory:getLayers': {} as Contract<
     [projectId: string, threadId: string],
     import('../types').BehaviorLayer[]

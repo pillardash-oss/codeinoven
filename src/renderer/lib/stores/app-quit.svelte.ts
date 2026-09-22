@@ -2,8 +2,8 @@
  * The renderer's view of "this app is quitting".
  *
  * The main process tells every window about a confirmed quit through
- * `window:beforeQuit`, then runs its shutdown pipeline: remote mode, PTYs,
- * schedulers, the chat engine, and finally the database. The window stays alive
+ * `window:beforeQuit`, then runs its shutdown pipeline: PTYs, schedulers, the
+ * chat engine, and finally the database. The window stays alive
  * for that whole pipeline (Electron only closes it at the pipeline's final
  * `app.quit()`), so any renderer work that keeps reading storage schedules
  * itself into a moment when the database is already closed. That surfaces as a

@@ -3911,7 +3911,7 @@
         // Another renderer window can create or resume the harness
         // session while this desktop view stays mounted. Adopt that persisted
         // binding before its stream arrives, then reconcile the user message
-        // that the remote renderer optimistically owns in its own cache.
+        // that the other window optimistically owns in its own cache.
         if (updatedThread.sessionId && updatedThread.sessionId !== sessionId) {
           sessionBindingVersion += 1
           sessionId = updatedThread.sessionId

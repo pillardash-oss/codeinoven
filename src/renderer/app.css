@@ -908,7 +908,7 @@ html body [data-sonner-toaster] {
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`
- * would otherwise be unreachable on the phone client, so on a device with no
+ * would otherwise be unreachable on a touch device, so on a device with no
  * hover they are simply visible. Long-press covers the cases driven by JS
  * state instead of CSS (see `long-press.svelte.ts`).
  */

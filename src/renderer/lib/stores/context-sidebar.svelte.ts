@@ -457,6 +457,13 @@ class ContextSidebarState {
     this.tabContexts.openActions(projectId, threadId)
   }
 
+  /** Whether the in-app browser can take a page right now. False while no
+   *  project thread is active to own the tab, which is every surface outside the
+   *  workspace until a project-less global browser exists. */
+  get canOpenBrowserTab(): boolean {
+    return this.browser.canOpen
+  }
+
   openBrowser(url: string, requestedTabId?: string): string | null {
     return this.browser.open(url, requestedTabId)
   }

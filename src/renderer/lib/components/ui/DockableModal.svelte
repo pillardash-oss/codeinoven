@@ -372,8 +372,14 @@
     <div class="min-h-0 flex-1 overflow-y-auto p-4">{@render children()}</div>
 
     {#if footer}
+      <!--
+        `flex-wrap` because the footer carries three actions in the pull request
+        sheet (compose, dismiss, create). It was sized for two, and at the panel's
+        360px minimum width the third would have overflowed the edge instead of
+        wrapping to a second row. Panels that already fit are unaffected.
+      -->
       <div
-        class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+        class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
         data-modal-footer
       >
         {@render footer()}

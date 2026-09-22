@@ -1,6 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
-import type { GitSyncResult } from '$shared/types'
+import type { DanglingReference, GitSyncResult } from '$shared/types'
 
 /**
  * Report a completed sync exactly once, in the words the picker used for the
@@ -33,6 +33,7 @@ export function reportSyncResult(result: GitSyncResult): void {
       showToastWarning(`${summary}. ${result.remote}/${result.peerBranch} could not be refreshed.`)
       return
     }
+    if (reportIntegrationFindings(summary, result)) return
     toast.success(summary)
     return
   }
@@ -47,6 +48,7 @@ export function reportSyncResult(result: GitSyncResult): void {
     )
     return
   }
+  if (reportIntegrationFindings(summary, result)) return
   toast.success(summary)
 }
 
@@ -83,7 +85,55 @@ export function syncStrategyNotes(direction: 'from' | 'to'): { label: string; no
     },
     {
       label: 'Fast-forward only',
-      note: 'Moves the other end only when it has not diverged.'
+      note: 'Moves the other end only when it has not yet diverged.'
     }
   ]
+}
+
+/** How many broken imports a toast names before it counts the rest. */
+const MAX_LISTED_REFERENCES = 3
+
+/**
+ * Report what the integration left behind, in the checkout the commits landed
+ * in, and return true when it warned instead of reporting a plain success.
+ *
+ * Both findings are silent by nature: git reports a clean integration either
+ * way, and the breakage only shows up in the checkout's next build or start.
+ */
+function reportIntegrationFindings(summary: string, result: GitSyncResult): boolean {
+  const references = result.danglingReferences
+  const manifests = result.changedDependencyManifests
+  if (references.length === 0 && manifests.length === 0) return false
+
+  const findings: string[] = []
+  if (references.length > 0) {
+    findings.push(`${String(references.length)} broken import${references.length === 1 ? '' : 's'}`)
+  }
+  if (manifests.length > 0) {
+    findings.push(
+      `${String(manifests.length)} changed dependency manifest${manifests.length === 1 ? '' : 's'}`
+    )
+  }
+
+  showToastWarning(`${summary}, leaving ${findings.join(' and ')}.`, {
+    duration: 20_000,
+    description: describeIntegrationFindings(references, manifests)
+  })
+  return true
+}
+
+/**
+ * One line, because a toast description is a single line: what is broken, and
+ * what has to run before this checkout is usable again.
+ */
+function describeIntegrationFindings(references: DanglingReference[], manifests: string[]): string {
+  const listed = references
+    .slice(0, MAX_LISTED_REFERENCES)
+    .map((reference) => `${reference.file} imports ${reference.specifier}, which was removed`)
+  const remaining = references.length - listed.length
+  if (remaining > 0) listed.push(`and ${String(remaining)} more`)
+  if (manifests.length > 0) {
+    listed.push(`Run the setup for this checkout again: ${manifests.join(', ')} changed`)
+  }
+  return listed.join('. ')
 }

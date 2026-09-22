@@ -12,11 +12,14 @@ import type {
   GitHubDeploymentJobLog,
   GitHubWorkflowRun,
   Project,
+  PullRequestCheck,
   PullRequestSummary
 } from '$shared/types'
 import type { PrCommentChatSubject } from './git-status-panel-prompts'
+import { jobForCheck } from './pr-check-job'
 import {
   prCommentAssignmentPrompt,
+  prCheckAssignmentPrompt,
   prTriagePrompt,
   conflictResolutionPrompt,
   deploymentJobDiagnosisPrompt,
@@ -192,6 +195,71 @@ export async function assignAgentToComment(
   workspaceState.openThread(thread, project)
 }
 
+/**
+ * Hand a failed check to an agent as an assignment.
+ *
+ * The check is the task, so the brief carries everything known about it: the pull
+ * request, the check's own state and link, the run and job behind it, and the
+ * output of the step that failed. The whole log rides along as a file attachment,
+ * because a job log runs to hundreds of kilobytes and only an excerpt fits in a
+ * prompt.
+ */
+export async function assignAgentToCheck(
+  projectId: string,
+  pr: PullRequestSummary,
+  identity: { owner: string; repo: string },
+  check: PullRequestCheck
+): Promise<void> {
+  const project = await invoke('project:get', projectId).catch(() => null)
+  if (!project) return
+  const run =
+    check.workflowRunId !== null
+      ? await gitState
+          .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+          .catch(() => null)
+      : null
+  const job = jobForCheck(run, check)
+  const jobId = check.jobId ?? job?.id ?? null
+  const log =
+    jobId !== null
+      ? await gitState
+          .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId)
+          .catch(() => null)
+      : null
+  // GitHub names a job from the workflow, and a matrix leg's name carries its
+  // whole parameter list, so the title is cut to what the sidecar accepts rather
+  // than failing the whole assignment on a long one.
+  const title = `Failed check: ${check.name}`.slice(0, 120)
+  const thread = await createAssignmentThread(
+    projectId,
+    project.path,
+    `${title} on PR #${pr.number}`
+  )
+  if (!thread) return
+  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+    kind: 'check',
+    title,
+    ...(check.url ? { url: check.url } : {})
+  })
+  if (!assignment) return
+  const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
+  rendererRecovery.setDraft(
+    projectId,
+    thread.id,
+    prCheckAssignmentPrompt(
+      pr,
+      `${identity.owner}/${identity.repo}`,
+      check,
+      job,
+      log,
+      assignment.reportPath
+    ),
+    attachments,
+    []
+  )
+  workspaceState.openThread(thread, project)
+}
+
 /** Reopen the thread that owns a pull request's agent assignment. */
 export async function openAgentThread(projectId: string, threadId: string): Promise<void> {
   const [project, thread] = await Promise.all([
@@ -205,10 +273,16 @@ export async function openAgentThread(projectId: string, threadId: string): Prom
  * Open a thread that resolves the given conflicted paths, with the brief
  * pre-loaded as a draft so the user reviews it before sending. The panel's
  * own conflict controls stay the place the merge is completed from.
+ *
+ * The thread carries the scope the panel is attached to, so conflicts that
+ * live in a managed worktree are resolved in that worktree. Main derives the
+ * working root from the scope id and fails closed on an unhealthy checkout,
+ * which is why the renderer never supplies a worktree path here.
  */
 async function launchConflictAgent(
   projectId: string,
   project: Project,
+  scopeBucketId: string,
   title: string,
   conflictedPaths: string[],
   pullRequest: PullRequestSummary | null
@@ -218,8 +292,14 @@ async function launchConflictAgent(
     providerId: 'pi',
     title,
     workingDirectory: project.path,
+    scopeBucketId,
     settings: { ...threadSettings.lastUsed }
-  }).catch(() => null)
+  }).catch((error: unknown) => {
+    // A refused create is actionable (an unhealthy worktree, a full bucket),
+    // so it must never read as a button that did nothing.
+    reportError(error, 'The conflict resolution thread could not be created.')
+    return null
+  })
   if (!thread) return
   rendererRecovery.setDraft(
     projectId,
@@ -260,11 +340,13 @@ export async function preparePrConflictSession(
  * Resolve a PR's online conflicts with the agent's help: prepare the working
  * tree, then (once `onPrepared` has let the panel switch views) hand the agent
  * a thread to resolve the conflict markers. The agent never pushes   the user
- * finishes with Complete merge.
+ * finishes with Complete merge. The scope is the one the panel is attached to,
+ * so the checkout that was prepared is the checkout the agent resolves in.
  */
 export async function resolvePrConflictsWithAgent(
   projectId: string,
   pr: PullRequestSummary,
+  scopeBucketId: string,
   remote: string,
   returnBranch: string,
   onPrepared: () => void
@@ -277,6 +359,7 @@ export async function resolvePrConflictsWithAgent(
   await launchConflictAgent(
     projectId,
     project,
+    scopeBucketId,
     `Resolve conflicts in PR #${pr.number}`,
     [...gitState.conflicted],
     pr
@@ -287,9 +370,12 @@ export async function resolvePrConflictsWithAgent(
  * Resolve whatever integration is in progress with the agent's help. The
  * conflicts are already in the working tree (a pull, a merge or a rebase), so
  * this only has to hand the agent the brief   the same brief the PR path uses.
+ * The thread opens in `scopeBucketId`, which is the checkout the conflicted
+ * working tree belongs to.
  */
 export async function resolveCurrentConflictsWithAgent(
   projectId: string,
+  scopeBucketId: string,
   branchLabel: string
 ): Promise<void> {
   const project = await invoke('project:get', projectId).catch(() => null)
@@ -297,6 +383,7 @@ export async function resolveCurrentConflictsWithAgent(
   await launchConflictAgent(
     projectId,
     project,
+    scopeBucketId,
     `Resolve conflicts in ${branchLabel}`,
     [...gitState.conflicted],
     null

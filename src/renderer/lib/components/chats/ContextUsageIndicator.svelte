@@ -40,12 +40,6 @@
     onHide?: () => void
     /** Whether live account usage is currently being fetched from the harness. */
     refreshing?: boolean
-    /** 'popover' (default) is the small battery trigger with a hover-revealed
-     *  detail panel, for desktop composer toolbars. 'panel' renders just the
-     *  detail content, always visible, filling its container   for hosts
-     *  (e.g. a mobile bottom sheet) that provide their own trigger and open
-     *  state since hover has no touch equivalent. */
-    layout?: 'popover' | 'panel'
   }
 
   let {
@@ -58,8 +52,7 @@
     onActivateBankedReset,
     onReveal,
     onHide,
-    refreshing = false,
-    layout = 'popover'
+    refreshing = false
   }: Props = $props()
 
   const boundedPercent = $derived(
@@ -355,45 +348,39 @@
   </div>
 {/snippet}
 
-{#if layout === 'panel'}
-  <div role="dialog" aria-label="Context and provider usage">
+<div
+  class="group relative"
+  role="group"
+  aria-label="Context and provider usage"
+  onmouseleave={onHide}
+>
+  <button
+    type="button"
+    class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+    onmouseenter={onReveal}
+    aria-label={boundedPercent === undefined
+      ? 'Context usage unavailable'
+      : `Context ${Math.round(boundedPercent)}% used`}
+    title="Context and usage"
+  >
+    <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
+      <span
+        class={`block h-full rounded-[1px] ${fillClass}`}
+        style={`width: ${boundedPercent ?? 0}%`}
+      ></span>
+      <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
+    </span>
+    <span class="context-usage-label tabular-nums text-[0.625rem]">{percentLabel}</span>
+  </button>
+
+  <div
+    class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+    role="dialog"
+    aria-label="Context and provider usage"
+  >
     {@render usageDetail()}
   </div>
-{:else}
-  <div
-    class="group relative"
-    role="group"
-    aria-label="Context and provider usage"
-    onmouseleave={onHide}
-  >
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-      onmouseenter={onReveal}
-      aria-label={boundedPercent === undefined
-        ? 'Context usage unavailable'
-        : `Context ${Math.round(boundedPercent)}% used`}
-      title="Context and usage"
-    >
-      <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
-        <span
-          class={`block h-full rounded-[1px] ${fillClass}`}
-          style={`width: ${boundedPercent ?? 0}%`}
-        ></span>
-        <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
-      </span>
-      <span class="context-usage-label tabular-nums text-[0.625rem]">{percentLabel}</span>
-    </button>
-
-    <div
-      class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
-      role="dialog"
-      aria-label="Context and provider usage"
-    >
-      {@render usageDetail()}
-    </div>
-  </div>
-{/if}
+</div>
 
 <style>
   .usage-loading-bar {

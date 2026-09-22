@@ -20,6 +20,7 @@ import {
 } from '../../utilities/skill-market'
 import { idleSkillUpdateStatus } from '../../utilities/skill-updates'
 import { Logger } from '../../system/logger'
+import { isNetworkError } from '../../util/network-error'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../../lib/types'
 import {
   validateBoundedString,
@@ -1185,7 +1186,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         // provider failures (timeouts, rate limits, flaky network) are expected.
         // Returning null avoids a noisy main-process "Error occurred in handler"
         // log for every probe retry; the caller already treats null as "unknown".
-        Logger.dev('PR detail fetch failed', reason)
+        // A transport failure is weather rather than a defect, so it is not
+        // recorded at all; an unexpected failure still is.
+        if (!isNetworkError(reason)) Logger.dev('PR detail fetch failed', reason)
         return null
       }
     }

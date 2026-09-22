@@ -374,7 +374,7 @@
 
   // Touch devices get a bottom-sheet list instead of the hover-oriented
   // dropdown, whose small hit targets and portal positioning are unreliable
-  // under a phone keyboard/viewport.
+  // on a touch device with a soft keyboard.
   const coarsePointer =
     typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   let subagentSheetOpen = $state(false)

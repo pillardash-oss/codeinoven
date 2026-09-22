@@ -228,6 +228,39 @@ export interface GitSyncPeerOption {
 }
 
 /**
+ * One import left pointing at a module an integration removed.
+ *
+ * A merge and a rebase both integrate path by path, so neither can notice that
+ * one side deleted a module while the other side's new file still imports it:
+ * the two changes touch different paths, git reports a clean integration, and
+ * the breakage lands in the checkout's next build or start instead.
+ */
+export interface DanglingReference {
+  /** File that still holds the reference, repo-relative POSIX. */
+  file: string
+  /** The import specifier exactly as that file writes it. */
+  specifier: string
+  /** Path the integration removed, repo-relative POSIX. */
+  deletedPath: string
+}
+
+/** What an integration did to a checkout, read from one diff of its refs. */
+export interface GitIntegrationChanges {
+  /** Paths the integration removed. */
+  deleted: string[]
+  /** Paths the integration added, removed or modified. */
+  changed: string[]
+}
+
+/** The post-integration findings a sync reports next to what it moved. */
+export interface GitIntegrationProbe {
+  /** Imports left pointing at a module the integration removed. */
+  danglingReferences: DanglingReference[]
+  /** Dependency manifests the integration rewrote, if any. */
+  changedDependencyManifests: string[]
+}
+
+/**
  * Result of syncing this checkout with another checkout or branch, in either
  * direction. The integrated ref and the resolved peer are reported so the panel
  * can state exactly what moved instead of guessing at "main".
@@ -252,6 +285,17 @@ export interface GitSyncResult {
   incoming: number
   /** Commits the peer checkout's branch is ahead of its upstream by after the sync. */
   peerAhead: number
+  /**
+   * Imports the integration left pointing at a module it removed, in the
+   * checkout the commits landed in. Empty when it removed nothing.
+   */
+  danglingReferences: DanglingReference[]
+  /**
+   * Dependency manifests the integration rewrote, such as `package.json` and
+   * `bun.lock`. A checkout whose manifests moved needs an install, and an
+   * integration installs nothing.
+   */
+  changedDependencyManifests: string[]
 }
 
 /**

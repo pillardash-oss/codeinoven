@@ -128,6 +128,32 @@ export class ModelRankingRepo {
     return { costUsd: row?.cost_usd ?? 0 }
   }
 
+  /**
+   * Every aggregate row, including ones too thin to report in analytics.
+   *
+   * The Usage page reports this raw count because a clean slate removes the
+   * whole table, not just the rows that clear the reporting threshold.
+   */
+  recordCount(): number {
+    const row = this.db.get<{ count: number }>('SELECT COUNT(*) AS count FROM model_rankings')
+    return row?.count ?? 0
+  }
+
+  /**
+   * Delete every ranking aggregate row and report how many were removed.
+   *
+   * The table holds one row per harness, provider, model, thinking level and
+   * rubric version, so it stays inherently small: a single statement on the
+   * primary connection is bounded work, unlike the usage ledger purge. The
+   * grading queue that feeds this table is cleared with it by the IPC layer, so
+   * a deleted slate cannot be silently repopulated by queued conversations.
+   */
+  clearAll(): number {
+    const before = this.recordCount()
+    this.db.run('DELETE FROM model_rankings')
+    return before
+  }
+
   /** IPC-shaped view of the aggregates; averages are always sum ÷ count. */
   analytics(): LocalProfileModelRanking[] {
     // Only rows with at least MIN_RANKING_SAMPLES total ranked conversations
