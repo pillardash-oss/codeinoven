@@ -490,7 +490,9 @@ export class SidebarTabContexts {
     }
     // Opening the git panel is an event-driven refresh trigger: the store
     // re-reads local status and the connection-gated PR indicators so the
-    // panel never shows data older than the moment it was opened.
+    // panel never shows data older than the moment it was opened. The remote
+    // fetch is not this click's job - opening the project already started it
+    // (and outside the stale window there is nothing to redo).
     gitState.notifyGitPanelOpened(projectId)
   }
 

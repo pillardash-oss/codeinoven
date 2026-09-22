@@ -45,7 +45,13 @@ export interface GitLocalOperationAccess {
   ): [string, ...Args, string | undefined]
   refresh(projectId: string): Promise<void>
   readStatus(projectId: string): Promise<GitStatus | null>
-  /** Record that a fetch was tried, so the panel-open gate can throttle it. */
+  /**
+   * Whether `projectId` is still the target the user is on. Fetches start when a
+   * project opens, so a project switch can land mid-flight and the answering
+   * project's status must never be published into the panel showing another one.
+   */
+  isActiveTarget(projectId: string): boolean
+  /** Record that a fetch was tried, so the age gate can throttle the next one. */
   noteFetchAttempt(projectId: string): void
   /** Refresh the open-PR conflict indicator after a mutation that changes it. */
   refreshConflictIndicators(projectId: string, force?: boolean): void
@@ -335,7 +341,13 @@ export class GitLocalOperations {
     this.error = null
     this.access.noteFetchAttempt(projectId)
     try {
-      this.status = await invoke('git:fetch', ...this.access.scopedGitArgs(projectId))
+      const status = await invoke('git:fetch', ...this.access.scopedGitArgs(projectId))
+      // This fetch is normally started by the project opening rather than by a
+      // click, so the user can have switched to another project while the round
+      // trip was in flight. Publishing then would put one project's status in
+      // the panel of another; `refresh` below already no-ops for a target that
+      // is no longer active.
+      if (this.access.isActiveTarget(projectId)) this.status = status
       // Branch tracking (ahead/behind) changes with every fetch - refresh it so
       // push decisions (like the PR sheet's "is there anything to push?") are
       // made against freshly fetched remote refs, not the last panel refresh.

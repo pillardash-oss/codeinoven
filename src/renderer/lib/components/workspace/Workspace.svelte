@@ -2027,9 +2027,13 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
-      // App-start Git discovery launches several local subprocesses. Keep it
-      // out of the first usable frame and let thread selection or opening the
-      // Git panel trigger it immediately when the user actually needs Git.
+      // App-start Git discovery launches several local subprocesses, and its
+      // stale-gated fetch opens a network round trip. Keep both out of the first
+      // usable frame: the delay lands them once the restored conversation has
+      // painted, and thread selection or opening the Git panel still triggers
+      // them immediately when the user gets there first. Triggering the fetch
+      // here is what keeps it off the panel's open path, where a user asking the
+      // panel for something is the last moment a round trip should start.
       window.setTimeout(() => {
         gitState.notifyAppStarted(workspaceState.activeProject)
       }, 2000)
