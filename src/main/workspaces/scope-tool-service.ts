@@ -407,6 +407,8 @@ export class ScopeToolService {
       remote: result.remote,
       incoming: result.incoming,
       peerAhead: result.peerAhead,
+      danglingReferences: result.danglingReferences,
+      changedDependencyManifests: result.changedDependencyManifests,
       conflicted,
       conflictState: result.status.conflictState,
       published: false,

@@ -11,6 +11,7 @@ import type {
   GitDiff,
   GitFileChange,
   GitIdentity,
+  GitIntegrationProbe,
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
@@ -43,6 +44,11 @@ import {
   buildPullRequestComposeContext,
   comparePullRequestBranches as comparePullRequestRefs
 } from './git/git-service-pull-request'
+import {
+  changedDependencyManifests,
+  findDanglingReferences,
+  integrationChanges
+} from './git/git-service-references'
 import type { ConflictWorkMetadata } from './git/git-service-conflicts'
 import {
   REMOTE_REF_PREFIX,
@@ -1377,6 +1383,10 @@ export class GitService {
       const remoteRef = remoteName ? `refs/remotes/${remoteName}/${sourceBranch}` : null
       const ref = await this.pickSyncSourceRef(directory, projectPath, localRef, remoteRef)
       const incoming = await this.countCommitsAhead(directory, projectPath, ref)
+      let probe: GitIntegrationProbe = {
+        danglingReferences: [],
+        changedDependencyManifests: []
+      }
       if (incoming > 0) {
         const uncommitted = uncommittedCount(before)
         // A rebase refuses any tracked change outright, so answer before git
@@ -1387,8 +1397,10 @@ export class GitService {
             `This checkout has ${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'}. Commit or stash ${uncommitted === 1 ? 'it' : 'them'} before syncing from ${options.peer.label}`
           )
         }
+        const beforeSha = await this.headSha(directory)
+        let outcome: 'done' | 'conflicted'
         try {
-          await this.integrateFromRef(directory, projectPath, ref, options.strategy)
+          outcome = await this.integrateFromRef(directory, projectPath, ref, options.strategy)
         } catch (failure) {
           // A merge or fast-forward only refuses for local changes that would
           // be overwritten, and git answers with the same advice in its own
@@ -1399,6 +1411,11 @@ export class GitService {
             )
           }
           throw failure
+        }
+        // A conflicted integration is reconciled by hand first, and probing a
+        // half-applied tree would describe the mess rather than the result.
+        if (outcome === 'done') {
+          probe = await this.probeIntegration(directory, projectPath, beforeSha)
         }
       }
 
@@ -1412,7 +1429,9 @@ export class GitService {
         fetched,
         remote: remoteName ?? null,
         incoming,
-        peerAhead: 0
+        peerAhead: 0,
+        danglingReferences: probe.danglingReferences,
+        changedDependencyManifests: probe.changedDependencyManifests
       }
     })
   }
@@ -1484,6 +1503,8 @@ export class GitService {
       options.peer.path ?? peerDirectory,
       branch
     )
+    // The commits land in the peer, so the peer is the checkout to probe.
+    const peerBeforeSha = await this.headSha(peerDirectory)
     let conflicted = false
     if (incoming > 0) {
       if (options.strategy === 'rebase') {
@@ -1502,6 +1523,14 @@ export class GitService {
       }
     }
 
+    const probe: GitIntegrationProbe =
+      incoming > 0 && !conflicted
+        ? await this.probeIntegration(
+            peerDirectory,
+            options.peer.path ?? peerDirectory,
+            peerBeforeSha
+          )
+        : { danglingReferences: [], changedDependencyManifests: [] }
     return {
       status: await this.readStatus(directory),
       direction: 'to',
@@ -1515,7 +1544,9 @@ export class GitService {
       peerAhead:
         incoming > 0 && !conflicted
           ? (await this.readStatus(peerDirectory)).ahead
-          : peerStatus.ahead
+          : peerStatus.ahead,
+      danglingReferences: probe.danglingReferences,
+      changedDependencyManifests: probe.changedDependencyManifests
     }
   }
 
@@ -1600,6 +1631,53 @@ export class GitService {
       const parsed = Number.parseInt(output.trim(), 10)
       return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
     })
+  }
+
+  /** The commit a checkout is on, or null when it has no commit to read. */
+  private async headSha(directory: string): Promise<string | null> {
+    return await this.client(directory)
+      .raw(['rev-parse', 'HEAD'])
+      .then((sha) => sha.trim() || null)
+      .catch(() => null)
+  }
+
+  /**
+   * Ask what an integration just did to `directory`, beyond whether git was
+   * happy with it: does anything still import a module it removed, and did it
+   * rewrite a dependency manifest without installing anything?
+   *
+   * Read-only and best-effort. A probe that fails must never turn a completed
+   * sync into an error, so it degrades to an empty result and says why in the
+   * dev log.
+   */
+  private async probeIntegration(
+    directory: string,
+    projectPath: string,
+    beforeSha: string | null
+  ): Promise<GitIntegrationProbe> {
+    const nothing: GitIntegrationProbe = {
+      danglingReferences: [],
+      changedDependencyManifests: []
+    }
+    if (!beforeSha) return nothing
+    try {
+      const git = this.client(directory)
+      const changes = await integrationChanges(git, beforeSha, await this.headSha(directory))
+      return {
+        danglingReferences:
+          changes.deleted.length === 0
+            ? []
+            : await findDanglingReferences(directory, changes.deleted, git),
+        changedDependencyManifests: changedDependencyManifests(changes)
+      }
+    } catch (failure) {
+      Logger.dev(
+        `Post-integration probe for ${projectPath} failed: ${
+          failure instanceof Error ? failure.message : String(failure)
+        }`
+      )
+      return nothing
+    }
   }
 
   /**
