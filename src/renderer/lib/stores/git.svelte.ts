@@ -16,6 +16,7 @@ import { GitDeploymentCache } from './git-store-deployments.svelte'
 import { GitPullRequestCache } from './git-store-pull-requests.svelte'
 import { GitPrConflictIndicators } from './git-store-pr-conflicts.svelte'
 import { GitPullRequestOperations } from './git-store-pr-operations.svelte'
+import type { PrBatchStepListener } from './git-store-pr-operations.svelte'
 import { GitGitHubAuth } from './git-store-github.svelte'
 import { GitLocalOperations } from './git-store-local-operations.svelte'
 import type {
@@ -1084,9 +1085,10 @@ export class GitState {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ) {
-    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment)
+    return this.prOps.closePullRequests(projectId, owner, repo, numbers, comment, onStep)
   }
 
   /** Reopen a batch, one at a time, reporting what succeeded and what did not. */
@@ -1095,9 +1097,10 @@ export class GitState {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ) {
-    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment)
+    return this.prOps.reopenPullRequests(projectId, owner, repo, numbers, comment, onStep)
   }
 
   /** Replace the labels a pull request carries, from the label picker. */

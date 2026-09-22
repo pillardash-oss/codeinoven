@@ -1,43 +1,32 @@
 <script lang="ts">
-  import { AlertTriangle } from '@lucide/svelte'
-  import { gitState } from '$lib/stores/git.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
-  import type { PrBatchResult } from '$lib/stores/git-store-pr-operations.svelte'
   import type { PullRequestSummary } from '$shared/types'
 
   /**
-   * One confirmation and one result for a lifecycle batch.
+   * The confirmation a lifecycle batch runs through, and nothing else.
    *
-   * The confirmation names the count and the numbers, because closing twenty pull
-   * requests from a list is one keystroke away from closing twenty-one and there is
-   * no undo. The result names the failures individually, because `gitState.error`
-   * holds a single message and a batch that closed seventeen of twenty has to say
-   * which three are still open and why.
+   * It names the count and the numbers, because closing twenty pull requests from a
+   * list is one keystroke away from closing twenty-one and there is no undo. It is
+   * also where the optional note is written: one line saying why, the same line on
+   * every one of them, is what a swept backlog needs to explain itself, and typing
+   * it twenty times is the reason a sweep turns into twenty individual closes. The
+   * note is posted before the close it belongs to, so a pull request whose note
+   * failed stays open rather than becoming a closed row that gives no reason.
    *
-   * The optional note is what makes a swept backlog explain itself. A dependabot
-   * branch closed by hand usually wants one line saying why, the same line on every
-   * one of them, and typing it twenty times is the reason a sweep turns into twenty
-   * individual closes. The note is posted before the close it belongs to, so a pull
-   * request whose note failed stays open rather than becoming a closed row that
-   * gives no reason.
+   * The run itself is not reported here. A batch is minutes of round trips, so it
+   * leaves with the confirmation and reports through the docked job panel
+   * (`PrBatchJobPanel`), which is what lets the user keep working instead of
+   * watching a modal. This dialog is unmounted the moment the user confirms.
    */
   interface Props {
-    /**
-     * The batch this dialog owns. It is mounted only while one is pending, so the
-     * reported result cannot outlive the batch that produced it and reappear over
-     * the next confirmation.
-     */
     batch: { mode: 'close' | 'reopen'; targets: PullRequestSummary[] }
-    projectId: string
-    owner: string
-    repo: string
+    /** Hand the confirmed batch over; the caller starts the job and dismisses this. */
+    onConfirm: (comment: string | null) => void
     onClose: () => void
   }
 
-  let { batch, projectId, owner, repo, onClose }: Props = $props()
+  let { batch, onConfirm, onClose }: Props = $props()
 
-  let result = $state<PrBatchResult | null>(null)
   /** The note every pull request in this batch receives, posted verbatim. */
   let comment = $state('')
   /**
@@ -46,7 +35,6 @@
    */
   const fieldSuffix = Math.random().toString(36).slice(2)
 
-  const busy = $derived(gitState.isBusy('pr-close') || gitState.isBusy('pr-reopen'))
   const targets = $derived(batch.targets)
   const mode = $derived(batch.mode)
 
@@ -69,31 +57,12 @@
     return `#${target.number}`
   }
 
-  async function run(): Promise<void> {
-    const numbers = targets.map((target) => target.number)
-    const batchComment = note.length > 0 ? note : null
-    const outcome =
-      mode === 'close'
-        ? await gitState.closePullRequests(projectId, owner, repo, numbers, batchComment)
-        : await gitState.reopenPullRequests(projectId, owner, repo, numbers, batchComment)
-    result = outcome
-  }
-
-  /** Dismissal is refused while the batch runs: the answer would be lost with it. */
-  function cancel(): void {
-    if (busy) return
-    onClose()
+  function confirm(): void {
+    onConfirm(note.length > 0 ? note : null)
   }
 </script>
 
-<ConfirmDialog
-  open={result === null}
-  {title}
-  confirmLabel={verb}
-  {busy}
-  onCancel={cancel}
-  onConfirm={() => void run()}
->
+<ConfirmDialog open {title} confirmLabel={verb} onCancel={onClose} onConfirm={confirm}>
   <p>
     {#if targets.length === 1}
       <strong class="text-foreground">{targets[0]?.title}</strong>
@@ -134,59 +103,9 @@
       {/if}
     </p>
   </div>
+
+  <p class="mt-3 text-[0.625rem] leading-relaxed text-dimmed">
+    This runs in the background: a panel reports each pull request as it lands, and you can keep
+    working while it does.
+  </p>
 </ConfirmDialog>
-
-<Modal
-  open={result !== null}
-  title={result ? `${result.succeeded.length} of ${targets.length} ${pastVerb}` : ''}
-  {onClose}
->
-  {#if result}
-    <div class="space-y-3 text-sm text-muted">
-      <p>
-        {#if result.succeeded.length > 0}
-          <strong class="text-foreground">{result.succeeded.length}</strong>
-          {result.succeeded.length === 1 ? 'pull request' : 'pull requests'}
-          {pastVerb}.
-        {:else}
-          Nothing was {pastVerb}.
-        {/if}
-      </p>
-
-      {#if result.failed.length > 0}
-        <div class="space-y-1.5">
-          <p class="flex items-center gap-1.5 font-medium text-danger">
-            <AlertTriangle size={13} class="shrink-0" />
-            {result.failed.length}
-            {result.failed.length === 1 ? 'pull request' : 'pull requests'} could not be {pastVerb}
-          </p>
-          <ul class="space-y-1">
-            {#each result.failed as failure (failure.number)}
-              <li class="text-[0.6875rem] leading-relaxed">
-                <span class="font-mono text-foreground">#{failure.number}</span>
-                <span class="text-dimmed"> · {failure.message}</span>
-              </li>
-            {/each}
-          </ul>
-        </div>
-      {/if}
-
-      {#if result.skipped.length > 0}
-        <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-          {result.skipped.length} were not attempted because the batch stopped:
-          {result.stoppedBy ?? 'the provider refused the request'}
-        </p>
-      {/if}
-    </div>
-  {/if}
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:bg-primary-hover"
-      onclick={onClose}
-    >
-      Done
-    </button>
-  {/snippet}
-</Modal>

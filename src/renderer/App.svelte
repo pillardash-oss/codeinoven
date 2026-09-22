@@ -47,6 +47,7 @@
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import type { ActionSelection } from '$lib/actions'
@@ -1342,6 +1343,13 @@
     <!-- Floats above every view so a worktree run keeps reporting while the user works. -->
     {#await import('$lib/components/scope/ScopeJobDockHost.svelte') then { default: ScopeJobDockHost }}
       <ScopeJobDockHost />
+    {/await}
+  {/if}
+
+  {#if prBatchJobs.jobs.length}
+    <!-- Floats above every view so a confirmed batch keeps closing pull requests while the user works. -->
+    {#await import('$lib/components/git/PrBatchDockHost.svelte') then { default: PrBatchDockHost }}
+      <PrBatchDockHost />
     {/await}
   {/if}
 

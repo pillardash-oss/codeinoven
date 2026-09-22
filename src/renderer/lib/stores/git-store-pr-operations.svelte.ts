@@ -50,6 +50,23 @@ export interface PrBatchResult {
   stoppedBy: string | null
 }
 
+/**
+ * What one pull request's turn in a batch did, reported as the loop reaches it.
+ *
+ * A batch is seconds to minutes of round trips, so its caller cannot wait for the
+ * whole result to say anything: whoever shows the run needs each row's outcome the
+ * moment it exists, not the count at the end.
+ */
+export interface PrBatchStepReport {
+  number: number
+  ok: boolean
+  /** Why this row failed, or null when it did not. */
+  message: string | null
+}
+
+/** How a batch reports each pull request as it settles it. */
+export type PrBatchStepListener = (report: PrBatchStepReport) => void
+
 /** What one pull request's turn in a batch did, as the loop reads it. */
 type PrBatchStep =
   | { outcome: 'done' }
@@ -353,7 +370,8 @@ export class GitPullRequestOperations {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ): Promise<PrBatchResult> {
     return this.runLifecycleBatch(
       projectId,
@@ -363,7 +381,8 @@ export class GitPullRequestOperations {
       'pr-close',
       'closed',
       'Pull request could not be closed',
-      comment
+      comment,
+      onStep
     )
   }
 
@@ -373,7 +392,8 @@ export class GitPullRequestOperations {
     owner: string,
     repo: string,
     numbers: number[],
-    comment: string | null = null
+    comment: string | null = null,
+    onStep?: PrBatchStepListener
   ): Promise<PrBatchResult> {
     return this.runLifecycleBatch(
       projectId,
@@ -383,7 +403,8 @@ export class GitPullRequestOperations {
       'pr-reopen',
       'open',
       'Pull request could not be reopened',
-      comment
+      comment,
+      onStep
     )
   }
 
@@ -395,7 +416,8 @@ export class GitPullRequestOperations {
     operation: 'pr-close' | 'pr-reopen',
     nextState: 'open' | 'closed',
     failureFallback: string,
-    comment: string | null
+    comment: string | null,
+    onStep?: PrBatchStepListener
   ): Promise<PrBatchResult> {
     const succeeded: number[] = []
     const failed: PrBatchFailure[] = []
@@ -418,9 +440,11 @@ export class GitPullRequestOperations {
         )
         if (step.outcome === 'done') {
           succeeded.push(pullNumber)
+          onStep?.({ number: pullNumber, ok: true, message: null })
           continue
         }
         failed.push({ number: pullNumber, message: step.message })
+        onStep?.({ number: pullNumber, ok: false, message: step.message })
         // Two refusals say something about the batch rather than about this one pull
         // request: missing App access, and being asked to slow down. Neither gets
         // better on the next row, and continuing would spend the rest of the batch
