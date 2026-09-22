@@ -8,11 +8,17 @@ import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { Logger } from '../system/logger'
+import type { StorageEngine } from '../storage/storage-engine'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
 const PI_MODELS_PATH = join(PI_AGENT_DIR, 'models.json')
 const NATIVE_HARNESSES = new Set(['opencode', 'pi'])
+const DISABLED_PROVIDERS_DIRECTORY = 'disabled-providers'
+const DISABLED_PROVIDER_SUFFIX = '.json'
+const DISABLED_PROVIDER_VERSION = 1
+/** Parked provider ids double as file names, so reject anything path-shaped. */
+const SAFE_DISABLED_PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
 const FORMAT_OPTIONS = { tabSize: 2, insertSpaces: true, eol: '\n' }
 const THINKING_LEVELS = new Set<ThinkingLevel>([
   'minimal',
@@ -82,6 +88,12 @@ export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
 
 /** Reads and surgically edits harness-owned custom provider catalogs. */
 export class NativeProviderConfigService {
+  private readonly disabledProviders: DisabledProviderStore
+
+  constructor(storage: StorageEngine) {
+    this.disabledProviders = new DisabledProviderStore(storage)
+  }
+
   /** Read a native Pi provider key for main-process usage probes only. */
   async readApiKey(harnessId: string, providerId: string): Promise<string | undefined> {
     if (harnessId !== 'pi') return undefined
@@ -130,7 +142,15 @@ export class NativeProviderConfigService {
       return
     }
     if (provider.harnessId === 'pi') {
-      await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], undefined)
+      // A parked provider is already gone from models.json; only touch the file
+      // when its entry is really there, so deleting one never creates an empty
+      // harness config.
+      const config = await tryReadJsoncObject(PI_MODELS_PATH)
+      const liveEntry = record(record(config?.['providers'])?.[provider.id])
+      if (liveEntry !== undefined) {
+        await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], undefined)
+      }
+      await this.disabledProviders.remove('pi', provider.id)
       return
     }
     throw new Error(`${provider.harnessId} does not expose a native provider catalog`)
@@ -202,51 +222,53 @@ export class NativeProviderConfigService {
   }
 
   private async listPiProviders(modelsPath: string = PI_MODELS_PATH): Promise<BaseUrlProvider[]> {
-    const config = await tryReadJsoncObject(modelsPath)
-    if (!config) return []
-    const providers = record(config['providers']) ?? {}
-    return Object.entries(providers).flatMap(([id, value]) => {
-      const provider = record(value)
-      const baseURL = stringValue(provider?.['baseUrl']) ?? stringValue(provider?.['baseURL'])
-      const models = Array.isArray(provider?.['models']) ? provider['models'] : []
-      if (!provider || !baseURL || models.length === 0) return []
-      const parsedModels = models.flatMap((model) => {
-        const parsed = piModel(id, model)
-        return parsed ? [parsed] : []
-      })
-      if (parsedModels.length === 0) return []
-      const api = stringValue(provider['api']) ?? 'openai-completions'
-      const npm =
-        api === 'openai-responses'
-          ? '@ai-sdk/openai'
-          : api === 'anthropic-messages'
-            ? '@ai-sdk/anthropic'
-            : '@ai-sdk/openai-compatible'
-      return [
-        nativeProvider(
-          id,
-          'pi',
-          stringValue(provider['name']) ?? id,
-          npm,
-          baseURL,
-          parsedModels,
-          true,
-          provider
-        )
-      ]
+    const [config, parked] = await Promise.all([
+      tryReadJsoncObject(modelsPath),
+      this.disabledProviders.list('pi')
+    ])
+    const providers = record(config?.['providers']) ?? {}
+    const live = Object.entries(providers).flatMap(([id, value]) => {
+      const parsed = piProvider(id, record(value), true)
+      return parsed ? [parsed] : []
     })
+    // Parked providers stay listed   badged disabled   so turning one off is as
+    // reversible in the UI as opencode's own `disabled_providers`. An id that is
+    // live again (re-enabled outside CodeInOven) wins, and its parked copy is
+    // not listed a second time.
+    const liveIds = new Set(live.map((provider) => provider.id))
+    const disabled = parked.flatMap((parkedProvider) => {
+      if (liveIds.has(parkedProvider.providerId)) return []
+      const parsed = piProvider(
+        parkedProvider.providerId,
+        parkedProvider.entry,
+        false,
+        parkedProvider.disabledAt
+      )
+      return parsed ? [parsed] : []
+    })
+    return [...live, ...disabled]
   }
 
+  /**
+   * Pi's `models.json` cannot express "configured, but off"   an entry's
+   * presence is its only switch   so a disable is emulated rather than
+   * rejected: the entry is parked in CodeInOven's own disabled-provider store
+   * and deleted from `models.json`. Pi stops offering the provider while the
+   * user still sees it listed as disabled and can re-enable it, which is the
+   * same behavior opencode's native `disabled_providers` gives them.
+   */
   private async upsertPiProvider(
     provider: BaseUrlProvider,
     apiKey?: string,
     removeApiKey = false
   ): Promise<void> {
-    if (!provider.enabled) {
-      throw new Error('Pi does not support disabling native custom providers; delete it instead.')
-    }
     const config = await readJsoncObject(PI_MODELS_PATH)
-    const existing = record(record(config['providers'])?.[provider.id]) ?? {}
+    const live = record(record(config['providers'])?.[provider.id])
+    // A parked provider is no longer in models.json, so its own parked entry
+    // the one carrying the stored API key and any field CodeInOven does not
+    // model   is what an edit starts from.
+    const parked = await this.disabledProviders.read('pi', provider.id)
+    const existing = { ...(parked?.entry ?? {}), ...(live ?? {}) }
     const entry: Record<string, unknown> = {
       ...existing,
       name: provider.name,
@@ -262,7 +284,168 @@ export class NativeProviderConfigService {
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       models: provider.models.map(serializePiModel)
     }
+    if (!provider.enabled) {
+      // Park first, delete second: a failure in between leaves the provider
+      // enabled and usable rather than gone.
+      await this.disabledProviders.save({
+        harnessId: 'pi',
+        providerId: provider.id,
+        name: provider.name,
+        entry
+      })
+      if (live !== undefined)
+        await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], undefined)
+      return
+    }
     await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], entry)
+    await this.disabledProviders.remove('pi', provider.id)
+  }
+}
+
+/** A native provider CodeInOven parked out of a harness config that cannot disable natively. */
+interface DisabledProviderRecord {
+  version: number
+  harnessId: string
+  providerId: string
+  /** Display name at the time of the disable, so the record reads on its own. */
+  name: string
+  disabledAt: number
+  /** The provider's native config entry, restored verbatim on re-enable. */
+  entry: Record<string, unknown>
+}
+
+/**
+ * CodeInOven-owned store for native providers whose harness cannot express
+ * "configured, but disabled" itself.
+ *
+ * opencode has `disabled_providers`, so it disables natively and never reaches
+ * this store. Pi's `models.json` has no equivalent   the only way to stop Pi
+ * offering a custom provider is to delete its entry   so CodeInOven parks that
+ * entry beneath its own config root and deletes it from `models.json`: Pi stops
+ * offering the provider, CodeInOven keeps listing it as disabled, and
+ * re-enabling restores it byte-for-byte.
+ *
+ * One file per provider: `disabled-providers/<harness>/<provider-id>.json`.
+ */
+class DisabledProviderStore {
+  constructor(private readonly storage: StorageEngine) {}
+
+  /** Every provider parked for one harness; a malformed record is skipped. */
+  async list(harnessId: string): Promise<DisabledProviderRecord[]> {
+    const directory = disabledProviderDirectory(harnessId)
+    const files = (await this.storage.list(directory)).filter(isDisabledProviderFile)
+    const records = await Promise.all(
+      files.map((file) => {
+        const providerId = file.slice(0, -DISABLED_PROVIDER_SUFFIX.length)
+        return this.readRecord(directory, file, harnessId, providerId)
+      })
+    )
+    return records.filter((record): record is DisabledProviderRecord => record !== null)
+  }
+
+  /** The record parked for one provider, or null when it is not parked. */
+  async read(harnessId: string, providerId: string): Promise<DisabledProviderRecord | null> {
+    assertDisabledProviderId(providerId)
+    return this.readRecord(
+      disabledProviderDirectory(harnessId),
+      `${providerId}${DISABLED_PROVIDER_SUFFIX}`,
+      harnessId,
+      providerId
+    )
+  }
+
+  /** Park `entry` as the disabled state of one provider, replacing any earlier record. */
+  async save(input: {
+    harnessId: string
+    providerId: string
+    name: string
+    entry: Record<string, unknown>
+  }): Promise<void> {
+    await this.storage.write(disabledProviderPath(input.harnessId, input.providerId), {
+      version: DISABLED_PROVIDER_VERSION,
+      harnessId: input.harnessId,
+      providerId: input.providerId,
+      name: input.name,
+      disabledAt: Date.now(),
+      entry: input.entry
+    } satisfies DisabledProviderRecord)
+  }
+
+  /** Drop a provider's parked record   it is live again, or deleted. */
+  async remove(harnessId: string, providerId: string): Promise<void> {
+    await this.storage.removeRaw(disabledProviderPath(harnessId, providerId))
+  }
+
+  private async readRecord(
+    directory: string,
+    file: string,
+    harnessId: string,
+    providerId: string
+  ): Promise<DisabledProviderRecord | null> {
+    const path = join(directory, file)
+    let raw: unknown
+    try {
+      raw = await this.storage.read<unknown>(path)
+    } catch (error) {
+      Logger.error('Disabled provider record could not be read; ignoring it', {
+        path,
+        cause: error instanceof Error ? error.message : String(error)
+      })
+      return null
+    }
+    // No file at all is simply "not parked".
+    if (raw === null) return null
+    const parsed = parseDisabledProviderRecord(raw, harnessId, providerId)
+    if (!parsed) Logger.error('Disabled provider record is malformed; ignoring it', { path })
+    return parsed
+  }
+}
+
+/**
+ * Defensive read of a parked record: a file we cannot trust is dropped instead
+ * of breaking the whole provider list. The worst case is a provider the user
+ * has to disable again.
+ */
+function parseDisabledProviderRecord(
+  value: unknown,
+  harnessId: string,
+  providerId: string
+): DisabledProviderRecord | null {
+  const raw = record(value)
+  if (!raw || raw['harnessId'] !== harnessId || raw['providerId'] !== providerId) return null
+  const entry = record(raw['entry'])
+  if (!entry) return null
+  const disabledAt = raw['disabledAt']
+  return {
+    version: typeof raw['version'] === 'number' ? raw['version'] : DISABLED_PROVIDER_VERSION,
+    harnessId,
+    providerId,
+    name: stringValue(raw['name']) ?? providerId,
+    disabledAt: typeof disabledAt === 'number' && Number.isFinite(disabledAt) ? disabledAt : 0,
+    entry
+  }
+}
+
+function isDisabledProviderFile(file: string): boolean {
+  return (
+    file.endsWith(DISABLED_PROVIDER_SUFFIX) &&
+    SAFE_DISABLED_PROVIDER_ID.test(file.slice(0, -DISABLED_PROVIDER_SUFFIX.length))
+  )
+}
+
+function disabledProviderDirectory(harnessId: string): string {
+  assertDisabledProviderId(harnessId)
+  return join(DISABLED_PROVIDERS_DIRECTORY, harnessId)
+}
+
+function disabledProviderPath(harnessId: string, providerId: string): string {
+  assertDisabledProviderId(providerId)
+  return join(disabledProviderDirectory(harnessId), `${providerId}${DISABLED_PROVIDER_SUFFIX}`)
+}
+
+function assertDisabledProviderId(value: string): void {
+  if (!SAFE_DISABLED_PROVIDER_ID.test(value)) {
+    throw new TypeError(`Unsupported disabled provider id: ${value}`)
   }
 }
 
@@ -334,6 +517,49 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
     ...(readDefaultThinkingLevel(model['cioDefaultThinkingLevel'])
       ? { defaultThinkingLevel: readDefaultThinkingLevel(model['cioDefaultThinkingLevel']) }
       : {})
+  }
+}
+
+/**
+ * One harness-native Pi provider entry in the UI's provider shape, shared by
+ * live `models.json` entries and parked (disabled) copies so a provider looks
+ * the same on either side of a disable.
+ */
+function piProvider(
+  id: string,
+  provider: Record<string, unknown> | undefined,
+  enabled: boolean,
+  updatedAt = 0
+): BaseUrlProvider | null {
+  const baseURL = stringValue(provider?.['baseUrl']) ?? stringValue(provider?.['baseURL'])
+  const models = Array.isArray(provider?.['models']) ? provider['models'] : []
+  if (!provider || !baseURL || models.length === 0) return null
+  const parsedModels = models.flatMap((model) => {
+    const parsed = piModel(id, model)
+    return parsed ? [parsed] : []
+  })
+  if (parsedModels.length === 0) return null
+  const api = stringValue(provider['api']) ?? 'openai-completions'
+  const npm =
+    api === 'openai-responses'
+      ? '@ai-sdk/openai'
+      : api === 'anthropic-messages'
+        ? '@ai-sdk/anthropic'
+        : '@ai-sdk/openai-compatible'
+  return {
+    ...nativeProvider(
+      id,
+      'pi',
+      stringValue(provider['name']) ?? id,
+      npm,
+      baseURL,
+      parsedModels,
+      enabled,
+      provider
+    ),
+    // A parked provider is as freshly touched as its disable, so it resurfaces
+    // in the most-recently-updated-first list like any other edit.
+    ...(updatedAt > 0 ? { updatedAt } : {})
   }
 }
 
