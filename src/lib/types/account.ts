@@ -7,6 +7,40 @@ export interface LocalProfileAnalyticsRange {
   endAt: number
 }
 
+/**
+ * One clearable local usage record store on the Usage page. The split follows
+ * the persisted records, not the page's panels: the activity calendar, models,
+ * harnesses, providers, thinking levels, projects, daily and hourly charts are
+ * all aggregates over the same `usage_events` ledger rows, so clearing any of
+ * them independently would silently empty the rest.
+ */
+export type LocalUsageRecordStore = 'agentResponses' | 'utilities' | 'modelRankings'
+
+/**
+ * How many records each Usage page store currently holds.
+ *
+ * The two ledger counts follow the selected range. Ranking rows and their
+ * grading queue carry no per-range timestamp, so those two are always all-time.
+ */
+export interface LocalUsageRecordCounts {
+  /** Model turn rows in the usage ledger inside the selected range. */
+  agentResponses: number
+  /** Auxiliary utility rows in the usage ledger inside the selected range. */
+  utilities: number
+  /** Permanent ranking aggregate rows (all-time). */
+  modelRankings: number
+  /** Conversations captured but not yet graded (all-time). */
+  pendingGrades: number
+}
+
+/** Request to start a Usage page record store from a clean slate. */
+export interface LocalUsageClearInput {
+  /** Store to clear, or `all` for every store the Usage page reads. */
+  store: LocalUsageRecordStore | 'all'
+  /** Range whose ledger rows are removed. The ranking store ignores it. */
+  range: LocalProfileAnalyticsRange
+}
+
 /** Date-range usage row with enough identity to render harness and provider marks. */
 export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   harnessId?: string
@@ -73,6 +107,8 @@ export interface LocalProfileAnalytics {
   modelRankings: LocalProfileModelRanking[]
   /** All-time priced cost of every ranked session folded into the aggregates. */
   gradingSpend: LocalProfileGradingSpend
+  /** Current size of each clearable record store behind this page. */
+  records: LocalUsageRecordCounts
   generatedAt: number
 }
 

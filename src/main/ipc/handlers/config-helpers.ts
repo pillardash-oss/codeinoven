@@ -16,12 +16,19 @@ import type {
   EditorId,
   HeartbeatConfig,
   LocalProfileAnalyticsRange,
+  LocalUsageClearInput,
+  LocalUsageRecordStore,
   ThinkingLevel
 } from '../../../lib/types'
 
 const THEMES = new Set(['light', 'dark', 'system'])
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
+const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>([
+  'agentResponses',
+  'utilities',
+  'modelRankings'
+])
 
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -59,6 +66,31 @@ function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyti
     throw new TypeError('Profile analytics range is invalid')
   }
   return { startAt, endAt }
+}
+
+/**
+ * Validate a Usage page clean-slate request.
+ *
+ * The store is checked against the closed set the page can ask for, and the
+ * range reuses the same bounds the analytics read enforces, so a clear can
+ * never target a wider window than the page is able to display.
+ */
+function validateLocalUsageClearInput(value: unknown): LocalUsageClearInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Usage clear request must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const store = record['store']
+  if (
+    store !== 'all' &&
+    (typeof store !== 'string' || !LOCAL_USAGE_RECORD_STORES.has(store as LocalUsageRecordStore))
+  ) {
+    throw new TypeError('Usage clear store is invalid')
+  }
+  return {
+    store: store as LocalUsageClearInput['store'],
+    range: validateLocalProfileAnalyticsRange(record['range'])
+  }
 }
 
 const CONFIG_PATCH_FIELDS = new Set([
@@ -600,6 +632,7 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
 export {
   EDITOR_IDS,
   validateLocalProfileAnalyticsRange,
+  validateLocalUsageClearInput,
   validateAgentModelSelection,
   validateHeartbeatCreateInput,
   validateHeartbeatPatchInput

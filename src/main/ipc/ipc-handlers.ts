@@ -41,6 +41,7 @@ import { MemoryService } from '../chat/memory-service'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
+import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
@@ -198,6 +199,10 @@ export function registerIpcHandlers(
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
   const modelRankingRepo = new ModelRankingRepo(database)
+  // The ranking drain in ChatEngine owns its own instance; repositories are
+  // stateless views over the same file, so this one exists only so a user
+  // purge can clear the queue together with the aggregates it feeds.
+  const rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
   const noteRepo = new NoteRepo(database)
 
   /**
@@ -395,6 +400,7 @@ export function registerIpcHandlers(
     attachmentGrantRepo,
     harnessUsageRepo,
     modelRankingRepo,
+    rankingSnapshotRepo,
     noteRepo,
     privilegedIpc,
     privileged,

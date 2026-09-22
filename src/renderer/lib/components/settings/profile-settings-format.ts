@@ -101,6 +101,12 @@ export const EMPTY_USAGE: LocalProfileAnalytics = {
   gradingSpend: {
     costUsd: 0
   },
+  records: {
+    agentResponses: 0,
+    utilities: 0,
+    modelRankings: 0,
+    pendingGrades: 0
+  },
   generatedAt: 0
 }
 
@@ -155,6 +161,15 @@ export function formatDate(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
     day: 'numeric',
     month: 'short',
+    year: 'numeric'
+  }).format(value)
+}
+
+/** Spelled-out date for confirmations, where an abbreviated month reads as a code. */
+export function formatLongDate(value: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'long',
     year: 'numeric'
   }).format(value)
 }
