@@ -225,6 +225,9 @@
     if (!entry) return
 
     navigateSection(entry.section)
+    // A card inside a tab is not on screen until that tab is selected, so the
+    // tab is chosen before the reveal looks for the block.
+    if (entry.harnessesTab) settingsUiState.harnessesTab = entry.harnessesTab
     await tick()
     // One frame so the freshly swapped section content has laid out.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
@@ -260,6 +263,7 @@
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
+      settingsUiState.harnessesTab = 'harnesses'
     }
   })
 

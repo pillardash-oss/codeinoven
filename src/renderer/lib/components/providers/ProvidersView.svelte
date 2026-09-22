@@ -7,6 +7,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
   import type {
     HarnessManifestEntry,
@@ -41,6 +42,7 @@
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
+  import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
   import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
   /** Where users can browse existing PRs / open one for a V2 support effort. */
@@ -69,8 +71,8 @@
   /** Per-harness "update automatically on launch" preference, keyed by harness id. */
   let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
-  /** Which top-level tab is on screen. */
-  let activeTab = $state<'harnesses' | 'accounts' | 'custom' | 'auxiliary'>('harnesses')
+  /** Which top-level tab is on screen. Shared, so settings search can open one. */
+  const activeTab = $derived(settingsUiState.harnessesTab)
   /** Per-harness advanced-info disclosure (Settings for ready harnesses, Details for errored ones), collapsed by default. */
   let expandedSettings = $state<Record<string, boolean>>({})
   /** Free-text filter over harness name/command/path. */
@@ -529,7 +531,7 @@
       role="tab"
       aria-selected={activeTab === 'harnesses'}
       title="Show connected harnesses"
-      onclick={() => (activeTab = 'harnesses')}
+      onclick={() => (settingsUiState.harnessesTab = 'harnesses')}
     >
       Harnesses
     </button>
@@ -542,7 +544,7 @@
       role="tab"
       aria-selected={activeTab === 'accounts'}
       title="Manage harness accounts"
-      onclick={() => (activeTab = 'accounts')}
+      onclick={() => (settingsUiState.harnessesTab = 'accounts')}
     >
       Accounts
     </button>
@@ -555,7 +557,7 @@
       role="tab"
       aria-selected={activeTab === 'auxiliary'}
       title="Assign the model each harness uses for background work"
-      onclick={() => (activeTab = 'auxiliary')}
+      onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
     >
       Auxiliary Agents
     </button>
@@ -568,7 +570,7 @@
       role="tab"
       aria-selected={activeTab === 'custom'}
       title="Manage custom base URL providers"
-      onclick={() => (activeTab = 'custom')}
+      onclick={() => (settingsUiState.harnessesTab = 'custom')}
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
@@ -1014,7 +1016,10 @@
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
   {:else if activeTab === 'auxiliary'}
-    <AuxiliaryAgentsPanel />
+    <div class="space-y-4">
+      <TypesafeDecisionsCard />
+      <AuxiliaryAgentsPanel />
+    </div>
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}

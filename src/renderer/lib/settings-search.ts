@@ -11,10 +11,12 @@ import {
   Puzzle,
   Router,
   SlidersHorizontal,
+  Sparkles,
   UsersRound,
   Volume2
 } from '@lucide/svelte'
 import type { SettingsSection } from './stores/renderer-recovery'
+import type { HarnessesTab } from './stores/settings-ui.svelte'
 
 /**
  * A searchable destination inside Settings — either a whole section page
@@ -36,6 +38,12 @@ export interface SettingsSearchEntry {
    * (rendered as `settings-block-<blockId>`). Absent = the whole page.
    */
   blockId?: string
+  /**
+   * Inner tab to select before the block is revealed, for a section page that
+   * splits its content into tabs. Without it a card inside a non-default tab
+   * cannot be scrolled to, because it is not on screen when the reveal runs.
+   */
+  harnessesTab?: HarnessesTab
 }
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
@@ -93,6 +101,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'cheap model'
     ],
     icon: Plug
+  },
+  {
+    id: 'harnesses-typesafe',
+    section: 'harnesses',
+    blockId: 'harnesses-typesafe',
+    harnessesTab: 'auxiliary',
+    title: 'TypeSafe decisions',
+    description: 'The API key CodeInOven uses for TypeSafe judgments, and its connection state.',
+    keywords: ['typesafe', 'jev', 'api key', 'credits', 'decision', 'auxiliary'],
+    icon: Sparkles
   },
   {
     id: 'utilities',

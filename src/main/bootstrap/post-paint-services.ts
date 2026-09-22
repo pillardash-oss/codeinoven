@@ -382,15 +382,44 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.harnessAutoUpdateService.register()
     state.harnessInstallService.register()
 
+    // One TypeSafe (Jev) capability for the whole app. The key is discovered
+    // from however the user already configured it (this device's Settings, the
+    // launch environment, a utility credential, or a secret set inside a
+    // thread), and every caller goes through one service, so an exhausted
+    // balance or a revoked key can only ever cost a fallback.
+    const [
+      { TypesafeDecisionService },
+      { TypesafeKeyResolver },
+      { TypesafeAuditLog },
+      { UtilityRegistryService },
+      { AgentSecretService }
+    ] = await Promise.all([
+      import('../typesafe/typesafe-decision-service'),
+      import('../typesafe/typesafe-key-resolver'),
+      import('../typesafe/typesafe-audit'),
+      import('../utilities/utility-registry-service'),
+      import('../utilities/agent-secret-service')
+    ])
+    const typesafeRegistry = new UtilityRegistryService(storage)
+    const typesafe = new TypesafeDecisionService(
+      new TypesafeKeyResolver(
+        vault,
+        typesafeRegistry,
+        new AgentSecretService(vault, typesafeRegistry, storage)
+      ),
+      new TypesafeAuditLog(storage)
+    )
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerGatewayIpc } = await import('../ipc/gateway-ipc')
+    const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     const { OwnedProcessJournal } = await import('../system/owned-process-journal')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
     registerBaseUrlProviderIpc(storage)
+    registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
       undefined,

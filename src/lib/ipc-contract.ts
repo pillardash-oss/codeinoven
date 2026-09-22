@@ -10,6 +10,7 @@ import { invokeBrowserContract } from './ipc/invoke-browser'
 import { invokeNotificationContract } from './ipc/invoke-notification'
 import { invokeUpdaterContract } from './ipc/invoke-updater'
 import { invokeSpeechContract } from './ipc/invoke-speech'
+import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation } from './types'
 
@@ -31,7 +32,8 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeBrowserContract,
   ...invokeNotificationContract,
   ...invokeUpdaterContract,
-  ...invokeSpeechContract
+  ...invokeSpeechContract,
+  ...invokeTypesafeContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT
