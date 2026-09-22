@@ -78,6 +78,67 @@ export function taskRowIconKey(task: Pick<Thread, 'assistantIconType'>): 'custom
   return task.assistantIconType ? 'custom' : 'bot'
 }
 
+/**
+ * Fence tag or leading body line naming a block as a how-to: `how-to`,
+ * `howto`, `how_to`, `how to`, each optionally followed by `: <title>` or
+ * `- <title>`. A trailing `.md` or other word is rejected.
+ */
+const HOW_TO_TAG = /^how[ _-]?to(?:[ \t]*[-:][^\n]*)?$/i
+
+/** A leading `how-to` marker line inside a block, e.g. `how-to: Slack digest`. */
+const HOW_TO_MARKER_LINE = /^[ \t]*how[-_]?to\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/
+
+/** The first non-blank line of a block body, or null when the body is blank. */
+function firstNonEmptyLine(text: string): string | null {
+  for (const line of text.split('\n')) {
+    if (line.trim() !== '') return line
+  }
+  return null
+}
+
+/** Drop a leading `how-to` marker line so the saved how-to is instructions only. */
+function stripHowToMarker(body: string): string {
+  const lines = body.split('\n')
+  const start = lines.findIndex((line) => line.trim() !== '')
+  if (start === -1) return ''
+  const content = HOW_TO_MARKER_LINE.test(lines[start]) ? lines.slice(start + 1) : lines.slice(start)
+  return content.join('\n').trim()
+}
+
+/**
+ * The how-to draft inside one assistant message, or null when it holds none.
+ *
+ * The authoring contract asks for a fence tagged `how-to`, but a model also
+ * opens a bare fence and starts the body with a `how-to: <title>` line, so both
+ * shapes are accepted. The newest matching block in the text wins, and a
+ * leading marker line is stripped so the saved how-to is instructions only.
+ */
+export function extractHowToDraft(text: string): string | null {
+  const fencedBlock = /```[ \t]*([^\n`]*)\n([\s\S]*?)```/g
+  let found: string | null = null
+  for (const match of text.matchAll(fencedBlock)) {
+    const tag = (match[1] ?? '').trim()
+    const body = match[2] ?? ''
+    const head = firstNonEmptyLine(body)
+    if (!HOW_TO_TAG.test(tag) && !(head !== null && HOW_TO_MARKER_LINE.test(head))) continue
+    const content = stripHowToMarker(body)
+    if (content) found = content
+  }
+  return found
+}
+
+/**
+ * The newest how-to draft across assistant messages, newest message first.
+ * Messages are given as plain text so this stays free of thread plumbing.
+ */
+export function latestHowToDraft(assistantTexts: readonly string[]): string | null {
+  for (let index = assistantTexts.length - 1; index >= 0; index -= 1) {
+    const draft = extractHowToDraft(assistantTexts[index] ?? '')
+    if (draft) return draft
+  }
+  return null
+}
+
 /** Overall state passed to the shared thread hover popover. */
 export type TaskPopoverState =
   | 'unread'

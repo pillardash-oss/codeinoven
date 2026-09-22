@@ -197,6 +197,13 @@ prompt"; the user-facing term is how-to.
   missing, and drafts the how-to with them. Only once both agree does the agent
   present the final how-to in a fenced `how-to` block and ask the user to send
   `/save-how-to`, which commits it to the routine.
+- Draft detection is deliberately tolerant, because the commit command has to
+  work against how a model actually formats the block, not only the contract.
+  `extractHowToDraft` in `assistant-view.ts` accepts both a fence tagged
+  `how-to` (optionally with a `: <title>` suffix) and a bare fence whose first
+  line is a `how-to: <title>` marker, strips that marker line, and takes the
+  newest matching block in the newest assistant message. Every other fenced
+  block is ignored, and a block that is only a marker line is not a draft.
 - The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
   how-to, and only once a how-to exists the routine schedule, the task schedule,
   and the connections. With no how-to it is a single empty state and nothing

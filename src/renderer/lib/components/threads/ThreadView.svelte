@@ -140,6 +140,7 @@
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { latestHowToDraft as latestHowToDraftIn } from '$lib/components/assistant/assistant-view'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -2128,7 +2129,7 @@
     return [
       `You are authoring the how-to for the routine "${routineName}". Help the user turn their intent into a concrete, step-by-step how-to that every task in this routine will follow.`,
       'Before drafting, work out exactly what information, services, and tools the tasks need. Check the app utility library for a matching skill, MCP server, or plugin. If one is missing, research whether a compatible option exists and explain plainly what it is and how to set it up. Never install anything without the user consent; when a compatible utility can be installed, tell the user to send "@cio-utility proceed" to arm it. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
-      'Go back and forth with the user until you agree. Only once they agree, present the final how-to inside one fenced code block whose opening fence says how-to, and tell them to send /save-how-to to commit it. The block must contain the exact instruction set the routine will run, not a summary of the conversation.'
+      'Go back and forth with the user until you agree. Only once they agree, present the final how-to inside one fenced code block whose opening fence says how-to, and tell them to send /save-how-to to commit it. The block must contain the exact instruction set the routine will run, not a summary of the conversation. Open the fence with the tag how-to alone on its line, with no title after it, and put no title line inside the block.',
     ].join('\n')
   }
 
@@ -5899,24 +5900,17 @@
 
   /**
    * The how-to the agent last drafted for this routine, taken from the newest
-   * ```how-to fenced block in an assistant message. The authoring contract tells
-   * the model to present the agreed how-to in exactly that block.
+   * how-to fenced block in an assistant message. The authoring contract asks
+   * for a `how-to` fence, but a bare fence whose body starts with a
+   * `how-to: <title>` line is accepted too.
    */
   function latestHowToDraft(): string | null {
-    const fence = /```(?:how-?to)\s*\n([\s\S]*?)```/giu
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
+    const assistantTexts: string[] = []
+    for (const message of messages) {
       if (message.role !== 'assistant') continue
-      const text = messageText(message)
-      let match: RegExpExecArray | null
-      let found: string | null = null
-      fence.lastIndex = 0
-      while ((match = fence.exec(text)) !== null) {
-        if (match[1]?.trim()) found = match[1].trim()
-      }
-      if (found) return found
+      assistantTexts.push(messageText(message))
     }
-    return null
+    return latestHowToDraftIn(assistantTexts)
   }
 
   /** Commit the agent-drafted how-to to the routine after the user agrees. */
@@ -5924,7 +5918,7 @@
     if (!assistantRoutineId) return
     const draft = latestHowToDraft()
     if (!draft) {
-      errorMessage = `The agent has not drafted a how-to yet. Ask it to write one, then send /save-how-to again.`
+      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then send /save-how-to again.`
       return
     }
     try {

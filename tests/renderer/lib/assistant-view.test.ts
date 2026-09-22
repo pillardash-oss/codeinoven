@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   UNGROUPED_MISSED_RUNS,
+  extractHowToDraft,
   groupMissedRunsByRoutine,
+  latestHowToDraft,
   missedTabVisible,
   taskHasMissed,
   taskRowIconKey,
@@ -92,5 +94,69 @@ describe('missed status tone', () => {
 
   it('does not reuse the warning token for missed', () => {
     expect(STATUS_TONE_COLORS.missed).not.toBe(STATUS_TONE_COLORS.attention)
+  })
+})
+
+describe('how-to draft extraction', () => {
+  it('reads a bare fence whose body starts with a how-to title line', () => {
+    const message = [
+      'Here is the exact instruction set for the routine.',
+      '',
+      '```',
+      'how-to: Slack checkup drain',
+      '',
+      'GOAL',
+      'Twice a day, sweep every Slack conversation.',
+      '```',
+      '',
+      'Send /save-how-to to commit this.'
+    ].join('\n')
+    expect(extractHowToDraft(message)).toBe(
+      'GOAL\nTwice a day, sweep every Slack conversation.'
+    )
+  })
+
+  it('reads a fence tagged how-to with or without a trailing title', () => {
+    expect(extractHowToDraft('```how-to\nCheck email at 08:30.\n```')).toBe(
+      'Check email at 08:30.'
+    )
+    expect(extractHowToDraft('```how-to: Morning mail\nCheck email at 08:30.\n```')).toBe(
+      'Check email at 08:30.'
+    )
+    expect(extractHowToDraft('```howto\nCheck email.\n```')).toBe('Check email.')
+    expect(extractHowToDraft('```How-To - Morning mail\nCheck email.\n```')).toBe(
+      'Check email.'
+    )
+  })
+
+  it('strips the marker line when the fence carries both a tag and a title line', () => {
+    expect(
+      extractHowToDraft('```how-to\nhow-to: Morning mail\n\nCheck email at 08:30.\n```')
+    ).toBe('Check email at 08:30.')
+  })
+
+  it('ignores blocks and messages that carry no how-to', () => {
+    expect(extractHowToDraft('No code block here at all.')).toBeNull()
+    expect(extractHowToDraft('```ts\nconst x = 1\n```')).toBeNull()
+    expect(extractHowToDraft('```json\n{"how-to": "not a block"}\n```')).toBeNull()
+    expect(extractHowToDraft('```\nhow-to: title only\n```')).toBeNull()
+  })
+
+  it('takes the newest how-to block in a message', () => {
+    const message = [
+      '```how-to\nFirst draft.\n```',
+      '```how-to\nSecond draft.\n```'
+    ].join('\n')
+    expect(extractHowToDraft(message)).toBe('Second draft.')
+  })
+
+  it('takes the newest message that holds a draft', () => {
+    const texts = [
+      '```how-to\nOlder draft.\n```',
+      'Still discussing the tools.',
+      '```\nhow-to: Slack digest\n\nNewer draft.\n```'
+    ]
+    expect(latestHowToDraft(texts)).toBe('Newer draft.')
+    expect(latestHowToDraft(['No draft yet.', '```ts\nconst x = 1\n```'])).toBeNull()
   })
 })
