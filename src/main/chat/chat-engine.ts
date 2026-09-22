@@ -4175,8 +4175,8 @@ export class ChatEngine {
         }
       }
       // The desktop view adopts ensureSession's return value directly. Publish
-      // the persisted binding too so remote renderers can route the very first
-      // streamed part from a new or replacement harness session.
+      // the persisted binding too so every other window can route the very
+      // first streamed part from a new or replacement harness session.
       broadcastThreadUpdate(boundThread)
       if (rotatedPlanningSession) {
         this.preparedImplementationSessions.add(sessionId)

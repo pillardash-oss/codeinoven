@@ -251,9 +251,6 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
-    /** Hides the inline context-usage indicator   for hosts that surface the
-     *  same detail elsewhere (e.g. the mobile header). */
-    hideUsageIndicator?: boolean
     /** Renders the scope shoe   the project scope + project type row at the
      *  footer of the composer. Only set in project mode. */
     scopeShoe?: ComposerScopeShoe
@@ -334,7 +331,6 @@
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
     enableImageDescriptorGate = true,
-    hideUsageIndicator = false,
     scopeShoe,
     onNeedsAiAccount
   }: Props = $props()
@@ -1733,20 +1729,18 @@
 
     <span class="flex-1"></span>
 
-    {#if !hideUsageIndicator}
-      <ContextUsageIndicator
-        usage={contextUsage}
-        {efficiencyKpis}
-        {harnessUsage}
-        {canCompact}
-        {compacting}
-        {onCompact}
-        {onActivateBankedReset}
-        onReveal={onRevealUsage}
-        onHide={onHideUsage}
-        refreshing={usageRefreshing}
-      />
-    {/if}
+    <ContextUsageIndicator
+      usage={contextUsage}
+      {efficiencyKpis}
+      {harnessUsage}
+      {canCompact}
+      {compacting}
+      {onCompact}
+      {onActivateBankedReset}
+      onReveal={onRevealUsage}
+      onHide={onHideUsage}
+      refreshing={usageRefreshing}
+    />
 
     <!-- Keep the mic mounted in one stable slot so recording state never resets
          when the composer gains text and the send control appears. -->

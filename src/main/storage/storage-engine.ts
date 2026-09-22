@@ -117,7 +117,6 @@ export class StorageEngine {
     await ensureDir(this.resolve('projects-gh'))
     await ensureDir(this.resolve('workflows'))
     await ensureDir(this.resolve('blobs'))
-    await ensureDir(this.resolve('remote'))
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve('chats-cwd'))
     await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
