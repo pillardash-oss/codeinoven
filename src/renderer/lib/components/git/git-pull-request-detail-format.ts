@@ -206,12 +206,19 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
   }
 
   for (const review of bundle.reviews) {
+    const threads = threadsByReview.get(review.id) ?? []
+    // Answered inline comments do not each own a unit. GitHub files every reply
+    // under a submitted review of its own   a `COMMENTED` review with no body
+    // and, because the answer stays in the thread it answered, no threads. It
+    // holds neither text nor verdict, so drawing it puts an empty row under the
+    // author's name beside the reply that already reads in place.
+    if (isReplyShell(review, threads)) continue
     nodes.push({
       kind: 'review',
       key: `r${review.id}`,
       at: review.submittedAt,
       entry: reviewEntry(review),
-      threads: threadsByReview.get(review.id) ?? []
+      threads
     })
   }
   if (unclaimed.length > 0) {
@@ -323,6 +330,23 @@ function rootIdOf(commentId: number, comments: PullRequestReviewComment[]): numb
     seen.add(parent)
     current = parent
   }
+}
+
+/**
+ * Whether a submitted review is only the shell GitHub wraps around an inline
+ * reply.
+ *
+ * A reviewer who approves, requests changes, dismisses, or writes a summary has
+ * said something, and each of those keeps its unit however short the body. A
+ * `COMMENTED` review with no body and no threads of its own is the opposite: it
+ * exists only because the reply it carried belongs to the thread it answered.
+ */
+function isReplyShell(review: PullRequestReview, threads: ReviewThread[]): boolean {
+  return (
+    review.state.trim().toLowerCase() === 'commented' &&
+    review.body.trim().length === 0 &&
+    threads.length === 0
+  )
 }
 
 /** The review a thread was submitted with, as its opening comment declares it. */
