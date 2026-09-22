@@ -2,6 +2,7 @@
   import {
     ChevronLeft,
     ChevronRight,
+    CornerDownRight,
     Eye,
     EyeOff,
     KeyRound,
@@ -13,16 +14,26 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import type { SpeechScope } from '../../../../lib/speech/types'
   import type { AgentSecretSubmission, PendingAgentQuestionRequest } from '$shared/types'
 
   interface Props {
     request: PendingAgentQuestionRequest
     /** Sends the pasted values to the main process; they never enter the transcript. */
     onSubmit: (requestId: string, secrets: AgentSecretSubmission[]) => Promise<void>
+    /**
+     * Sends an instruction instead of a value: the main process reuses whatever
+     * the device already holds for the requested names and hands the instruction
+     * to the agent, so a value the user cannot reach any more is never re-asked.
+     */
+    onAlternative: (requestId: string, alternative: string) => Promise<void>
     onDismiss: (requestId: string) => Promise<void>
+    scope: SpeechScope
   }
 
-  let { request, onSubmit, onDismiss }: Props = $props()
+  let { request, onSubmit, onAlternative, onDismiss, scope }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -33,6 +44,9 @@
   let working = $state(false)
   let actionError = $state('')
   let folded = $state(false)
+  let showingAlternative = $state(false)
+  let alternative = $state('')
+  let alternativeEditor = $state<RichMarkdownEditor>()
 
   let total = $derived(request.questions.length)
   let question = $derived(request.questions[currentIndex])
@@ -40,6 +54,41 @@
   let currentRevealed = $derived(revealedIndex === currentIndex)
   let filledCount = $derived(values.filter((value) => value.trim().length > 0).length)
   let allFilled = $derived(filledCount === total)
+  let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+  /** Every variable this request asks for, so reuse is stated before it happens. */
+  let requestedVariables = $derived(
+    request.questions.flatMap((entry) =>
+      entry.secretEnvironmentVariable ? [entry.secretEnvironmentVariable] : []
+    )
+  )
+  const alternativeTargetId = $derived(`secret-alternative-${request.requestId}`)
+
+  function alternativeSpeechTarget() {
+    return alternativeEditor?.speechEditorTarget(alternativeTargetId) ?? null
+  }
+
+  function showAlternative(): void {
+    showingAlternative = true
+  }
+
+  function cancelAlternative(): void {
+    showingAlternative = false
+    alternative = ''
+  }
+
+  async function handleAlternative(): Promise<void> {
+    const instruction = alternative.trim()
+    if (!instruction || working) return
+    working = true
+    actionError = ''
+    try {
+      await onAlternative(request.requestId, instruction)
+    } catch (error) {
+      working = false
+      actionError =
+        error instanceof Error ? error.message : 'The alternative instruction could not be sent.'
+    }
+  }
 
   function toggleReveal(): void {
     revealedIndex = currentRevealed ? null : currentIndex
@@ -155,57 +204,97 @@
           {/if}
         </div>
 
-        {#key currentIndex}
+        {#if showingAlternative}
           <div class="space-y-1.5">
-            <label
-              class="block text-xs font-medium text-muted"
-              for={`secret-value-${request.requestId}-${currentIndex}`}
-            >
-              {allFilled ? 'Value' : 'Paste the value'}
+            <label class="block text-xs font-medium text-muted" for={alternativeTargetId}>
+              Alternative instruction
             </label>
-            <div class="relative">
-              <span
-                class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dimmed"
-                aria-hidden="true"
-              >
-                <KeyRound size={14} />
-              </span>
-              <input
-                id={`secret-value-${request.requestId}-${currentIndex}`}
-                class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
-                type={currentRevealed ? 'text' : 'password'}
-                autocomplete="off"
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck="false"
+            <div class="flex items-start gap-2">
+              <RichMarkdownEditor
+                bind:this={alternativeEditor}
+                id={alternativeTargetId}
+                bind:value={alternative}
+                autofocus
                 disabled={working}
-                placeholder="Paste the value"
-                bind:value={values[currentIndex]}
+                placeholder="Say what the agent should use instead, or name the variable you already provided…"
+                class="w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                containerClass="min-w-0 flex-1"
+                ariaLabel="Alternative instruction"
+                onSubmit={() => void handleAlternative()}
               />
-              <button
-                class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
-                type="button"
+              <VoiceInputButton
+                targetId={alternativeTargetId}
+                getTarget={alternativeSpeechTarget}
+                {scope}
                 disabled={working}
-                aria-pressed={currentRevealed}
-                title={currentRevealed ? 'Hide the value' : 'Show the value'}
-                aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
-                onclick={toggleReveal}
-              >
-                {#if currentRevealed}
-                  <EyeOff size={14} />
-                {:else}
-                  <Eye size={14} />
-                {/if}
-              </button>
+              />
             </div>
-            {#if question.secretEnvironmentVariable}
-              <p class="text-xs text-dimmed">
-                Available to the agent as
-                <span class="font-mono text-foreground">${question.secretEnvironmentVariable}</span>
-              </p>
-            {/if}
+            <p class="text-xs text-dimmed">
+              No value is stored from this card. Whatever the device already holds for
+              {#if requestedVariables.length > 0}
+                <span class="font-mono text-foreground">{requestedVariables.join(', ')}</span>
+              {:else}
+                this request
+              {/if}
+              is reused from your encrypted vault and handed to the agent, and your instruction reaches
+              it as written.
+            </p>
           </div>
-        {/key}
+        {:else}
+          {#key currentIndex}
+            <div class="space-y-1.5">
+              <label
+                class="block text-xs font-medium text-muted"
+                for={`secret-value-${request.requestId}-${currentIndex}`}
+              >
+                {allFilled ? 'Value' : 'Paste the value'}
+              </label>
+              <div class="relative">
+                <span
+                  class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dimmed"
+                  aria-hidden="true"
+                >
+                  <KeyRound size={14} />
+                </span>
+                <input
+                  id={`secret-value-${request.requestId}-${currentIndex}`}
+                  class="h-10 w-full rounded-lg border bg-elevated pr-10 pl-9 font-mono text-sm text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
+                  type={currentRevealed ? 'text' : 'password'}
+                  autocomplete="off"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  disabled={working}
+                  placeholder="Paste the value"
+                  bind:value={values[currentIndex]}
+                />
+                <button
+                  class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
+                  type="button"
+                  disabled={working}
+                  aria-pressed={currentRevealed}
+                  title={currentRevealed ? 'Hide the value' : 'Show the value'}
+                  aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
+                  onclick={toggleReveal}
+                >
+                  {#if currentRevealed}
+                    <EyeOff size={14} />
+                  {:else}
+                    <Eye size={14} />
+                  {/if}
+                </button>
+              </div>
+              {#if question.secretEnvironmentVariable}
+                <p class="text-xs text-dimmed">
+                  Available to the agent as
+                  <span class="font-mono text-foreground"
+                    >${question.secretEnvironmentVariable}</span
+                  >
+                </p>
+              {/if}
+            </div>
+          {/key}
+        {/if}
 
         {#if actionError}
           <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -222,32 +311,57 @@
       <span class="min-w-0 truncate">Secrets are not sent to the agent</span>
     </p>
     <div class="flex min-w-0 shrink items-center justify-end gap-2">
-      {#if total > 1}
-        <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
-      {/if}
-      {#if currentIndex < total - 1}
+      {#if showingAlternative}
+        <button
+          class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+          disabled={working}
+          onclick={cancelAlternative}
+        >
+          Cancel
+        </button>
         <button
           class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working || !currentValue.trim()}
-          onclick={goNext}
+          disabled={!canSubmitAlternative}
+          onclick={() => void handleAlternative()}
         >
-          Next
-          <ChevronRight size={13} />
+          Send alternative
+          <CornerDownRight size={13} />
         </button>
       {:else}
+        {#if total > 1}
+          <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
+        {/if}
         <button
-          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working || !allFilled}
-          onclick={() => void handleSubmit()}
+          class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+          disabled={working}
+          onclick={showAlternative}
         >
-          {#if working}
-            <Loader2 size={13} class="animate-spin" />
-            Storing…
-          {:else}
-            <ShieldCheck size={13} />
-            Submit
-          {/if}
+          Provide alternative
         </button>
+        {#if currentIndex < total - 1}
+          <button
+            class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={working || !currentValue.trim()}
+            onclick={goNext}
+          >
+            Next
+            <ChevronRight size={13} />
+          </button>
+        {:else}
+          <button
+            class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={working || !allFilled}
+            onclick={() => void handleSubmit()}
+          >
+            {#if working}
+              <Loader2 size={13} class="animate-spin" />
+              Storing…
+            {:else}
+              <ShieldCheck size={13} />
+              Submit
+            {/if}
+          </button>
+        {/if}
       {/if}
     </div>
   </div>

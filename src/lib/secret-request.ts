@@ -20,6 +20,8 @@ const SECRET_TITLE_LIMIT = 120
 const SECRET_DESCRIPTION_LIMIT = 400
 const ENVIRONMENT_VARIABLE_LIMIT = 64
 const SECRET_TITLE_SLUG_LIMIT = 24
+/** Most names one alternative instruction may point the app at, bounding lookups. */
+export const SECRET_ALTERNATIVE_NAME_LIMIT = 5
 
 /** One secret an agent asked the user for, exactly as the tool input describes it. */
 export interface AgentSecretRequest {
@@ -121,6 +123,30 @@ export function deriveSecretEnvironmentVariable(id: string, title: string): stri
     .slice(0, SECRET_TITLE_SLUG_LIMIT)
     .replace(/_+$/gu, '')
   return `CIO_${id}_${slug || 'SECRET'}`
+}
+
+/**
+ * Variable names the user pointed at in an alternative instruction, so a value
+ * the device already holds under a different name than the agent asked for is
+ * still reused.
+ *
+ * Only unmistakable candidates are taken: a valid OS variable name that is
+ * either underscored or at least eight characters, because a lookup that finds
+ * nothing costs nothing while a single-letter token would produce noise.
+ */
+export function alternativeSecretNames(instruction: string): string[] {
+  const names: string[] = []
+  for (const match of instruction.matchAll(
+    /(?:^|[^A-Za-z0-9_])([A-Z][A-Z0-9_]{3,63})(?![A-Za-z0-9_])/gu
+  )) {
+    const name = match[1]
+    if (!name || !SECRET_ENVIRONMENT_VARIABLE_PATTERN.test(name)) continue
+    if (!name.includes('_') && name.length < 8) continue
+    if (names.includes(name)) continue
+    names.push(name)
+    if (names.length >= SECRET_ALTERNATIVE_NAME_LIMIT) break
+  }
+  return names
 }
 
 /**

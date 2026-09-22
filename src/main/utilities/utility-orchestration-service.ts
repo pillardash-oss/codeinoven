@@ -830,6 +830,14 @@ export class UtilityOrchestrationService {
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
+    const sharedNote = `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
+    const secretEntries = resolution.secrets.map((secret) => ({
+      label: secret.label,
+      environment_variable: secret.environmentVariable,
+      ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
+      ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {}),
+      ...(secret.reusedFrom ? { reused_from: secret.reusedFrom } : {})
+    }))
     const result: Record<string, unknown> =
       resolution.status === 'dismissed'
         ? {
@@ -837,18 +845,31 @@ export class UtilityOrchestrationService {
             message:
               'The user dismissed the secret request without providing a value. Continue without it, and ask again only if the secret is essential.'
           }
-        : {
-            status: 'set',
-            message: 'Secret set, you may proceed.',
-            secrets: resolution.secrets.map((secret) => ({
-              label: secret.label,
-              environment_variable: secret.environmentVariable,
-              ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
-              ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {})
-            })),
-            note: `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
-          }
-    if (input['apply_environment'] !== true || resolution.status === 'dismissed') return result
+        : resolution.status === 'alternative'
+          ? {
+              status: 'alternative',
+              message:
+                'The user answered with an instruction instead of a value. This is an answer, not a dismissal: do not ask for the same secret again in this turn. Follow the instruction and continue.',
+              user_instruction: resolution.alternative,
+              secrets: secretEntries,
+              ...(resolution.unresolved?.length
+                ? {
+                    unresolved_environment_variables: resolution.unresolved,
+                    unresolved_note:
+                      'Nothing was exposed for these names. Continue with the user instruction. If one of them is already defined in your own environment, use it directly and never print, echo, or log it; otherwise take a different route or say plainly what is missing.'
+                  }
+                : {}),
+              note: sharedNote
+            }
+          : {
+              status: 'set',
+              message: 'Secret set, you may proceed.',
+              secrets: secretEntries,
+              note: sharedNote
+            }
+    // A reused value must reach the session environment exactly like a pasted
+    // one, which is what a user answering "this key was already supplied" needs.
+    if (input['apply_environment'] !== true || resolution.secrets.length === 0) return result
     // Only an in-process gateway transport asks for this, and it applies the map
     // to its own session environment before the result is shown to the model.
     return {
