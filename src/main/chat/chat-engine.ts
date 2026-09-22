@@ -624,6 +624,18 @@ export type { VirtualTaskOptions } from './chat-engine/chat-engine-types'
  * The renderer subscribes to `agent:event` for streaming AgentEvents; this
  * class broadcasts driver events to all windows through a bounded stream buffer.
  */
+
+/** An open user-activity window for one in-app terminal, rooted in that
+ *  terminal's worktree so it can only ever apply to turns in the same root. */
+interface UserTerminalWindow {
+  /** Baseline fingerprint of the terminal's own worktree, captured at first keystroke. */
+  fingerprint: Promise<ProjectFingerprint | null>
+  /** Real path of the terminal's worktree, resolved once at window open. */
+  projectRoot: Promise<string | null>
+  lastInput: number
+  timer: NodeJS.Timeout
+}
+
 export class ChatEngine {
   /** Close deadline: an untouched conversation is graded after this much inactivity. */
   private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
@@ -760,13 +772,11 @@ export class ChatEngine {
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
 
-  /** Per-project user-terminal activity: an open fingerprint window while the
-   *  user is typing commands, so their shell-driven edits are never swept into
-   *  a concurrent agent turn's bash-window diff. */
-  private userTerminalWindows = new Map<
-    string,
-    { fingerprint: Promise<ProjectFingerprint | null>; lastInput: number; timer: NodeJS.Timeout }
-  >()
+  /** Per-project user-terminal activity: while the user is typing commands in
+   *  an in-app terminal, an open fingerprint window (one per terminal worktree
+   *  root) records what their shell moved, so those edits are never swept into
+   *  a concurrent agent turn's bash-window diff or final checkpoint. */
+  private userTerminalWindows = new Map<string, Map<string, UserTerminalWindow>>()
 
   /** Harness sessions implementing an approved specification until its contract is fulfilled. */
   private engineeringImplementationSessions = new Set<string>()
@@ -4946,31 +4956,53 @@ export class ChatEngine {
     // Command-backed terminals (harness logins/updates) carry no project id;
     // there is no checkpoint to attribute their shell commands to.
     if (!projectId) return
-    const existing = this.userTerminalWindows.get(projectId)
+    // The window is scoped to the terminal's own worktree root, not just the
+    // project: a terminal running in one scope worktree must never affect
+    // attribution of a turn (or another terminal) in a different root.
+    let roots = this.userTerminalWindows.get(projectId)
+    if (!roots) {
+      roots = new Map()
+      this.userTerminalWindows.set(projectId, roots)
+    }
+    const windowKey = projectPath
+    const existing = roots.get(windowKey)
     if (existing) {
       existing.lastInput = Date.now()
       clearTimeout(existing.timer)
       existing.timer = setTimeout(() => {
-        const current = this.userTerminalWindows.get(projectId)
-        if (current?.timer === existing.timer) {
-          this.userTerminalWindows.delete(projectId)
-        }
+        const current = this.userTerminalWindows.get(projectId)?.get(windowKey)
+        if (current?.timer !== existing.timer) return
+        const roots = this.userTerminalWindows.get(projectId)
+        if (!roots) return
+        roots.delete(windowKey)
+        if (roots.size === 0) this.userTerminalWindows.delete(projectId)
       }, USER_TERMINAL_SETTLE_MS)
       return
     }
-    const window = {
-      fingerprint: this.checkpointManager.fingerprint(projectId, projectPath).catch((error) => {
+    const fingerprint = this.checkpointManager
+      .fingerprint(projectId, projectPath)
+      .catch((error) => {
         Logger.error('user-terminal fingerprint failed:', error)
         return null
-      }),
+      })
+    const window: UserTerminalWindow = {
+      fingerprint,
+      // Resolved from the same fingerprint: the tracker real-paths the cwd, so
+      // this is the canonical worktree root the window applies to. A failed
+      // baseline also resolves to null, which excludes the window everywhere.
+      projectRoot: fingerprint.then((baseline) => baseline?.projectRoot ?? null),
       lastInput: Date.now(),
       timer: setTimeout(() => undefined, 0)
     }
     window.timer = setTimeout(() => {
-      const current = this.userTerminalWindows.get(projectId)
-      if (current?.timer === window.timer) this.userTerminalWindows.delete(projectId)
+      const current = this.userTerminalWindows.get(projectId)?.get(windowKey)
+      if (current?.timer !== window.timer) return
+      const roots = this.userTerminalWindows.get(projectId)
+      if (!roots) return
+      roots.delete(windowKey)
+      if (roots.size === 0) this.userTerminalWindows.delete(projectId)
     }, USER_TERMINAL_SETTLE_MS)
-    this.userTerminalWindows.set(projectId, window)
+    roots.set(windowKey, window)
   }
 
   /** Delete a harness-native or app-managed skill. */
@@ -23752,17 +23784,30 @@ export class ChatEngine {
     this.closeUnboundedToolWindow(session)
   }
 
+  /** The open user-terminal windows for this session's project. Root
+   *  matching happens per window when its fingerprint resolves: a window
+   *  rooted in another scope's worktree never applies to this session. */
+  private matchingUserTerminalWindows(session: SessionInfo): UserTerminalWindow[] {
+    const roots = this.userTerminalWindows.get(session.projectId)
+    if (!roots) return []
+    return [...roots.values()]
+  }
+
   private closeUnboundedToolWindow(session: SessionInfo): void {
     const start = session.unboundedWindowStart
     session.unboundedWindowStart = undefined
     session.openUnboundedTools?.clear()
     if (!start) return
     const turnId = session.activeTurnId
-    // Snapshot any open user-terminal window for this project: paths that
-    // moved while the user was typing commands in the in-app terminal are the
-    // user's edits, not this turn's bash work.
-    const userWindow = this.userTerminalWindows.get(session.projectId)
-    const userBefore = userWindow ? userWindow.fingerprint : undefined
+    // Snapshot any open user-terminal windows for this project: paths that
+    // moved while the user was typing commands in an in-app terminal are the
+    // user's edits, not this turn's bash work. Only windows rooted in the
+    // turn's own worktree apply.
+    const userWindows = this.matchingUserTerminalWindows(session)
+    const userBefore = userWindows.map((entry) => ({
+      fingerprint: entry.fingerprint,
+      projectRoot: entry.projectRoot
+    }))
     const pendingScans = (session.pendingWindowScans ??= new Set())
     const scan = (async (): Promise<void> => {
       try {
@@ -23781,17 +23826,19 @@ export class ChatEngine {
           return
         }
         let userMoved: Set<string> | undefined
-        if (userBefore) {
-          const userStart = await userBefore
-          // The terminal window's baseline is rooted in the terminal's own
-          // worktree. When the turn runs in another scope (or the project
-          // root), the two roots cannot be compared and the user window simply
-          // does not apply   those edits stay unattributed rather than being
-          // claimed by either side.
-          if (userStart && userStart.projectRoot === after.projectRoot) {
-            userMoved = new Set(
-              this.checkpointManager.diffFingerprints(session.projectId, userStart, after)
-            )
+        for (const entry of userBefore) {
+          const [userStart, windowRoot] = await Promise.all([entry.fingerprint, entry.projectRoot])
+          // A window whose baseline failed, or whose terminal worktree differs
+          // from the turn's root, does not apply here: those edits stay
+          // unattributed rather than being claimed by either side.
+          if (!userStart || !windowRoot || windowRoot !== after.projectRoot) continue
+          userMoved ??= new Set()
+          for (const path of this.checkpointManager.diffFingerprints(
+            session.projectId,
+            userStart,
+            after
+          )) {
+            userMoved.add(path)
           }
         }
         session.changedPaths ??= new Set()
@@ -23817,6 +23864,55 @@ export class ChatEngine {
       .finally(() => pendingScans.delete(scan))
   }
 
+  /**
+   * Paths the user's in-app terminal commands moved during this turn, in the
+   * turn's own worktree. Computed by diffing each matching terminal window's
+   * baseline against a fresh fingerprint, so a turn that never ran a shell
+   * tool still excludes the user's shell edits from its final checkpoint.
+   */
+  private async userTerminalChangedPaths(session: SessionInfo): Promise<Set<string>> {
+    // No active turn means nothing to attribute at all; the empty set keeps
+    // completion's project-wide snapshot behavior. The whole scan is also
+    // skipped unless a shell tool ran (only then does completion use the
+    // full-turn diff that exclusions apply to) and a window is open at all.
+    if (!session.activeTurnId || !session.unboundedToolObserved) return new Set()
+    if (!this.userTerminalWindows.get(session.projectId)?.size) return new Set()
+    const after = await this.checkpointManager
+      .fingerprint(session.projectId, session.projectPath)
+      .catch((error) => {
+        Logger.error('user-terminal completion scan failed:', error)
+        return null
+      })
+    if (!after) return new Set()
+    const changed = new Set<string>()
+    for (const entry of this.matchingUserTerminalWindows(session)) {
+      const [userStart, windowRoot] = await Promise.all([entry.fingerprint, entry.projectRoot])
+      // Only windows rooted in the turn's worktree apply (see
+      // closeUnboundedToolWindow); anything else cannot be compared safely.
+      if (!userStart || !windowRoot || windowRoot !== after.projectRoot) continue
+      for (const path of this.checkpointManager.diffFingerprints(
+        session.projectId,
+        userStart,
+        after
+      )) {
+        changed.add(path)
+      }
+    }
+    return changed
+  }
+
+  /** Merge in-app editor saves with terminal-window paths for completion exclusion. */
+  private withUserTerminalPaths(
+    userTouchedPaths: ReadonlySet<string> | undefined,
+    userTerminalPaths: ReadonlySet<string>
+  ): Set<string> | undefined {
+    if (userTerminalPaths.size === 0)
+      return userTouchedPaths ? new Set(userTouchedPaths) : undefined
+    const merged = new Set(userTouchedPaths ?? [])
+    for (const path of userTerminalPaths) merged.add(path)
+    return merged
+  }
+
   private async finishCheckpoint(
     sessionId: string,
     info: SessionInfo | undefined,
@@ -23829,6 +23925,10 @@ export class ChatEngine {
     if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
     if (info.pendingWindowScans?.size) await Promise.all([...info.pendingWindowScans])
     const ownThreadIds = await this.selfFamilyThreadIds(info.projectId, info.threadId)
+    // Edits the user made from an in-app terminal during this turn are the
+    // user's work, not the thread's: exclude them from the final checkpoint
+    // just like in-app editor saves.
+    const userTerminalPaths = await this.userTerminalChangedPaths(info)
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -23849,7 +23949,7 @@ export class ChatEngine {
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
           ownThreadIds,
-          excludedPaths: info.userTouchedPaths
+          excludedPaths: this.withUserTerminalPaths(info.userTouchedPaths, userTerminalPaths)
         }
       )
       info.activeTurnId = undefined
