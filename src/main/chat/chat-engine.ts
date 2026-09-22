@@ -272,6 +272,7 @@ import type {
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
@@ -342,6 +343,8 @@ import { generateId } from '../../lib/utils'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  ASSISTANT_CWD_DIR,
+  CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   chatThreadArtifactDirectory,
   ensureFeatureSlug,
@@ -457,7 +460,6 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
-  CHATS_CWD_DIR,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
   DEFAULT_QUESTION_TIMEOUT_MS,
@@ -19639,6 +19641,16 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
+    // A routine behaves like a project, so every task in it works inside its own
+    // `assistant-cwd/<routineId>/` root and keeps its artifacts there. A
+    // routine-less task gets `assistant-cwd/<threadId>/` so it still lives under
+    // the assistant root without colliding with any routine.
+    if (projectId === ASSISTANT_SPACE_ID) {
+      const assistantDirectory = join(ASSISTANT_CWD_DIR, thread.routineId ?? thread.id)
+      await this.storage.ensureDirectory(assistantDirectory)
+      return this.storage.resolve(assistantDirectory)
+    }
+
     // The scope resolver is authoritative for threads in a scope; a stale
     // persisted directory never wins, and unhealthy managed scopes fail
     // closed instead of silently operating on the project root.
@@ -19662,9 +19674,16 @@ export class ChatEngine {
     if (!project) throw new Error(`Project not found: ${projectId}`)
 
     let projectPath = project.path
-    if (!projectPath && project.id === INBOX_PROJECT_ID && project.hidden) {
+    if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
+    }
+    // The assistant space is hidden too, and its tasks are conversations rather
+    // than files in a project. Its root is a neutral app-storage directory so a
+    // session never runs against a real project folder.
+    if (!projectPath && project.hidden && project.id === ASSISTANT_SPACE_ID) {
+      await this.storage.ensureDirectory(ASSISTANT_CWD_DIR)
+      projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
@@ -21956,7 +21975,14 @@ export class ChatEngine {
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+    // Assistant tasks are routine-scoped rather than project- or chat-scoped:
+    // their workspace is the routine's own `assistant-cwd/<routineId>/` root
+    // (`info.projectPath`), so they never fall back to a chats artifact
+    // directory for pre-authorized writes.
+    const isAssistant = info.projectId === ASSISTANT_SPACE_ID
+    const scratchPaths = isAssistant
+      ? []
+      : [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)

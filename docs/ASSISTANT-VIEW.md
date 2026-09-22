@@ -43,6 +43,27 @@ entity, a new `threadKind` flag, hand-off by move (not fork), and a permanent
 general assistant chat. The header's **New task** action creates a routine-less
 task instead, and creates it with no extra naming step.
 
+### Workspace
+
+A routine behaves like a project, so its tasks run inside the routine's own
+workspace instead of a shared scratch directory:
+
+- The assistant container itself is hidden with no path, like the inbox. When a
+  session needs a directory, `resolveProjectPath`
+  (`src/main/chat/chat-engine.ts`) maps it to the app-storage root
+  `assistant-cwd/`.
+- `resolveThreadPath` then scopes every assistant thread to
+  `assistant-cwd/<routineId>/`, so work in one routine can never touch another's
+  files. A routine-less task gets `assistant-cwd/<threadId>/`.
+- That routine directory is the session's working directory and its permission
+  project root, so artifacts, generated images, and any files the agent writes
+  land under the routine. Assistant threads get no `chats-artifacts` scratch
+  path, and `assistant-cwd` is registered as an app artifact root so the
+  renderer can show those files.
+- Directory constants live in `src/lib/project-artifacts.ts`
+  (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
+  `src/main/storage/storage-engine.ts`.
+
 ## Scheduler contract
 
 `RoutineSchedulerService` (`src/main/scheduler/routine-scheduler-service.ts`) is
@@ -70,10 +91,10 @@ the app's clock for Assistant View.
 The missed surfaces use a dedicated token, never `--color-warning` (`#d97706`),
 and never `#ffe300` verbatim (it fails text contrast on light surfaces).
 
-| Theme | Token | Value | Contrast |
-| --- | --- | --- | --- |
+| Theme                                      | Token            | Value     | Contrast                             |
+| ------------------------------------------ | ---------------- | --------- | ------------------------------------ |
 | Light (`@theme` in `src/renderer/app.css`) | `--color-missed` | `#a16207` | ~4.9:1 on `#ffffff` (AA normal text) |
-| Dark (`.dark` in `src/renderer/app.css`) | `--color-missed` | `#fcd34d` | ~13.6:1 on `#0b0b0d` |
+| Dark (`.dark` in `src/renderer/app.css`)   | `--color-missed` | `#fcd34d` | ~13.6:1 on `#0b0b0d`                 |
 
 The token joins the other thread tones in `STATUS_TONE_COLORS`
 (`src/renderer/lib/stores/scope-board.ts`) as `missed: 'var(--color-missed)'`,
@@ -171,7 +192,7 @@ prompt"; the user-facing term is how-to.
   `--color-missed`. Routine rows never carry the state as text, and the badge
   shares the second row with the task count.
 - The how-to is authored conservatively in the routine's task thread, never in
-  a panel. The first task's head start asks *how the routine should happen* and
+  a panel. The first task's head start asks _how the routine should happen_ and
   the user describes it; the agent works out what it needs, asks about anything
   missing, and drafts the how-to with them. Only once both agree does the agent
   present the final how-to in a fenced `how-to` block and ask the user to send

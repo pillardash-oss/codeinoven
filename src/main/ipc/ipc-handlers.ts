@@ -274,6 +274,8 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'chats'),
           join(getConfigRoot(), 'chat-artifacts'),
           join(getConfigRoot(), 'chats-artifacts'),
+          // The assistant workspace, one directory per routine.
+          join(getConfigRoot(), 'assistant-cwd'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
