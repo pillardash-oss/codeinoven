@@ -28,9 +28,16 @@ import type { IpcHandlerContext } from './context'
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
-/** Returned instead of a raw fetch failure when GitHub is unreachable (offline). */
-const GITHUB_OFFLINE_MESSAGE =
-  'GitHub is unreachable right now. Pull requests will refresh automatically once you are back online.'
+/**
+ * Returned instead of a raw fetch failure when GitHub could not be reached at
+ * all   offline, or a request that outlived the provider's own deadline.
+ *
+ * It is a transient state rather than a broken feature, so the page says so
+ * instead of rejecting the IPC call, which is also what keeps a network blip
+ * out of the main process's handler-error log.
+ */
+const GITHUB_TRANSIENT_MESSAGE =
+  'GitHub could not be reached right now. Pull requests will refresh automatically.'
 
 export function registerPrHandlers(ctx: IpcHandlerContext): void {
   const {
@@ -371,10 +378,16 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
         }
-        // An unreachable GitHub is a transient state, not a broken feature
-        // degrade to an offline page so the renderer keeps its last known data.
+        // A transient transport failure is reported as one, not as a rejected
+        // call: the renderer keeps the rows it already has and shows the line,
+        // and Electron records no handler error for it.
         if (isNetworkError(error)) {
-          return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
+          return {
+            items: [],
+            page: safePage,
+            hasMore: false,
+            transientError: GITHUB_TRANSIENT_MESSAGE
+          }
         }
         throw error
       }

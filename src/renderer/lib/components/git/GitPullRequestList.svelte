@@ -120,6 +120,7 @@
   const items = $derived(cached?.page.items ?? [])
   const hasMore = $derived(cached?.page.hasMore ?? false)
   const accessError = $derived(cached?.page.accessError ?? '')
+  const transientError = $derived(cached?.page.transientError ?? '')
   const loading = $derived(gitState.isBusy('pr-list'))
 
   /**
@@ -387,6 +388,21 @@
     {/if}
 
     <!--
+      A transient failure is a line on top of the rows, not a replacement for
+      them: the reader keeps the listing they were reading and still learns why
+      it may be stale. It draws no repository-access action, because a dropped
+      connection is not a permissions problem.
+    -->
+    {#if transientError && items.length > 0}
+      <div
+        class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
+      >
+        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+        <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
+      </div>
+    {/if}
+
+    <!--
       The rows scroll behind the selection bar rather than above it: the bar rides
       on the bottom edge of the list, so picking a row never pushes twenty rows down
       the panel. This is the one surface a user sweeps repeatedly, and a list that
@@ -414,6 +430,11 @@
             >
               Install GitHub App
             </button>
+          </div>
+        {:else if transientError && items.length === 0}
+          <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+            <TriangleAlert size={18} class="text-warning" />
+            <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
           </div>
         {:else if items.length === 0}
           <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">

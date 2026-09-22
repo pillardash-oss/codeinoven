@@ -154,6 +154,30 @@ export class GitPullRequestCache {
     this.failures[key] = Date.now()
   }
 
+  /**
+   * Hold on to the rows a transient failure could not replace.
+   *
+   * A page that answers with `transientError` carries no rows, because the
+   * request never completed. Storing it as-is would blank a listing the reader
+   * is looking at, so the failure becomes a line above the rows already held
+   * rather than a replacement for them. A later success replaces the whole page
+   * and clears the line with it.
+   */
+  private keepRowsOnTransient(key: string, page: PullRequestPage): PullRequestPage {
+    const previous = this.pages[key]?.page
+    if (!page.transientError || !previous) return page
+    // Only the rows carry over. The previous answer's own error does not: the
+    // newest answer is this transient one, and an access failure it has since
+    // recovered from must not outlive it.
+    return {
+      items: previous.items,
+      page: page.page,
+      hasMore: previous.hasMore,
+      nextCursor: previous.nextCursor,
+      transientError: page.transientError
+    }
+  }
+
   /** True while a recent warm-up for this key failed, so hover backs off it. */
   private preloadCoolingDown(key: string): boolean {
     const failedAt = this.preloadFailures[key]
@@ -460,7 +484,18 @@ export class GitPullRequestCache {
         sort: query.sort,
         cursor
       })
-      this.pages = { ...this.pages, [key]: { page: result, fetchedAt: Date.now(), state } }
+      // A warm-up that only learned GitHub is unreachable must not park a
+      // transient page in the cache: it would read as a fresh page, and the
+      // click it was warming would then skip the fetch it needs. Back the
+      // hover off instead, the way a thrown failure used to.
+      if (silent && result.transientError) {
+        this.preloadFailures[key] = Date.now()
+        return
+      }
+      this.pages = {
+        ...this.pages,
+        [key]: { page: this.keepRowsOnTransient(key, result), fetchedAt: Date.now(), state }
+      }
       delete this.failures[key]
       delete this.preloadFailures[key]
       // The chips for these rows are read alongside the page, so a listing and its

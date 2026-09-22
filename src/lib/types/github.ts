@@ -164,6 +164,16 @@ export interface PullRequestPage {
   nextCursor?: string | null
   /** Actionable repository-access failure returned without rejecting IPC. */
   accessError?: string
+  /**
+   * A transient transport failure (offline, timeout) returned instead of a
+   * rejected IPC call.
+   *
+   * Kept apart from `accessError`, which is a permissions fact about the
+   * repository: a transient failure carries no rows of its own, so the listing
+   * holds on to the rows it already had and shows this line beside them rather
+   * than replacing them, and it offers no repository-access action.
+   */
+  transientError?: string
 }
 
 /**
