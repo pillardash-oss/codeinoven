@@ -1,5 +1,6 @@
 import type { AgentProviderIssue } from '../../../lib/types'
 import { APP_NAME } from '../../../lib/brand'
+import { classifyProviderIssue, presentProviderError } from '../../../lib/provider-issue'
 
 export const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 
@@ -51,6 +52,30 @@ export function historyMirrorIssue(error: unknown, harnessId: string): AgentProv
     message: historyMirrorFailureMessage(message),
     rawError: rawErrorDetail(error),
     harnessId,
+    retryable: true
+  }
+}
+
+/**
+ * Present a disposable agent task's failure in the app's provider-issue
+ * vocabulary.
+ *
+ * A virtual task reports nothing the user saw happen: there is no thread, no
+ * transcript and no provider card, so its caller has only the failure itself to
+ * render. Classifying it here is what lets that caller show the same title,
+ * message and actions every other harness failure gets, instead of a thrown
+ * string nobody can act on.
+ */
+export function harnessFailureIssue(error: unknown, harnessId: string): AgentProviderIssue {
+  const detail = rawErrorMessage(error)
+  const presentation = presentProviderError(detail)
+  return {
+    kind: classifyProviderIssue(detail),
+    message: presentation.message,
+    ...(presentation.rawError ? { rawError: presentation.rawError } : {}),
+    harnessId,
+    // The task was never started, so nothing about it is spent: re-running it
+    // costs one more attempt against a harness the user may have just fixed.
     retryable: true
   }
 }

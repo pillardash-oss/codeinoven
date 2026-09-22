@@ -6,7 +6,7 @@ import type {
   PrAgentAssignmentWorkspace,
   PrCommentKind,
   PrComposeInput,
-  PrComposeReport,
+  PrComposeOutcome,
   PrCreateInput,
   PrMergeMethod,
   PrMinimizeReason,
@@ -21,6 +21,7 @@ import type {
   ThreadSettings
 } from '$shared/types'
 import { errorMessage, type GitOperation } from './git-store-helpers'
+import { classifyProviderIssue } from '$shared/provider-issue'
 import type { CachedPullRequestPatch } from './git-store-pull-requests.svelte'
 
 /**
@@ -569,14 +570,19 @@ export class GitPullRequestOperations {
     }
   }
 
-  /** Run PR composition as a one-shot virtual agent task with no persisted thread. */
+  /**
+   * Run PR composition as a one-shot virtual agent task with no persisted thread.
+   *
+   * Always resolves to an outcome. A harness that cannot run is an expected
+   * result of the user's own model choice, not an exception, so it comes back as
+   * a `failed` outcome carrying its cause and retryability for the sheet to act on.
+   */
   async composeWithAgent(
     projectId: string,
     virtualTaskId: string,
     settings: ThreadSettings,
     input: PrComposeInput
-  ): Promise<PrComposeReport | null> {
-    this.access.setError(null)
+  ): Promise<PrComposeOutcome> {
     try {
       const scopeBucketId = this.access.scopeFor(projectId)
       if (!scopeBucketId) throw new Error('The pull request scope is unavailable')
@@ -589,8 +595,18 @@ export class GitPullRequestOperations {
         input
       )
     } catch (reason) {
-      this.access.setError(errorMessage(reason, 'The PR compose agent could not complete its task'))
-      return null
+      // Only a transport or validation failure reaches here; the task reports its
+      // own failures as an outcome.
+      const message = errorMessage(reason, 'The PR compose agent could not be started')
+      return {
+        status: 'failed',
+        issue: {
+          kind: classifyProviderIssue(message),
+          message,
+          harnessId: settings.harnessId,
+          retryable: true
+        }
+      }
     }
   }
 

@@ -53,6 +53,7 @@ import type {
   UtilityActivation
 } from '../../../lib/types'
 import type { PullRequestComposeContext } from '../../git/git-service'
+import { harnessFailureIssue } from '../../chat/chat-engine/chat-engine-errors'
 import {
   createPrAgentAssignment,
   listPrAgentReports,
@@ -1377,7 +1378,6 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle('pr:composeWithAgent', async (_, ...args: unknown[]) => {
-    if (!chatEngine?.runVirtualTask) throw new Error('The PR compose agent is unavailable')
     const safeProjectId = validateEntityId(args[0], 'Project ID')
     const scopeBucketId = validateEntityId(args[1], 'Scope bucket ID')
     const virtualTaskId = validateEntityId(args[2], 'Virtual task ID')
@@ -1394,32 +1394,45 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       fileSystemMode: false
     })
     const input = validatePrComposeInput(args[4])
-    const context = await gitService.pullRequestComposeContext(
-      await resolveProjectPath(safeProjectId, scopeBucketId),
-      input
-    )
-    const response = await chatEngine.runVirtualTask(
-      safeProjectId,
-      virtualTaskId,
-      settings,
-      `Compose PR: ${input.head} to ${input.base}`,
-      prComposePrompt(input, context),
-      {
-        systemPrompt: PR_COMPOSE_SYSTEM_PROMPT,
-        readOnly: true,
-        allowedTools: [],
-        structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 },
-        textOutputFallback: {
-          accepts: hasPrComposeResponse,
-          repairPrompt: prComposeRepairPrompt
+    // Everything past validation is an expected outcome rather than a thrown
+    // failure: the harness the user picked may be missing, unauthenticated,
+    // rate-limited, or unable to start. Returning it keeps the cause and the
+    // retryability on the wire, so the sheet can offer a way out instead of an
+    // exception it can only print.
+    try {
+      if (!chatEngine?.runVirtualTask) throw new Error('The PR compose agent is unavailable')
+      const context = await gitService.pullRequestComposeContext(
+        await resolveProjectPath(safeProjectId, scopeBucketId),
+        input
+      )
+      const response = await chatEngine.runVirtualTask(
+        safeProjectId,
+        virtualTaskId,
+        settings,
+        `Compose PR: ${input.head} to ${input.base}`,
+        prComposePrompt(input, context),
+        {
+          systemPrompt: PR_COMPOSE_SYSTEM_PROMPT,
+          readOnly: true,
+          allowedTools: [],
+          structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 },
+          textOutputFallback: {
+            accepts: hasPrComposeResponse,
+            repairPrompt: prComposeRepairPrompt
+          }
         }
+      )
+      const report = prComposeResponse(response)
+      if (!report.title.trim()) throw new Error('The PR compose agent returned no title')
+      return { status: 'completed' as const, report: { ...report, taskId: virtualTaskId } }
+    } catch (error) {
+      // The outcome carries this to the sheet; the dev log keeps the raw cause
+      // available when the sanitized message is not enough to diagnose with.
+      Logger.dev('PR compose agent failed', error)
+      return {
+        status: 'failed' as const,
+        issue: harnessFailureIssue(error, settings.harnessId)
       }
-    )
-    const report = prComposeResponse(response)
-    if (!report.title.trim()) throw new Error('The PR compose agent returned no title')
-    return {
-      ...report,
-      taskId: virtualTaskId
     }
   })
 

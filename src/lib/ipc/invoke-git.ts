@@ -30,7 +30,6 @@ import type {
   GitSyncResult,
   MergeSummary,
   PrCommentKind,
-  PrComposeReport,
   PrCreateInput,
   PrListRequest,
   PrMergeMethod,
@@ -730,7 +729,14 @@ export const invokeGitContract = {
     ],
     PullRequestReviewResult
   >,
-  /** Run the PR-compose agent virtually and consume its temporary report. */
+  /**
+   * Run the PR-compose agent virtually and consume its temporary report.
+   *
+   * Resolves to a `failed` outcome rather than rejecting when the agent cannot
+   * run: a harness that is missing, unauthenticated, rate-limited or unable to
+   * start is an expected result of the user's own choice, and its cause has to
+   * reach the sheet as data so it can offer the way out.
+   */
   'pr:composeWithAgent': {} as Contract<
     [
       projectId: string,
@@ -739,7 +745,7 @@ export const invokeGitContract = {
       settings: ThreadSettings,
       input: import('../types').PrComposeInput
     ],
-    PrComposeReport
+    import('../types').PrComposeOutcome
   >,
   'github:authStatus': {} as Contract<[], GitHubAuthStatus>,
   'github:startDeviceFlow': {} as Contract<[], GitHubDeviceCode>,

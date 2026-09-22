@@ -14,7 +14,6 @@
   import { createSubscriber } from 'svelte/reactivity'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
-    AgentProviderIssueKind,
     AgentSessionStatus,
     ProviderAccountLoginHandoff,
     ProviderCatalog,
@@ -24,7 +23,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
-  import { presentProviderError } from '$shared/provider-issue'
+  import { presentProviderError, providerIssueTitle } from '$shared/provider-issue'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
@@ -163,23 +162,11 @@
     return parts
   }
 
-  function issueTitle(kind: AgentProviderIssueKind): string {
-    switch (kind) {
-      case 'rate_limit':
-      case 'quota':
-        return 'Usage limit reached'
-      case 'authentication':
-        return 'Provider sign-in required'
-      case 'billing':
-        return 'Provider billing issue'
-      case 'provider_unavailable':
-        return 'Provider temporarily unavailable'
-      case 'network':
-        return 'Provider connection interrupted'
-      default:
-        return waiting ? 'Provider retry scheduled' : 'Agent output error'
-    }
-  }
+  /**
+   * The card heading. Shared with every other surface that renders one of these
+   * issues, so the same failure is never named two different things.
+   */
+  const title = $derived(providerIssueTitle(issue.kind, waiting))
 
   function relativeRetryTime(retryAt: number): string {
     const remainingSeconds = Math.max(0, Math.ceil((retryAt - now) / 1_000))
@@ -282,7 +269,7 @@
     <div class="min-w-0 flex-1">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
         <p class="text-sm font-semibold text-foreground">
-          {sourceLabel ? 'Worker output error' : issueTitle(issue.kind)}
+          {sourceLabel ? 'Worker output error' : title}
         </p>
         <span class="rounded-full bg-raised px-2 py-0.5 text-[0.625rem] font-semibold text-muted">
           {providerName}

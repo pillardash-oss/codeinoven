@@ -8,6 +8,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { prComposeAgentSettings } from '$lib/stores/pr-compose-agent-settings.svelte'
+  import { classifyProviderIssue } from '$shared/provider-issue'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import {
@@ -19,6 +20,7 @@
   import { logRendererError } from '$lib/system/renderer-logger'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import type {
+    AgentProviderIssue,
     Project,
     PrComposeInput,
     PullRequestCompare,
@@ -173,8 +175,14 @@
   // ─── Compose with agent ────────────────────────────────────────────────────
   /** Phase of the compose flow, drives the dropdown's button label. */
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
-  /** Latest compose error, shown inline in the dropdown. */
-  let composeError = $state('')
+  /**
+   * The last compose failure, already classified.
+   *
+   * A compose failure is a state of the form, not an exception: it is classified
+   * in main and returned as an outcome, so the block can name it and the user can
+   * switch the agent or retry instead of reading a thrown string.
+   */
+  let composeIssue = $state<AgentProviderIssue | null>(null)
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
   let composeCompleteTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -220,7 +228,7 @@
     Boolean(
       originError ||
       compareError ||
-      composeError ||
+      composeIssue ||
       createError ||
       gitState.error ||
       pushRejected ||
@@ -634,7 +642,7 @@
   async function applyComposeReport(report: { title: string; description: string }): Promise<void> {
     title = report.title
     body = report.description
-    composeError = ''
+    composeIssue = null
     composePhase = 'complete'
     // If the PR was already created, push the improved title/description to
     // GitHub so the PR row and detail view reflect the recomposed content.
@@ -651,7 +659,7 @@
         result = { ...result, title: updated.title }
         onCreated?.()
       } else if (gitState.error) {
-        composeError = gitState.error
+        composeIssue = composeFailure(gitState.error)
       }
     }
     composeCompleteTimer = setTimeout(() => {
@@ -683,32 +691,44 @@
     }
   }
 
+  /**
+   * A GitHub-side failure while saving recomposed copy, phrased in the same
+   * provider-issue shape the compose outcome uses so the block has one state.
+   */
+  function composeFailure(message: string): AgentProviderIssue {
+    return {
+      kind: classifyProviderIssue(message),
+      message,
+      harnessId: prComposeAgentSettings.selection?.harnessId ?? '',
+      retryable: true
+    }
+  }
+
   /** Kick off a fresh disposable compose or recompose task. */
   async function runCompose(): Promise<void> {
     if (!originIdentity || !head || !base || composePhase === 'working') return
     const recomposing = composePhase === 'recompose'
     clearComposeTimers()
-    composeError = ''
+    composeIssue = null
     composePhase = 'working'
-    try {
-      const settings = composeVirtualTaskSettings()
-      if (!settings) throw new Error('Choose a model for Compose PR first')
-      const virtualTaskId = crypto.randomUUID()
-      const report = await gitState.composeWithAgent(
-        projectId,
-        virtualTaskId,
-        settings,
-        composeInput(recomposing)
-      )
-      if (!report) {
-        throw new Error(gitState.error ?? 'The PR compose agent did not return a result')
-      }
-      await applyComposeReport(report)
-    } catch (reason) {
-      composeError =
-        reason instanceof Error ? reason.message : 'The compose agent could not be started'
+    const settings = composeVirtualTaskSettings()
+    if (!settings) {
+      composeIssue = composeFailure('Choose a model for Compose PR first')
       composePhase = 'idle'
+      return
     }
+    const outcome = await gitState.composeWithAgent(
+      projectId,
+      crypto.randomUUID(),
+      settings,
+      composeInput(recomposing)
+    )
+    if (outcome.status === 'failed') {
+      composeIssue = outcome.issue
+      composePhase = 'idle'
+      return
+    }
+    await applyComposeReport(outcome.report)
   }
 
   onDestroy(clearComposeTimers)
@@ -841,7 +861,7 @@
           {projectId}
           providers={composeProviders}
           {composePhase}
-          bind:composeError
+          bind:issue={composeIssue}
           onCompose={() => void runCompose()}
         />
       {/if}
@@ -929,7 +949,7 @@
       />
     {/if}
 
-    {#if gitState.error && !result && !composeError && !createError}
+    {#if gitState.error && !result && !composeIssue && !createError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
       >

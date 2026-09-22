@@ -1,3 +1,5 @@
+import type { AgentProviderIssue } from './agent-events'
+
 /** Filter for pull request listings. */
 export type PrState = 'open' | 'closed' | 'all'
 
@@ -578,6 +580,19 @@ export interface PrComposeReport {
   /** Disposable task that produced the report; it is not a persisted Thread id. */
   taskId: string
 }
+
+/**
+ * What one disposable PR-compose task produced.
+ *
+ * A compose failure is an expected outcome, not an exception. The agent runs on
+ * a harness the user picked, and that harness can be missing, unauthenticated,
+ * rate-limited, or unable to start at all. Returning the failure as a value
+ * keeps it inside the app's provider-issue vocabulary, so the sheet can render
+ * the same title and actions every other harness failure gets instead of a
+ * thrown string that names nothing the user can do.
+ */
+export type PrComposeOutcome =
+  { status: 'completed'; report: PrComposeReport } | { status: 'failed'; issue: AgentProviderIssue }
 
 /** Branch selection and optional existing copy for one isolated PR composition. */
 export interface PrComposeInput {
