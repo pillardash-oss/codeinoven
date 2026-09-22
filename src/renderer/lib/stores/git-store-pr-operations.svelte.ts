@@ -20,7 +20,7 @@ import type {
   RepositoryMentionUser,
   ThreadSettings
 } from '$shared/types'
-import { errorMessage, type GitOperation } from './git-store-helpers'
+import { errorMessage, prThreadResolveBusyKey, type GitOperation } from './git-store-helpers'
 import { classifyProviderIssue } from '$shared/provider-issue'
 import type { CachedPullRequestPatch } from './git-store-pull-requests.svelte'
 
@@ -771,7 +771,8 @@ export class GitPullRequestOperations {
     threadNodeId: string,
     resolved: boolean
   ): Promise<boolean> {
-    this.access.markBusy('pr-thread-resolve', true)
+    const busyKey = prThreadResolveBusyKey(threadNodeId)
+    this.access.markBusy(busyKey, true)
     this.access.setError(null)
     this.access.setGitHubPermission(null)
     try {
@@ -797,7 +798,7 @@ export class GitPullRequestOperations {
       )
       return false
     } finally {
-      this.access.markBusy('pr-thread-resolve', false)
+      this.access.markBusy(busyKey, false)
     }
   }
 
