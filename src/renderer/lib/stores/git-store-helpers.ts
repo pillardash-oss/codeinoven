@@ -45,6 +45,12 @@ export type GitOperation =
    * single key made all of them report the one write that was in flight.
    */
   | `pr-thread-resolve:${string}`
+  /**
+   * One comment's reaction write, keyed by the subject's node id and the emoji
+   * (`pr-reaction:<nodeId>:<content>`). Per chip rather than per comment, so
+   * reacting with one emoji never puts the other seven in flight with it.
+   */
+  | `pr-reaction:${string}`
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
@@ -176,6 +182,17 @@ export function prPageKey(
  */
 export function prThreadResolveBusyKey(threadNodeId: string): GitOperation {
   return `pr-thread-resolve:${threadNodeId}`
+}
+
+/**
+ * Busy key for one reaction chip on one comment.
+ *
+ * The subject's node id and the emoji are both part of the key, so the chip being
+ * written is the only one that reports the write: reacting with 👍 must not make
+ * the other seven emoji look busy, and it must not touch another comment's chips.
+ */
+export function prReactionBusyKey(nodeId: string, content: string): GitOperation {
+  return `pr-reaction:${nodeId}:${content}`
 }
 
 /** Cache key for one pull request's detail bundle. */

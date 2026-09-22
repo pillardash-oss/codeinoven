@@ -32,6 +32,7 @@ import {
   validatePrCommentId,
   validatePrCommentKind,
   validatePrMinimizeReason,
+  validatePrReactionContent,
   validateGraphqlNodeId,
   validatePrNumber,
   validatePrNumbers,
@@ -51,6 +52,11 @@ import type {
   CloudDeploymentProviderKind,
   CloudDeploymentStatus,
   PrComposeInput,
+  PrReactionMap,
+  PullRequestComment,
+  PullRequestDetail,
+  PullRequestReview,
+  PullRequestReviewComment,
   UtilityActivation
 } from '../../../lib/types'
 import type { PullRequestComposeContext } from '../../git/git-service'
@@ -66,6 +72,30 @@ import type { IpcHandlerContext } from './context'
 const CLOUD_DEPLOYMENT_PROVIDER_KINDS = new Set<string>(CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES)
 const CLOUD_DEPLOYMENT_STATUSES = new Set<string>(['building', 'success', 'failed', 'unknown'])
 const CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH = 16_384
+
+/**
+ * Every subject in one pull request bundle that can be reacted to, as node ids.
+ *
+ * The description is a field on the pull request rather than a comment, so it
+ * contributes the pull request's own node id; the rest are the issue comments,
+ * the reviews and the inline comments the conversation draws. Duplicates are
+ * dropped because one subject can be reachable twice (a review and the threads
+ * it wrote), and the batched read wants a unique id list.
+ */
+function reactionSubjects(
+  detail: PullRequestDetail,
+  comments: PullRequestComment[],
+  reviews: PullRequestReview[],
+  reviewComments: PullRequestReviewComment[]
+): string[] {
+  const ids = [
+    detail.nodeId,
+    ...comments.map((comment) => comment.nodeId),
+    ...reviews.map((review) => review.nodeId),
+    ...reviewComments.map((comment) => comment.nodeId)
+  ]
+  return [...new Set(ids.filter((id): id is string => id !== null))]
+}
 
 function validateCloudDeploymentProviderKind(
   value: unknown,
@@ -1125,6 +1155,13 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
             .getPullRequestChecks(target)
             .catch(() => ({ state: 'none' as const, checks: [] }))
         ])
+      // Reactions are one batched read over every subject the conversation draws,
+      // so it follows the comments rather than racing them: their node ids are
+      // what it addresses. Optional like the threads, for the same reason   a
+      // comment list is worth showing even when its reactions could not be read.
+      const reactions = await provider
+        .listPullRequestReactions(reactionSubjects(detail, comments, reviews, reviewComments))
+        .catch((): PrReactionMap => ({}))
       return {
         detail,
         commits,
@@ -1132,6 +1169,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         reviews,
         reviewComments,
         reviewThreads,
+        reactions,
         files,
         checks,
         fetchedAt: Date.now()
@@ -1339,6 +1377,28 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         await provider.setPullRequestReviewThreadResolved({ nodeId, resolved: settled })
         return true
       })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:react',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      subjectNodeId: unknown,
+      content: unknown,
+      add: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const nodeId = validateGraphqlNodeId(subjectNodeId)
+      const reaction = validatePrReactionContent(content)
+      const adding = validateBoolean(add, 'Add reaction')
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.setPullRequestReaction({ nodeId, content: reaction, add: adding })
+      )
     }
   )
 

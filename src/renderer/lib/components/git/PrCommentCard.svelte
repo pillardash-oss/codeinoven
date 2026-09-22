@@ -28,6 +28,8 @@
   import BotBadge from './BotBadge.svelte'
   import IdentityBadge from './IdentityBadge.svelte'
   import PrCommentActionsMenu from './PrCommentActionsMenu.svelte'
+  import PrReactionChips from './PrReactionChips.svelte'
+  import PrReactionPicker from './PrReactionPicker.svelte'
   import {
     canDeleteConversationEntry,
     canEditConversationEntry,
@@ -35,7 +37,7 @@
     commentRoleBadges,
     type ConversationEntry
   } from './git-pull-request-detail-format'
-  import type { PrMinimizeReason } from '$shared/types'
+  import type { PrMinimizeReason, PrReactionContent, PrReactionGroup } from '$shared/types'
 
   interface Props {
     entry: ConversationEntry
@@ -65,6 +67,14 @@
     onAssignAgent?: (entry: ConversationEntry) => void
     /** Answer this exact comment, when the surface has somewhere to answer it. */
     onReply?: (entry: ConversationEntry) => void
+    /**
+     * What the comment has been reacted with, which the bundle keys by node id.
+     * Empty for a comment nobody has reacted to, and for one whose node id the
+     * provider did not send (which is also why it then offers no picker).
+     */
+    reactions?: PrReactionGroup[]
+    /** React with this emoji, or take the reader's own reaction back. */
+    onReact?: (content: PrReactionContent, add: boolean) => void
     /** Open the Delete confirmation for this entry. */
     onDelete: (entry: ConversationEntry) => void
     /** Surface a one-line confirmation in the reader's header. */
@@ -86,6 +96,8 @@
     onCommentChat,
     onAssignAgent,
     onReply,
+    reactions = [],
+    onReact,
     onDelete,
     onNotice,
     onRefresh
@@ -127,6 +139,14 @@
    * that opened its own unit, which is every row outside a thread.
    */
   const repliesTo = $derived(entry.repliesTo ? githubDisplayLogin(entry.repliesTo) : null)
+  /**
+   * Whether this row can be reacted to at all.
+   *
+   * GitHub addresses a reaction by the subject's GraphQL node id, so a row whose
+   * provider payload did not carry one has no handle to write to: it then offers
+   * no picker rather than one whose write could not land.
+   */
+  const reactable = $derived(entry.nodeId !== null && onReact !== undefined)
 
   function openEntryOnGitHub(): void {
     if (entry.url) void openInBrowser(entry.url)
@@ -207,6 +227,16 @@
     cancelEdit()
     onNotice(entry.commentId === null ? 'Description saved' : 'Comment saved')
     await onRefresh()
+  }
+
+  /**
+   * React to this comment, or take the reader's own reaction back.
+   *
+   * The picker and the chips are only mounted for a comment the caller can
+   * address, so this is never the no-op its optional callback would allow.
+   */
+  function react(content: PrReactionContent, add: boolean): void {
+    onReact?.(content, add)
   }
 
   async function hideEntry(reason: PrMinimizeReason): Promise<void> {
@@ -318,6 +348,14 @@
         <ChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
       </button>
     {/if}
+    {#if !editing && reactable}
+      <!--
+        Reactions live in the header rather than under the body: the invitation to
+        react must not cost every comment a line, and the chips that appear once
+        someone has reacted sit under the body where a reader looks for them.
+      -->
+      <PrReactionPicker nodeId={entry.nodeId ?? ''} groups={reactions} onToggle={react} />
+    {/if}
     {#if !editing}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
@@ -425,6 +463,10 @@
       -->
       <MarkdownView text={entry.body} allowHtml {repository} />
     </div>
+  {/if}
+
+  {#if !editing && entry.nodeId && reactable && reactions.length > 0}
+    <PrReactionChips nodeId={entry.nodeId} groups={reactions} onToggle={react} />
   {/if}
 
   {#if footer && !editing && !folded}

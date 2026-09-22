@@ -10,6 +10,8 @@ import type {
   PrCreateInput,
   PrMergeMethod,
   PrMinimizeReason,
+  PrReactionContent,
+  PrReactionGroup,
   PrReviewEvent,
   PrState,
   PullRequestComment,
@@ -20,7 +22,12 @@ import type {
   RepositoryMentionUser,
   ThreadSettings
 } from '$shared/types'
-import { errorMessage, prThreadResolveBusyKey, type GitOperation } from './git-store-helpers'
+import {
+  errorMessage,
+  prReactionBusyKey,
+  prThreadResolveBusyKey,
+  type GitOperation
+} from './git-store-helpers'
 import { classifyProviderIssue } from '$shared/provider-issue'
 import type { CachedPullRequestPatch } from './git-store-pull-requests.svelte'
 
@@ -111,6 +118,14 @@ export interface GitPrOperationAccess {
     repo: string,
     pullNumber: number,
     state: 'open' | 'closed' | 'merged'
+  ): void
+  /** Replace one comment's reactions in the cached bundle from the write's answer. */
+  patchBundleReactions(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    groups: PrReactionGroup[]
   ): void
 }
 
@@ -818,6 +833,48 @@ export class GitPullRequestOperations {
         errorMessage(
           reason,
           resolved ? 'The thread could not be resolved' : 'The thread could not be reopened'
+        )
+      )
+      return false
+    } finally {
+      this.access.markBusy(busyKey, false)
+    }
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on one comment.
+   *
+   * The write answers with the subject's reactions, so the cached bundle is
+   * corrected in place and the reader sees the chip change without the
+   * conversation refetching. `add` is what the caller decided from what it was
+   * showing, which is why the chip is the thing that knows whether this is a
+   * reaction or its removal.
+   */
+  async setPrCommentReaction(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<boolean> {
+    const busyKey = prReactionBusyKey(nodeId, content)
+    this.access.markBusy(busyKey, true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      const groups = this.resolveMutation(
+        await invoke('pr:react', projectId, owner, repo, pullNumber, nodeId, content, add)
+      )
+      if (groups === null) return false
+      this.access.patchBundleReactions(owner, repo, pullNumber, nodeId, groups)
+      return true
+    } catch (reason) {
+      this.access.setError(
+        errorMessage(
+          reason,
+          add ? 'The reaction could not be added' : 'The reaction could not be removed'
         )
       )
       return false

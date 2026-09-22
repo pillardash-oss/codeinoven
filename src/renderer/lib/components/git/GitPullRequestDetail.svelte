@@ -69,6 +69,7 @@
     PrReviewEvent,
     PullRequestCheck,
     PullRequestSummary,
+    PrReactionContent,
     RepositoryMentionUser
   } from '$shared/types'
 
@@ -371,6 +372,30 @@
       `${identity.owner}/${identity.repo}`,
       commentSubject(entry),
       entry.body
+    )
+  }
+
+  /**
+   * React to one comment, or take the reader's own reaction back.
+   *
+   * The store corrects the cached bundle from the write's own answer, so nothing
+   * refreshes here: the chip that was clicked is already the server's truth by the
+   * time this returns, and a refusal lands in the panel's error line.
+   */
+  async function reactToComment(
+    entry: ConversationEntry,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<void> {
+    if (!entry.nodeId) return
+    await gitState.setPrCommentReaction(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number,
+      entry.nodeId,
+      content,
+      add
     )
   }
 
@@ -995,6 +1020,8 @@
         onQuote={(entry) => void quoteEntry(entry)}
         onCommentChat={openCommentChat}
         onAssignAgent={assignCommentToAgent}
+        reactions={bundle?.reactions ?? {}}
+        onReact={reactToComment}
         onNotice={(message) => (notice = message)}
         onRefresh={refresh}
       />

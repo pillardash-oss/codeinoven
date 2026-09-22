@@ -10,6 +10,8 @@ import type {
   PrListSort,
   PrMergeMethod,
   PrMinimizeReason,
+  PrReactionGroup,
+  PrReactionMap,
   PrReviewEvent,
   PrState,
   PullRequestComment,
@@ -26,6 +28,7 @@ import type {
   PullRequestPage,
   PullRequestReference,
   RepositoryMentionUser,
+  SetPrReactionInput,
   WorkflowRerunMode
 } from '../../lib/types'
 
@@ -194,6 +197,24 @@ export interface GitProvider {
   listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]>
   /** Settle or reopen one thread. GraphQL only, addressed by thread node id. */
   setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void>
+  /**
+   * Read the reactions on many comments at once, keyed by their node ids.
+   *
+   * GitHub answers reactions per subject, so a conversation of eighty comments
+   * would otherwise be eighty requests. Subjects with no reactions are absent
+   * from the answer, and a subject the read could not resolve is absent too
+   * rather than reported as unreacted.
+   */
+  listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap>
+  /**
+   * Add or take back the signed-in account's reaction, answering with the
+   * subject's reactions as they now stand.
+   *
+   * The write and the read are one round trip: GitHub's mutation payload carries
+   * the subject, so the caller corrects its own view from the server's answer
+   * instead of refetching the conversation it is already showing.
+   */
+  setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]>
   listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
   listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>

@@ -63,7 +63,14 @@ export interface ConversationEntry {
   commentId: number | null
   /** Which collection `commentId` lives in. Meaningless when it is null. */
   commentKind: PrCommentKind
-  /** GraphQL id, the only handle GitHub's minimise mutation accepts. */
+  /**
+   * GraphQL id of the thing this row can be addressed as: the comment, the
+   * review, or   for the description   the pull request itself.
+   *
+   * One field serves two mutations because GitHub addresses both the same way:
+   * minimising a comment and reacting to it each take the subject's node id. Null
+   * when the provider payload did not carry one, and the row then offers neither.
+   */
   nodeId: string | null
 }
 
@@ -160,7 +167,10 @@ export function buildConversation(bundle: PullRequestBundle | undefined): Conver
             url: bundle.detail.url,
             commentId: null,
             commentKind: 'issue',
-            nodeId: null
+            // The description is a field on the pull request rather than a
+            // comment, so the pull request's own node id is what a reaction to
+            // it is addressed to.
+            nodeId: bundle.detail.nodeId
           }
         }
       ]
@@ -763,9 +773,14 @@ export function canDeleteConversationEntry(
   return entry.commentId !== null && viewerLogin === entry.author
 }
 
-/** Hiding needs a node id, which a description does not expose here. */
+/**
+ * Hiding needs a node id, and it needs a comment: GitHub's minimise mutation
+ * takes a comment, a review or an inline comment, never the pull request's own
+ * description. The description carries the pull request's node id   that is what
+ * reacting to it addresses   so the kind is what excludes it.
+ */
 export function canHideConversationEntry(entry: ConversationEntry): boolean {
-  return entry.nodeId !== null
+  return entry.kind !== 'description' && entry.nodeId !== null
 }
 
 /** The quote-reply block GitHub builds from a comment's body. */
