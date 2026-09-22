@@ -41,7 +41,7 @@
   import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
   import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
-  import { assignAgentToComment } from './git-status-panel-agent-actions'
+  import { assignAgentToCheck, assignAgentToComment } from './git-status-panel-agent-actions'
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
   import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
   import {
@@ -67,6 +67,7 @@
     PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
+    PullRequestCheck,
     PullRequestSummary,
     RepositoryMentionUser
   } from '$shared/types'
@@ -371,6 +372,17 @@
       commentSubject(entry),
       entry.body
     )
+  }
+
+  /**
+   * Hand one failed check to an agent as an assignment.
+   *
+   * The reader owns this rather than a prop, for the same reason it owns the
+   * comment-shaped work: it holds the identity and the pull request the check
+   * belongs to, and the check itself arrives from the row that was clicked.
+   */
+  function assignCheckToAgent(check: PullRequestCheck): Promise<void> {
+    return assignAgentToCheck(projectId, summary, identity, check)
   }
 
   /**
@@ -1008,6 +1020,7 @@
         {identity}
         {checks}
         {onOpenWorkflowRun}
+        onAssignCheck={assignCheckToAgent}
         onRefresh={refresh}
       />
     {:else}

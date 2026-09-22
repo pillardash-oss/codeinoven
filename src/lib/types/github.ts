@@ -502,16 +502,22 @@ export interface PullRequestBundle {
   fetchedAt: number
 }
 
-/** What an agent assignment was asked to work on. */
-export type PrAgentAssignmentKind = 'triage' | 'comment'
+/**
+ * What an agent assignment was asked to work on.
+ *
+ * The kind is what the reader uses to decide which controls a report card offers:
+ * a comment assignment can point back at its comment, and a check assignment
+ * points at the check instead.
+ */
+export type PrAgentAssignmentKind = 'triage' | 'comment' | 'check'
 
 /**
  * One agent assignment's report, read back from `.cio/git/pr/<number>/`.
  *
  * An assignment is one thread with one report file, so a pull request can hold
- * several at once: a triage, then one for each comment handed to an agent. Each
- * keeps its own `review-<id>.md`, which is what stops a second assignment from
- * overwriting the first.
+ * several at once: a triage, then one for each comment or failed check handed to
+ * an agent. Each keeps its own `review-<id>.md`, which is what stops a second
+ * assignment from overwriting the first.
  */
 export interface PrAgentReport {
   /** Identity of the assignment, and the `<id>` in `review-<id>.md`. */
@@ -528,7 +534,10 @@ export interface PrAgentReport {
   createdAt: number | null
   /** Thread the assignment was handed to, so the UI can jump back into it. */
   threadId: string | null
-  /** Permalink of the comment the assignment was opened from, when there was one. */
+  /**
+   * The provider page the assignment was opened from: the comment for a comment
+   * assignment, the check for a check assignment, and null for a triage.
+   */
   url: string | null
 }
 
@@ -555,7 +564,7 @@ export interface PrAgentAssignmentInput {
   kind: PrAgentAssignmentKind
   /** What the assignment addresses, shown in the report list. */
   title: string
-  /** Permalink of the comment the assignment was opened from, when there is one. */
+  /** Provider page the assignment was opened from, when there is one. */
   url?: string
 }
 

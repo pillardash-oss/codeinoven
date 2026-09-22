@@ -62,7 +62,8 @@ const WORKFLOW_RERUN_MODES = new Set<import('../../../lib/types').WorkflowRerunM
 /** How an agent assignment was opened. */
 const PR_AGENT_ASSIGNMENT_KINDS = new Set<import('../../../lib/types').PrAgentAssignmentKind>([
   'triage',
-  'comment'
+  'comment',
+  'check'
 ])
 
 /** Validate a PR merge method (merge|squash|rebase). */

@@ -101,8 +101,9 @@ async function readMeta(directory: string, id: string): Promise<AssignmentMeta> 
   const url = fields['url']
   const threadId = fields['threadId']
   const createdAt = fields['createdAt']
+  const kind = fields['kind']
   return {
-    kind: fields['kind'] === 'comment' ? 'comment' : 'triage',
+    kind: kind === 'comment' || kind === 'check' ? kind : 'triage',
     title: typeof title === 'string' && title.length > 0 ? title : 'Agent assignment',
     url: typeof url === 'string' ? url : null,
     threadId: typeof threadId === 'string' ? threadId : null,

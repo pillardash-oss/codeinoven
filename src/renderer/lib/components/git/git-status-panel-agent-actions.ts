@@ -12,11 +12,14 @@ import type {
   GitHubDeploymentJobLog,
   GitHubWorkflowRun,
   Project,
+  PullRequestCheck,
   PullRequestSummary
 } from '$shared/types'
 import type { PrCommentChatSubject } from './git-status-panel-prompts'
+import { jobForCheck } from './pr-check-job'
 import {
   prCommentAssignmentPrompt,
+  prCheckAssignmentPrompt,
   prTriagePrompt,
   conflictResolutionPrompt,
   deploymentJobDiagnosisPrompt,
@@ -187,6 +190,71 @@ export async function assignAgentToComment(
     thread.id,
     prCommentAssignmentPrompt(comment, body, pr, repository, assignment.reportPath),
     [],
+    []
+  )
+  workspaceState.openThread(thread, project)
+}
+
+/**
+ * Hand a failed check to an agent as an assignment.
+ *
+ * The check is the task, so the brief carries everything known about it: the pull
+ * request, the check's own state and link, the run and job behind it, and the
+ * output of the step that failed. The whole log rides along as a file attachment,
+ * because a job log runs to hundreds of kilobytes and only an excerpt fits in a
+ * prompt.
+ */
+export async function assignAgentToCheck(
+  projectId: string,
+  pr: PullRequestSummary,
+  identity: { owner: string; repo: string },
+  check: PullRequestCheck
+): Promise<void> {
+  const project = await invoke('project:get', projectId).catch(() => null)
+  if (!project) return
+  const run =
+    check.workflowRunId !== null
+      ? await gitState
+          .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+          .catch(() => null)
+      : null
+  const job = jobForCheck(run, check)
+  const jobId = check.jobId ?? job?.id ?? null
+  const log =
+    jobId !== null
+      ? await gitState
+          .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId)
+          .catch(() => null)
+      : null
+  // GitHub names a job from the workflow, and a matrix leg's name carries its
+  // whole parameter list, so the title is cut to what the sidecar accepts rather
+  // than failing the whole assignment on a long one.
+  const title = `Failed check: ${check.name}`.slice(0, 120)
+  const thread = await createAssignmentThread(
+    projectId,
+    project.path,
+    `${title} on PR #${pr.number}`
+  )
+  if (!thread) return
+  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+    kind: 'check',
+    title,
+    ...(check.url ? { url: check.url } : {})
+  })
+  if (!assignment) return
+  const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
+  rendererRecovery.setDraft(
+    projectId,
+    thread.id,
+    prCheckAssignmentPrompt(
+      pr,
+      `${identity.owner}/${identity.repo}`,
+      check,
+      job,
+      log,
+      assignment.reportPath
+    ),
+    attachments,
     []
   )
   workspaceState.openThread(thread, project)
