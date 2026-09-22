@@ -25,6 +25,12 @@
     onOpenRoutineHowTo: (routine: Routine) => void
     /** Create a new task inside a routine (the row's plus action). */
     onCreateTaskInRoutine: (routine: Routine) => void
+    /** Full thread action set for task rows, so a task behaves like a thread. */
+    onRenameTask: (task: Thread, newName: string) => Promise<void>
+    onTogglePinTask: (task: Thread) => void
+    onDeleteTask: (task: Thread) => Promise<void>
+    onForkTask: (task: Thread) => void
+    onOpenTaskNotes: (task: Thread) => void
     onRenameRoutine: (routineId: string, name: string) => Promise<void>
     onDeleteRoutine: (routineId: string) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
@@ -44,6 +50,11 @@
     onOpenTaskHowTo,
     onOpenRoutineHowTo,
     onCreateTaskInRoutine,
+    onRenameTask,
+    onTogglePinTask,
+    onDeleteTask,
+    onForkTask,
+    onOpenTaskNotes,
     onRenameRoutine,
     onDeleteRoutine,
     onTogglePinRoutine,
@@ -77,9 +88,7 @@
 
   /** Routine-less tasks, most recently active first. */
   const standaloneTasks = $derived(
-    tasks
-      .filter((task) => !task.routineId)
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+    tasks.filter((task) => !task.routineId).sort((a, b) => b.lastActivity - a.lastActivity)
   )
 
   function routineTasks(routineId: string): Thread[] {
@@ -162,7 +171,11 @@
   {/snippet}
 
   <div class="flex h-full min-h-0 flex-col">
-    <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5" role="list" aria-label="Routines and tasks">
+    <div
+      class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"
+      role="list"
+      aria-label="Routines and tasks"
+    >
       {#if orderedRoutines.length === 0 && standaloneTasks.length === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
           <Workflow size={18} class="text-dimmed" />
@@ -176,9 +189,7 @@
           {@const visibleTasks = filteredRoutineTasks(routine)}
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
-          {@const holdsSelected = routineTaskList.some(
-            (task) => task.id === selectedThreadId
-          )}
+          {@const holdsSelected = routineTaskList.some((task) => task.id === selectedThreadId)}
           <AssistantRoutineRow
             {routine}
             expanded={expanded.has(routine.id) || searching || holdsSelected}
@@ -216,6 +227,11 @@
                       onOpenTask(selected)
                       onOpenRoutineHowTo(routine)
                     }}
+                    onRename={onRenameTask}
+                    onTogglePin={onTogglePinTask}
+                    onDelete={onDeleteTask}
+                    onFork={onForkTask}
+                    onOpenNotes={onOpenTaskNotes}
                   />
                 {:else}
                   <p class="px-2 py-1 text-[0.625rem] text-dimmed">No tasks in this routine yet.</p>
@@ -226,7 +242,9 @@
         {/each}
 
         {#if standaloneTasks.length > 0}
-          <div class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase">
+          <div
+            class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+          >
             Tasks
           </div>
           {#each standaloneTasks as task (task.id)}
@@ -239,6 +257,11 @@
                 onOpenTask(selected)
                 onOpenTaskHowTo(selected)
               }}
+              onRename={onRenameTask}
+              onTogglePin={onTogglePinTask}
+              onDelete={onDeleteTask}
+              onFork={onForkTask}
+              onOpenNotes={onOpenTaskNotes}
             />
           {/each}
         {/if}
@@ -247,11 +270,7 @@
   </div>
 </CollapsibleSidebar>
 
-<Modal
-  open={renameTarget !== null}
-  title="Rename routine"
-  onClose={() => (renameTarget = null)}
->
+<Modal open={renameTarget !== null} title="Rename routine" onClose={() => (renameTarget = null)}>
   <input
     class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
     placeholder="Routine name"

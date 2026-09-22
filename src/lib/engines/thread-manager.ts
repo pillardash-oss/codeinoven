@@ -263,6 +263,15 @@ export class ThreadManager {
       achievementRole: input.achievementRole,
       auditorThreadId: input.auditorThreadId,
       userInputLocked: input.userInputLocked,
+      // Assistant-space fields must be part of the created row itself: the
+      // creation broadcast carries this object, so grouping a task after the
+      // fact would be wiped by the very next thread:updated payload.
+      routineId: input.routineId,
+      assistantIconType: input.assistantIconType,
+      assistantIcon: input.assistantIcon,
+      // The repository stores an absent override as NULL and reads it back as
+      // `undefined`, so the in-memory row must use the same shape.
+      scheduleOverride: input.scheduleOverride ?? undefined,
       createdAt: now,
       updatedAt: now,
       lastActivity: now,

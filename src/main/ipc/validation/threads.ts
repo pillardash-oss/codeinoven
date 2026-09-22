@@ -101,7 +101,8 @@ const CREATE_THREAD_FIELDS = new Set([
   'workingDirectory',
   'settings',
   'titleSource',
-  'scopeBucketId'
+  'scopeBucketId',
+  'routineId'
 ])
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
@@ -336,6 +337,9 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
 
   if (input.scopeBucketId !== undefined) {
     sanitized.scopeBucketId = validateEntityId(input.scopeBucketId, 'Scope bucket ID')
+  }
+  if (input.routineId !== undefined) {
+    sanitized.routineId = validateEntityId(input.routineId, 'Routine ID')
   }
   return sanitized
 }

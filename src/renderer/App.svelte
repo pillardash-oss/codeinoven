@@ -315,7 +315,8 @@
         const lastChat = lastThreadOfKind(true)
         if (lastChat) {
           const project =
-            scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ?? null
+            scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ??
+            null
           workspaceState.openThread(lastChat, project)
         } else {
           workspaceState.clearThread()
@@ -325,8 +326,9 @@
       const lastProjectThread = lastThreadOfKind(false)
       if (lastProjectThread) {
         const project =
-          scopeState.projectRecords.find((candidate) => candidate.id === lastProjectThread.projectId) ??
-          null
+          scopeState.projectRecords.find(
+            (candidate) => candidate.id === lastProjectThread.projectId
+          ) ?? null
         workspaceState.openThread(lastProjectThread, project)
       } else {
         workspaceState.clearThread()
@@ -1099,6 +1101,12 @@
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
+      // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
+      if (activeView === 'assistant') {
+        if (commandPaletteOpen) commandPaletteOpen = false
+        workspaceState.requestAssistantRoutine()
+        return
+      }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
       if (activeView === 'chats') return
       if (commandPaletteOpen) commandPaletteOpen = false
@@ -1113,6 +1121,13 @@
       // instead of starting a new thread. The tree's own handler manages it.
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
+
+      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the routine
+      // the user is currently in when there is one, routine-less otherwise.
+      if (activeView === 'assistant') {
+        workspaceState.requestAssistantTask()
+        return
+      }
 
       requestThreadForCurrentView()
     }

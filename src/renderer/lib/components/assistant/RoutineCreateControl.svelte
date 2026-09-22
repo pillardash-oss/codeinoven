@@ -6,13 +6,29 @@
     /** Create a routine with the given name; the host also seeds a first task. */
     onCreate: (name: string) => void | Promise<void>
     title?: string
+    /** External open signal (keyboard shortcut); the control opens its dialog
+     *  whenever the value grows past the one it already handled. */
+    trigger?: number
   }
 
-  let { onCreate, title = 'New routine' }: Props = $props()
+  let { onCreate, title = 'New routine', trigger = 0 }: Props = $props()
 
   let open = $state(false)
   let name = $state('')
   let busy = $state(false)
+
+  /** Highest trigger value already handled. The control unmounts when the view
+   *  changes and remounts later; re-initialising from the live value keeps a
+   *  stale trigger from re-opening the dialog on remount. */
+  // Intentional initial-value capture   the baseline later triggers compare against.
+  // svelte-ignore state_referenced_locally
+  let handledTrigger = trigger
+  $effect(() => {
+    if (trigger > handledTrigger) {
+      handledTrigger = trigger
+      open = true
+    }
+  })
 
   async function submit(): Promise<void> {
     const trimmed = name.trim()

@@ -311,6 +311,35 @@ class WorkspaceState {
     return true
   }
 
+  /** Incremented to signal Workspace to create an assistant task. */
+  requestAssistantTaskCount = $state(0)
+  private consumedAssistantTaskRequestCount = 0
+
+  requestAssistantTask(): void {
+    this.requestAssistantTaskCount++
+  }
+
+  consumeAssistantTaskRequest(): boolean {
+    if (this.consumedAssistantTaskRequestCount === this.requestAssistantTaskCount) return false
+    this.consumedAssistantTaskRequestCount = this.requestAssistantTaskCount
+    return true
+  }
+
+  /** Incremented to signal Workspace to start the new-routine flow. */
+  requestAssistantRoutineCount = $state(0)
+  private consumedAssistantRoutineRequestCount = 0
+
+  requestAssistantRoutine(): void {
+    this.requestAssistantRoutineCount++
+  }
+
+  consumeAssistantRoutineRequest(): boolean {
+    if (this.consumedAssistantRoutineRequestCount === this.requestAssistantRoutineCount)
+      return false
+    this.consumedAssistantRoutineRequestCount = this.requestAssistantRoutineCount
+    return true
+  }
+
   /** Incremented to signal Workspace to toggle its right (context) sidebar. */
   requestToggleContextSidebarCount = $state(0)
   private consumedToggleContextSidebarRequestCount = 0

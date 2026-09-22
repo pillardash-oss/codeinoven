@@ -21,6 +21,11 @@
     /** Whether this thread's in-flight turn belongs to another CodeInOven
      *  instance, which is where its live output and stop control are. */
     isForeignRun?: boolean
+    /**
+     * Force-hide the Project/Repository rows. Assistant tasks live in the
+     * hidden assistant container, so its internal project is noise here.
+     */
+    hideProject?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
@@ -41,6 +46,7 @@
     isWorking = false,
     isRetryPaused = false,
     isForeignRun = false,
+    hideProject = false,
     stageLabel = '',
     threadState = 'read'
   }: Props = $props()
@@ -51,7 +57,7 @@
   )
 
   /** While the sidebar is scoped to one project, Project/Repository are redundant. */
-  let hideProjectInfo = $derived(Boolean(scopeState.sidebarContext))
+  let showProjectInfo = $derived(!hideProject && !scopeState.sidebarContext)
 
   /** Git remote origin URL for the thread's project, resolved lazily on hover. */
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
@@ -107,7 +113,7 @@
       </dd>
     </div>
   {/if}
-  {#if project && !hideProjectInfo}
+  {#if project && showProjectInfo}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Project</dt>
       <dd class="min-w-0 break-words text-muted">{project.name}</dd>

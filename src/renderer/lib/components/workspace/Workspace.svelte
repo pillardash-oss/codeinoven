@@ -260,7 +260,10 @@
   // Keep each mode's scroll position and restore it when the mode comes back,
   // and briefly suppress the focus-follow reveal so it doesn't yank the
   // restored scroll back to the selected thread's row.
-  const sidebarScrollByMode = new SvelteMap<'projects' | 'chats' | 'threads' | 'assistant', number>()
+  const sidebarScrollByMode = new SvelteMap<
+    'projects' | 'chats' | 'threads' | 'assistant',
+    number
+  >()
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
@@ -329,8 +332,12 @@
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
+  let prevAssistantTaskCount = 0
+  let prevAssistantRoutineCount = 0
   let prevProjectFileOpenCount = 0
   let prevToggleContextSidebarCount = 0
+  /** Bumped to open the new-routine dialog from a keyboard shortcut. */
+  let routineCreateTrigger = $state(0)
   let creatingThread = false
 
   // This view hosts the terminal panel   advertise it to the header.
@@ -411,6 +418,25 @@
     if (current !== prevNewChatCount && workspaceState.consumeNewChatRequest()) {
       prevNewChatCount = current
       startNewChat()
+    }
+  })
+
+  /** React to Cmd/Ctrl+N on the Assistant view → new task, inside the routine
+   *  the user is currently in when there is one, routine-less otherwise. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantTaskCount
+    if (current !== prevAssistantTaskCount && workspaceState.consumeAssistantTaskRequest()) {
+      prevAssistantTaskCount = current
+      void createAssistantTaskFromShortcut()
+    }
+  })
+
+  /** React to Cmd/Ctrl+Shift+N on the Assistant view → new routine. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantRoutineCount
+    if (current !== prevAssistantRoutineCount && workspaceState.consumeAssistantRoutineRequest()) {
+      prevAssistantRoutineCount = current
+      routineCreateTrigger++
     }
   })
 
@@ -815,9 +841,7 @@
             icon: BotMessageSquare,
             active: dockKindActive('assistant-how-to'),
             onSelect: () =>
-              toggleDockPanel('assistant-how-to', () =>
-                openAssistantHowToForTask(selectedThread)
-              )
+              toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
           }
         ]
       ]
@@ -1445,7 +1469,8 @@
       existing.status === thread.status &&
       existing.title === thread.title &&
       existing.pinned === thread.pinned &&
-      existing.read === thread.read
+      existing.read === thread.read &&
+      existing.routineId === thread.routineId
     ) {
       return
     }
@@ -1854,14 +1879,15 @@
         {
           id: 'new-routine',
           component: RoutineCreateControl as unknown as ViewActionItem['component'],
-          props: { onCreate: createAssistantRoutine }
+          props: { onCreate: createAssistantRoutine, trigger: routineCreateTrigger }
         },
         {
           id: 'new-task',
           icon: BotMessageSquare,
           ariaLabel: 'New task',
           title: 'New task',
-          run: () => void createAssistantTask()
+          shortcut: keymapKeys('assistant-new-task'),
+          run: () => void createAssistantTaskFromShortcut()
         }
       ]
       viewActions.set('assistant', assistantActions)
@@ -2641,7 +2667,9 @@
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
-    requestedBucketId?: string
+    requestedBucketId?: string,
+    /** Assistant-space grouping: the routine the new task belongs to. */
+    routineId?: string
   ): Promise<void> {
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
@@ -2655,6 +2683,23 @@
     const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
+      // A routine-scoped create always lands inside its routine, even when it
+      // reuses a blank thread: the reused row predates this call, so its
+      // grouping is applied here rather than at creation time.
+      if (routineId && existing.routineId !== routineId) {
+        const optimistic = { ...existing, routineId }
+        upsertThreadInList(optimistic)
+        if (workspaceState.selectedThread?.id === existing.id) {
+          workspaceState.updateThread(optimistic)
+        }
+        void assistantRoutines
+          .setTaskRoutine(existing.id, routineId)
+          .then((grouped) => {
+            upsertThreadInList(grouped)
+            workspaceState.updateThread(grouped)
+          })
+          .catch(() => undefined)
+      }
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
@@ -2707,6 +2752,7 @@
       updatedAt: Date.now(),
       lastActivity: Date.now(),
       workingDirectory: project.path,
+      ...(routineId ? { routineId } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
@@ -2738,7 +2784,8 @@
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
-      ...(scopeBucketId ? { scopeBucketId } : {})
+      ...(scopeBucketId ? { scopeBucketId } : {}),
+      ...(routineId ? { routineId } : {})
     })
       .then((created) => {
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
@@ -2903,6 +2950,15 @@
     workspaceState.openThread(task, assistantProject)
   }
 
+  /** Open the task and dock its note panel in the context sidebar. */
+  function openAssistantTaskNotes(task: Thread): void {
+    openAssistantTask(task)
+    contextSidebarState.openThreadNote(task.projectId, task.id, task.title, {
+      edit: true,
+      focusEditor: true
+    })
+  }
+
   /** Open a routine's authoring task from the how-to panel. */
   function openAssistantTaskById(threadId: string): void {
     const task = allThreads.find((thread) => thread.id === threadId)
@@ -2915,31 +2971,60 @@
     await createThreadInProject(assistantProject)
   }
 
+  /**
+   * The routine the user is currently "inside": the routine of the selected
+   * task, else the routine whose how-to panel is docked (so a shortcut still
+   * lands in the routine while its panel is open on another task).
+   */
+  function activeAssistantRoutine(): Routine | null {
+    const selectedId = selectedThread?.id
+    const fromSelection = selectedId
+      ? assistantTasks.find((task) => task.id === selectedId)?.routineId
+      : undefined
+    const tab = contextSidebarState.sidebarActiveTab
+    const fromPanel = tab?.kind === 'assistant-how-to' ? (tab.routineId ?? undefined) : undefined
+    const routineId = fromSelection ?? fromPanel
+    if (!routineId) return null
+    return assistantRoutineList.find((routine) => routine.id === routineId) ?? null
+  }
+
+  /** Cmd/Ctrl+N on the Assistant view: new task in the active routine when the
+   *  user is inside one, otherwise a routine-less task. */
+  async function createAssistantTaskFromShortcut(): Promise<void> {
+    const routine = activeAssistantRoutine()
+    if (routine) await createAssistantTaskInRoutine(routine)
+    else await createAssistantTask()
+  }
+
   /** Create a routine and seed its first task, then open the how-to panel. */
   async function createAssistantRoutine(name: string): Promise<void> {
     if (!assistantProject) return
     const routine = await assistantRoutines.createRoutine({ name })
-    await createThreadInProject(assistantProject)
-    const created = workspaceState.selectedThread
-    if (created && created.projectId === ASSISTANT_SPACE_ID) {
-      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
-      upsertThreadInList(grouped)
-      workspaceState.updateThread(grouped)
-    }
+    // The seed task is created already inside the routine: a follow-up regroup
+    // would race the creation broadcast and leave the task outside it.
+    await createThreadInProject(assistantProject, undefined, routine.id)
     await openAssistantHowToForRoutine(routine)
   }
 
-  /** Create a task inside a routine and open its how-to panel. */
+  /** Create a task inside a routine and open the routine's how-to panel. */
   async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
     if (!assistantProject) return
-    await createThreadInProject(assistantProject)
+    await createThreadInProject(assistantProject, undefined, routine.id)
     const created = workspaceState.selectedThread
     if (created && created.projectId === ASSISTANT_SPACE_ID) {
-      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
-      upsertThreadInList(grouped)
-      workspaceState.updateThread(grouped)
+      upsertThreadInList(created)
+      // Anchor on the routine id we already hold: a reused blank thread carries
+      // no grouping until its async regroup lands, and the panel must not open
+      // against the wrong routine in that window.
+      contextSidebarState.openAssistantHowTo(
+        ASSISTANT_SPACE_ID,
+        created.id,
+        routine.id,
+        routine.name
+      )
+    } else {
+      await openAssistantHowToForRoutine(routine)
     }
-    await openAssistantHowToForRoutine(routine)
   }
 
   async function renameAssistantRoutine(routineId: string, name: string): Promise<void> {
@@ -3001,20 +3086,13 @@
         : undefined)
     if (!anchor) {
       if (!assistantProject) return
-      await createThreadInProject(assistantProject)
+      await createThreadInProject(assistantProject, undefined, routine.id)
       const created = workspaceState.selectedThread
       if (!created) return
-      const grouped = await assistantRoutines.setTaskRoutine(created.id, routine.id)
-      upsertThreadInList(grouped)
-      workspaceState.updateThread(grouped)
-      anchor = grouped
+      upsertThreadInList(created)
+      anchor = created
     }
-    contextSidebarState.openAssistantHowTo(
-      ASSISTANT_SPACE_ID,
-      anchor.id,
-      routine.id,
-      routine.name
-    )
+    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
   }
 
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
@@ -3249,6 +3327,11 @@
       onOpenTaskHowTo={openAssistantHowToForTask}
       onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
       onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+      onRenameTask={handleRename}
+      onTogglePinTask={(task) => void togglePin(task)}
+      onDeleteTask={handleDelete}
+      onForkTask={(task) => void forkThread(task)}
+      onOpenTaskNotes={openAssistantTaskNotes}
       onRenameRoutine={renameAssistantRoutine}
       onDeleteRoutine={deleteAssistantRoutine}
       onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
@@ -3262,42 +3345,42 @@
       {mode}
       {active}
       {navigate}
-    {projects}
-    {visibleProjects}
-    {projectIcons}
-    {loading}
-    activeThreadId={activeThreadRowId(selectedThread)}
-    {threadsByProject}
-    {pinnedThreads}
-    {pinnedProjects}
-    {regularProjects}
-    {pinnedInboxThreads}
-    {standaloneThreads}
-    {pinnedTimelineThreads}
-    {unpinnedTimelineThreads}
-    {hasMoreHistory}
-    {historyLoading}
-    {projectPageLoading}
-    {sidebar}
-    {projectDialogs}
-    {scopeActions}
-    {projectHasMoreInDb}
-    onLoadProjectThreadsPage={loadProjectThreadsPage}
-    onLoadHistoryPage={loadHistoryPage}
-    onSetProjects={(next) => (projects = next)}
-    onOpenThread={openThread}
-    onRename={handleRename}
-    onTogglePin={togglePin}
-    onDelete={handleDelete}
-    onFork={forkThread}
-    onThreadMove={handleThreadMove}
-    onPinnedThreadMove={handlePinnedThreadMove}
-    onTimelinePinnedMove={handleTimelinePinnedMove}
-    onProjectMove={handleProjectMove}
-    onCreateThread={createThreadInProject}
-    onOpenScopedThread={openScopedThread}
-    onSwitchScopedProject={switchScopedProject}
-  />
+      {projects}
+      {visibleProjects}
+      {projectIcons}
+      {loading}
+      activeThreadId={activeThreadRowId(selectedThread)}
+      {threadsByProject}
+      {pinnedThreads}
+      {pinnedProjects}
+      {regularProjects}
+      {pinnedInboxThreads}
+      {standaloneThreads}
+      {pinnedTimelineThreads}
+      {unpinnedTimelineThreads}
+      {hasMoreHistory}
+      {historyLoading}
+      {projectPageLoading}
+      {sidebar}
+      {projectDialogs}
+      {scopeActions}
+      {projectHasMoreInDb}
+      onLoadProjectThreadsPage={loadProjectThreadsPage}
+      onLoadHistoryPage={loadHistoryPage}
+      onSetProjects={(next) => (projects = next)}
+      onOpenThread={openThread}
+      onRename={handleRename}
+      onTogglePin={togglePin}
+      onDelete={handleDelete}
+      onFork={forkThread}
+      onThreadMove={handleThreadMove}
+      onPinnedThreadMove={handlePinnedThreadMove}
+      onTimelinePinnedMove={handleTimelinePinnedMove}
+      onProjectMove={handleProjectMove}
+      onCreateThread={createThreadInProject}
+      onOpenScopedThread={openScopedThread}
+      onSwitchScopedProject={switchScopedProject}
+    />
   {/if}
 
   <!-- Main Content -->

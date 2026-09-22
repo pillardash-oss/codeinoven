@@ -112,7 +112,20 @@ the workspace through `viewActions`:
 - **New routine** (`RoutineCreateControl.svelte`) names a routine and
   immediately seeds its first task, exactly as adding a project opens a first
   thread; the how-to panel opens next.
-- **New task** creates a routine-less task.
+- **New task** creates a task, and is routine-aware: when the user is inside a
+  routine (the selected task belongs to one, or its how-to panel is docked) the
+  task is created inside that routine; otherwise it is routine-less.
+
+Keyboard shortcuts mirror the header actions and are scoped to the Assistant
+view, so they never steal the chords from Projects or Chats:
+
+- **Cmd/Ctrl+N** — new task (inside the routine the user is currently in, else
+  routine-less).
+- **Cmd/Ctrl+Shift+N** — new routine, always.
+
+Both signals travel through `workspaceState.requestAssistantTask()` and
+`requestAssistantRoutine()` and are consumed by the workspace, which owns the
+routine-aware creation logic.
 
 Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
 icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
@@ -121,6 +134,16 @@ with How to, Rename, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
 task dragged onto a routine is grouped into it. Hovering a routine reveals a
 popover with its status, schedule type, next run, task count, and a how-to
 preview (`AssistantRoutineHoverPopover.svelte`).
+
+Task rows (`AssistantTaskRow.svelte`) behave exactly like thread rows. Hovering
+reveals an ellipsis (overlaid, so the title truncates at the full row width)
+whose menu is the shared `createThreadActionsMenu`: Rename, Pin/Unpin, Fork,
+Notes, Copy thread id, and Delete. Right-clicking the row opens the same menu,
+a long press opens it on touch, and hovering shows the regular
+`ThreadHoverPopover` (with the hidden assistant container's project rows
+suppressed via `hideProject`). A new task is created already inside its routine
+(`routineId` travels through `thread:create`), so the creation broadcast can
+never leave it stranded outside the routine.
 
 The how-to panel opens in the right context sidebar from the rail's **How to**
 toggle or a routine's **How to** menu item. The assistant rail is deliberately

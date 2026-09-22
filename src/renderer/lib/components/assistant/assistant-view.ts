@@ -1,4 +1,5 @@
 import { describeRelativeTime, type MissedRun, type Thread } from '$shared/types'
+import { threadStatusPolicy } from '$shared/thread-status-policy'
 
 /**
  * Pure presentation logic for Assistant View, kept out of the components so the
@@ -75,4 +76,43 @@ export function taskRunLine(
  */
 export function taskRowIconKey(task: Pick<Thread, 'assistantIconType'>): 'custom' | 'bot' {
   return task.assistantIconType ? 'custom' : 'bot'
+}
+
+/** Overall state passed to the shared thread hover popover. */
+export type TaskPopoverState =
+  | 'unread'
+  | 'temporary-unread'
+  | 'read'
+  | 'todo'
+  | 'completed'
+  | 'working'
+  | 'working-paused'
+  | 'spec'
+  | 'approval'
+  | 'error'
+  | 'scheduled'
+
+/**
+ * Assistant tasks reuse the regular thread hover popover, which takes an
+ * overall state rather than a status. The mapping mirrors the thread row's own
+ * badge priority: unread wins, then the status policy's tone.
+ */
+export function taskPopoverState(task: Pick<Thread, 'status' | 'read'>): TaskPopoverState {
+  if (!task.read) return 'unread'
+  switch (threadStatusPolicy(task.status).tone) {
+    case 'working':
+      return 'working'
+    case 'working-paused':
+      return 'working-paused'
+    case 'attention':
+      return 'approval'
+    case 'spec':
+      return 'spec'
+    case 'error':
+      return 'error'
+    case 'done':
+      return 'completed'
+    default:
+      return 'todo'
+  }
 }
