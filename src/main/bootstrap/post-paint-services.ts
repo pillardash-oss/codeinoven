@@ -327,6 +327,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const [
       { PtyService },
       { ProviderConnectionService },
+      { OpenCodeV2Service },
       { HarnessUpdateService },
       { HarnessInstallService },
       { HarnessAutoUpdateService },
@@ -334,6 +335,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ] = await Promise.all([
       import('../system/pty-service'),
       import('../providers/provider-connection'),
+      import('../opencode-v2/opencode-v2-service'),
       import('../agents/harness-update-service'),
       import('../agents/harness-install-service'),
       import('../agents/harness-auto-update-service'),
@@ -365,6 +367,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.providerConnection = new ProviderConnectionService(() => {
       void state.chatEngine?.invalidateProviderCatalogs()
     })
+    state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     state.harnessInstallService = new HarnessInstallService(state.providerConnection)
@@ -378,6 +381,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
     state.ptyService.register()
     state.providerConnection.register()
+    state.openCodeV2Service.register()
     state.harnessUpdateService.register()
     state.harnessAutoUpdateService.register()
     state.harnessInstallService.register()

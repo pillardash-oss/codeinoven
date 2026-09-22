@@ -22,12 +22,13 @@ const PROBE_YIELD_MS = 50
 const PROBE_BROADCAST_BATCH_SIZE = 2
 
 /**
- * The harness is installed but its detected version is not yet supported by
- * CodeInOven. The Harnesses page surfaces a notice; everywhere else the harness
- * is treated as not installed.
+ * The `opencode` command resolved to an OpenCode V2 binary. That entry's driver
+ * speaks the v1 API only, so the install is reported as installed-but-not-
+ * drivable here; the `opencode2` entry owns V2. The Harnesses page surfaces
+ * this as a notice rather than treating it as a working install.
  */
 export const OPENCODE_V2_UNSUPPORTED_DETAIL =
-  'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
+  'This binary reports OpenCode V2. Use the OpenCode V2 entry for this harness.'
 
 /** True when a `--version` line reports a major version >= 2 (OpenCode V2). */
 function isOpenCodeV2(version: string): boolean {
@@ -225,9 +226,9 @@ export class ProviderConnectionService {
     if (versionResult.ok) {
       const version =
         (versionResult.stdout || versionResult.stderr).split(/\r?\n/u)[0]?.trim() ?? ''
-      // OpenCode V2 is not yet supported: report it as installed-but-unsupported
-      // so the Harnesses page can surface a notice while every availability
-      // check treats it as not installed.
+      // The v1 `opencode` entry cannot drive a v2 binary: the API moved to
+      // `/api/*` with Basic auth. Report it as installed-but-not-drivable here
+      // and let the dedicated `opencode2` entry own V2.
       if (def.id === 'opencode' && isOpenCodeV2(version)) {
         return {
           ...base,
@@ -237,6 +238,19 @@ export class ProviderConnectionService {
           version,
           unsupportedReason: 'opencode-v2',
           detail: OPENCODE_V2_UNSUPPORTED_DETAIL
+        }
+      }
+      // The `opencode2` entry must actually be the v2 binary. A v1 binary on
+      // that command (e.g. a stale alias) would otherwise be reported as a
+      // working V2 install and fail later.
+      if (def.id === 'opencode2' && !isOpenCodeV2(version)) {
+        return {
+          ...base,
+          status: 'error',
+          resolvedPath: runtime.resolvedPath,
+          executionTarget: runtime.target,
+          version,
+          detail: `"opencode2" reported a non-V2 version (${version || 'unknown'}).`
         }
       }
       return {

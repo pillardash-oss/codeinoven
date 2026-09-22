@@ -36,6 +36,7 @@ type UpdateSource = NpmSource | GitHubSource
  */
 const UPDATE_SOURCES: Record<string, UpdateSource> = {
   opencode: { kind: 'npm', package: 'opencode-ai' },
+  opencode2: { kind: 'npm', package: '@opencode/cli' },
   codex: { kind: 'npm', package: '@openai/codex' },
   'claude-code': { kind: 'npm', package: '@anthropic-ai/claude-code' },
   cline: { kind: 'npm', package: 'cline' },
@@ -49,6 +50,7 @@ const UPDATE_SOURCES: Record<string, UpdateSource> = {
  */
 const UPDATE_ARGS: Record<string, string[]> = {
   opencode: ['upgrade'],
+  opencode2: ['upgrade'],
   codex: ['update'],
   'claude-code': ['update'],
   cline: ['update'],
@@ -69,7 +71,8 @@ function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
   if (!resolvedPath) return false
   const appRoot = app.getAppPath()
   const relativePath = relative(appRoot, resolvedPath)
-  const inside = relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+  const inside =
+    relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
   if (inside || process.platform !== 'win32') return inside
   // Windows is case-insensitive; a differing drive-letter casing would
   // otherwise report an app-owned path as user-owned.
@@ -218,10 +221,7 @@ export class HarnessUpdateService {
     }
 
     const currentVersion = provider.version ? extractVersion(provider.version) : undefined
-    if (
-      provider.executionTarget?.kind === 'bundled' ||
-      isAppOwnedInstall(provider.resolvedPath)
-    ) {
+    if (provider.executionTarget?.kind === 'bundled' || isAppOwnedInstall(provider.resolvedPath)) {
       return this.settle(harnessId, {
         ...base,
         currentVersion,

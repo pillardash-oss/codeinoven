@@ -7,6 +7,14 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- OpenCode V2 support begins. The v2 CLI (`@opencode/cli`, the `opencode2`
+  binary) is now detected as its own **OpenCode V2** harness alongside the v1
+  `opencode` entry, with its own install/update/uninstall channels. The
+  Harnesses page can read the harness's catalog (providers, models, agents)
+  over the V2 `/api/*` surface without streaming a chat turn yet. A `opencode`
+  install that reports a V2 version is no longer labelled "not supported yet";
+  it now points at the OpenCode V2 entry.
+
 - The agent can now collect secrets without ever seeing them. A new
   `cio_ask_secret` **gateway** tool (the utility gateway every harness already
   reaches, not a per-harness tool) asks for one or more values by title and

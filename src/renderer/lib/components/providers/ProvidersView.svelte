@@ -43,13 +43,13 @@
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
+
+  import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
   import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
-  /** Where users can browse existing PRs / open one for a V2 support effort. */
-  const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
-  /** Human copy shown for an installed-but-unsupported harness. */
+  /** Human copy shown when the v1 `opencode` entry resolves to a V2 binary. */
   const OPENCODE_V2_NOTICE =
-    'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
+    'This install is OpenCode V2. Use the “OpenCode V2” harness entry for it.'
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
   /** How long a copy confirmation stays visible on the Path column. */
@@ -151,7 +151,8 @@
   function hasDisclosure(provider: ProviderConnectionInfo): boolean {
     return (
       (provider.status === 'available' && provider.integration === 'ready') ||
-      provider.status === 'error'
+      provider.status === 'error' ||
+      (provider.status === 'available' && provider.id === 'opencode2')
     )
   }
 
@@ -171,7 +172,7 @@
     if (provider.unsupportedReason === 'opencode-v2') {
       return {
         Icon: AlertTriangle,
-        label: 'Not supported yet',
+        label: 'See OpenCode V2',
         classes: 'border-warning/30 bg-warning/10 text-warning'
       }
     }
@@ -241,10 +242,7 @@
       }
     ]
     if (provider.unsupportedReason === 'opencode-v2') {
-      items.push({
-        label: 'Check PRs',
-        onClick: () => void openInBrowser(OPENCODE_V2_PRS_URL)
-      })
+      items.push({ label: `divider-${provider.id}`, divider: true })
     }
     if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
       items.push({ label: `divider-${provider.id}`, divider: true })
@@ -968,6 +966,11 @@
                     />
                   </div>
                 </div>
+                {#if provider.id === 'opencode2'}
+                  <div class="border-t border-border pt-2.5">
+                    <OpenCodeV2CatalogPanel harnessName={provider.name} />
+                  </div>
+                {/if}
               {/if}
             </div>
           {/if}

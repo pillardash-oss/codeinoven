@@ -94,6 +94,22 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {
+    // OpenCode V2 ships its own binary (`opencode2`) whose HTTP API lives under
+    // `/api/*` with Basic auth   entirely separate from the v1 CLI the
+    // `opencode` driver drives. It is detected and can be inspected read-only
+    // (see `OpenCodeV2Service`); it has no chat driver yet, so it is `planned`.
+    id: 'opencode2',
+    name: 'OpenCode V2',
+    command: 'opencode2',
+    versionArgs: ['--version'],
+    integration: 'planned',
+    supportsCustomProviders: false,
+    // V2 reads AGENTS.md itself. Manual compaction is declared `false` until a
+    // V2 chat driver implements `compactSession`; the declaration tracks the
+    // driver capability that gates the UI action, not the upstream API.
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
+  },
+  {
     id: 'cline',
     name: 'Cline',
     command: 'cline',

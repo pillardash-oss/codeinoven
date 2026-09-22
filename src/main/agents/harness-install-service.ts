@@ -27,6 +27,11 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
     linux: 'https://opencode.ai/download',
     win32: 'https://opencode.ai/download'
   },
+  opencode2: {
+    darwin: 'https://www.npmjs.com/package/@opencode/cli',
+    linux: 'https://www.npmjs.com/package/@opencode/cli',
+    win32: 'https://www.npmjs.com/package/@opencode/cli'
+  },
   codex: {
     darwin: 'https://developers.openai.com/codex/cli/',
     linux: 'https://developers.openai.com/codex/cli/',
@@ -65,6 +70,13 @@ const INSTALL_METHODS: Record<string, Partial<Record<Platform, HarnessInstallMet
     darwin: ['npm', 'brew', 'native'],
     linux: ['npm', 'brew', 'native'],
     win32: ['npm', 'native']
+  },
+  // OpenCode V2 is published as `@opencode/cli`; the vendor's curl/brew channels
+  // still resolve to the v1 line, so npm is the only verified v2 install method.
+  opencode2: {
+    darwin: ['npm'],
+    linux: ['npm'],
+    win32: ['npm']
   },
   codex: {
     darwin: ['npm', 'brew', 'native'],
@@ -114,6 +126,9 @@ const UNINSTALL_COMMANDS: Record<
     brew: { command: 'brew', args: ['uninstall', 'anomalyco/tap/opencode'] },
     native: { command: 'rm', args: ['-rf', '~/.opencode'] }
   },
+  opencode2: {
+    npm: { command: 'npm', args: ['uninstall', '-g', '@opencode/cli'] }
+  },
   codex: {
     npm: { command: 'npm', args: ['uninstall', '-g', '@openai/codex'] },
     brew: { command: 'brew', args: ['uninstall', '--cask', 'codex'] },
@@ -155,7 +170,9 @@ const UNINSTALL_COMMANDS: Record<
  */
 const INSTALL_COMMANDS: Record<
   string,
-  Partial<Record<Platform, Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>>>
+  Partial<
+    Record<Platform, Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>>
+  >
 > = {
   opencode: {
     darwin: {
@@ -173,6 +190,17 @@ const INSTALL_COMMANDS: Record<
         args: ['-NoProfile', '-Command', 'irm https://opencode.ai/install.ps1 | iex']
       },
       npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] }
+    }
+  },
+  opencode2: {
+    darwin: {
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
+    },
+    linux: {
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
+    },
+    win32: {
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
     }
   },
   codex: {
@@ -326,7 +354,8 @@ export class HarnessInstallService {
       throw new Error(`${definition.name} is bundled with CodeInOven and needs no install.`)
     }
 
-    const wslTarget = provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
+    const wslTarget =
+      provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
     const platform: Platform = wslTarget ? 'linux' : process.platform
     const platformCommands = INSTALL_COMMANDS[harnessId]?.[platform]
     const method = (METHOD_PREFERENCE[platform] ?? ['npm']).find(

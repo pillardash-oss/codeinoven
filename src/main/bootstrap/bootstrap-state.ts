@@ -22,6 +22,7 @@ import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
+import type { OpenCodeV2Service } from '../opencode-v2/opencode-v2-service'
 import type { HarnessUpdateService } from '../agents/harness-update-service'
 import type { HarnessAutoUpdateService } from '../agents/harness-auto-update-service'
 import type { HarnessInstallService } from '../agents/harness-install-service'
@@ -62,6 +63,7 @@ export interface BootstrapState {
   chatEngine: ChatEngine | null
   ptyService: PtyService | null
   providerConnection: ProviderConnectionService | null
+  openCodeV2Service: OpenCodeV2Service | null
   harnessUpdateService: HarnessUpdateService | null
   harnessAutoUpdateService: HarnessAutoUpdateService | null
   harnessInstallService: HarnessInstallService | null
@@ -117,6 +119,7 @@ export function createBootstrapState(): BootstrapState {
     chatEngine: null,
     ptyService: null,
     providerConnection: null,
+    openCodeV2Service: null,
     harnessUpdateService: null,
     harnessAutoUpdateService: null,
     harnessInstallService: null,
