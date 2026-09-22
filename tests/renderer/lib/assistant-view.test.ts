@@ -111,28 +111,22 @@ describe('how-to draft extraction', () => {
       '',
       'Send /save-how-to to commit this.'
     ].join('\n')
-    expect(extractHowToDraft(message)).toBe(
-      'GOAL\nTwice a day, sweep every Slack conversation.'
-    )
+    expect(extractHowToDraft(message)).toBe('GOAL\nTwice a day, sweep every Slack conversation.')
   })
 
   it('reads a fence tagged how-to with or without a trailing title', () => {
-    expect(extractHowToDraft('```how-to\nCheck email at 08:30.\n```')).toBe(
-      'Check email at 08:30.'
-    )
+    expect(extractHowToDraft('```how-to\nCheck email at 08:30.\n```')).toBe('Check email at 08:30.')
     expect(extractHowToDraft('```how-to: Morning mail\nCheck email at 08:30.\n```')).toBe(
       'Check email at 08:30.'
     )
     expect(extractHowToDraft('```howto\nCheck email.\n```')).toBe('Check email.')
-    expect(extractHowToDraft('```How-To - Morning mail\nCheck email.\n```')).toBe(
-      'Check email.'
-    )
+    expect(extractHowToDraft('```How-To - Morning mail\nCheck email.\n```')).toBe('Check email.')
   })
 
   it('strips the marker line when the fence carries both a tag and a title line', () => {
-    expect(
-      extractHowToDraft('```how-to\nhow-to: Morning mail\n\nCheck email at 08:30.\n```')
-    ).toBe('Check email at 08:30.')
+    expect(extractHowToDraft('```how-to\nhow-to: Morning mail\n\nCheck email at 08:30.\n```')).toBe(
+      'Check email at 08:30.'
+    )
   })
 
   it('ignores blocks and messages that carry no how-to', () => {
@@ -143,11 +137,64 @@ describe('how-to draft extraction', () => {
   })
 
   it('takes the newest how-to block in a message', () => {
-    const message = [
-      '```how-to\nFirst draft.\n```',
-      '```how-to\nSecond draft.\n```'
-    ].join('\n')
+    const message = ['```how-to\nFirst draft.\n```', '```how-to\nSecond draft.\n```'].join('\n')
     expect(extractHowToDraft(message)).toBe('Second draft.')
+  })
+
+  it('keeps a nested command fence inside the draft instead of truncating at it', () => {
+    const message = [
+      '```how-to',
+      'GOAL',
+      '',
+      'Run this:',
+      '```bash',
+      'gh pr list --state open',
+      '```',
+      '',
+      'Then summarise the result.',
+      '```'
+    ].join('\n')
+    expect(extractHowToDraft(message)).toBe(
+      [
+        'GOAL',
+        '',
+        'Run this:',
+        '```bash',
+        'gh pr list --state open',
+        '```',
+        '',
+        'Then summarise the result.'
+      ].join('\n')
+    )
+  })
+
+  it('keeps nested fences in a four-backtick block and excludes trailing prose', () => {
+    const message = [
+      '````how-to',
+      'GOAL',
+      '```bash',
+      'ls',
+      '```',
+      '````',
+      '',
+      'Send /save-how-to to commit this.'
+    ].join('\n')
+    expect(extractHowToDraft(message)).toBe(['GOAL', '```bash', 'ls', '```'].join('\n'))
+  })
+
+  it('stops at the how-to block even when a later fenced block follows it', () => {
+    const message = [
+      '```how-to',
+      'GOAL',
+      '```',
+      '',
+      'Send /save-how-to.',
+      '',
+      '```bash',
+      'ls',
+      '```'
+    ].join('\n')
+    expect(extractHowToDraft(message)).toBe('GOAL')
   })
 
   it('takes the newest message that holds a draft', () => {

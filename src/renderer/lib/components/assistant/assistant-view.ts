@@ -88,9 +88,36 @@ const HOW_TO_TAG = /^how[ _-]?to(?:[ \t]*[-:][^\n]*)?$/i
 /** A leading `how-to` marker line inside a block, e.g. `how-to: Slack digest`. */
 const HOW_TO_MARKER_LINE = /^[ \t]*how[-_]?to\b[ \t]*(?:[-:][ \t]*[^\n]*)?$/
 
+/** A fence line: indent, a backtick run of 3+, and an optional tag (no backticks). */
+const FENCE_LINE = /^[ \t]*(`{3,})[ \t]*([^`]*)$/
+
+interface FenceLine {
+  /** Index of the fence line in the message. */
+  index: number
+  /** Backtick run length   a closing fence must be at least this long. */
+  length: number
+  /** Everything after the backticks, trimmed; empty for an untagged fence. */
+  tag: string
+}
+
+/** Every fence line in the message, in order. */
+function collectFences(lines: readonly string[]): FenceLine[] {
+  const fences: FenceLine[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = FENCE_LINE.exec(lines[index] ?? '')
+    if (!match) continue
+    fences.push({
+      index,
+      length: (match[1] ?? '').length,
+      tag: (match[2] ?? '').trim()
+    })
+  }
+  return fences
+}
+
 /** The first non-blank line of a block body, or null when the body is blank. */
-function firstNonEmptyLine(text: string): string | null {
-  for (const line of text.split('\n')) {
+function firstNonEmptyLine(lines: readonly string[]): string | null {
+  for (const line of lines) {
     if (line.trim() !== '') return line
   }
   return null
@@ -101,8 +128,17 @@ function stripHowToMarker(body: string): string {
   const lines = body.split('\n')
   const start = lines.findIndex((line) => line.trim() !== '')
   if (start === -1) return ''
-  const content = HOW_TO_MARKER_LINE.test(lines[start]) ? lines.slice(start + 1) : lines.slice(start)
+  const content = HOW_TO_MARKER_LINE.test(lines[start])
+    ? lines.slice(start + 1)
+    : lines.slice(start)
   return content.join('\n').trim()
+}
+
+/** Whether a fence opens a how-to block: a `how-to` tag, or a leading marker line. */
+function opensHowTo(fence: FenceLine, lines: readonly string[]): boolean {
+  if (HOW_TO_TAG.test(fence.tag)) return true
+  const head = firstNonEmptyLine(lines.slice(fence.index + 1))
+  return head !== null && HOW_TO_MARKER_LINE.test(head)
 }
 
 /**
@@ -110,21 +146,41 @@ function stripHowToMarker(body: string): string {
  *
  * The authoring contract asks for a fence tagged `how-to`, but a model also
  * opens a bare fence and starts the body with a `how-to: <title>` line, so both
- * shapes are accepted. The newest matching block in the text wins, and a
- * leading marker line is stripped so the saved how-to is instructions only.
+ * shapes are accepted. The newest how-to block in the text wins, and a leading
+ * marker line is stripped so the saved how-to is instructions only.
+ *
+ * A how-to is a step-by-step instruction set, so it often carries its own code
+ * fences (a command to run, a payload to post). Matching the block to its first
+ * closing fence would silently truncate it there, so tagged inner fences are
+ * tracked as nesting and only an untagged fence at the outer depth closes the
+ * block. Prose written after the block is left out of the saved how-to.
  */
 export function extractHowToDraft(text: string): string | null {
-  const fencedBlock = /```[ \t]*([^\n`]*)\n([\s\S]*?)```/g
-  let found: string | null = null
-  for (const match of text.matchAll(fencedBlock)) {
-    const tag = (match[1] ?? '').trim()
-    const body = match[2] ?? ''
-    const head = firstNonEmptyLine(body)
-    if (!HOW_TO_TAG.test(tag) && !(head !== null && HOW_TO_MARKER_LINE.test(head))) continue
-    const content = stripHowToMarker(body)
-    if (content) found = content
+  const lines = text.split('\n')
+  const fences = collectFences(lines)
+
+  let lastOpening: FenceLine | null = null
+  for (const fence of fences) {
+    if (opensHowTo(fence, lines)) lastOpening = fence
   }
-  return found
+  if (!lastOpening) return null
+  const open = lastOpening
+
+  let depth = 1
+  for (const fence of fences) {
+    if (fence.index <= open.index) continue
+    if (fence.length < open.length) continue
+    if (fence.tag !== '') {
+      // A tagged fence is an inner opening (a nested example), not the close.
+      depth += 1
+      continue
+    }
+    depth -= 1
+    if (depth > 0) continue
+    const content = stripHowToMarker(lines.slice(open.index + 1, fence.index).join('\n'))
+    return content || null
+  }
+  return null
 }
 
 /**
