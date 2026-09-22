@@ -95,11 +95,11 @@
 <article class="overflow-hidden rounded-lg border border-border bg-surface">
   <!--
     Two rows, because the card answers two questions: what this assignment was,
-    and where its answer can be read. The first row names it and offers the one
-    thing that leads back to what it was asked, the second carries when it was
-    written and the three places its output lives. The permalink is the only
-    control that leaves the app, so it is the only icon-only one, and it declares
-    its address for the app's link context menu to find.
+    and where its answer can be read. The first row names it, the second carries
+    when it was written and every control that leads back to the assignment or to
+    its output. The permalink is the only control that leaves the app, so it is the
+    only icon-only one, and it declares its address for the app's link context menu
+    to find.
   -->
   <header class="border-b border-border/60 bg-elevated/50 px-2.5 py-1.5">
     <div class="flex items-center gap-1.5">
@@ -110,19 +110,8 @@
       >
         {report.title}
       </p>
-      {#if commentUrl}
-        <button
-          type="button"
-          class={actionClass}
-          title="Show the comment this assignment answered in the conversation"
-          onclick={() => onShowInConversation(report)}
-        >
-          <MessageSquare size={11} class="shrink-0" />
-          Show comment
-        </button>
-      {/if}
     </div>
-    <div class="mt-1 flex items-center gap-1">
+    <div class="mt-1 flex flex-wrap items-center gap-1">
       {#if written}
         <p class="min-w-0 truncate text-[0.5625rem] text-dimmed">
           {report.updatedAt ? 'Written' : 'Assigned'}
@@ -130,6 +119,17 @@
         </p>
       {/if}
       <div class="ml-auto flex shrink-0 items-center gap-1">
+        {#if commentUrl}
+          <button
+            type="button"
+            class={actionClass}
+            title="Show the comment this assignment answered in the conversation"
+            onclick={() => onShowInConversation(report)}
+          >
+            <MessageSquare size={11} class="shrink-0" />
+            Show comment
+          </button>
+        {/if}
         {#if threadId}
           <button
             type="button"
