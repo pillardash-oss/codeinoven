@@ -60,6 +60,15 @@ workspace instead of a shared scratch directory:
   land under the routine. Assistant threads get no `chats-artifacts` scratch
   path, and `assistant-cwd` is registered as an app artifact root so the
   renderer can show those files.
+- The rail's **Workspace files** panel mounts the file tree on exactly that
+  directory: `assistantThreadWorkspaceDirectory` (`src/lib/project-artifacts.ts`)
+  builds the same `assistant-cwd/<routineId ?? threadId>` path for both the
+  session and the file surfaces, and `ProjectFilesRootResolver`
+  (`src/main/editor/project-files/project-files-roots.ts`) resolves it through
+  the assistant mount built by `createThreadWorkspaceRoots`
+  (`src/main/editor/project-files/thread-workspace-roots.ts`). Previews of those
+  files are served from `appfile://thread/assistant/<threadId>/<path>`, so a
+  task only ever previews inside its own routine's workspace.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.
@@ -177,9 +186,20 @@ suppressed via `hideProject`). A new task is created already inside its routine
 never leave it stranded outside the routine.
 
 The how-to panel opens in the right context sidebar from the rail's **How to**
-toggle or a routine's **How to** menu item. The assistant rail is deliberately
-minimal: for an assistant thread it carries only **History** and **How to**,
-never terminal, actions, files, memory, or cloud tools.
+toggle or a routine's **How to** menu item. An assistant thread's rail carries
+the conversation tools only: **History**, **How to**, **Workspace files**
+(mounted on the task's own workspace directory), **Sources** and **Memory**, plus
+**Debugger** in development builds. It never carries terminal, actions, changes
+or cloud tools.
+
+Memory on an assistant task uses the `sidebar-assistant` surface
+(`src/renderer/lib/components/memory/memory-routing.ts`), which pins the project
+to the hidden assistant container instead of a pickable project: **Global**
+(the projects-wide scope), **Assistant** (the assistant space's own file) and
+**This task** (the thread file). Those are exactly the layers the engine loads
+for an assistant turn (`MemoryService.current` treats the assistant container
+like a project thread), so the panel never shows memory the agent would not
+receive.
 
 ## How-to authoring
 
@@ -203,7 +223,11 @@ prompt"; the user-facing term is how-to.
   `how-to` (optionally with a `: <title>` suffix) and a bare fence whose first
   line is a `how-to: <title>` marker, strips that marker line, and takes the
   newest matching block in the newest assistant message. Every other fenced
-  block is ignored, and a block that is only a marker line is not a draft.
+  block is ignored, and a block that is only a marker line is not a draft. The
+  block is matched by fence nesting rather than to its first closing fence, so a
+  how-to that carries its own command fence (a `bash` example inside the
+  instructions) is kept whole instead of being silently truncated, and prose
+  written after the block stays out of the saved how-to.
 - The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
   how-to, and only once a how-to exists the routine schedule, the task schedule,
   and the connections. With no how-to it is a single empty state and nothing
