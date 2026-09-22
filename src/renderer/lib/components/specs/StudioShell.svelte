@@ -1,7 +1,10 @@
 <script module lang="ts">
   export interface StudioShellSectionBadge {
-    count: number
-    tone: 'info' | 'danger'
+    /** Rendered when the badge carries no `text`. */
+    count?: number
+    /** Short status word rendered instead of a count, e.g. "Not Validated". */
+    text?: string
+    tone: 'info' | 'danger' | 'warning'
     label: string
   }
 
@@ -9,6 +12,12 @@
     id: SectionId
     title: string
     badges?: StudioShellSectionBadge[]
+  }
+
+  const badgeTones: Record<StudioShellSectionBadge['tone'], string> = {
+    info: 'bg-info/10 text-info',
+    danger: 'bg-danger/10 text-danger',
+    warning: 'bg-warning/10 text-warning'
   }
 </script>
 
@@ -186,13 +195,13 @@
               <span class="flex items-center gap-1">
                 {#each section.badges ?? [] as badge (badge.label)}
                   <span
-                    class="rounded-full px-1.5 text-[0.625rem] {badge.tone === 'danger'
-                      ? 'bg-danger/10 text-danger'
-                      : 'bg-info/10 text-info'}"
+                    class="rounded-full px-1.5 text-[0.625rem] whitespace-nowrap {badgeTones[
+                      badge.tone
+                    ]} {badge.text ? 'font-semibold' : ''}"
                     title={badge.label}
                     aria-label={badge.label}
                   >
-                    {badge.count}
+                    {badge.text ?? badge.count}
                   </span>
                 {/each}
               </span>

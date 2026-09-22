@@ -15,13 +15,18 @@
     AuditSectionId
   } from '$shared/types'
   import { exportAuditReportMarkdown } from '$shared/audit/audit-markdown'
+  import {
+    auditEvidenceAttribution,
+    auditEvidenceIssueDetail
+  } from '$shared/audit/audit-evidence-status'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import StatusPill from '../ui/StatusPill.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
-  import type { StudioShellSection } from './StudioShell.svelte'
+  import type { StudioShellSection, StudioShellSectionBadge } from './StudioShell.svelte'
   import StudioSidebarFileActions from './StudioSidebarFileActions.svelte'
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
@@ -110,6 +115,13 @@
     onOpenInEditor,
     onRevealInAppFile
   }: Props = $props()
+  /** The audit document's navigable sections: the four annotatable report
+   *  sections plus the verification evidence block, which is where unvalidated
+   *  verification facts live and therefore needs its own badge and anchor. */
+  type AuditStudioSectionId = AuditSectionId | 'verification'
+  const NOT_VALIDATED_BADGE = 'Not Validated'
+  const NOT_VALIDATED_HINT =
+    'Some facts here could not be matched to executed evidence in the auditor transcript'
   // svelte-ignore state_referenced_locally
   let draft = $state<AuditReport>(history.attach($state.snapshot(report)))
   // svelte-ignore state_referenced_locally
@@ -138,7 +150,7 @@
   const editingAnnotationPosition = $derived(overlay.editingPosition)
   const annotationMarkers = $derived(overlay.markers)
   let severityEditingId = $state<string | null>(null)
-  let selectedSection = $state<AuditSectionId>('executive_summary')
+  let selectedSection = $state<AuditStudioSectionId>('executive_summary')
   /** Narrow layout only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
@@ -169,17 +181,37 @@
   const workflowActionsVisible = $derived(actionsAvailable && isLatestVersion)
 
   // Sidebar headings are a projection of the fixed audit sections with open annotation counts.
-  const shellSections = $derived<StudioShellSection<AuditSectionId>[]>(
-    auditSections.map((section) => {
-      const badges: StudioShellSection<AuditSectionId>['badges'] = []
+  const auditEvidence = $derived(auditEvidenceAttribution(draft))
+  const shellSections = $derived<StudioShellSection<AuditStudioSectionId>[]>([
+    ...auditSections.map((section) => {
+      const badges: StudioShellSectionBadge[] = []
       const commentCount = annotations(section.id).length
       if (commentCount) badges.push({ count: commentCount, tone: 'info', label: 'annotations' })
-      if (section.id === 'findings' && draft.content.findings.length) {
-        badges.push({ count: draft.content.findings.length, tone: 'danger', label: 'findings' })
+      if (section.id === 'findings') {
+        if (draft.content.findings.length) {
+          badges.push({ count: draft.content.findings.length, tone: 'danger', label: 'findings' })
+        }
+        if (auditEvidence.findings) {
+          badges.push({ text: NOT_VALIDATED_BADGE, tone: 'warning', label: 'not validated' })
+        }
       }
       return { id: section.id, title: section.label, badges }
-    })
-  )
+    }),
+    // Verification evidence is a real report block (checks, utilities,
+    // limitations) but not one of the annotatable sections; it gets its own
+    // nav entry so an unvalidated fact is visible and reachable.
+    ...(draft.content.verification !== undefined || (draft.content.auditedFiles?.length ?? 0) > 0
+      ? [
+          {
+            id: 'verification' as const,
+            title: 'Verification evidence',
+            badges: auditEvidence.verification
+              ? [{ text: NOT_VALIDATED_BADGE, tone: 'warning' as const, label: 'not validated' }]
+              : []
+          }
+        ]
+      : [])
+  ])
   const statusLabel = $derived(
     draft.outcome === 'passed'
       ? 'Passed'
@@ -274,6 +306,14 @@
     return draft.annotations.filter(
       (annotation) => annotation.section === section && annotation.status === 'open'
     )
+  }
+
+  function checkIssuesFor(checkId: string): readonly string[] {
+    return auditEvidence.checkIssues.get(checkId) ?? []
+  }
+
+  function utilityIssuesFor(utilityName: string): readonly string[] {
+    return auditEvidence.utilityIssues.get(utilityName) ?? []
   }
 
   function findingNumber(findingId: string): number {
@@ -543,7 +583,7 @@
   openAnnotationCount={draft.annotations.filter((annotation) => annotation.status === 'open').length}
   annotationsTitle="Section annotations"
   annotationsEmptyLabel="Select text or click a section heading to annotate."
-  sectionAnnotations={annotations}
+  sectionAnnotations={(section) => (section === 'verification' ? [] : annotations(section))}
   onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
   {error}
   onScrollerMouseUp={captureDocumentSelection}
@@ -739,7 +779,7 @@
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
         <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
-          {@render sectionHeading('findings', 'Findings')}
+          {@render sectionHeading('findings', 'Findings', auditEvidence.findings)}
           <ol class="mt-3 divide-y divide-border">
             {#each draft.content.findings as finding, index (finding.id)}
               <li
@@ -760,6 +800,14 @@
                       changed()
                     }}
                   />
+                  {#if auditEvidence.findingIds.has(finding.id)}
+                    <StatusPill
+                      tone="warning"
+                      title="The verification check backing this finding could not be matched to executed evidence"
+                    >
+                      Not Validated
+                    </StatusPill>
+                  {/if}
                   {#if workflowActionsVisible && severityEditingId === finding.id}
                     <select
                       class="rounded-md border bg-elevated px-2 py-1 text-xs"
@@ -856,9 +904,19 @@
         </section>
 
         {#if draft.content.auditedFiles?.length || draft.content.verification}
-          <section class="scroll-mt-5" aria-labelledby="audit-verification-heading">
-            <h2 id="audit-verification-heading" class="text-xl font-semibold tracking-tight">
+          <section
+            id="audit-section-verification"
+            class="scroll-mt-5"
+            aria-labelledby="audit-verification-heading"
+          >
+            <h2
+              id="audit-verification-heading"
+              class="flex items-center gap-2 text-xl font-semibold tracking-tight"
+            >
               Verification evidence
+              {#if auditEvidence.verification}
+                {@render notValidatedBadge()}
+              {/if}
             </h2>
 
             {#if draft.content.auditedFiles?.length}
@@ -904,6 +962,11 @@
                           >
                             {check.status.replace('_', ' ')}
                           </span>
+                          {#if checkIssuesFor(check.id).length}
+                            <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
+                              Not Validated
+                            </StatusPill>
+                          {/if}
                           {#if check.exitCode !== undefined}
                             <span class="text-[0.625rem] tabular-nums text-dimmed">
                               Exit {check.exitCode}
@@ -928,6 +991,16 @@
                             {check.files.join(', ')}
                           </p>
                         {/if}
+                        {#if checkIssuesFor(check.id).length}
+                          <ul
+                            class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
+                            aria-label="Why this check is not validated"
+                          >
+                            {#each checkIssuesFor(check.id) as issue (issue)}
+                              <li>{auditEvidenceIssueDetail(issue)}</li>
+                            {/each}
+                          </ul>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -939,10 +1012,27 @@
                   </h3>
                   <ul class="mt-2 space-y-2">
                     {#each draft.content.verification.utilities as utility (utility.name)}
-                      <li class="text-xs leading-5 text-muted">
-                        <span class="font-semibold text-foreground">{utility.name}</span>
-                        <span class="text-dimmed"> · {utility.status.replace('_', ' ')}</span>
-                          {utility.evidence}
+                      <li class="space-y-1 text-xs leading-5 text-muted">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="font-semibold text-foreground">{utility.name}</span>
+                          <span class="text-dimmed">· {utility.status.replace('_', ' ')}</span>
+                          {#if utilityIssuesFor(utility.name).length}
+                            <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
+                              Not Validated
+                            </StatusPill>
+                          {/if}
+                        </span>
+                        <span class="block">{utility.evidence}</span>
+                        {#if utilityIssuesFor(utility.name).length}
+                          <ul
+                            class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
+                            aria-label="Why this utility is not validated"
+                          >
+                            {#each utilityIssuesFor(utility.name) as issue (issue)}
+                              <li>{auditEvidenceIssueDetail(issue)}</li>
+                            {/each}
+                          </ul>
+                        {/if}
                       </li>
                     {/each}
                   </ul>
@@ -1024,7 +1114,7 @@
 {/if}
 
 
-{#snippet sectionHeading(section: AuditSectionId, title: string)}
+{#snippet sectionHeading(section: AuditSectionId, title: string, notValidated = false)}
   {#if workflowActionsVisible}
     <button
       class="group flex items-center gap-2 text-left"
@@ -1032,14 +1122,26 @@
       onclick={(event: MouseEvent) => openSectionAnnotation(section, title, event)}
     >
       <span class="text-xl font-semibold tracking-tight">{title}</span>
+      {#if notValidated}
+        {@render notValidatedBadge()}
+      {/if}
       <MessageSquarePlus
         size={14}
         class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
       />
     </button>
   {:else}
-    <h2 class="text-xl font-semibold tracking-tight">{title}</h2>
+    <h2 class="flex items-center gap-2 text-xl font-semibold tracking-tight">
+      {title}
+      {#if notValidated}
+        {@render notValidatedBadge()}
+      {/if}
+    </h2>
   {/if}
+{/snippet}
+
+{#snippet notValidatedBadge()}
+  <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>Not Validated</StatusPill>
 {/snippet}
 
 {#snippet textSection(
