@@ -22,6 +22,7 @@
     "nanoid": "3.3.18",
     "uuid": "11.1.1",
     "@xmldom/xmldom": "0.9.12",
+    "plist": "3.1.1",
     "qs": "6.16.0",
     "fast-uri": "3.1.7",
     "@codemirror/state": "^6.7.2",
@@ -31,7 +32,7 @@
     "js-yaml": "^4.3.2"
   },
   "scripts": {
-    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-plist-xmldom.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
+    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
     "predev": "bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",

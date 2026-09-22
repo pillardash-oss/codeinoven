@@ -44,11 +44,6 @@ import {
   buildPullRequestComposeContext,
   comparePullRequestBranches as comparePullRequestRefs
 } from './git/git-service-pull-request'
-import {
-  changedDependencyManifests,
-  findDanglingReferences,
-  integrationChanges
-} from './git/git-service-references'
 import type { ConflictWorkMetadata } from './git/git-service-conflicts'
 import {
   REMOTE_REF_PREFIX,
@@ -1661,6 +1656,14 @@ export class GitService {
     }
     if (!beforeSha) return nothing
     try {
+      // The probe reads every tracked source file of the checkout, so its module
+      // is imported only once an integration actually removed something, instead
+      // of sitting in the always-loaded feature-IPC graph. That also keeps the
+      // feature-IPC graph emit-able: with this probe inside it, Vite 8's
+      // rolldown rendered the whole graph as an empty chunk (see
+      // refuseEmptyChunks in electron.vite.config.ts).
+      const { changedDependencyManifests, findDanglingReferences, integrationChanges } =
+        await import('./git/git-service-references')
       const git = this.client(directory)
       const changes = await integrationChanges(git, beforeSha, await this.headSha(directory))
       return {
