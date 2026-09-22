@@ -5,6 +5,7 @@
     Copy,
     Eraser,
     ExternalLink,
+    Globe2,
     Link,
     Scissors,
     TextSelect
@@ -12,6 +13,7 @@
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { canOpenInCioBrowser, openInCioBrowser } from '$lib/open-in-browser'
   import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
@@ -34,6 +36,9 @@
   let menuEl: HTMLDivElement | null = $state(null)
   let menuWidth = $state(0)
   let menuHeight = $state(0)
+  /** The in-app browser takes a page only while a project thread is on screen to
+   *  own the tab, so the link item is offered exactly when it can work. */
+  const cioBrowserAvailable = $derived(canOpenInCioBrowser())
 
   const itemClass =
     'flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus-visible:bg-elevated disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
@@ -293,6 +298,18 @@
     close()
   }
 
+  /**
+   * Load the link in the in-app browser instead of handing it to the system
+   * one. The menu is dismissed first: the browser renders a native view
+   * composited above every DOM surface, so a menu still on screen would be
+   * painted underneath the page that replaces it.
+   */
+  function openLinkInCioBrowser(href: string): void {
+    close()
+    if (openInCioBrowser(href)) return
+    toast.error('The CIO browser has no project thread to open this link in')
+  }
+
   async function pasteIntoTerminal(t: TextMenuTarget): Promise<void> {
     const terminal = t.terminal
     if (!terminal) {
@@ -438,6 +455,18 @@
           <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
           Open in Default Browser
         </button>
+        {#if cioBrowserAvailable}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            title="Open in the CIO browser tab for this project"
+            onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+          >
+            <Globe2 class="size-3.5 shrink-0 text-text-muted" />
+            Open in CIO Browser
+          </button>
+        {/if}
         <button
           type="button"
           class={itemClass}

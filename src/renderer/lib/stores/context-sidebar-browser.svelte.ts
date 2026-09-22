@@ -102,11 +102,31 @@ export class SidebarBrowserTabs {
     this.visible = false
   }
 
-  open(url: string, requestedTabId?: string): string | null {
+  /**
+   * The project thread a browser tab opened right now would belong to, or null
+   * when none is active. A tab is always owned by a project thread, so this is
+   * both the availability answer and the identity `open` needs   one resolution,
+   * so an availability check can never promise what the open itself refuses.
+   *
+   * An empty thread id (a project activated before any thread exists) counts as
+   * missing: there is no thread to own a tab.
+   */
+  private get openContext(): { projectId: string; threadId: string } | null {
     const projectId = this.host.activeProjectId()
     const threadId = this.host.activeThreadId()
     if (!projectId || !threadId) return null
-    return this.openForContext(url, projectId, threadId, requestedTabId, true)
+    return { projectId, threadId }
+  }
+
+  /** Whether a page can be opened right now. */
+  get canOpen(): boolean {
+    return this.openContext !== null
+  }
+
+  open(url: string, requestedTabId?: string): string | null {
+    const context = this.openContext
+    if (!context) return null
+    return this.openForContext(url, context.projectId, context.threadId, requestedTabId, true)
   }
 
   openForContext(
