@@ -17,7 +17,7 @@ import type {
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
-import { prepareHarnessInvocation } from './harness-runtime'
+import { describeHarnessExit, prepareHarnessInvocation } from './harness-runtime'
 import { spawnInUtilityHost } from './harness-utility-host'
 import type {
   AgentEventCallback,
@@ -522,6 +522,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
     let stdoutBuffer = ''
     let stderrBuffer = ''
+    /**
+     * Whether the process said anything at all before it ended.
+     *
+     * A byte on either stream is proof the executable ran, which is what
+     * separates a harness the system refused to start from one that crashed
+     * partway through its work.
+     */
+    let producedOutput = false
     let completed = false
     const finish = async (error?: string, detail?: string): Promise<void> => {
       if (completed) return
@@ -588,10 +596,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      producedOutput = true
       stdoutBuffer += chunk.toString()
       stdoutBuffer = this.lineReader.consumeLines(stdoutBuffer, session, projectPath, invocation)
     })
     child.stderr?.on('data', (chunk: Buffer) => {
+      producedOutput = true
       stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-4_000)
     })
     child.on('error', (error) => void finish(error.message))
@@ -607,13 +617,37 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
       const failure = exitedCleanly
         ? undefined
-        : `Harness process exited with code ${code ?? 'unknown'}`
+        : this.describeTurnExit(code, signal, producedOutput, child.killed)
       const failureDetail = exitedCleanly || !stderrBuffer.trim() ? undefined : stderrBuffer.trim()
       void finish(failure, failureDetail)
     })
 
     if (invocation.input) child.stdin?.write(invocation.input)
     if (!invocation.keepInputOpen) child.stdin?.end()
+  }
+
+  /**
+   * The failure message for a turn process that did not exit cleanly.
+   *
+   * A signal death is where this app held evidence and threw it away. An
+   * executable the operating system will not run reaches the exit handler with
+   * no exit code and not one byte of output, because macOS kills an arm64
+   * binary whose code signature no longer matches its contents during exec,
+   * before the program starts. Reporting that as "exited with code unknown"
+   * left a broken harness install looking like an anonymous crash, so a signal
+   * death that produced nothing says what it is. A stop this app asked for
+   * (abort, steer, dispose) is never that, and `requestedStop` is what
+   * separates the two.
+   */
+  private describeTurnExit(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    producedOutput: boolean,
+    requestedStop: boolean
+  ): string {
+    const reason = describeHarnessExit('Harness process', code, signal)
+    if (!signal || producedOutput || requestedStop) return reason
+    return `${reason} before it produced any output, so ${this.name} could not start on this machine. Its install is the likeliest cause: reinstall it under Settings, Harnesses, or pick a different harness and retry.`
   }
 
   /**

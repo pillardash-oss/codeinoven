@@ -63,13 +63,30 @@
 
 <div class="space-y-1.5">
   {#if composeError}
-    <p
-      class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[0.5625rem] leading-relaxed text-warning"
+    <div
+      class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5"
       role="alert"
     >
-      <TriangleAlert size={11} class="mt-0.5 shrink-0" aria-hidden="true" />
-      <span>{composeError}</span>
-    </p>
+      <TriangleAlert size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <span class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning"
+        >{composeError}</span
+      >
+      <!--
+        The remedy for most compose failures is a different agent, and the
+        control that chooses one   harness, provider and model   is the picker
+        above. Opening it from the failure keeps the switch where the user is
+        already looking instead of sending them hunting for it.
+      -->
+      <button
+        type="button"
+        class="shrink-0 cursor-pointer text-[0.5625rem] font-medium text-warning underline underline-offset-2 hover:text-foreground"
+        title="Choose another harness, provider, or model for Compose PR"
+        aria-label="Choose another harness, provider, or model for Compose PR"
+        onclick={() => (composeOpen = true)}
+      >
+        Change model
+      </button>
+    </div>
   {/if}
   <div class="flex items-center justify-between gap-2">
     <p class="text-[0.625rem] text-muted">Let the agent draft the PR for you.</p>

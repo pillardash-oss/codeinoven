@@ -135,6 +135,8 @@ interface CacheEntry<T> {
 
 interface CaptureResult {
   code: number | null
+  /** Signal that ended the process, or null when it exited on its own. */
+  signal: NodeJS.Signals | null
   stdout: Buffer
   stderr: Buffer
 }
@@ -228,8 +230,8 @@ function captureInUtilityHost(
       clearTimeout(timer)
       reject(error)
     })
-    child.on('exit', (code) => {
-      finish({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+    child.on('exit', (code, signal) => {
+      finish({ code, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
     })
   })
 }
@@ -294,8 +296,8 @@ function capture(
       clearTimeout(timer)
       reject(error)
     })
-    child.on('exit', (code) => {
-      finish({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+    child.on('exit', (code, signal) => {
+      finish({ code, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
     })
   })
 }
@@ -806,11 +808,30 @@ export async function probeHarnessRuntime(
       ok: false,
       reason:
         (stderr || stdout).split(/\r?\n/u)[0]?.trim() ||
-        `Exited with code ${result.code ?? 'unknown'}`
+        describeHarnessExit('Harness probe', result.code, result.signal)
     }
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/**
+ * Why a harness process ended without a clean exit.
+ *
+ * A process stopped by a signal reports no exit code, so the `code ?? 'unknown'`
+ * this replaces described the app's most common harness failure   an executable
+ * the operating system refuses to run, which macOS kills with SIGKILL during
+ * exec   as if nothing had been observed at all. Naming the signal is the whole
+ * difference between "the harness install is broken" and an anonymous crash.
+ */
+export function describeHarnessExit(
+  command: string,
+  code: number | null,
+  signal: NodeJS.Signals | null
+): string {
+  if (typeof code === 'number') return `${command} exited with code ${code}`
+  if (signal) return `${command} was killed by ${signal}`
+  return `${command} exited without a status code`
 }
 
 /** Non-zero exit from a bounded harness command, carrying the captured output. */
@@ -856,7 +877,7 @@ export async function runHarnessCommand(
   if (result.code !== 0) {
     const detail =
       (stderr || stdout).split(/\r?\n/u)[0]?.trim() ||
-      `${command} exited with code ${result.code ?? 'unknown'}`
+      describeHarnessExit(command, result.code, result.signal)
     throw new HarnessCommandError(detail, result.code ?? undefined, stdout, stderr)
   }
   return { stdout, stderr }
