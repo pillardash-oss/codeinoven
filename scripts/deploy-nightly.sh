@@ -236,7 +236,10 @@ if [[ "$DEV_VERSION" == "$NIGHTLY_VERSION" && -n "$LAST_STABLE" && "$NIGHTLY_VER
     warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals last published stable v$LAST_STABLE — bumping dev to the next patch for the new stable cycle (stable $LAST_STABLE -> nightly $LAST_STABLE+1)..."
     bun scripts/bump-version.ts
     DEV_VERSION="$(pkg_version dev)"
-    git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
+    # `scripts/bump-version.ts` writes exactly one versioned file: the root
+    # package.json. Stage that path only, never a remembered list of paths that
+    # may no longer exist.
+    git add package.json
     git commit -m "chore: bump version for next stable cycle"
     git push origin dev
     ok "Bumped dev to $DEV_VERSION and pushed."

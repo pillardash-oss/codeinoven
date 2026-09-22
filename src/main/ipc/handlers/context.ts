@@ -65,7 +65,7 @@ export interface RegisterIpcHandlersOptions {
   hydrationHandlersRegistered?: boolean
   /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
   threadCreation?: ThreadCreationCoordinator
-  /** Optimistic thread-delete cleanup coordinator shared with remote RPC. */
+  /** Optimistic thread-delete cleanup coordinator shared with ChatEngine. */
   threadDeletion?: ThreadDeletionCoordinator
   /** Git-backed inspector shared with the managed worktree service. */
   worktreeInspector?: ManagedWorktreeInspector

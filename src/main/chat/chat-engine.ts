@@ -20804,7 +20804,7 @@ export class ChatEngine {
   }
 
   /**
-   * Broadcast an agent event to every renderer window and the remote peer.
+   * Broadcast an agent event to every renderer window.
    *
    * Provider token streams can emit hundreds of snapshots/deltas per second.
    * Renderers only need the newest part snapshot and the concatenated deltas

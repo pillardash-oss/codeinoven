@@ -8,7 +8,6 @@ import { installRendererErrorCapture } from './lib/system/renderer-logger'
 // the main-process durable log so client crashes are diagnosable on disk.
 installRendererErrorCapture()
 
-
 const notificationSound = new Audio(new URL('./alert.wav', document.baseURI).href)
 notificationSound.preload = 'auto'
 const attentionSound = new Audio(new URL('./alert-attention.wav', document.baseURI).href)

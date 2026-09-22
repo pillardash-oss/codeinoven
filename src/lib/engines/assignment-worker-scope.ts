@@ -41,7 +41,7 @@ export interface AssignmentWorkerScopeProvisioner {
 
 /**
  * The provisioner an engine falls back to when the app has not installed one,
- * which is the case for a bare engine in a test and for the remote RPC engine.
+ * which is the case for a bare engine in a test.
  *
  * It keeps the behaviour every Assignment had before per-worker scopes existed:
  * inherit the Assignment's own scope, or a named scope already chosen for the

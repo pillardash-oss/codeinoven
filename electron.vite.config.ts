@@ -127,13 +127,7 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          external: [
-            'electron',
-            'node-pty',
-            'better-sqlite3',
-            'electron-updater',
-            'werift'
-          ],
+          external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
           input: {
             index: resolve(__dirname, 'src/main/index.ts')
           }

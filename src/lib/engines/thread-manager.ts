@@ -978,7 +978,7 @@ export class ThreadManager {
   /**
    * Persist a thread's draft state: the edge-triggered `drafting` flag and the
    * debounce-committed draft content. Broadcasts a lightweight draft event so
-   * every renderer (and remote view) keeps its draft indicators in sync
+   * every renderer keeps its draft indicators in sync
    * without the expensive full-thread reconcile that `broadcastThreadUpdate`
    * triggers - commits land while the user is actively typing.
    */

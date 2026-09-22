@@ -151,7 +151,7 @@ export class UpdaterService {
     this.chatEngine = engine
   }
 
-  /** Register an extra activity source (terminal sessions, remote sessions, …). */
+  /** Register an extra activity source (for example live terminal sessions). */
   addActivitySource(source: SessionActivitySource): void {
     this.activitySources.push(source)
   }

@@ -65,18 +65,6 @@ export const invokeGitContract = {
     [input: { url: string; destination?: string }],
     { command: string; args: string[]; destination: string; repoName: string }
   >,
-  'remotePush:getPublicKey': {} as Contract<[], string>,
-  'remotePush:subscribe': {} as Contract<
-    [
-      subscription: {
-        endpoint: string
-        expirationTime: number | null
-        keys: { p256dh: string; auth: string }
-      }
-    ],
-    void
-  >,
-  'remotePush:unsubscribe': {} as Contract<[endpoint: string], void>,
   'git:status': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
   'git:diff': {} as Contract<
     [projectId: string, relativePath: string, staged: boolean, scopeBucketId?: string],
