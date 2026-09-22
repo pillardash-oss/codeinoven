@@ -23773,10 +23773,22 @@ export class ChatEngine {
           session.projectPath
         )
         if (session.activeTurnId !== turnId) return
+        // A turn whose project root changed mid-window (scope switch, worktree
+        // move) has no comparable baseline: drop the window instead of letting
+        // the cross-root comparison throw and kill the whole scan.
+        if (before.projectRoot !== after.projectRoot) {
+          Logger.dev('turn change window skipped: project root changed mid-window')
+          return
+        }
         let userMoved: Set<string> | undefined
         if (userBefore) {
           const userStart = await userBefore
-          if (userStart) {
+          // The terminal window's baseline is rooted in the terminal's own
+          // worktree. When the turn runs in another scope (or the project
+          // root), the two roots cannot be compared and the user window simply
+          // does not apply   those edits stay unattributed rather than being
+          // claimed by either side.
+          if (userStart && userStart.projectRoot === after.projectRoot) {
             userMoved = new Set(
               this.checkpointManager.diffFingerprints(session.projectId, userStart, after)
             )
