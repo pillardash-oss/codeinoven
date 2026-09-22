@@ -529,8 +529,8 @@ export class UpdaterService {
     // Mirrors AppHeader's working-activity badges (workingThreadCounts):
     // only sessions with `sessionStatuses === 'working'` count. Idle PTYs,
     // `waiting` sessions, pending permissions/questions, compactions,
-    // brainstorm/loop runs and remote blockedQuit do not pulse the header
-    // and must not block "Restart to update".
+    // brainstorm/loop runs do not pulse the header and must not block
+    // "Restart to update".
     const engine = this.chatEngine as unknown as { workingSessionCount?: () => number } | null
     if (engine?.workingSessionCount) return engine.workingSessionCount()
     let count = this.chatEngine?.activeSessionCount() ?? 0
