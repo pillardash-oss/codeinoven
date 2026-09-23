@@ -4,6 +4,7 @@
     applyCodeFenceOnEnter,
     applyEmptyPairCodeRule,
     applyMarkdownInputRule,
+    exitEmptyListItemOnEnter,
     formatRichSelection,
     insertMarkdownLineBreak,
     insertPlainText,
@@ -551,13 +552,23 @@
         return
       }
 
-      // ``` fences materialize on Enter, not while typing: a block whose text is
-      // ```lang, ```content``` or ```lang\ncontent``` becomes a code block here.
+      // Two Enter-time block rewrites that must not fight the browser's default
+      // insert: ``` fences materialize here rather than while typing (a block
+      // whose text is ```lang, ```content``` or ```lang\ncontent``` becomes a
+      // code block), and Enter on an empty list item leaves the list instead of
+      // appending another empty item.
       if (!event.shiftKey) {
         const historyEntry = history.captureEntry()
         if (applyCodeFenceOnEnter(editor)) {
           event.preventDefault()
           emitEditorValue(true)
+          history.commit(historyEntry)
+          publishCaretText()
+          return
+        }
+        if (exitEmptyListItemOnEnter(editor)) {
+          event.preventDefault()
+          emitEditorValue()
           history.commit(historyEntry)
           publishCaretText()
           return
