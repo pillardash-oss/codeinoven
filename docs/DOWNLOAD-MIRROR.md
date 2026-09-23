@@ -174,8 +174,13 @@ automatic mirror runs are **skipped** instead of failing every release.
 
 ## Publishing
 
-`.github/workflows/download-mirror.yml` runs automatically when a release is published
-(stable and nightly), and can be run by hand to backfill:
+`.github/workflows/download-mirror.yml` is dispatched by the release workflows, and can be run
+by hand to backfill. It also listens for `release: published`, but that event only fires for a
+release published by hand or by a token other than the default one: GitHub does not start a
+workflow from an event a `GITHUB_TOKEN` caused, and both `nightly.yml` and `release.yml` publish
+their releases with `GITHUB_TOKEN`. Each of them therefore ends by dispatching this workflow,
+because `workflow_dispatch` is the documented exception to that rule (it needs `actions: write`
+on the token).
 
 ```bash
 # Mirror an already-published release (workflow_dispatch inputs: tag, channel, keep,
