@@ -1100,11 +1100,12 @@ export class ChatEngine {
    */
   private assistantAgentsResolver: ((task: Thread) => RoutineAgents | undefined) | null = null
   /**
-   * Records that an assistant task's run turn settled, so the routine can note
-   * its last successful run. Attached by the bootstrap, which owns the routine
-   * manager; absent means run outcomes are not tracked.
+   * Records that an assistant task's turn settled with a final status, so the
+   * routine can note its last successful run when the run truly completes.
+   * Attached by the bootstrap, which owns the routine manager; absent means run
+   * outcomes are not tracked.
    */
-  private assistantRunSettled: ((threadId: string, success: boolean) => void) | null = null
+  private assistantRunSettled: ((threadId: string, status: ThreadStatus) => void) | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -21492,12 +21493,12 @@ export class ChatEngine {
   }
 
   /**
-   * Wire the assistant run-outcome recorder. Fired when an internal-origin turn
-   * on an assistant task settles, so the routine manager can stamp the task's
-   * last successful run.
+   * Wire the assistant run-outcome recorder. Fired when a turn on an assistant
+   * task settles with its final thread status, so the routine manager can stamp
+   * the task's last successful run once the run actually completes.
    */
   attachAssistantRunSettledRecorder(
-    recorder: ((threadId: string, success: boolean) => void) | null
+    recorder: ((threadId: string, status: ThreadStatus) => void) | null
   ): void {
     this.assistantRunSettled = recorder
   }
@@ -23065,7 +23066,7 @@ export class ChatEngine {
       // successful run. Harmless for a user's own chat: the scheduler ignores a
       // thread no run was dispatched on.
       if (this.assistantRunSettled && finishedThread && isAssistantThread(finishedThread)) {
-        this.assistantRunSettled(finishedThread.id, finalStatus === 'completed')
+        this.assistantRunSettled(finishedThread.id, finalStatus)
       }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {

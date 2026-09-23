@@ -6,7 +6,8 @@ import {
   scheduleIsActive,
   type MissedRun,
   type Routine,
-  type Thread
+  type Thread,
+  type ThreadStatus
 } from '../../lib/types'
 import { MissedRunStore } from './missed-run-store'
 
@@ -144,17 +145,25 @@ export class RoutineSchedulerService {
   }
 
   /**
-   * Report that a run's turn settled on a task. Only tasks the scheduler
-   * actually dispatched a run on are stamped, so a user's own chat on a task
-   * never counts as a run. Failed turns are dropped: they surface in the Issues
-   * tab, and `lastSuccessAt` keeps pointing at the last good run.
+   * Report that a dispatched run's turn settled on a task with a final status.
+   * A `completed` turn records the last successful run and releases the task;
+   * a `failed` or `interrupted` turn releases it without a success stamp; an
+   * `awaiting_approval` or `working-paused` turn is left tracked, because the
+   * run is still in progress (waiting on the user or a provider reset) and its
+   * eventual completion must still count. A task the scheduler never dispatched
+   * a run on is ignored, so a user's own chat never counts as a run.
    */
-  settleRun(threadId: string, success: boolean): void {
+  settleRun(threadId: string, status: ThreadStatus): void {
     if (!this.inFlightRuns.has(threadId)) return
-    this.inFlightRuns.delete(threadId)
-    if (!success) return
-    const updated = this.deps.routines.markTaskRunSuccess(threadId, this.now())
-    if (updated) this.deps.onTaskChanged?.(updated)
+    if (status === 'completed') {
+      this.inFlightRuns.delete(threadId)
+      const updated = this.deps.routines.markTaskRunSuccess(threadId, this.now())
+      if (updated) this.deps.onTaskChanged?.(updated)
+      return
+    }
+    if (status === 'failed' || status === 'interrupted') {
+      this.inFlightRuns.delete(threadId)
+    }
   }
 
   /**

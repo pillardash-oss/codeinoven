@@ -234,11 +234,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.attachAssistantAgentsResolver((task) =>
     state.routineManager?.resolveTaskAgents(task)
   )
-  // A finished assistant run turn stamps the task's last successful run. The
-  // scheduler ignores a thread it did not dispatch a run on, so a user's own
-  // chat never counts as a run, and failures are surfaced through Issues.
-  state.chatEngine.attachAssistantRunSettledRecorder((threadId, success) => {
-    state.routineScheduler?.settleRun(threadId, success)
+  // A settled turn on an assistant task is reported to the routine scheduler,
+  // which knows whether it dispatched a run on that task and stamps the last
+  // successful run once the run's turn actually completes.
+  state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
+    state.routineScheduler?.settleRun(threadId, status)
   })
   state.speechService = new SpeechService(
     {
