@@ -16,9 +16,9 @@
     providers: ProviderCatalog[]
     /** Project whose harness catalog the pickers read. */
     projectId?: string | null
-    /** Fallback slots rendered before the user adds any. */
+    /** Fallback rows shown before the user adds or removes any. */
     minFallbacks?: number
-    /** How many fallbacks the user may add. */
+    /** Most fallback rows the picker offers. */
     maxFallbacks?: number
     disabled?: boolean
     /** Fires on every change with the full, already-updated model set. */
@@ -50,10 +50,15 @@
     }
   )
 
-  /** Extra empty fallback rows the user asked for; empty rows are never persisted. */
-  let wantedSlots = $state(0)
+  /**
+   * How many fallback rows the picker shows: the count the user last set, or
+   * `null` until they touch the list, in which case the `minFallbacks` prompt
+   * decides. It never drops below the fallbacks actually set. Empty rows are
+   * never persisted.
+   */
+  let wantedSlots = $state<number | null>(null)
   const fallbackSlots = $derived(
-    Math.min(maxFallbacks, Math.max(minFallbacks, wantedSlots, draft.fallbacks.length))
+    Math.max(wantedSlots ?? Math.min(minFallbacks, maxFallbacks), draft.fallbacks.length)
   )
   const canAddFallback = $derived(fallbackSlots < maxFallbacks)
   const filledFallbacks = $derived(
@@ -100,9 +105,15 @@
   }
 
   function removeFallback(index: number): void {
+    const fallbacks = draft.fallbacks
+      .filter((_, position) => position !== index)
+      .map((entry) => ({ ...entry }))
+    // The row count shrinks with the removal, so a removed row really goes away
+    // instead of leaving a permanent empty slot behind.
+    wantedSlots = Math.max(fallbacks.length, fallbackSlots - 1)
     commit({
-      ...(draft.primary ? { primary: draft.primary } : {}),
-      fallbacks: draft.fallbacks.filter((_, position) => position !== index)
+      ...(draft.primary ? { primary: { ...draft.primary } } : {}),
+      fallbacks
     })
   }
 
@@ -175,12 +186,14 @@
     <span class="text-[0.6875rem] font-medium text-muted">Fallback models</span>
     {#if filledFallbacks.length < minFallbacks}
       <p class="text-[0.625rem] leading-relaxed text-dimmed">
-        Add {minFallbacks} fallbacks so a model that fails or hits its limit never stops this
-        routine.
+        Add {minFallbacks} fallbacks so a model that fails or hits its limit never stops this routine.
       </p>
     {/if}
     {#each Array.from({ length: fallbackSlots }) as _slot, index (index)}
       {@const fallback = draft.fallbacks[index]}
+      {@const removeLabel = fallback?.modelId
+        ? `Remove fallback ${index + 1}`
+        : `Remove empty fallback slot ${index + 1}`}
       <div class="flex items-center gap-1.5">
         <div class="min-w-0 flex-1">
           <ModelPicker
@@ -224,18 +237,16 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         </div>
-        {#if fallback?.modelId}
-          <button
-            type="button"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-            title="Remove fallback {index + 1}"
-            aria-label="Remove fallback {index + 1}"
-            {disabled}
-            onclick={() => removeFallback(index)}
-          >
-            <X size={13} strokeWidth={1.8} />
-          </button>
-        {/if}
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          title={removeLabel}
+          aria-label={removeLabel}
+          {disabled}
+          onclick={() => removeFallback(index)}
+        >
+          <X size={13} strokeWidth={1.8} />
+        </button>
       </div>
     {/each}
     {#if canAddFallback}

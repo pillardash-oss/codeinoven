@@ -331,7 +331,8 @@ read-only where the app must own the value and editable where the user must.
 - **Agents** — one primary model and any number of fallbacks, each picked with
   the app's `ModelPicker` so thinking level and account stay visible
   (`RoutineAgentPicker.svelte`). Creating a routine prompts for a primary and two
-  fallbacks; more can be added here. The primary is prefilled with the model the
+  fallbacks; more can be added here, and any row can be removed again, so a set
+  can shrink back to the primary alone. The primary is prefilled with the model the
   user is already working on (`currentAssistantModelSelection` in the
   workspace), and `withDefaultRoutinePrimary` (`src/lib/routine-agents.ts`)
   applies the same fallback when the dialog is skipped, so a routine never blocks
