@@ -6,7 +6,6 @@
     ChevronRight,
     Gauge,
     Maximize2,
-    Minimize2,
     Pause,
     Pencil,
     Play,
@@ -17,8 +16,8 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
+  import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -271,6 +270,19 @@
 
   const issueCount = $derived(missedRuns.length + runIssues.length)
 
+  /**
+   * The panel's sections as the full screen strip's tabs. The strip carries no
+   * badge slot, so the Issues tab puts its count in the title rather than
+   * reserving a second one next to the inline header's badge.
+   */
+  const fullscreenTabs = $derived(
+    visibleTabs.map((entry) => ({
+      id: entry.id,
+      title:
+        entry.id === 'issues' && issueCount > 0 ? `${entry.label} · ${issueCount}` : entry.label
+    }))
+  )
+
   // ─── Run history ──────────────────────────────────────────────────────────
 
   /** The run panel is routine-scoped; a routine-less task reports on itself. */
@@ -336,7 +348,7 @@
   })
 </script>
 
-{#snippet panelHeader(isFullscreen: boolean)}
+{#snippet panelHeader()}
   <div class="flex h-9 shrink-0 items-stretch border-b border-border pr-1">
     <div
       class="flex min-w-0 flex-1 items-stretch overflow-x-auto"
@@ -373,15 +385,11 @@
     <button
       type="button"
       class="my-1 flex w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title={isFullscreen ? 'Exit full screen' : 'Open in full screen'}
-      aria-label={isFullscreen ? 'Exit full screen' : 'Open in full screen'}
-      onclick={() => (fullscreen = !isFullscreen)}
+      title="Open in full screen"
+      aria-label="Open in full screen"
+      onclick={() => (fullscreen = true)}
     >
-      {#if isFullscreen}
-        <Minimize2 size={13} strokeWidth={1.8} />
-      {:else}
-        <Maximize2 size={13} strokeWidth={1.8} />
-      {/if}
+      <Maximize2 size={13} strokeWidth={1.8} />
     </button>
   </div>
 {/snippet}
@@ -752,23 +760,28 @@
 
 {#if !fullscreen}
   <div class="flex h-full min-h-0 flex-col" aria-label="Assistant routine panel">
-    {@render panelHeader(false)}
+    {@render panelHeader()}
     {@render panelContent()}
   </div>
 {/if}
 
-<Modal
-  open={fullscreen}
-  title="Assistant routine"
-  placement="fullscreen"
-  chrome={false}
-  panelClass="bg-app"
-  onClose={() => (fullscreen = false)}
->
-  <div class="flex h-full min-h-0 flex-col">
-    {@render panelHeader(true)}
+{#if fullscreen}
+  <!--
+    The full screen render reuses the app's full screen surface, so it shares the
+    draggable title bar, the traffic-light inset and the canonical minimize with
+    the browser, terminal and pull request reader. The panel's own sections are
+    the strip's tabs, which is why this surface passes neither `onNew` nor
+    `onCloseTab`: a section is switched, not opened or closed.
+  -->
+  <FullscreenPanelDialog
+    tabs={fullscreenTabs}
+    activeTabId={activeTab}
+    minimizeLabel="Exit full screen"
+    onSelect={(id) => (panelTab = id as AssistantPanelTab)}
+    onMinimize={() => (fullscreen = false)}
+  >
     <div class="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
       {@render panelContent()}
     </div>
-  </div>
-</Modal>
+  </FullscreenPanelDialog>
+{/if}

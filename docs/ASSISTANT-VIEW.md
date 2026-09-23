@@ -285,8 +285,13 @@ prompt"; the user-facing term is how-to.
 ## Assistant panel
 
 `AssistantPanel.svelte` is the routine's whole surface, docked in the right
-context sidebar and openable full screen from its own header button. It is
-read-only where the app must own the value and editable where the user must.
+context sidebar and openable full screen from its own header button. The full
+screen render reuses the app's full screen surface
+(`src/renderer/lib/components/workspace/FullscreenPanelDialog.svelte`), so it
+shares the draggable title bar, the traffic-light inset and the canonical
+minimize with the browser, terminal and pull request reader, and the panel's
+sections become that strip's tabs. It is read-only where the app must own the
+value and editable where the user must.
 
 - **All** — pause or resume the routine, plus one summary row per section with
   the state in one line and a **More** button that opens that tab. An amber icon
