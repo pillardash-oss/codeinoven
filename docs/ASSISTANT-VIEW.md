@@ -386,15 +386,26 @@ prompt"; the user-facing term is how-to.
   instruction set, and a turn on an assistant task whose routine already has its
   how-to carries the run contract (`routineRunContext` in
   `src/lib/routine-run.ts`): when something the routine needs is not set up, the
-  agent supplies it itself with `cio_util_find`/`cio_util_manage`, collects
-  credentials with `cio_ask_secret`, and asks the user for anything else with
-  `cio_ask_user`. Pointing the user at the Connections tab is the last resort,
-  not the answer. `sendPrompt` grants the run contract (`CIO_UTILITY_RUN_PROMPT`)
-  instead of the reuse contract, so installing is in scope for the run, and
-  `rearmSteerUtilities` keeps the grant for a steer landing mid-run. The app's own
-  next-steps message sent right after a save is excluded
-  (`isRoutineNextStepsPrompt`), so it stays a no-tool informational turn.
-- The `install_bundle` argument is documented in the tool schema *and* accepted
+  agent searches the library with `cio_util_find`, and when the library has
+  nothing it goes online to find the official source (its own web tools, or a
+  web/search capability activated with `cio_util_init`), installs what it finds
+  with `cio_util_manage`, collects credentials with `cio_ask_secret`, and asks
+  the user for anything else with `cio_ask_user`. Pointing the user at the
+  Connections tab is the last resort, not the answer.
+- The contract is a property of the thread, so it applies to every turn on the
+  task, not just the internal run: a scheduled run, a missed-run **Run now**, and
+  a user follow-up on the same thread all carry it and the run grant
+  (`CIO_UTILITY_RUN_PROMPT`), so installing is in scope however the turn starts.
+  `rearmSteerUtilities` keeps the grant for a steer landing mid-run. The app's
+  own next-steps message sent right after a save is excluded
+  (`isRoutineNextStepsPrompt`), so it stays a no-tool informational turn. Gating
+  the contract on an internal origin was a real bug: a follow-up got only the
+  reuse contract, which reserves installing, and the assistant dead-ended on
+  "connect it yourself" instead of supplying the connection.
+- When `cio_util_find` finds no direct match it says so and points at the
+  research path in its fallback message, so a run that has exhausted the library
+  is told it may go online rather than concluding the capability is impossible.
+- The `install_bundle` argument is documented in the tool schema _and_ accepted
   tolerantly. The canonical shape is
   `{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}`:
   `utilities` is the array, each entry's only required key is `definition`, and

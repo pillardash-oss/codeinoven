@@ -1148,7 +1148,7 @@ export class UtilityOrchestrationService {
       ...(fallback
         ? {
             message:
-              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search.'
+              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search. If none of them fits, research the official source online (your own web tools, or a web/search capability from this library) before concluding the capability cannot be supplied.'
           }
         : {})
     }

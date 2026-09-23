@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  ROUTINE_NEXT_STEPS_PROMPT,
-  isRoutineNextStepsPrompt
-} from '$shared/assistant-next-steps'
+import { ROUTINE_NEXT_STEPS_PROMPT, isRoutineNextStepsPrompt } from '$shared/assistant-next-steps'
 import { routineRunContext } from '$shared/routine-run'
 import type { RoutineConnection } from '$shared/types'
 
@@ -19,7 +16,7 @@ describe('routineRunContext', () => {
   it('names the routine and points at the how-to as the instruction set', () => {
     const context = routineRunContext({ name: 'Slack digest', connections: [] })
     expect(context).toContain('"Slack digest"')
-    expect(context).toContain('The how-to above is your instruction set')
+    expect(context).toContain('Its how-to is your instruction set')
   })
 
   it('tells the agent to supply a missing connection itself, with the gateway tools', () => {
@@ -31,11 +28,24 @@ describe('routineRunContext', () => {
     expect(context).toContain('cio_ask_user')
   })
 
+  it('tells the agent to go online when the library has nothing', () => {
+    const context = routineRunContext({ name: 'Slack digest', connections: [] })
+    expect(context).toContain('go online')
+    expect(context).toContain('cio_util_init')
+    expect(context).toContain('official MCP endpoint')
+  })
+
+  it('routes credentials through cio_ask_secret and forbids pasting a secret in chat', () => {
+    const context = routineRunContext({ name: 'Slack digest', connections: [] })
+    expect(context).toContain('environment_variable')
+    expect(context).toContain('Never ask the user to paste a secret into chat')
+  })
+
   it('frames the Connections tab as the last resort, never the first answer', () => {
     const context = routineRunContext({ name: 'Slack digest', connections: [] })
     expect(context).toContain('Only when you genuinely cannot install it yourself')
     expect(context).toContain('Connections tab')
-    expect(context).toContain('Never end a run by telling the user to connect something')
+    expect(context).toContain('Never end a turn by telling the user to connect something')
   })
 
   it('lists the routine connections with their required flag and setup note', () => {

@@ -3095,12 +3095,13 @@ export class ChatEngine {
     brainstormInterview = false,
     explicitUtilityInvocation = false,
     /**
-     * A run of a saved routine. It carries the run grant (management is in
-     * scope) rather than the reuse contract, which reserves installing for an
-     * explicit request. Mutually exclusive with `explicitUtilityInvocation`,
-     * which wins when the user typed @cio-utility on the same turn.
+     * A turn on a saved routine's task   a scheduled run or a user follow-up on
+     * the same thread. It carries the run grant (management is in scope) rather
+     * than the reuse contract, which reserves installing for an explicit
+     * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
+     * when the user typed @cio-utility on the same turn.
      */
-    assistantRunTurn = false
+    assistantRoutineTurn = false
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3176,7 +3177,7 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : assistantRunTurn
+        : assistantRoutineTurn
           ? CIO_UTILITY_RUN_PROMPT
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
@@ -7499,8 +7500,12 @@ export class ChatEngine {
     const routineRun = this.routineRunHiddenContext(targetThread)
     const assistantTaskTurn =
       routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
-    const assistantRunTurn = assistantTaskTurn && origin === 'internal'
-    if (assistantRunTurn && routineRun) {
+    // The contract belongs to the thread, not to one send path. A scheduled run
+    // and a user follow-up on the same task are both the routine's assistant, so
+    // both carry the self-provisioning contract and the run grant; gating it on
+    // an internal origin left a follow-up with only the reuse contract, which
+    // reserves installing and dead-ends on "connect it yourself".
+    if (assistantTaskTurn && routineRun) {
       hiddenContext = [hiddenContext, routineRun].filter(Boolean).join('\n\n')
     }
     if (origin === 'user') {
@@ -8065,7 +8070,7 @@ export class ChatEngine {
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantRunTurn
+      assistantTaskTurn
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
