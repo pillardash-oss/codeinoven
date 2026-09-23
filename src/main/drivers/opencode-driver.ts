@@ -38,8 +38,8 @@ import { opencodeNativeProviderIds } from '../agents/native-provider-config-serv
 import { SecretVault } from '../storage/secret-vault'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
+import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
-import { mapOpenCodeAccountUsage, OPENCODE_ACCOUNT_USAGE_ENDPOINT } from './opencode-provider-usage'
 import { mapOpenCodeEvent } from './opencode/opencode-events'
 import { errorFromResponse } from './opencode/opencode-issues'
 import { mapOpenCodeMessage } from './opencode/opencode-messages'
@@ -50,12 +50,7 @@ import {
   narrowOpenCodeRuntimeForProvider,
   prepareOpenCodeUtilityRuntime
 } from './opencode/opencode-utility-runtime'
-import {
-  apiKeyFromOpenCodeAuth,
-  openCodeAuthPaths,
-  recordValue,
-  stringValue
-} from './opencode/opencode-values'
+import { openCodeAuthPaths, recordValue, stringValue } from './opencode/opencode-values'
 
 export { mapOpenCodeAccountUsage } from './opencode-provider-usage'
 export { mapOpenCodeEvent } from './opencode/opencode-events'
@@ -64,7 +59,6 @@ export { opencodePermissionTools, parseOpenCodeModels } from './opencode/opencod
 
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
-const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
 
 const SSE_RECONNECT_MS = 1000
 const TITLE_GENERATION_TIMEOUT_MS = 180_000
@@ -886,7 +880,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
    */
   private async authCredentialIds(): Promise<Set<string> | null> {
     const environment = this.buildEnv()
-    for (const path of openCodeAuthPaths(environment)) {
+    for (const path of openCodeAuthPaths(environment, { scopedToDataHome: true })) {
       let raw: string
       try {
         raw = await readFile(path, 'utf8')
@@ -970,59 +964,13 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
     void _projectPath
     if (this.accountUsageRequest) return this.accountUsageRequest
-    const request = this.fetchAccountUsage()
+    const request = readOpenCodeAccountUsage(this.buildEnv(), 'v1')
     this.accountUsageRequest = request
     try {
       return await request
     } finally {
       if (this.accountUsageRequest === request) this.accountUsageRequest = null
     }
-  }
-
-  private async fetchAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
-    try {
-      const apiKey = await this.readOpenCodeApiKey()
-      if (!apiKey) return null
-      const response = await fetch(OPENCODE_ACCOUNT_USAGE_ENDPOINT, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(ACCOUNT_USAGE_TIMEOUT_MS)
-      })
-      // A valid Zen key may not belong to an OpenCode Go subscription. Treat
-      // both missing access and missing entitlement as unsupported telemetry.
-      if (response.status === 401 || response.status === 403) return null
-      if (!response.ok) throw new Error(`OpenCode usage request failed (${response.status})`)
-      const rateLimits = mapOpenCodeAccountUsage((await response.json()) as unknown)
-      return rateLimits.length > 0 ? { rateLimits } : null
-    } catch (error) {
-      Logger.dev('OpenCode on-demand account usage refresh unavailable:', error)
-      return null
-    }
-  }
-
-  private async readOpenCodeApiKey(): Promise<string | undefined> {
-    const environment = this.buildEnv()
-    const environmentKey = stringValue(environment['OPENCODE_API_KEY'])
-    if (environmentKey) return environmentKey
-
-    const authContent = stringValue(environment['OPENCODE_AUTH_CONTENT'])
-    if (authContent) {
-      try {
-        const key = apiKeyFromOpenCodeAuth(JSON.parse(authContent) as unknown)
-        if (key) return key
-      } catch {
-        // Fall back to OpenCode's persisted auth file.
-      }
-    }
-
-    for (const path of openCodeAuthPaths(environment)) {
-      try {
-        const key = apiKeyFromOpenCodeAuth(JSON.parse(await readFile(path, 'utf8')) as unknown)
-        if (key) return key
-      } catch {
-        // OpenCode may not use this platform-specific data path.
-      }
-    }
-    return undefined
   }
 
   async runCommand(

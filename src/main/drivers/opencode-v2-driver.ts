@@ -29,6 +29,7 @@ import type {
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
+import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { runHarnessCommand } from './harness-runtime'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { SecretVault } from '../storage/secret-vault'
@@ -762,12 +763,23 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   /**
-   * Read the account's quota telemetry. V2 keeps credentials in its own SQLite
-   * store and exposes no quota surface, and the V1 usage endpoint is V1-only, so
-   * there is nothing honest to report.
+   * Read the account's quota telemetry. The usage endpoint is account-wide and
+   * version-agnostic; V2 simply keeps its key in SQLite instead of `auth.json`,
+   * so the shared reader is pointed at the V2 credential store. A key that is
+   * missing or has no Go subscription reports null and lets OpenUsage answer.
    */
-  async readAccountUsage(_projectPath: string): Promise<null> {
-    return null
+  async readAccountUsage(
+    _projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    void _projectPath
+    if (this.accountUsageRequest) return this.accountUsageRequest
+    const request = readOpenCodeAccountUsage(this.buildEnv(), 'v2')
+    this.accountUsageRequest = request
+    try {
+      return await request
+    } finally {
+      if (this.accountUsageRequest === request) this.accountUsageRequest = null
+    }
   }
 
   dispose(): void {

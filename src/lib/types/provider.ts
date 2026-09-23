@@ -126,6 +126,12 @@ export interface HarnessAccount {
   providerName: string
   label: string
   containerKind: 'legacy-default' | 'managed'
+  /**
+   * Identity of the credential this legacy row mirrors (a harness credential
+   * id or slug). One provider can hold several credentials, and this is what
+   * keeps their mirrored rows apart across reconciliations.
+   */
+  sourceId?: string
   /** Marks the user's preferred account for this harness+provider. When unset,
    *  the earliest created account acts as the default. */
   isDefault?: boolean

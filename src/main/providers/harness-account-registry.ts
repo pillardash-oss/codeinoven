@@ -22,8 +22,13 @@ export function legacyHarnessAccountId(harnessId: string): string {
   return `${harnessId}.default`
 }
 
-function additionalLegacyAccountId(harnessId: string, providerId: string): string {
-  const digest = createHash('sha256').update(providerId).digest('hex').slice(0, 16)
+function additionalLegacyAccountId(
+  harnessId: string,
+  providerId: string,
+  sourceId?: string
+): string {
+  const identity = sourceId ? `${providerId}\0${sourceId}` : providerId
+  const digest = createHash('sha256').update(identity).digest('hex').slice(0, 16)
   return `${harnessId}.default.${digest}`
 }
 
@@ -65,15 +70,39 @@ export class HarnessAccountRegistry {
       const labels = new Set(managed.map((account) => account.label.toLocaleLowerCase('en-US')))
       const now = Date.now()
       const legacy: HarnessAccount[] = []
+      // Each prior row may be claimed by one discovered credential. Consuming it
+      // keeps a second credential on the same provider from reusing the first
+      // one's id (V2 reports one account per connection, not per provider).
+      const availablePrior = [...priorLegacy]
       for (const [index, discovered] of active.entries()) {
-        const existing = priorLegacy.find((account) => account.providerId === discovered.providerId)
+        const sourceId = discovered.id
+        let matchIndex = sourceId
+          ? availablePrior.findIndex((account) => account.sourceId === sourceId)
+          : -1
+        if (matchIndex < 0) {
+          matchIndex = availablePrior.findIndex(
+            (account) => account.providerId === discovered.providerId
+          )
+        }
+        const existing = matchIndex >= 0 ? availablePrior.splice(matchIndex, 1)[0] : undefined
         const mayUseHarnessDefault = active.length === 1
-        const id =
-          existing && (mayUseHarnessDefault || existing.id !== legacyHarnessAccountId(harnessId))
-            ? existing.id
-            : mayUseHarnessDefault && !occupiedIds.has(legacyHarnessAccountId(harnessId))
-              ? legacyHarnessAccountId(harnessId)
-              : additionalLegacyAccountId(harnessId, discovered.providerId)
+        let id: string
+        if (
+          existing &&
+          (mayUseHarnessDefault || existing.id !== legacyHarnessAccountId(harnessId))
+        ) {
+          id = existing.id
+        } else if (mayUseHarnessDefault && !occupiedIds.has(legacyHarnessAccountId(harnessId))) {
+          id = legacyHarnessAccountId(harnessId)
+        } else {
+          id = additionalLegacyAccountId(harnessId, discovered.providerId, sourceId)
+          // A provider that appears twice still needs two distinct ids.
+          let salt = 0
+          while (occupiedIds.has(id)) {
+            salt += 1
+            id = additionalLegacyAccountId(harnessId, discovered.providerId, `${sourceId}\0${salt}`)
+          }
+        }
         occupiedIds.add(id)
         const providerName = discovered.label || discovered.providerId
         const existingLabelWasGenerated =
@@ -98,6 +127,7 @@ export class HarnessAccountRegistry {
           providerName,
           label,
           containerKind: 'legacy-default',
+          ...(sourceId ? { sourceId } : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })

@@ -49,17 +49,32 @@ export function apiKeyFromOpenCodeAuth(value: unknown): string | undefined {
   return undefined
 }
 
-export function openCodeAuthPaths(environment: NodeJS.ProcessEnv): string[] {
+export function openCodeAuthPaths(
+  environment: NodeJS.ProcessEnv,
+  options: {
+    /**
+     * Return only the credential store the environment points at. A managed
+     * account container sets `XDG_DATA_HOME`, and reading past it would let the
+     * account see (and report) the user's default-home credentials.
+     */
+    scopedToDataHome?: boolean
+  } = {}
+): string[] {
   const home = homedir()
+  const scoped = options.scopedToDataHome === true && Boolean(environment['XDG_DATA_HOME'])
   return [
     ...(environment['XDG_DATA_HOME']
       ? [join(environment['XDG_DATA_HOME'], 'opencode', 'auth.json')]
       : []),
-    ...(environment['LOCALAPPDATA']
+    ...(!scoped && environment['LOCALAPPDATA']
       ? [join(environment['LOCALAPPDATA'], 'opencode', 'auth.json')]
       : []),
-    join(home, '.local', 'share', 'opencode', 'auth.json'),
-    join(home, '.opencode', 'data', 'auth.json')
+    ...(scoped
+      ? []
+      : [
+          join(home, '.local', 'share', 'opencode', 'auth.json'),
+          join(home, '.opencode', 'data', 'auth.json')
+        ])
   ].filter((path, index, paths) => paths.indexOf(path) === index)
 }
 

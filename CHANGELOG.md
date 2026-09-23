@@ -30,17 +30,24 @@ All notable changes to CodeInOven are documented here. This project follows
   down when they end, and a delegated sub-agent is surfaced as a child-agent
   card (V2 announces the child session with a non-null `parentID`).
   `opencode auth list/login/logout` backs the provider account UI at both
-  version lines.
+  version lines, and a V2 integration that holds several keys reports each
+  connection as its own account. CodeInOven's account containers still isolate
+  V2 completely: the container environment relocates V2's config and its SQLite
+  store, so each account keeps its own credentials and state.
 
   Custom base-URL providers are claimed for the single entry. V2 cannot restrict
   `read` in a session permission ruleset (its own provider entitlement is
   evaluated through the same ruleset), so a restricted V2 turn denies everything
   that mutates instead of every tool. Token and cost usage is read from the V2
-  session stats and message payloads; account-level rate limits and monthly
-  budgets live only in the hosted Console API behind a service-account key, so
-  they are not claimed as a local-server capability. Structured output is not
-  claimed for either line (V2 has no JSON-schema mode, and V1 deliberately keeps
-  deterministic JSON flows off its history endpoint).
+  session stats and message payloads, and the account's Go quota windows are read
+  from OpenCode's own usage API (`https://opencode.ai/zen/go/v1/usage`) for
+  whichever line is installed: V1 from its `auth.json`, V2 from its SQLite
+  credential store. The local **OpenUsage** integration remains the fallback that
+  answers the same question for any provider, so account quota is a local
+  capability. Only the hosted Console workspace budgets and CSV export stay a
+  separate service-account product. Structured output is not claimed for either
+  line (V2 has no JSON-schema mode, and V1 deliberately keeps deterministic JSON
+  flows off its history endpoint).
 
 - An end-to-end suite for the OpenCode harness is committed and gated on
   `OPENCODE_E2E_BINARY`: with a real install it proves the app selects the

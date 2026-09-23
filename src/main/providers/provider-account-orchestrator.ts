@@ -6,7 +6,10 @@ import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import { isOpenCodeV2Version } from '../../lib/opencode-version'
-import { cachedOpenCodeInstallation } from '../agents/opencode-installation'
+import {
+  cachedOpenCodeInstallation,
+  detectOpenCodeInstallation
+} from '../agents/opencode-installation'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -149,14 +152,15 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
 /**
  * Read `opencode auth list --format json` (V2's credential store).
  *
- * V2's credential list has not been observed with a populated store, so the
- * parser is deliberately tolerant: it accepts the array form the empty store
- * prints, the `{credentials|accounts: [...]}` container form, and per-entry
- * objects whose identity fields may be named `integrationID`, `providerID`,
- * `provider`, or `id`. Anything it cannot read reports `unknown` rather than
- * claiming the account is signed out.
+ * The observed shape is an array of integrations, each carrying a
+ * `connections` array; one connection is one stored credential, so an
+ * integration that holds two keys reports two accounts. `type: 'env'`
+ * connections are not stored credentials and are skipped, matching V1's
+ * `auth list`. The parser stays tolerant of the `{credentials|accounts: [...]}`
+ * container form and of a flat per-credential entry, and anything it cannot
+ * read reports `unknown` rather than claiming the account is signed out.
  */
-function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthStatus {
+export function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthStatus {
   const clean = stripAnsi(output).trim()
   if (clean.length === 0) {
     return {
@@ -175,36 +179,60 @@ function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthS
       detail: 'OpenCode V2 did not report credentials as JSON.'
     }
   }
-  const container = isRecord(parsed) ? parsed : undefined
-  const entries = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(container?.['credentials'])
-      ? (container['credentials'] as unknown[])
-      : Array.isArray(container?.['accounts'])
-        ? (container['accounts'] as unknown[])
-        : []
-  const accounts: HarnessAuthAccount[] = entries.flatMap((entry) => {
-    const record = isRecord(entry) ? entry : undefined
-    if (!record) return []
-    const providerId =
-      firstAuthString(record['integrationID']) ??
-      firstAuthString(record['providerID']) ??
-      firstAuthString(record['provider']) ??
-      firstAuthString(record['id'])
-    if (!providerId) return []
-    const label = firstAuthString(record['label']) ?? firstAuthString(record['name']) ?? providerId
-    const method = firstAuthString(record['method'])
+  const accounts = openCodeV2Entries(parsed).flatMap((entry) => openCodeV2Accounts(entry))
+  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
+}
+
+/** Integration objects in any of the shapes the credential list has printed. */
+function openCodeV2Entries(parsed: unknown): Record<string, unknown>[] {
+  if (Array.isArray(parsed)) return parsed.filter(isRecord)
+  if (!isRecord(parsed)) return []
+  for (const key of ['integrations', 'credentials', 'accounts'] as const) {
+    const list = parsed[key]
+    if (Array.isArray(list)) return list.filter(isRecord)
+  }
+  return []
+}
+
+/** Every stored credential one integration entry reports, as account rows. */
+function openCodeV2Accounts(entry: Record<string, unknown>): HarnessAuthAccount[] {
+  const providerId =
+    firstAuthString(entry['id']) ??
+    firstAuthString(entry['integrationID']) ??
+    firstAuthString(entry['providerID']) ??
+    firstAuthString(entry['provider'])
+  if (!providerId) return []
+  const integrationName = firstAuthString(entry['name']) ?? firstAuthString(entry['label'])
+  if (!Array.isArray(entry['connections'])) {
+    // Tolerant fallback for a flat credential row that names its provider.
+    const label = integrationName ?? providerId
+    const method = firstAuthString(entry['method'])
     return [
       {
         id: accountId(label),
         providerId,
         label,
         ...(method ? { method } : {}),
-        ...(record['active'] === true || record['activated'] === true ? { active: true } : {})
+        ...(entry['active'] === true || entry['activated'] === true ? { active: true } : {})
+      }
+    ]
+  }
+  return entry['connections'].filter(isRecord).flatMap((connection) => {
+    if (connection['type'] === 'env') return []
+    const label = firstAuthString(connection['label']) ?? integrationName ?? providerId
+    const credentialId = firstAuthString(connection['id'])
+    const method = firstAuthString(connection['method'])
+    return [
+      {
+        // The credential id is unique per connection, so two keys on one
+        // integration stay tellable; a slug is the fallback for older output.
+        id: credentialId ?? accountId(label),
+        providerId,
+        label,
+        ...(method ? { method } : {})
       }
     ]
   })
-  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -687,9 +715,19 @@ function openCodeV2Auth(command: string): AuthDefinition {
 /**
  * The auth definition for whichever OpenCode line is installed. One harness id
  * (`opencode`) covers both, so the CLI grammar is chosen from the detected
- * version instead of a second harness entry.
+ * version instead of a second harness entry. A cold cache runs the bounded
+ * probe here, so a V2-only machine never falls back to a V1 command.
  */
-function openCodeAuthDefinition(): AuthDefinition {
+async function openCodeAuthDefinition(): Promise<AuthDefinition> {
+  const installation = cachedOpenCodeInstallation() ?? (await detectOpenCodeInstallation())
+  if (installation && isOpenCodeV2Version(installation.version)) {
+    return openCodeV2Auth(installation.command)
+  }
+  return OPENCODE_V1_AUTH
+}
+
+/** Version-aware definition without spawning a probe (for existence checks). */
+function openCodeAuthDefinitionCached(): AuthDefinition {
   const installation = cachedOpenCodeInstallation()
   if (installation && isOpenCodeV2Version(installation.version)) {
     return openCodeV2Auth(installation.command)
@@ -797,7 +835,7 @@ export class ProviderAccountOrchestrator {
     apiKey: string,
     environment: NodeJS.ProcessEnv = {}
   ): Promise<void> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
     if (harnessId === 'pi' && piAgentDir) {
       await new PiAuthConfigService(join(piAgentDir, 'auth.json')).setApiKey(providerId, apiKey)
@@ -903,7 +941,7 @@ export class ProviderAccountOrchestrator {
     environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessAuthStatus> {
     return this.enqueueStatus(async () => {
-      const definition = this.requireDefinition(harnessId)
+      const definition = await this.resolveDefinition(harnessId)
       if (definition.readStatus) {
         return definition.readStatus(projectPath, environment)
       }
@@ -934,7 +972,7 @@ export class ProviderAccountOrchestrator {
     options: HarnessLoginOptions = {},
     environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessLoginHandoff> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
     const prepared = await prepareHarnessTerminalHandoff(
       definition.command,
       definition.loginArgs(options)
@@ -958,7 +996,7 @@ export class ProviderAccountOrchestrator {
     environment: NodeJS.ProcessEnv = {},
     providerHint?: string
   ): Promise<void> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
     if (harnessId === 'pi' && piAgentDir) {
       if (!providerId) throw new Error('pi requires a provider to disconnect.')
@@ -1154,8 +1192,18 @@ export class ProviderAccountOrchestrator {
   // ─── Offered-provider catalog ──────────────────────────────────────────────
 
   private definition(harnessId: string): AuthDefinition | undefined {
-    if (harnessId === 'opencode') return openCodeAuthDefinition()
+    if (harnessId === 'opencode') return openCodeAuthDefinitionCached()
     return AUTH_DEFINITIONS.find((definition) => definition.id === harnessId)
+  }
+
+  /**
+   * Version-aware definition for operations that spawn the CLI. OpenCode's
+   * grammar depends on the detected install, so a cold cache resolves it here
+   * instead of silently assuming V1.
+   */
+  private async resolveDefinition(harnessId: string): Promise<AuthDefinition> {
+    if (harnessId === 'opencode') return openCodeAuthDefinition()
+    return this.requireDefinition(harnessId)
   }
 
   private requireDefinition(harnessId: string): AuthDefinition {

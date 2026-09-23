@@ -3409,15 +3409,27 @@ export class ChatEngine {
     driver.setProcessObserver?.(this.agentProcesses)
     driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
     this.drivers.set('opencode', driver)
+    // Account-scoped drivers cache the transport they were built with, so a
+    // managed account would keep speaking the old API until restart. Drop them
+    // and let the next use rebuild against the detected line.
+    for (const [accountId, accountDriver] of [...this.accountDrivers]) {
+      if (accountDriver.id !== 'opencode') continue
+      accountDriver.dispose()
+      this.accountDrivers.delete(accountId)
+    }
     this.openCodeDriverIsV2 = desiredV2
   }
 
-  /** True when a harness driver reports a live turn on any known session. */
+  /** True when any driver for a harness (default or account-scoped) has a live turn. */
   private harnessHasActiveTurn(harnessId: string): boolean {
-    const driver = this.drivers.get(harnessId)
-    if (!driver?.hasActiveTurn) return false
-    for (const sessionId of this.sessionRegistry.keys()) {
-      if (driver.hasActiveTurn(sessionId)) return true
+    const drivers = [this.drivers.get(harnessId), ...this.accountDrivers.values()].filter(
+      (driver): driver is HarnessDriver => driver !== undefined && driver.id === harnessId
+    )
+    for (const driver of drivers) {
+      if (!driver.hasActiveTurn) continue
+      for (const sessionId of this.sessionRegistry.keys()) {
+        if (driver.hasActiveTurn(sessionId)) return true
+      }
     }
     return false
   }
