@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import {
     AlertTriangle,
     Ban,
@@ -31,13 +32,13 @@
     describeSchedule,
     routineAgentsComplete,
     routineHowToComplete,
+    type AgentCapabilityCatalog,
     type MissedRun,
     type Routine,
     type RoutineAgents,
     type RoutineConnection,
     type Thread,
-    type UtilityCatalog,
-    type UtilityDefinition
+    type UtilityCatalog
   } from '$shared/types'
   import {
     parseHowToSections,
@@ -48,6 +49,7 @@
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
+  import { buildConnectionLibrary, type ConnectionLibraryEntry } from './connection-library'
 
   interface Props {
     projectId: string
@@ -87,12 +89,21 @@
   })
 
   let catalog = $state<UtilityCatalog | null>(null)
-  $effect(() => {
-    if (catalog) return
-    void invoke('utilities:list')
-      .then((result) => (catalog = result))
+  // The Utilities page shows the registry and the capabilities a harness discovers
+  // side by side. Loading only the registry here made the picker look half empty.
+  let capabilities = $state<AgentCapabilityCatalog | null>(null)
+  // One-time load, matching how UtilitiesView fetches the same two catalogs.
+  onMount(() => {
+    void Promise.all([invoke('utilities:list'), invoke('capabilities:listAll')])
+      .then(([utilityCatalog, capabilityCatalog]) => {
+        catalog = utilityCatalog
+        capabilities = capabilityCatalog
+      })
       .catch(() => undefined)
   })
+
+  /** Every connection the app can offer, registry and harness-discovered alike. */
+  const connectionLibrary = $derived(buildConnectionLibrary(catalog, capabilities))
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
 
@@ -167,17 +178,23 @@
     void persistRoutine({ agents }, 'Could not save the routine models')
   }
 
-  const connectionViews = $derived(resolveConnections(routine?.connections ?? [], catalog))
-  const connectedIds = $derived(new Set(connectionViews.map((view) => view.connection.utilityId)))
+  const connectionViews = $derived(
+    resolveConnections(routine?.connections ?? [], catalog, capabilities)
+  )
+  // A connection that only matched by label still shows as connected, so the
+  // picker marks the entry it resolved to rather than the raw stored id.
+  const connectedIds = $derived(
+    new Set(connectionViews.map((view) => view.entry?.id ?? view.connection.utilityId))
+  )
   const connectionProblems = $derived(
     connectionViews.filter((view) => view.status !== 'ready').length
   )
 
-  function addConnection(utility: UtilityDefinition): void {
+  function addConnection(entry: ConnectionLibraryEntry): void {
     if (!routine) return
     const connections: RoutineConnection[] = [
       ...routine.connections,
-      { utilityId: utility.id, label: utility.name, kind: utility.kind }
+      { utilityId: entry.id, label: entry.name, kind: entry.kind }
     ]
     void persistRoutine({ connections }, 'Could not add the connection')
   }
@@ -601,10 +618,11 @@
             {/each}
           {/if}
           <UtilityPicker
-            utilities={catalog?.utilities ?? []}
+            entries={connectionLibrary}
             {connectedIds}
             label="Add a connection"
             onSelect={addConnection}
+            onOpenLibrary={openUtilities}
           />
         </div>
       {/if}

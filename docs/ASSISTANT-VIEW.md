@@ -306,14 +306,28 @@ read-only where the app must own the value and editable where the user must.
   with `RichMarkdownEditor` and rendered with `MarkdownView`. The schedule appears
   here as a read-only line: the agent sets it from the plan block, so no manual
   schedule editor exists anywhere in the app.
-- **Connections** — the routine's utilities, resolved against the library by
-  `resolveConnections`. Each row carries its kind and a **Ready / Off /
+- **Connections** — the routine's utilities, resolved against the connection
+  library by `resolveConnections`. Each row carries its kind and a **Ready / Off /
   Incomplete / Needs setup** state with the reason: a connection the library does
   not carry, a switched-off utility, an MCP with no command or URL, and an MCP
   whose declared `{env:NAME}` secret was never supplied all read as needing setup
-  instead of as working. **Add a connection** is a searchable utility picker
-  (`UtilityPicker.svelte`), never a plain select, and a half-configured row links
-  straight to the Utilities page.
+  instead of as working. **Add a connection** is a searchable, full-width library
+  picker (`UtilityPicker.svelte`), never a plain select, and a half-configured row
+  links straight to the Utilities page.
+
+  The library is the same union the Utilities page renders, built by
+  `buildConnectionLibrary` in `connection-library.ts`: the registry utilities the
+  user installed **plus** the MCP servers and skills the active harness discovers
+  on disk, addressed with a `capability:` prefix so a discovered capability's id
+  can never collide with a registry id. Loading only the registry made the picker
+  look half empty next to the page it points the user at. A capability whose
+  source is the registry itself is skipped, since the registry record is the one
+  the user can configure, and the same skill discovered by several harnesses is
+  collapsed to one row with the app-owned or global copy winning.
+
+  A discovered capability has no registry config to inspect, so it resolves as
+  ready once it is switched on and carries a transport; an MCP with no command or
+  URL still reads as incomplete.
 - **Agents** — one primary model and any number of fallbacks, each picked with
   the app's `ModelPicker` so thinking level and account stay visible
   (`RoutineAgentPicker.svelte`). Creating a routine prompts for a primary and two

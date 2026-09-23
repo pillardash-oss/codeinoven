@@ -13,7 +13,9 @@
 
   let { view, onRemove, onOpenUtilities }: Props = $props()
 
-  const KindIcon = $derived(utilityKindIcon(view.connection.kind ?? view.utility?.kind))
+  const KindIcon = $derived(
+    utilityKindIcon(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)
+  )
 
   const STATUS_COLORS: Readonly<Record<ConnectionStatus, string>> = {
     ready: 'var(--color-thread-done)',
@@ -41,7 +43,7 @@
       <span
         class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
       >
-        {utilityKindLabel(view.connection.kind ?? view.utility?.kind)}
+        {utilityKindLabel(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)}
       </span>
       <span
         class="flex shrink-0 items-center gap-1 text-[0.625rem]"

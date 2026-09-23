@@ -2,6 +2,7 @@ import {
   describeRelativeTime,
   routineAgentsComplete,
   routineHowToComplete,
+  type AgentCapabilityCatalog,
   type MissedRun,
   type Routine,
   type RoutineConnection,
@@ -12,6 +13,13 @@ import {
   type UtilityDefinition
 } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
+import {
+  buildConnectionLibrary,
+  connectionNamesOverlap,
+  findConnectionEntry,
+  normalizeConnectionName,
+  type ConnectionLibraryEntry
+} from './connection-library'
 
 /**
  * Pure presentation logic for Assistant View, kept out of the components so the
@@ -182,10 +190,7 @@ function newestTaggedBlock(
     }
     depth -= 1
     if (depth > 0) continue
-    return stripLeadingMarker(
-      lines.slice(open.index + 1, fence.index).join('\n'),
-      matchesMarker
-    )
+    return stripLeadingMarker(lines.slice(open.index + 1, fence.index).join('\n'), matchesMarker)
   }
   return null
 }
@@ -517,7 +522,9 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
     const value = separator === -1 ? '' : line.slice(separator + 1).trim()
     if (!value) continue
 
-    if (['connections', 'connection', 'services', 'service', 'tools', 'integrations'].includes(key)) {
+    if (
+      ['connections', 'connection', 'services', 'service', 'tools', 'integrations'].includes(key)
+    ) {
       connections.push(...splitList(value))
       sawAnything = true
       continue
@@ -570,9 +577,7 @@ export function extractRoutinePlanDraft(text: string): RoutinePlanDraft | null {
 }
 
 /** The newest routine plan across assistant messages, newest message first. */
-export function latestRoutinePlanDraft(
-  assistantTexts: readonly string[]
-): RoutinePlanDraft | null {
+export function latestRoutinePlanDraft(assistantTexts: readonly string[]): RoutinePlanDraft | null {
   for (let index = assistantTexts.length - 1; index >= 0; index -= 1) {
     const draft = extractRoutinePlanDraft(assistantTexts[index] ?? '')
     if (draft) return draft
@@ -625,23 +630,22 @@ export interface ConnectionView {
   connection: RoutineConnection
   /** The library utility this connection resolves to, or null when missing. */
   utility: UtilityDefinition | null
+  /**
+   * The library entry it resolved to, whether a registry utility or a
+   * harness-discovered capability, or null when the library does not carry it.
+   */
+  entry: ConnectionLibraryEntry | null
   status: ConnectionStatus
   /** Short reason shown under the row when the status is not `ready`. */
   detail: string
 }
 
 /** Lowercase alphanumeric form used for name matching. */
-function normalizeName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
+const normalizeName = normalizeConnectionName
 
 /** Whether a connection label names a library utility. */
 function matchesUtility(label: string, utility: UtilityDefinition): boolean {
-  const needle = normalizeName(label)
-  if (!needle) return false
-  return [utility.name, utility.id]
-    .map(normalizeName)
-    .some((candidate) => candidate.includes(needle) || needle.includes(candidate))
+  return [utility.name, utility.id].some((candidate) => connectionNamesOverlap(candidate, label))
 }
 
 /** The `{env:NAME}` references an MCP utility declares in its environment/headers. */
@@ -687,39 +691,57 @@ function utilityConfigGap(utility: UtilityDefinition): string | null {
 }
 
 /**
- * Resolve a routine's connections against the utility library so the panel can
- * show what is actually ready. A connection the library does not carry, or one
+ * Resolve a routine's connections against the connection library so the panel
+ * can show what is actually ready. The library is the same union the Utilities
+ * page renders   registry utilities plus the MCP servers and skills a harness
+ * discovers   so a connection that points at a discovered capability resolves
+ * instead of reading as missing. A connection the library does not carry, or one
  * that is switched off or half-configured, is surfaced as needing setup rather
  * than rendered as a working connection.
  */
 export function resolveConnections(
   connections: readonly RoutineConnection[],
-  catalog: UtilityCatalog | null
+  catalog: UtilityCatalog | null,
+  capabilities: AgentCapabilityCatalog | null = null
 ): ConnectionView[] {
-  const utilities = catalog?.utilities ?? []
+  const library = buildConnectionLibrary(catalog, capabilities)
   return connections.map((connection) => {
-    const utility =
-      utilities.find((candidate) => candidate.id === connection.utilityId) ??
-      utilities.find((candidate) => matchesUtility(connection.label, candidate)) ??
-      null
-    if (!utility) {
+    const entry = findConnectionEntry(library, connection)
+    if (!entry) {
       return {
         connection,
         utility: null,
+        entry: null,
         status: 'needs-setup',
         detail: 'Not in your utility library yet'
       }
     }
-    if (!utility.enabled) {
+    if (!entry.enabled) {
       return {
         connection,
-        utility,
+        utility: entry.utility,
+        entry,
         status: 'disabled',
         detail: 'Switched off in Utilities'
       }
     }
+    // A harness-discovered capability has no registry config to inspect, so it
+    // is ready once it is switched on and carries a usable transport.
+    if (!entry.utility) {
+      if (entry.kind === 'mcp' && !entry.capability?.detail?.trim()) {
+        return {
+          connection,
+          utility: null,
+          entry,
+          status: 'incomplete',
+          detail: 'No server command or URL'
+        }
+      }
+      return { connection, utility: null, entry, status: 'ready', detail: 'Ready' }
+    }
+    const utility = entry.utility
     const gap = utilityConfigGap(utility)
-    if (gap) return { connection, utility, status: 'incomplete', detail: gap }
+    if (gap) return { connection, utility, entry, status: 'incomplete', detail: gap }
     const stored = new Set(
       utility.credentials
         .map((credential) => credential.environmentVariable)
@@ -730,11 +752,12 @@ export function resolveConnections(
       return {
         connection,
         utility,
+        entry,
         status: 'incomplete',
         detail: `Needs ${missing.join(', ')}`
       }
     }
-    return { connection, utility, status: 'ready', detail: 'Ready' }
+    return { connection, utility, entry, status: 'ready', detail: 'Ready' }
   })
 }
 
