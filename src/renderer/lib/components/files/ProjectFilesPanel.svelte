@@ -20,9 +20,9 @@
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import {
-    conflictSaveStep,
-    conflictSaveStepLabel,
-    conflictSaveStepTitle
+    conflictSaveActionLabels,
+    conflictSaveActionTitle,
+    conflictSaveStep
   } from './conflict-resolution'
   import type {
     ConflictResolutionController,
@@ -300,15 +300,15 @@
     dirty: false,
     saving: false
   })
-  /** What the save chord and both save buttons do right now: they write the
-   *  resolved progress as a draft until there is nothing left to draft, and
-   *  only then hand the finished file back to git. */
+  /** What the save chord does for a conflicted file right now: the draft lands
+   *  first, and only a press with no draft left to write marks the file
+   *  resolved. The panel's own save controls always mark it resolved. */
   let conflictStep = $derived(conflictSaveStep(conflictStatus))
-  /** A conflict save is possible while there is resolved progress the scratch
-   *  file has not taken yet, or once every conflict block is resolved. */
-  let conflictSaveReady = $derived(conflictStep !== 'none')
-  let conflictSaveLabel = $derived(conflictSaveStepTitle(conflictStep))
-  let conflictSaveText = $derived(conflictSaveStepLabel(conflictStep))
+  /** The panel's save controls mark the file resolved, which needs every
+   *  conflict block resolved. It does not need a draft write first. */
+  let conflictSaveReady = $derived(conflictStatus.canSave)
+  let conflictSaveText = $derived(conflictSaveActionLabels.resolve)
+  let conflictSaveTitle = $derived(conflictSaveActionTitle('resolve'))
   let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
@@ -375,10 +375,24 @@
     conflictStatus = next
   }
 
-  /** Save the active tab. A conflict being resolved saves its resolved
-   *  progress as a draft first: one press cannot both persist the scratch file
-   *  and stage the file back to git, so the draft lands first and the press
-   *  after that, with no draft left to write, marks the file resolved. */
+  /** What the panel's save button runs for a conflicted file: it marks the file
+   *  resolved directly. Saving a draft is the conflict editor's own button. */
+  async function resolveActiveConflict(): Promise<void> {
+    await conflictController?.save()
+  }
+
+  function runPanelSave(): void {
+    if (activePathIsConflicted) {
+      void resolveActiveConflict()
+      return
+    }
+    void saveActiveFile()
+  }
+
+  /** Save the active tab. The Cmd/Ctrl+S chord for a conflicted file keeps a
+   *  rule of its own: it writes the resolved progress as a draft first, and only
+   *  a press with no draft left to write marks the file resolved, so one press
+   *  cannot stage a file whose progress the scratch file has not seen. */
   async function saveActiveFile(): Promise<void> {
     if (!activeTab) return
     if (activePathIsConflicted) {
@@ -465,7 +479,7 @@
       // Holding the key never escalates either, so a repeat press cannot mark
       // the file resolved while the draft write is still settling.
       event.preventDefault()
-      if (event.repeat || conflictStatus.saving || !conflictSaveReady) return
+      if (event.repeat || conflictStatus.saving || conflictStep === 'none') return
       void saveActiveFile()
       return
     }
@@ -799,7 +813,8 @@
             (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
             (activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving))}
           saving={activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving)}
-          saveLabel={activePathIsConflicted ? conflictSaveLabel : 'Save file (Cmd/Ctrl+S)'}
+          saveLabel={activePathIsConflicted ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
+          saveTitle={activePathIsConflicted ? conflictSaveTitle : undefined}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
           onInfo={() => void showActiveFileInfo()}
@@ -813,7 +828,7 @@
           onFullscreen={openFullscreen}
           onRename={startRename}
           onDelete={() => (deleteTargetPath = activeTab.path)}
-          onSave={() => void saveActiveFile()}
+          onSave={runPanelSave}
         />
       {/if}
 
@@ -1094,8 +1109,8 @@
         disabled={deletedAtCheckpoint ||
           (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
           (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-        title={activePathIsConflicted ? conflictSaveLabel : 'Save file (Cmd/Ctrl+S)'}
-        onclick={() => void saveActiveFile()}
+        title={activePathIsConflicted ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
+        onclick={runPanelSave}
       >
         {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
           <Loader2 size={11} class="animate-spin" />
@@ -1165,7 +1180,7 @@
           onFullscreen={openFullscreen}
           onRename={startRename}
           onDelete={() => (deleteTargetPath = activeTab.path)}
-          onSave={() => void saveActiveFile()}
+          onSave={runPanelSave}
         />
       {/if}
       {@render staleVersionAlert('top-2')}

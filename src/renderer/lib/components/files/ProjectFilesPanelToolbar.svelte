@@ -29,6 +29,8 @@
     saveDisabled: boolean
     saving: boolean
     saveLabel: string
+    /** Sentence behind the save button, for its `title`. Defaults to `saveLabel`. */
+    saveTitle?: string
     fullscreen: boolean
     onSetView: (view: ProjectFileView) => void
     onInfo: () => void
@@ -63,6 +65,7 @@
     saveDisabled,
     saving,
     saveLabel,
+    saveTitle = undefined,
     fullscreen,
     onSetView,
     onInfo,
@@ -174,7 +177,7 @@
       class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
       disabled={saveDisabled}
       aria-label={saveLabel}
-      title={saveLabel}
+      title={saveTitle ?? saveLabel}
       onclick={onSave}
     >
       {#if saving}

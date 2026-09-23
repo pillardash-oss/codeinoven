@@ -13,41 +13,40 @@ export interface ConflictResolutionController {
 }
 
 /**
- * What a save press does for a conflicted file right now.
+ * The conflict editor's two outcomes, each with its own control: saving a draft
+ * keeps the merge in progress, and marking the file resolved stages the
+ * finished content. Neither waits on the other, so a file can be resolved
+ * without a draft write, and a draft can be saved without resolving anything.
+ */
+export type ConflictSaveAction = 'draft' | 'resolve'
+
+/** The fixed text on each conflict save control. */
+export const conflictSaveActionLabels: Record<ConflictSaveAction, string> = {
+  draft: 'Save as draft',
+  resolve: 'Mark as resolved'
+}
+
+/** The sentence behind a conflict save control, for its `title` and `aria-label`. */
+export function conflictSaveActionTitle(action: ConflictSaveAction): string {
+  return action === 'draft'
+    ? 'Save the resolved progress as a draft; the file stays conflicted'
+    : 'Replace the original file with the resolved content and mark it resolved'
+}
+
+/**
+ * What a Cmd/Ctrl+S press does for a conflicted file.
  *
- * `draft` writes the resolved progress into the conflict scratch file, `resolve`
- * replaces the working file with the resolved content and stages it, and `none`
- * means there is nothing to persist yet.
+ * The chord keeps a rule of its own, unlike the two buttons: it writes the
+ * resolved progress as a draft first, and only a press with no draft left to
+ * write hands the finished file back to git, so one press can never stage a
+ * file whose resolved progress the scratch file has not seen.
  */
 export type ConflictSaveStep = 'draft' | 'resolve' | 'none'
 
-/**
- * The one rule every conflict save control follows: resolved progress that the
- * scratch file has not taken yet is written as a draft first, and only a press
- * with no draft left to write hands the finished file back to git. The chord,
- * the panel's save button, and the editor's own save button all read this, so
- * none of them can mark a file resolved on the press that drafts it.
- */
 export function conflictSaveStep(
   status: Pick<ConflictResolutionStatus, 'canSave' | 'canSaveDraft'>
 ): ConflictSaveStep {
   if (status.canSaveDraft) return 'draft'
   if (status.canSave) return 'resolve'
   return 'none'
-}
-
-/** The button text: the step the press performs. */
-export function conflictSaveStepLabel(step: ConflictSaveStep): string {
-  return step === 'resolve' ? 'Mark as resolved' : 'Save draft'
-}
-
-/** The sentence behind the button, for its `title` and `aria-label`. */
-export function conflictSaveStepTitle(step: ConflictSaveStep): string {
-  if (step === 'draft') {
-    return 'Save the resolved progress to the conflict scratch file (Cmd/Ctrl+S)'
-  }
-  if (step === 'resolve') {
-    return 'Replace the original file with the resolved content and mark it resolved (Cmd/Ctrl+S)'
-  }
-  return 'Accept a conflict block first: a draft needs at least one resolved block'
 }

@@ -22,11 +22,7 @@
   } from '$lib/editor/codemirror-file-editor'
   import { gitState } from '$lib/stores/git.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import {
-    conflictSaveStep,
-    conflictSaveStepLabel,
-    conflictSaveStepTitle
-  } from './conflict-resolution'
+  import { conflictSaveActionLabels, conflictSaveActionTitle } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -81,10 +77,10 @@
   const activeState = $derived(hunkStates[activeHunk] ?? null)
   const resolvedCount = $derived(hunkStates.filter(isResolved).length)
   const allResolved = $derived(hunkStates.length > 0 && resolvedCount === hunkStates.length)
+  /** Resolved progress the scratch file has not taken yet. The editor's own
+   *  save button writes exactly this as a draft; marking the file resolved is
+   *  the panel's save control, and it does not need this draft. */
   const canSaveDraft = $derived(resolvedCount > 0 && dirty)
-  /** The editor's own save button follows the same two-step rule as the chord
-   *  and the panel's save button: draft first, then mark the file resolved. */
-  const saveStep = $derived(conflictSaveStep({ canSave: allResolved, canSaveDraft }))
 
   function isResolved(state: GitConflictWorkHunkState): boolean {
     return state.acceptedIncoming || state.acceptedCurrent || state.edited
@@ -300,12 +296,6 @@
       saving = false
       notifyStatus()
     }
-  }
-
-  /** Run whichever step the save button shows right now. */
-  function runSaveStep(): void {
-    if (saveStep === 'draft') void saveDraft()
-    else if (saveStep === 'resolve') void save()
   }
 
   const controller: ConflictResolutionController = { save, saveDraft }
@@ -537,15 +527,13 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-        disabled={saveStep === 'none' || draftSaving || saving}
-        title={conflictSaveStepTitle(saveStep)}
-        onclick={runSaveStep}
+        class="flex h-6 items-center gap-1 rounded border border-border bg-elevated px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:opacity-30"
+        disabled={!canSaveDraft || draftSaving || saving}
+        title={conflictSaveActionTitle('draft')}
+        onclick={() => void saveDraft()}
       >
-        {#if draftSaving || saving}<Loader2 size={11} class="animate-spin" />{:else}<Save
-            size={11}
-          />{/if}
-        {conflictSaveStepLabel(saveStep)}
+        {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
+        {conflictSaveActionLabels.draft}
       </button>
       <button
         type="button"
