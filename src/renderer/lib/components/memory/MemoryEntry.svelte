@@ -2,6 +2,7 @@
   import type { MemoryCategory, MemoryEntry, MemoryPriority, Thread } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { locationScopeOf } from '$shared/memory/memory-scopes'
+  import { formatDate } from '$shared/date-time-format'
   import { parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
@@ -344,7 +345,7 @@
       <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
         <span class="flex items-center gap-1">
           <Clock size={10} />
-          Updated {new Date(entry.updatedAt).toLocaleDateString()}
+          Updated {formatDate(entry.updatedAt)}
         </span>
         {#if entry.lastReinforced}
           <span class="flex items-center gap-1">

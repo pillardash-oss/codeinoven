@@ -1,3 +1,4 @@
+import { formatDateTime } from '$shared/date-time-format'
 import {
   describeRelativeTime,
   routineAgentsComplete,
@@ -643,14 +644,14 @@ export function handoffSummary(
   routine: Pick<Routine, 'name' | 'howTo'> | null
 ): string {
   const lines = [
-    `Handed off from Assistant View on ${new Date().toLocaleString()}.`,
+    `Handed off from Assistant View on ${formatDateTime(Date.now())}.`,
     `Task: ${task.title}`
   ]
   if (routine) lines.push(`Routine: ${routine.name}`)
   const howTo = routine?.howTo?.trim()
   if (howTo) lines.push('', 'How-to:', howTo)
   if (task.lastRunAt !== undefined) {
-    lines.push('', `Last scheduled run: ${new Date(task.lastRunAt).toLocaleString()}`)
+    lines.push('', `Last scheduled run: ${formatDateTime(task.lastRunAt)}`)
   }
   return lines.join('\n')
 }

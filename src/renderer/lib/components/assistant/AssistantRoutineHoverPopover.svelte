@@ -1,5 +1,6 @@
 <script lang="ts">
   import { AlertTriangle, Clock, Link2, ListChecks, Sparkles } from '@lucide/svelte'
+  import { formatDateTime } from '$shared/date-time-format'
   import { describeSchedule, type Routine } from '$shared/types'
   import { routineGap } from './assistant-view'
 
@@ -19,14 +20,7 @@
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
   const scheduleLabel = $derived(describeSchedule(routine.schedule ?? null))
-  const scheduleAt = $derived(
-    nextRunAt === null
-      ? null
-      : `Next ${new Date(nextRunAt).toLocaleString(undefined, {
-          dateStyle: 'medium',
-          timeStyle: 'short'
-        })}`
-  )
+  const scheduleAt = $derived(nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`)
   const howToPreview = $derived.by(() => {
     const text = routine.howTo.trim().replace(/\s+/g, ' ')
     if (text.length === 0) return 'No how-to written yet.'

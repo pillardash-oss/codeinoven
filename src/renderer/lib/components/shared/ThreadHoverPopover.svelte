@@ -8,6 +8,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { formatDateTime } from '$shared/date-time-format'
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -80,13 +81,6 @@
       void projectRemotes.ensure(project.id, project.path)
     }
   })
-
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    })
-  }
 </script>
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
@@ -127,11 +121,11 @@
   {/if}
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Created</dt>
-    <dd class="text-muted">{formatDate(thread.createdAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.createdAt)}</dd>
   </div>
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
-    <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.updatedAt)}</dd>
   </div>
   {#if isForeignRun}
     <div class="flex gap-2">

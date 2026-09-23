@@ -28,6 +28,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { formatDateTime } from '$shared/date-time-format'
   import {
     describeRelativeTime,
     describeSchedule,
@@ -798,7 +799,7 @@
                     </span>
                   </div>
                   <p class="mt-1 text-[0.625rem] text-dimmed">
-                    Was due {new Date(run.dueAt).toLocaleString()} while the app was closed.
+                    Was due {formatDateTime(run.dueAt)} while the app was closed.
                   </p>
                   <div class="mt-2 flex justify-end gap-1.5">
                     <button

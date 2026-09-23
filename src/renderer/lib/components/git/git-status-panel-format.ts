@@ -1,4 +1,5 @@
 import type { GitFileChange } from '$shared/types'
+import { formatDateTime } from '$shared/date-time-format'
 
 /** A folder node in the commit diff's read-only tree. */
 export interface CommitTreeNode {
@@ -25,9 +26,7 @@ export function branchAvatarClass(name: string): string {
 
 /** Absolute commit timestamp, shown in the commit info dialog. */
 export function absoluteTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(timestamp)
-  )
+  return formatDateTime(timestamp)
 }
 
 export function relativeTime(timestamp: number): string {

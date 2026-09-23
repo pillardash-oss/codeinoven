@@ -7,6 +7,8 @@
  * machine's clock, so a "daily 9am" cadence means 9am wherever the app runs.
  */
 
+import { formatDateTime } from '../date-time-format'
+
 export type ScheduleCadence = 'once' | 'hourly' | 'daily' | 'weekdays' | 'weekly'
 
 /** One recurring (or one-shot) schedule. A routine carries the default; a task
@@ -104,7 +106,10 @@ export function scheduleIsActive(schedule: RoutineSchedule | null | undefined): 
  * exhausted. `weekly` and `weekdays` are bounded to a two-week lookahead, so a
  * schedule whose weekdays never match can never loop forever.
  */
-export function nextRunAt(schedule: RoutineSchedule | null | undefined, from: number): number | null {
+export function nextRunAt(
+  schedule: RoutineSchedule | null | undefined,
+  from: number
+): number | null {
   if (!schedule) return null
   if (schedule.cadence === 'once') {
     return schedule.onceAt !== undefined && schedule.onceAt > from ? schedule.onceAt : null
@@ -146,7 +151,10 @@ export function nextRunAt(schedule: RoutineSchedule | null | undefined, from: nu
  * come due yet. The scheduler compares this against the task's last fire to
  * decide between dispatching a run and recording a missed run.
  */
-export function previousDueAt(schedule: RoutineSchedule | null | undefined, now: number): number | null {
+export function previousDueAt(
+  schedule: RoutineSchedule | null | undefined,
+  now: number
+): number | null {
   if (!schedule) return null
   if (schedule.cadence === 'once') {
     return schedule.onceAt !== undefined && schedule.onceAt <= now ? schedule.onceAt : null
@@ -186,7 +194,7 @@ export function describeSchedule(schedule: RoutineSchedule | null | undefined): 
   if (!scheduleIsActive(schedule) || !schedule) return 'Not scheduled'
   const times = normalizedTimes(schedule)
   if (schedule.cadence === 'once') {
-    return `Once on ${new Date(schedule.onceAt ?? 0).toLocaleString()}`
+    return `Once on ${formatDateTime(schedule.onceAt ?? 0)}`
   }
   if (schedule.cadence === 'hourly') return 'Every hour'
   if (schedule.cadence === 'daily') return `Daily at ${times.join(', ')}`

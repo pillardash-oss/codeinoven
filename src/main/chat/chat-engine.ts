@@ -37,6 +37,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
@@ -15988,7 +15989,7 @@ export class ChatEngine {
         const pendingRetry = this.retryScheduler?.getPendingRetry(sessionId)
         if (pendingRetry?.retryAt !== undefined && pendingRetry.retryAt > Date.now() + 60_000) {
           lastError = new Error(
-            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${new Date(pendingRetry.retryAt).toLocaleTimeString()}; run the audit again after that window.`
+            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${formatTime(pendingRetry.retryAt)}; run the audit again after that window.`
           )
           break
         }

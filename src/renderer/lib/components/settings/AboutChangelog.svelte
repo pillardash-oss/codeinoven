@@ -3,18 +3,17 @@
   import { Loader2, RefreshCw, ScrollText } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import { formatDate } from '$shared/date-time-format'
   import type { UpdaterChangelog } from '$shared/ipc-contract'
 
   let changelog = $state<UpdaterChangelog | null>(null)
   let loading = $state(true)
   let error = $state(false)
 
-  const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
-
   const formattedDate = $derived.by(() => {
     if (!changelog?.publishedAt) return ''
     const parsed = Date.parse(changelog.publishedAt)
-    return Number.isNaN(parsed) ? '' : dateFormat.format(parsed)
+    return Number.isNaN(parsed) ? '' : formatDate(parsed)
   })
 
   async function load(): Promise<void> {
