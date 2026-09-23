@@ -152,10 +152,17 @@ export interface CoordinatorContextTab {
   threadId: string
 }
 
+/** Sections of the assistant how-to panel, in strip order. */
+export type AssistantPanelTab = 'all' | 'routine' | 'connections' | 'agents' | 'issues'
+
 /**
- * Assistant View's how-to panel, docked into the context sidebar. It anchors to
- * one assistant task thread (so thread-scoped tab plumbing applies) while
- * showing its routine's how-to, schedule, and connections, plus the task's own
+ * Assistant View's how-to panel, docked into the context sidebar. There is
+ * exactly one panel per routine, exactly like the file tree keeps one panel per
+ * file: the tab lives in the project's context (not a task's), so it survives
+ * task switches, and its id is keyed by the routine so opening the how-to from
+ * any of the routine's tasks focuses the same panel. A routine-less task keys on
+ * its own thread and so still owns exactly one panel. The tab shows the
+ * routine's how-to, schedule, and connections, plus the anchor task's own
  * schedule override.
  */
 export interface AssistantHowToContextTab {
@@ -163,9 +170,15 @@ export interface AssistantHowToContextTab {
   kind: 'assistant-how-to'
   title: string
   projectId: string
+  /** Task the panel was last opened from; refreshes the panel's task-scoped
+   *  content (Issues) and never changes the panel's identity. */
   threadId: string
   /** Routine whose how-to the panel edits; null for a routine-less task. */
   routineId: string | null
+  /** The section the panel was last showing. It lives on the tab, not in the
+   *  component, so switching to another sidebar panel and back reopens the same
+   *  section instead of resetting the panel to "All". */
+  panelTab: AssistantPanelTab
 }
 
 export type TemporaryChatMode = 'elaborate' | 'quick'
@@ -258,7 +271,8 @@ export const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'actions',
   'git',
   'cloud-deployment',
-  'memory'
+  'memory',
+  'assistant-how-to'
 ])
 
 export function isProjectTab(tab: ContextSidebarTab): boolean {

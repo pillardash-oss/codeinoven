@@ -161,6 +161,7 @@
         projectId={activeContextTab.projectId}
         threadId={activeContextTab.threadId}
         routineId={activeContextTab.routineId}
+        bind:panelTab={activeContextTab.panelTab}
         {navigate}
         onOpenTask={onOpenAssistantTask}
       />

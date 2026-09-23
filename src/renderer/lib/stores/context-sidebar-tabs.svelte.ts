@@ -121,7 +121,12 @@ export class SidebarTabContexts {
   rebindProjectTabs(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     for (const tab of context.tabs) {
-      if ('threadId' in tab) tab.threadId = threadId
+      // The how-to panel's thread is its own anchor task, not "the current
+      // thread": re-targeting it would let a routine-less panel turn into
+      // whichever routine the user selected next. Its routine id is the panel's
+      // identity, so it stays put while every other project tab follows the
+      // active thread.
+      if ('threadId' in tab && tab.kind !== 'assistant-how-to') tab.threadId = threadId
     }
   }
 
@@ -630,9 +635,13 @@ export class SidebarTabContexts {
   }
 
   /**
-   * Dock the assistant how-to panel for a task thread. A routine-level open
-   * re-titles the tab rather than duplicating it; the routine id is refreshed
-   * so an ungrouped task's panel reflects the change.
+   * Dock the assistant how-to panel for a routine. There is one panel per
+   * routine, keyed by the routine id exactly like the file tree keys one panel
+   * per file, so opening the how-to from any task of the routine focuses the
+   * same tab instead of stacking a second copy. A routine-less task keys on its
+   * own thread and so still owns exactly one panel. The tab lives in the
+   * project's context, never a task's, so it survives task switches and its
+   * section is preserved while the user visits another sidebar tool.
    */
   openAssistantHowTo(
     projectId: string,
@@ -640,36 +649,25 @@ export class SidebarTabContexts {
     routineId: string | null,
     title: string
   ): void {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `assistant-how-to:${projectId}:${threadId}`
+    const context = this.ensureProjectContext(projectId)
+    const id = `assistant-how-to:${projectId}:${routineId ?? threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing && existing.kind === 'assistant-how-to') {
       existing.title = title
+      existing.threadId = threadId
       existing.routineId = routineId
-      this.focusInContext(context, id)
+      this.focusInProjectContext(context, id)
       return
     }
-    this.open(context, {
+    this.openProject(context, {
       id,
       kind: 'assistant-how-to',
       title,
       projectId,
       threadId,
-      routineId
+      routineId,
+      panelTab: 'all'
     })
-  }
-
-  /** Whether the how-to panel is already docked for a task thread. */
-  hasAssistantHowTo(projectId: string, threadId: string): boolean {
-    const context = this.contextFor(projectId, threadId)
-    return context?.tabs.some((tab) => tab.kind === 'assistant-how-to') ?? false
-  }
-
-  /** Update the routine an open how-to tab targets (task grouping changed). */
-  setAssistantHowToRoutine(projectId: string, threadId: string, routineId: string | null): void {
-    const context = this.contextFor(projectId, threadId)
-    const tab = context?.tabs.find((candidate) => candidate.kind === 'assistant-how-to')
-    if (tab && tab.kind === 'assistant-how-to') tab.routineId = routineId
   }
 
   openMemory(

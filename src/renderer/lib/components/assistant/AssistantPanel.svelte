@@ -23,6 +23,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import type { AssistantPanelTab } from '$lib/stores/context-sidebar-types'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -56,16 +57,25 @@
     threadId: string
     /** Routine snapshot from the tab; the task's own routineId wins when set. */
     routineId: string | null
+    /** The section on screen. It is bound to the sidebar tab (not local state)
+     *  so switching to another sidebar panel and back reopens the same section
+     *  instead of resetting the panel to "All". */
+    panelTab: AssistantPanelTab
     navigate: (view: MainView) => void
     /** Open one of the routine's tasks, so the workspace owns the selection. */
     onOpenTask: (task: Thread) => void
   }
 
-  let { projectId, threadId, routineId, navigate, onOpenTask }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    routineId,
+    panelTab = $bindable(),
+    navigate,
+    onOpenTask
+  }: Props = $props()
 
-  type PanelTab = 'all' | 'routine' | 'connections' | 'agents' | 'issues'
-
-  const TABS: ReadonlyArray<{ id: PanelTab; label: string }> = [
+  const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'routine', label: 'Routine' },
     { id: 'connections', label: 'Connections' },
@@ -83,7 +93,11 @@
   )
 
   const routine = $derived.by((): Routine | null => {
-    const id = task?.routineId ?? routineId
+    // The panel's own routine id is authoritative: one panel per routine means
+    // selecting another task must never re-target this panel (its anchor task
+    // can even belong to a different routine, e.g. a routine with no tasks yet).
+    // The task's routine is only a fallback for a panel opened without one.
+    const id = routineId ?? task?.routineId
     if (!id) return null
     return assistantRoutines.routines.find((candidate) => candidate.id === id) ?? null
   })
@@ -107,14 +121,13 @@
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
 
-  let tab = $state<PanelTab>('all')
   let fullscreen = $state(false)
 
   const visibleTabs = $derived(
     routine ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
   )
   const activeTab = $derived(
-    visibleTabs.some((entry) => entry.id === tab) ? tab : ('all' as PanelTab)
+    visibleTabs.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
   )
 
   // ─── Routine content ──────────────────────────────────────────────────────
@@ -219,7 +232,9 @@
   })
 
   const missedRuns = $derived(
-    routine ? assistantRoutines.missedForRoutine(routine.id) : assistantRoutines.missedForTask(threadId)
+    routine
+      ? assistantRoutines.missedForRoutine(routine.id)
+      : assistantRoutines.missedForTask(threadId)
   )
 
   /** Task-level run problems: rate limits, failures, and interrupted runs. */
@@ -236,7 +251,12 @@
         })
       }
       if (entry.status === 'failed') {
-        issues.push({ id: `${entry.id}:failed`, task: entry, kind: 'Failed', detail: 'The last run failed' })
+        issues.push({
+          id: `${entry.id}:failed`,
+          task: entry,
+          kind: 'Failed',
+          detail: 'The last run failed'
+        })
       } else if (entry.status === 'interrupted') {
         issues.push({
           id: `${entry.id}:interrupted`,
@@ -256,14 +276,14 @@
   /** The run panel is routine-scoped; a routine-less task reports on itself. */
   const runScopeTasks = $derived(routine ? routineTasks : task ? [task] : [])
 
-  const lastRunAt = $derived(
-    runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastRunAt ?? 0), 0)
+  const lastDispatchedAt = $derived(
+    runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastDispatchedAt ?? 0), 0)
   )
   const lastSuccessAt = $derived(
     runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastSuccessAt ?? 0), 0)
   )
   const lastRunLabel = $derived(
-    lastRunAt > 0 ? describeRelativeTime(lastRunAt, Date.now()) : 'never'
+    lastDispatchedAt > 0 ? describeRelativeTime(lastDispatchedAt, Date.now()) : 'never'
   )
   const lastSuccessLabel = $derived(
     lastSuccessAt > 0 ? describeRelativeTime(lastSuccessAt, Date.now()) : 'never'
@@ -333,7 +353,7 @@
             ? 'text-foreground'
             : 'text-muted hover:text-foreground'}"
           title={entry.label}
-          onclick={() => (tab = entry.id)}
+          onclick={() => (panelTab = entry.id)}
         >
           {entry.label}
           {#if entry.id === 'issues' && issueCount > 0}
@@ -366,7 +386,12 @@
   </div>
 {/snippet}
 
-{#snippet summaryRow(args: { title: string; detail: string; target: PanelTab; warn?: boolean })}
+{#snippet summaryRow(args: {
+  title: string
+  detail: string
+  target: AssistantPanelTab
+  warn?: boolean
+})}
   <div class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2">
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-1.5">
@@ -390,7 +415,7 @@
       class="flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open {args.title}"
       aria-label="Open {args.title}"
-      onclick={() => (tab = args.target)}
+      onclick={() => (panelTab = args.target)}
     >
       More
       <ChevronRight size={12} strokeWidth={1.8} />

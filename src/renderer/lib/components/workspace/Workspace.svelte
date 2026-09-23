@@ -3163,11 +3163,17 @@
   }
 
   function openAssistantHowToForTask(task: Thread): void {
+    // One panel per routine: the title follows the routine, so opening the
+    // how-to from any of its tasks focuses the same panel with the same name
+    // instead of re-titling it with whichever task was clicked.
+    const routine = task.routineId
+      ? assistantRoutineList.find((entry) => entry.id === task.routineId)
+      : undefined
     contextSidebarState.openAssistantHowTo(
       ASSISTANT_SPACE_ID,
       task.id,
       task.routineId ?? null,
-      task.title
+      routine?.name ?? task.title
     )
   }
 

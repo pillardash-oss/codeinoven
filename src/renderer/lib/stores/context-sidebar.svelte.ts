@@ -548,7 +548,7 @@ class ContextSidebarState {
     this.tabContexts.closeCoordinator(projectId, threadId)
   }
 
-  /** Dock the assistant how-to panel for a task thread. */
+  /** Dock the assistant how-to panel for a routine (one panel per routine). */
   openAssistantHowTo(
     projectId: string,
     threadId: string,
@@ -556,16 +556,6 @@ class ContextSidebarState {
     title: string
   ): void {
     this.tabContexts.openAssistantHowTo(projectId, threadId, routineId, title)
-  }
-
-  /** Whether the how-to panel is already docked for a task thread. */
-  hasAssistantHowTo(projectId: string, threadId: string): boolean {
-    return this.tabContexts.hasAssistantHowTo(projectId, threadId)
-  }
-
-  /** Refresh the routine an open how-to tab targets after task regrouping. */
-  setAssistantHowToRoutine(projectId: string, threadId: string, routineId: string | null): void {
-    this.tabContexts.setAssistantHowToRoutine(projectId, threadId, routineId)
   }
 
   openMemory(
