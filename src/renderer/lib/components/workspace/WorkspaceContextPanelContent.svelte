@@ -10,7 +10,6 @@
   import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
   import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
   import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
-  import HowToPanel from '$lib/components/assistant/AssistantPanel.svelte'
   import type { Thread } from '$shared/types'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
@@ -208,14 +207,16 @@
         <NotificationPanel />
       {/await}
     {:else if activeContextTab.kind === 'assistant-how-to'}
-      <HowToPanel
-        projectId={activeContextTab.projectId}
-        threadId={activeContextTab.threadId}
-        routineId={activeContextTab.routineId}
-        bind:panelTab={activeContextTab.panelTab}
-        {navigate}
-        onOpenTask={onOpenAssistantTask}
-      />
+      {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
+        <HowToPanel
+          projectId={activeContextTab.projectId}
+          threadId={activeContextTab.threadId}
+          routineId={activeContextTab.routineId}
+          bind:panelTab={activeContextTab.panelTab}
+          {navigate}
+          onOpenTask={onOpenAssistantTask}
+        />
+      {/await}
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}
         {#if coordinator.panel.component === 'assignment'}

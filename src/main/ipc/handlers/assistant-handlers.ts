@@ -208,7 +208,12 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   const broadcastRoutines = () => broadcastRoutinesChanged(routineManager.listRoutines())
 
-  ipcMain.handle('routine:ensureSpace', () => projectManager.ensureAssistantSpace())
+  // Registered on the hydration surface when the bootstrap already owns it, so
+  // Assistant View's first hydration pass never awaits the post-paint graph just
+  // to guarantee the hidden assistant container exists.
+  if (!ctx.options.hydrationHandlersRegistered) {
+    ipcMain.handle('routine:ensureSpace', () => projectManager.ensureAssistantSpace())
+  }
   ipcMain.handle('routine:list', () => routineManager.listRoutines())
 
   ipcMain.handle('routine:create', (_, input: unknown) => {

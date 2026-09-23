@@ -49,7 +49,6 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import AssistantSidebar from '../assistant/AssistantSidebar.svelte'
   import { groupRunsByTask } from '../assistant/assistant-view'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
@@ -2144,10 +2143,12 @@
 
   async function loadData(): Promise<void> {
     try {
+      // Assistant View hydrates in the same pass as every other view. The hidden
+      // assistant container is created by the main process before navigation, so
+      // its project record is already in `project:list`; nothing here awaits the
+      // post-paint feature graph, which used to serialize the entire first
+      // usable frame (project/thread hydration included) behind it.
       assistantRoutines.initialize()
-      // Ensure the assistant container exists before the thread list is read so
-      // assistant tasks are present on the first load.
-      await assistantRoutines.ensureSpace().catch(() => undefined)
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
         invoke('thread:listRecentPerProject')
@@ -3492,30 +3493,32 @@
 <div class="flex h-full">
   <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
   {#if mode === 'assistant'}
-    <AssistantSidebar
-      bind:scroller={sidebarScroller}
-      routines={assistantRoutineList}
-      tasks={assistantTasks}
-      runsByTask={assistantRunsByTask}
-      selectedThreadId={activeThreadRowId(selectedThread)}
-      {navigate}
-      onOpenTask={openAssistantTask}
-      onOpenTaskHowTo={openAssistantHowToForTask}
-      onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
-      onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
-      onRenameTask={handleRename}
-      onTogglePinTask={(task) => void togglePin(task)}
-      onDeleteTask={handleDelete}
-      onForkTask={(task) => void forkThread(task)}
-      onOpenTaskNotes={openAssistantTaskNotes}
-      onHandedOffTask={handleAssistantHandoff}
-      onHideHowTo={(task) => void hideAssistantHowTo(task)}
-      onDeleteRoutine={deleteAssistantRoutine}
-      onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
-      onMoveRoutine={(draggedId, targetId, position) =>
-        void moveAssistantRoutine(draggedId, targetId, position)}
-      onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
-    />
+    {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
+      <AssistantSidebar
+        bind:scroller={sidebarScroller}
+        routines={assistantRoutineList}
+        tasks={assistantTasks}
+        runsByTask={assistantRunsByTask}
+        selectedThreadId={activeThreadRowId(selectedThread)}
+        {navigate}
+        onOpenTask={openAssistantTask}
+        onOpenTaskHowTo={openAssistantHowToForTask}
+        onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
+        onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+        onRenameTask={handleRename}
+        onTogglePinTask={(task) => void togglePin(task)}
+        onDeleteTask={handleDelete}
+        onForkTask={(task) => void forkThread(task)}
+        onOpenTaskNotes={openAssistantTaskNotes}
+        onHandedOffTask={handleAssistantHandoff}
+        onHideHowTo={(task) => void hideAssistantHowTo(task)}
+        onDeleteRoutine={deleteAssistantRoutine}
+        onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
+        onMoveRoutine={(draggedId, targetId, position) =>
+          void moveAssistantRoutine(draggedId, targetId, position)}
+        onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
+      />
+    {/await}
   {:else}
     <WorkspaceSidebar
       bind:scroller={sidebarScroller}
