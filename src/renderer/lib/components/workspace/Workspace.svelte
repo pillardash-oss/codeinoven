@@ -3155,13 +3155,19 @@
     }
   }
 
-  /** Remove a routine; its tasks survive as routine-less tasks. */
+  /** Remove a routine and every thread it owns, its hidden how-to thread included. */
   async function deleteAssistantRoutine(routineId: string): Promise<void> {
     const affected = allThreads.filter((thread) => thread.routineId === routineId)
     await assistantRoutines.deleteRoutine(routineId)
+    // `thread:deleted` prunes the rows; drop them here too so the sidebar is
+    // correct immediately, the same way a plain thread delete behaves.
     for (const thread of affected) {
-      upsertThreadInList({ ...thread, routineId: undefined })
+      allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
+      scopeState.removeThread(thread.id)
+      if (selectedThread?.id === thread.id) workspaceState.clearThread()
     }
+    // The routine is gone, so its how-to panel has nothing left to configure.
+    contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
   }
 
   async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {

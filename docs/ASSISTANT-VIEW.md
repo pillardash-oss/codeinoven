@@ -181,7 +181,11 @@ a new-task button, and an ellipsis menu (also opened by right-clicking the row)
 with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
 task dragged onto a routine is grouped into it. Hovering a routine reveals a
 popover with its status, schedule type, next run, task count, and a how-to
-preview (`AssistantRoutineHoverPopover.svelte`).
+preview (`AssistantRoutineHoverPopover.svelte`). **Remove** deletes the routine
+and every thread it owns, the hidden getting-started thread included, through the
+same thread-deletion path a plain thread delete uses (`RoutineManager` is handed
+the canonical thread deleter by `src/main/ipc/ipc-handlers.ts`), so a routine
+never leaves orphaned tasks or a how-to thread behind.
 
 Routines are editable exactly like projects: **Edit routine**
 (`RoutineEditModal.svelte`) opens the shared `AppearancePicker` for the accent
@@ -482,7 +486,9 @@ value and editable where the user must.
   not carry, a switched-off utility, an MCP with no command or URL, and an MCP
   whose declared `{env:NAME}` secret was never supplied all read as needing setup
   instead of as working. **Add a connection** is a searchable, full-width library
-  picker (`UtilityPicker.svelte`), never a plain select.
+  picker (`UtilityPicker.svelte`), never a plain select. Removing one is
+destructive, so the row's X only stages it and the shared `ConfirmDialog`
+commits the removal.
 
   A row that still needs setup carries a **Set up** button that opens the
   **Add capability** modal the Utilities page uses, so the user can wire the

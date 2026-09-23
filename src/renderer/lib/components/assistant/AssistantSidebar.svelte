@@ -353,7 +353,7 @@
   onConfirm={submitDelete}
 >
   <p>
-    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Its tasks survive as
-    routine-less tasks.
+    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Every task in it and
+    its getting-started thread are deleted with their conversations. This cannot be undone.
   </p>
 </ConfirmDialog>

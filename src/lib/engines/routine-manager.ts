@@ -30,10 +30,21 @@ import type {
 export class RoutineManager {
   private routineRepo: RoutineRepo
   private threadRepo: ThreadRepo
+  /**
+   * Removes a thread through the canonical path (session teardown, DB cleanup,
+   * disk artifacts). Attached by the IPC layer once the thread manager exists,
+   * so deleting a routine sweeps its threads instead of orphaning them.
+   */
+  private threadDeleter: ((threadId: string) => Promise<void>) | null = null
 
   constructor(private database: Database) {
     this.routineRepo = new RoutineRepo(database)
     this.threadRepo = new ThreadRepo(database)
+  }
+
+  /** Attach the canonical thread deleter used when a routine is deleted. */
+  attachThreadDeleter(deleter: (threadId: string) => Promise<void>): void {
+    this.threadDeleter = deleter
   }
 
   listRoutines(): Routine[] {
@@ -127,13 +138,20 @@ export class RoutineManager {
     return readIconDataUrl(getRoutinePath(routineId), routine.icon)
   }
 
-  /** Delete a routine and ungroup its tasks (they survive as routine-less). */
-  deleteRoutine(routineId: string): void {
-    // Archived tasks are ungrouped too: a routine deleted while its how-to
-    // thread is hidden must not leave that thread pointing at a routine that
-    // no longer exists.
-    for (const task of this.allRoutineThreads(routineId)) {
-      const ungrouped: Thread = { ...task, routineId: undefined, updatedAt: Date.now() }
+  /**
+   * Delete a routine and every thread it owns   the hidden how-to thread
+   * included   so nothing survives pointing at a routine that no longer
+   * exists. Threads go through the canonical deleter when one is attached (the
+   * app always attaches it); without one they are ungrouped instead, so a unit
+   * context can never leave a dangling `routineId`.
+   */
+  async deleteRoutine(routineId: string): Promise<void> {
+    for (const thread of this.allRoutineThreads(routineId)) {
+      if (this.threadDeleter) {
+        await this.threadDeleter(thread.id)
+        continue
+      }
+      const ungrouped: Thread = { ...thread, routineId: undefined, updatedAt: Date.now() }
       this.threadRepo.upsert(ungrouped)
     }
     this.routineRepo.delete(routineId)

@@ -224,8 +224,10 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return routine
   })
 
-  ipcMain.handle('routine:delete', (_, routineId: unknown) => {
-    routineManager.deleteRoutine(validateEntityId(routineId, 'Routine ID'))
+  ipcMain.handle('routine:delete', async (_, routineId: unknown) => {
+    // The routine's threads   its hidden how-to thread included   are deleted
+    // with it; the thread:deleted broadcasts prune every open surface.
+    await routineManager.deleteRoutine(validateEntityId(routineId, 'Routine ID'))
     broadcastRoutines()
   })
 

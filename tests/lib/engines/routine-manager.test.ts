@@ -108,18 +108,32 @@ describe('RoutineManager', () => {
     expect(routines.resolveTaskSchedule(grouped!)).toEqual({ cadence: 'hourly', times: [] })
   })
 
-  it('ungroups tasks when a routine is deleted', async () => {
+  it('deletes every thread of a routine when it is removed, the hidden how-to thread included', async () => {
+    routines.attachThreadDeleter((threadId) => threads.deleteThread(ASSISTANT_SPACE_ID, threadId))
     const routine = routines.createRoutine({ name: 'Temp' })
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
       title: 'Task'
     })
+    const setup = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Getting started',
+      assistantGettingStarted: true
+    })
     routines.setTaskRoutine(task.id, routine.id)
-    routines.deleteRoutine(routine.id)
-    const remaining = routines.listAssistantTasks().find((entry) => entry.id === task.id)
-    expect(remaining?.routineId).toBeUndefined()
+    routines.setTaskRoutine(setup.id, routine.id)
+    // Hidden how-to thread: archived out of the sidebar but still owned.
+    routines.setHowToHidden(routine.id, true)
+    expect(routines.howToThread(routine.id)?.id).toBe(setup.id)
+
+    await routines.deleteRoutine(routine.id)
+
     expect(routines.getRoutine(routine.id)).toBeNull()
+    expect(routines.howToThread(routine.id)).toBeNull()
+    expect(routines.listAssistantTasks().map((entry) => entry.id)).not.toContain(task.id)
+    expect(await threads.getThread(ASSISTANT_SPACE_ID, setup.id)).toBeNull()
   })
 
   it('lists only assistant-space tasks', async () => {

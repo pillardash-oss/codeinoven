@@ -80,6 +80,7 @@ import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { GitProvider } from '../git/git-provider.interface'
 import type { AttachmentStorageScope, OpenedPath } from '../../lib/types'
+import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type {
   IpcChatEngine,
   IpcHandlerContext,
@@ -150,6 +151,11 @@ export function registerIpcHandlers(
       }
     },
     scopeRoots
+  )
+  // A routine's threads (its hidden how-to thread included) are deleted through
+  // this same canonical path when the routine is removed.
+  routineManager.attachThreadDeleter((threadId) =>
+    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId)
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,
