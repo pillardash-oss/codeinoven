@@ -1,4 +1,5 @@
 import type { Component } from 'svelte'
+import type { ScopeBucket } from '$shared/types'
 
 export type ActionId = `${string}:${string}`
 
@@ -52,6 +53,10 @@ export interface ActionDefinition {
    *  description row: the currently working provider + model while the thread
    *  is working, otherwise the thread's harnesses and provider as icons. */
   threadMeta?: ActionThreadMeta
+  /** Optional scope the action belongs to (a thread's scope), rendered as the
+   *  canonical scope badge. Omitted for the project-rooted Default scope, so a
+   *  row only advertises a scope the user actually created. */
+  scope?: ScopeBucket
 }
 
 export interface ActionThreadMeta {

@@ -6,6 +6,7 @@ import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { statusBadgeForThread } from '$lib/thread-status-badge'
+import { threadScopeBucket } from '$lib/threads/thread-scope'
 import {
   isOrchestrationChildThread,
   isThreadWorking,
@@ -57,6 +58,9 @@ export class ThreadSearchPaletteController {
   private timer: number | null = null
   private request = 0
   private lastQuery = ''
+  /** Latest result set, kept so rows can be rebuilt (scope badges) without
+   *  re-running the search. */
+  private lastResults: readonly ThreadSearchResult[] = []
   private readonly targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   constructor(private readonly deps: ThreadSearchPaletteDeps) {}
@@ -71,6 +75,7 @@ export class ThreadSearchPaletteController {
     this.actions = []
     this.targets.clear()
     this.projectIds = []
+    this.lastResults = []
     this.lastQuery = ''
   }
 
@@ -93,6 +98,7 @@ export class ThreadSearchPaletteController {
       this.loading = false
       this.actions = []
       this.targets.clear()
+      this.lastResults = []
       return
     }
 
@@ -145,6 +151,49 @@ export class ThreadSearchPaletteController {
     }
     if (request !== this.request || !this.paletteOpen) return
 
+    this.lastResults = results
+    this.renderRows()
+    this.loading = false
+    // A scope badge needs the thread's project scope board, which is only cached
+    // for projects the user already opened. Warm the missing boards in the
+    // background and repaint the rows once they land   the search itself never
+    // waits on a board read.
+    void this.warmScopeBoards(request)
+  }
+
+  /** Rebuild the visible rows from the cached results. Scope badges read the
+   *  cached scope boards, so a board that lands after the search refreshes its
+   *  rows without another query. */
+  private renderRows(): void {
+    const { actions, targets } = this.buildRows(this.lastResults)
+    this.targets.clear()
+    for (const [id, target] of targets) this.targets.set(id, target)
+    this.actions = actions
+  }
+
+  /** Cache the scope boards of the projects in the current results that are not
+   *  cached yet, then repaint so their scope badges appear. Deduped per project
+   *  and bounded by the number of projects the results actually span. */
+  private async warmScopeBoards(request: number): Promise<void> {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const missing = new Set<string>()
+    for (const result of this.lastResults) {
+      const thread = result.thread
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      if (scopeState.hasBoard(thread.projectId)) continue
+      missing.add(thread.projectId)
+    }
+    if (missing.size === 0) return
+    await Promise.all([...missing].map((projectId) => scopeState.cacheBoardForLookup(projectId)))
+    if (request !== this.request || !this.paletteOpen) return
+    this.renderRows()
+  }
+
+  /** Map search results to palette rows and their open targets. */
+  private buildRows(results: readonly ThreadSearchResult[]): {
+    actions: ActionDefinition[]
+    targets: SvelteMap<ActionDefinition['id'], ThreadSearchTarget>
+  } {
     const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
     const actions: ActionDefinition[] = []
     for (const result of results) {
@@ -186,6 +235,9 @@ export class ThreadSearchPaletteController {
       // Thread rows always surface the thread's last-activity time, never its
       // creation time, so freshly worked-on threads read as "1h" etc.
       const activityLabel = relativeThreadTime(thread.lastActivity)
+      // The thread's scope, so the row says which scope it belongs to   the same
+      // signal the sidebar thread rows and the hover card already carry.
+      const scope = threadScopeBucket(thread)
       actions.push({
         id,
         title: thread.title,
@@ -202,6 +254,7 @@ export class ThreadSearchPaletteController {
         showSourceBadge: false,
         ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
         ...(status ? { status } : {}),
+        ...(scope ? { scope } : {}),
         threadMeta: {
           working: isLiveWorking,
           harnessIds,
@@ -212,9 +265,6 @@ export class ThreadSearchPaletteController {
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
       })
     }
-    this.targets.clear()
-    for (const [id, target] of targets) this.targets.set(id, target)
-    this.actions = actions.slice(0, MAX_RESULTS)
-    this.loading = false
+    return { actions: actions.slice(0, MAX_RESULTS), targets }
   }
 }

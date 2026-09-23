@@ -259,6 +259,27 @@ class ScopeState {
     await this.loadBoard(projectId)
   }
 
+  /** Whether a project's scope board is already cached for read-only lookups. */
+  hasBoard(projectId: string): boolean {
+    return this.boards.has(projectId)
+  }
+
+  /**
+   * Cache one project's scope board for a read-only lookup (the cross-project
+   * thread search resolves a thread's scope badge from it) without touching the
+   * active board, the shared loading flag, or the visible error. Safe to call
+   * concurrently for different projects: each call owns its own cache entry.
+   */
+  async cacheBoardForLookup(projectId: string): Promise<void> {
+    if (this.boards.has(projectId)) return
+    try {
+      const board = await invoke('scope:get', projectId)
+      this.boards.set(projectId, cloneBoard(board))
+    } catch {
+      // Lookup-only warm-up: a failure here must never surface as a scope error.
+    }
+  }
+
   async loadBoard(projectId = this.activeProjectId): Promise<void> {
     if (!projectId) {
       this.board = cloneBoard(EMPTY_BOARD)

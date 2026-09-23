@@ -1,12 +1,13 @@
 <script lang="ts">
   import { Command } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, X, Zap } from '@lucide/svelte'
+  import { ArrowLeft, CornerDownLeft, FolderTree, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -302,6 +303,22 @@
                     title={action.status.label}
                   />
                   <span class="truncate">{action.status.label}</span>
+                </span>
+              {/if}
+              {#if action.scope}
+                {@const scope = action.scope}
+                <span class="flex shrink-0 items-center gap-1">
+                  {#if scope.root.kind === 'worktree'}
+                    <span
+                      class="flex shrink-0 items-center"
+                      role="img"
+                      aria-label="Managed Git worktree scope on {scope.root.branch}"
+                      title="Managed Git worktree scope on {scope.root.branch}"
+                    >
+                      <FolderTree size={11} class="text-warning" />
+                    </span>
+                  {/if}
+                  <ScopeBadge bucket={scope} size="xs" />
                 </span>
               {/if}
             </span>
