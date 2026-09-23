@@ -513,6 +513,68 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
+   * The three numbers a user deciding to grade now needs: how many
+   * conversations are waiting at all, how many the automatic drain would take
+   * on its next pass, and how many are parked after exhausting their retries.
+   *
+   * One statement, because the three answer the same question and reading them
+   * apart could report a queue that never existed.
+   */
+  queueCounts(nowMs: number): { awaiting: number; due: number; failed: number } {
+    const row = this.db.get<{ awaiting: number; due: number; failed: number }>(
+      `SELECT
+         COUNT(*) AS awaiting,
+         COALESCE(SUM(status = 'pending' AND due_at_ms <= ?), 0) AS due,
+         COALESCE(SUM(status = 'failed'), 0) AS failed
+       FROM model_ranking_snapshots`,
+      nowMs
+    )
+    return { awaiting: row?.awaiting ?? 0, due: row?.due ?? 0, failed: row?.failed ?? 0 }
+  }
+
+  /**
+   * Pull every conversation still inside its inactivity window forward, so a
+   * user-requested run grades what the queue would otherwise hold for hours.
+   *
+   * Only `pending` rows move: a row already claimed by a concurrent pass keeps
+   * its own claim and deadline, and the claim guard would refuse a re-date
+   * anyway. Routed through the database worker because the sweep is unbounded.
+   */
+  async pullPendingForwardViaWorker(nowMs: number): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ?
+       WHERE status = 'pending' AND due_at_ms > ?`,
+      [nowMs, nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking queue pull-forward failed:', result.error)
+    }
+    return result
+  }
+
+  /**
+   * Give every parked conversation one fresh attempt.
+   *
+   * A user who asks for a grade now is deliberately retrying work that already
+   * exhausted its retry budget, so the attempt count resets with it; otherwise
+   * the first failure would park the row again immediately. The claim token is
+   * cleared so a stale in-flight result cannot apply to the revived row.
+   */
+  async requeueFailedRowsViaWorker(nowMs: number): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET status = 'pending', due_at_ms = ?, attempt_count = 0, claim_token = NULL
+       WHERE status = 'failed'`,
+      [nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking failed-snapshot requeue failed:', result.error)
+    }
+    return result
+  }
+
+  /**
    * Every queue row in any state, including ones parked as `failed` for
    * recovery. A user-requested clean slate reports and removes all of them,
    * because a surviving row would be graded later and repopulate the ranking

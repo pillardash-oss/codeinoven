@@ -264,7 +264,10 @@ import type {
   UsageEventFeature,
   UsagePricingProvenance,
   BrainstormPrototypeFidelity,
-  ModelRankingSnapshotRow
+  ModelRankingSnapshotRow,
+  LocalRankingGradeProgress,
+  LocalRankingGradeScope,
+  RankingJudgeConfig
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -391,6 +394,7 @@ import type {
   PersistedProviderCatalog,
   QueuedCoordinatorHandoff,
   RankingGradeCandidate,
+  RankingDrainOutcome,
   RankingJudgeOutcome,
   RankingPassPlan,
   RejectedSpecArtifact,
@@ -733,6 +737,24 @@ export class ChatEngine {
    * so batches never chain back to back even while a backlog is being cleared.
    */
   private static readonly RANKING_DRAIN_RESTART_MS = 2_000
+
+  /**
+   * Breath between the passes of one user-requested run. Shorter than the
+   * automatic restart because a person is watching, and long enough that the
+   * main thread, the database worker and the provider are never hammered by a
+   * backlog being cleared as fast as the queue allows.
+   */
+  private static readonly RANKING_MANUAL_PASS_PAUSE_MS = 250
+
+  /** Wait before re-checking a queue another pass currently owns. */
+  private static readonly RANKING_MANUAL_POLL_MS = 500
+
+  /**
+   * Consecutive passes that grade nothing before a user-requested run stops and
+   * reports what is left. A run must end even when the queue cannot move, for
+   * instance while every judge route sits inside a closed provider window.
+   */
+  private static readonly RANKING_MANUAL_IDLE_PASSES = 2
 
   /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
    *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
@@ -1234,6 +1256,20 @@ export class ChatEngine {
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
   private gradeDrainRunning = false
+
+  /**
+   * The user-requested run in flight, or null when the queue is idle. Held here
+   * (not only in the IPC layer) so the panel can read live progress from
+   * anywhere and a second request joins the run instead of starting a rival one.
+   */
+  private rankingManualRun: LocalRankingGradeProgress | null = null
+
+  /**
+   * The run in flight, so a second request awaits the same result instead of
+   * reading a half-filled snapshot of it. Cleared by whichever caller started
+   * the run, once that run settles.
+   */
+  private rankingManualRunPromise: Promise<LocalRankingGradeProgress> | null = null
 
   /**
    * Earliest moment the next ranking pass may run, set while rows a pass could
@@ -23297,6 +23333,177 @@ export class ChatEngine {
     await this.drainRankingQueue(true)
   }
 
+  /** Live progress of the user-requested run, or null when the queue is idle. */
+  rankingGradeRunStatus(): LocalRankingGradeProgress | null {
+    return this.rankingManualRun ? { ...this.rankingManualRun } : null
+  }
+
+  /**
+   * Stop the user-requested run at the end of the pass in flight.
+   *
+   * A pass is up to three harness processes, so cancelling cannot interrupt one
+   * mid-judge; what it guarantees is that no further row is claimed, which is
+   * what keeps a cancel from costing more than the batch already running.
+   */
+  cancelRankingGrade(): void {
+    if (this.rankingManualRun) this.rankingManualRun.cancelled = true
+  }
+
+  /**
+   * Grade the ranking queue now, on the user's explicit request.
+   *
+   * `due` runs the passes the automatic drain was about to run anyway, only
+   * sooner. `all` additionally pulls every conversation still inside its
+   * inactivity window forward and gives a conversation parked after exhausting
+   * its retries one fresh attempt, so the queue a user is looking at actually
+   * empties.
+   *
+   * The work stays in bounded passes: each one claims at most three rows, waits
+   * for a breath, and re-reads the queue, so a backlog is never graded in one
+   * burst and the main thread is never held. A second request while a run is in
+   * flight joins it rather than starting a rival one, and two consecutive passes
+   * that grade nothing end the run and report what is left, so a queue whose
+   * judge routes are all inside a closed provider window cannot spin.
+   */
+  async gradeRankingQueueNow(
+    scope: LocalRankingGradeScope,
+    onProgress?: (progress: LocalRankingGradeProgress) => void
+  ): Promise<LocalRankingGradeProgress> {
+    const inFlight = this.rankingManualRunPromise
+    if (inFlight) return inFlight
+    const run = this.runRankingGradeQueue(scope, onProgress)
+    this.rankingManualRunPromise = run
+    try {
+      return await run
+    } finally {
+      this.rankingManualRunPromise = null
+    }
+  }
+
+  /**
+   * The body of one user-requested run. Separate from the public entry point so
+   * a joining request can await the very same promise and read its result.
+   */
+  private async runRankingGradeQueue(
+    scope: LocalRankingGradeScope,
+    onProgress?: (progress: LocalRankingGradeProgress) => void
+  ): Promise<LocalRankingGradeProgress> {
+    const run: LocalRankingGradeProgress = {
+      requested: 0,
+      graded: 0,
+      failed: 0,
+      remaining: 0,
+      cancelled: false
+    }
+    this.rankingManualRun = run
+    const emit = (): void => onProgress?.({ ...run })
+    try {
+      const nowMs = Date.now()
+      if (scope === 'all') {
+        await this.rankingSnapshotRepo.requeueFailedRowsViaWorker(nowMs)
+        await this.rankingSnapshotRepo.pullPendingForwardViaWorker(nowMs)
+      }
+      // A hold left by an earlier pass must not pace work the user just asked
+      // for, and the stale-claim sweep runs on the first pass of a full run so
+      // rows a crash left mid-judge are not counted as ungradable.
+      this.rankingHeldRetryAtMs = null
+      const inScope = (): number => {
+        const counts = this.rankingSnapshotRepo.queueCounts(Date.now())
+        return scope === 'all' ? counts.awaiting : counts.due
+      }
+      run.requested = inScope()
+      // What the row shows while the run works: every conversation still
+      // waiting, not only the ones this scope may grade, so a user grading the
+      // due rows still sees how much of the queue is left behind them.
+      run.remaining = await this.rankingSnapshotRepo.totalCount()
+      emit()
+      let firstPass = true
+      let idlePasses = 0
+      while (!run.cancelled && inScope() > 0) {
+        const outcome = await this.drainRankingQueue(firstPass && scope === 'all')
+        firstPass = false
+        // Another pass owns the drain right now: wait for it instead of
+        // counting its work as an idle pass and giving up early.
+        if (outcome === null) {
+          await new Promise((resolve) => setTimeout(resolve, ChatEngine.RANKING_MANUAL_POLL_MS))
+          run.remaining = await this.rankingSnapshotRepo.totalCount()
+          emit()
+          continue
+        }
+        if (outcome.scored === 0 && outcome.failed === 0) {
+          idlePasses += 1
+          if (idlePasses >= ChatEngine.RANKING_MANUAL_IDLE_PASSES) {
+            run.remaining = await this.rankingSnapshotRepo.totalCount()
+            emit()
+            break
+          }
+        } else {
+          idlePasses = 0
+        }
+        run.graded += outcome.scored
+        run.failed += outcome.failed
+        run.remaining = await this.rankingSnapshotRepo.totalCount()
+        emit()
+        if (!run.cancelled && inScope() > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, ChatEngine.RANKING_MANUAL_PASS_PAUSE_MS)
+          )
+        }
+      }
+      return { ...run }
+    } finally {
+      this.rankingManualRun = null
+      emit()
+    }
+  }
+
+  /**
+   * The judge preference, defaulting to the automatic chain for a config
+   * written before the setting existed.
+   */
+  private async rankingJudgePreference(): Promise<RankingJudgeConfig> {
+    const config = await this.storage.getConfig()
+    return config.rankingJudge ?? { kind: 'automatic' }
+  }
+
+  /**
+   * The route of a judge the user pinned to one exact model, or null when the
+   * preference is not a model pin or the pin cannot be resolved (harness gone,
+   * account signed out). An unresolvable pin is not an error: the caller falls
+   * through to the automatic chain, which is the same route the app took before
+   * the setting existed.
+   */
+  private async resolvePinnedRankingJudge(projectPath: string): Promise<AuxiliaryRoute | null> {
+    const preference = await this.rankingJudgePreference()
+    if (preference.kind !== 'model') return null
+    const { harnessId, providerId, modelId } = preference
+    if (!harnessId || !providerId || !modelId) return null
+    const selection: AgentModelSelection = {
+      harnessId,
+      providerId,
+      modelId,
+      ...(preference.accountId === undefined ? {} : { accountId: preference.accountId }),
+      ...(preference.thinkingLevel === undefined ? {} : { thinkingLevel: preference.thinkingLevel })
+    }
+    try {
+      const account = await this.accountRegistry.resolveForProvider(
+        selection.harnessId,
+        selection.providerId,
+        selection.accountId
+      )
+      const driver = await this.driverForAccount(selection.harnessId, account.id)
+      return this.buildAuxiliaryRoute(selection, account.id, driver, projectPath)
+    } catch (error) {
+      Logger.dev('Pinned ranking judge could not be resolved; using the automatic chain', {
+        harnessId,
+        providerId,
+        modelId,
+        error: rawErrorMessage(error)
+      })
+      return null
+    }
+  }
+
   /**
    * Arm one process-wide wake-up for the earliest durable queue row.
    *
@@ -23339,10 +23546,12 @@ export class ChatEngine {
    * harness whose judge keeps failing has its queue held back instead of being
    * retried row by row (see `deferJudgeFailure`).
    */
-  private async drainRankingQueue(requeueStale = false): Promise<void> {
-    if (this.gradeDrainRunning) return
+  private async drainRankingQueue(requeueStale = false): Promise<RankingDrainOutcome | null> {
+    if (this.gradeDrainRunning) return null
     this.gradeDrainRunning = true
     let processed = 0
+    let scored = 0
+    let failed = 0
     let plan: RankingPassPlan = { claimIds: [], heldBack: [] }
     let planFailed = false
     let heldBackDeferral: { failed: boolean; earliestUntilMs: number } | null = null
@@ -23389,11 +23598,15 @@ export class ChatEngine {
           )
           // The snapshot vanished mid-drain or was re-claimed by a later
           // generation (stale judge result); never defer or double-count it.
-          if (applied) processed += 1
+          if (applied) {
+            processed += 1
+            scored += 1
+          }
           continue
         }
         await this.deferJudgeFailure(row, outcome)
         processed += 1
+        failed += 1
       }
     } finally {
       this.gradeDrainRunning = false
@@ -23416,6 +23629,10 @@ export class ChatEngine {
           : undefined
       )
     }
+    // Returned after the `finally` on purpose: returning from inside it would
+    // swallow a judge error thrown by the pass, turning a real failure into a
+    // quiet "graded nothing" result.
+    return { scored, failed }
   }
 
   /**
@@ -23470,9 +23687,14 @@ export class ChatEngine {
     }
     const claimIds: string[] = []
     const heldBack = new Map<number, string[]>()
+    // A pinned judge stands in for the auxiliary lane across the whole window:
+    // it is one route for every row, so it is resolved once, and it is the lane
+    // the pass would actually grade with. An unresolvable pin leaves the lane
+    // exactly as it was, because grading then falls back to the same chain.
+    const pinned = await this.resolvePinnedRankingJudge(projectPath)
     for (const row of head) {
       const native = await driverFor(row.harness_id)
-      const auxiliary = await routeFor(row.harness_id)
+      const auxiliary = pinned ?? (await routeFor(row.harness_id))
       const fallback = await fallbackFor(
         row.harness_id,
         auxiliary ? [row.harness_id, auxiliary.harnessId] : [row.harness_id]
@@ -23757,13 +23979,51 @@ export class ChatEngine {
       viaAuxiliary: false
     }
     try {
-      // TypeSafe first whenever it is available: one HTTPS call with no process
+      // A pinned judge runs first, so the model a user chose on the Usage page is
+      // the model that grades. The pin is a preference, never a lock: anything
+      // short of a readable score falls through to the chain below, so choosing a
+      // judge can only ever cost a slower grade, never a lost one.
+      const workingDirectory = await this.auxiliaryWorkingDirectory()
+      const preference = await this.rankingJudgePreference()
+      if (preference.kind === 'model') {
+        const pinned = await this.resolvePinnedRankingJudge(workingDirectory)
+        if (pinned) {
+          judge = {
+            score: null,
+            judgeHarnessId: pinned.harnessId,
+            judgeModelId: pinned.modelId,
+            viaAuxiliary: true
+          }
+          const pinnedScore = await pinned.driver.gradeTurn(workingDirectory, {
+            settings: pinned.settings,
+            candidates: pinned.candidates,
+            userMessage: candidate.userMessage,
+            assistantOutput: candidate.assistantOutput,
+            followUp: candidate.followUp
+          })
+          if (typeof pinnedScore === 'number') {
+            Logger.dev('Ranking grading completed on the pinned judge', {
+              judgeHarnessId: pinned.harnessId,
+              judgeModelId: pinned.modelId,
+              gradedHarnessId: candidate.harnessId,
+              gradedModelId: candidate.modelId,
+              score: pinnedScore
+            })
+            return { ...judge, score: pinnedScore }
+          }
+          Logger.dev('Pinned judge returned no score; using the automatic chain', {
+            judgeHarnessId: pinned.harnessId,
+            judgeModelId: pinned.modelId,
+            gradedHarnessId: candidate.harnessId
+          })
+        }
+      }
+      // TypeSafe whenever it is available: one HTTPS call with no process
       // spawn, no provider account and a judge outside every harness. Anything
       // short of a readable score falls through to the lanes below.
       const typesafe = await this.gradeWithTypesafe(candidate)
       if (typesafe) return typesafe
 
-      const workingDirectory = await this.auxiliaryWorkingDirectory()
       // A user-assigned auxiliary model judges the conversation when one is
       // configured for the graded model's harness. Grading has no thread, so a
       // failed or unusable judge falls back to the graded model's own harness

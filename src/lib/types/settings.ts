@@ -1,4 +1,4 @@
-import type { AgentDefaultsConfig, AuxiliaryAgentConfig } from './agent'
+import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
 import type { GitPullPreference, PrMergeMethod } from './git'
 
 export interface WorkflowStage {
@@ -191,6 +191,8 @@ export interface AppConfig {
   agentDefaults: AgentDefaultsConfig
   /** Model each harness uses for auxiliary work, keyed by the harness a thread runs on. */
   auxiliaryAgents: AuxiliaryAgentConfig
+  /** Model that judges ranking conversations, and whether it is pinned at all. */
+  rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
   agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
@@ -250,6 +252,7 @@ export type AppConfigPatch = Partial<
     | 'memory'
     | 'agentDefaults'
     | 'auxiliaryAgents'
+    | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'

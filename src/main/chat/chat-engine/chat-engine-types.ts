@@ -567,3 +567,17 @@ export interface RankingPassPlan {
   /** Held-back rows grouped by the deadline they wait for. */
   heldBack: Array<{ untilMs: number; ids: string[] }>
 }
+
+/**
+ * What one drain pass actually did.
+ *
+ * `null` (the return of the drain itself) means the pass never ran because
+ * another one already owned the queue, which a caller driving a run must wait
+ * out rather than mistake for a pass that found nothing to grade.
+ */
+export interface RankingDrainOutcome {
+  /** Rows judged and folded into the aggregates. */
+  scored: number
+  /** Rows the judge could not score, deferred or parked for a later attempt. */
+  failed: number
+}

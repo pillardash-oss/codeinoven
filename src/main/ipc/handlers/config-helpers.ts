@@ -16,8 +16,11 @@ import type {
   EditorId,
   HeartbeatConfig,
   LocalProfileAnalyticsRange,
+  LocalRankingGradeScope,
   LocalUsageClearInput,
   LocalUsageRecordStore,
+  RankingJudgeConfig,
+  RankingJudgeKind,
   ThinkingLevel
 } from '../../../lib/types'
 
@@ -29,6 +32,15 @@ const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>([
   'utilities',
   'modelRankings'
 ])
+const RANKING_GRADE_SCOPES = new Set<LocalRankingGradeScope>(['due', 'all'])
+
+/** Which conversations a user-requested ranking grade run covers. */
+export function validateRankingGradeScope(value: unknown): LocalRankingGradeScope {
+  if (typeof value !== 'string' || !RANKING_GRADE_SCOPES.has(value as LocalRankingGradeScope)) {
+    throw new TypeError('Ranking grade scope is invalid')
+  }
+  return value as LocalRankingGradeScope
+}
 
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -108,6 +120,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
+  'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
@@ -227,6 +240,51 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
     )
   }
   return auxiliaryAgents
+}
+
+const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
+
+/** Fields that describe the pinned model, and therefore apply to `model` only. */
+const RANKING_JUDGE_MODEL_FIELDS = [
+  'harnessId',
+  'providerId',
+  'modelId',
+  'accountId',
+  'thinkingLevel'
+] as const
+
+/**
+ * The ranking-judge preference.
+ *
+ * A `model` pin must name a complete selection, because a half-written pin would
+ * silently grade with the automatic chain while the settings page claimed
+ * otherwise. The other kinds must carry no model fields at all: a stale pin that
+ * survives a switch back to the automatic chain is exactly the quiet
+ * contradiction this boundary exists to refuse.
+ */
+export function validateRankingJudge(value: unknown): RankingJudgeConfig {
+  if (!isRecord(value)) throw new TypeError('Ranking judge must be an object')
+  const fields = new Set<string>(['kind', ...RANKING_JUDGE_MODEL_FIELDS])
+  for (const field of Object.keys(value)) {
+    if (!fields.has(field)) throw new TypeError(`Unsupported ranking judge field: ${field}`)
+  }
+  const kind = value.kind
+  if (typeof kind !== 'string' || !RANKING_JUDGE_KINDS.has(kind as RankingJudgeKind)) {
+    throw new TypeError('Ranking judge kind is invalid')
+  }
+  if (kind !== 'model') {
+    for (const field of RANKING_JUDGE_MODEL_FIELDS) {
+      if (field in value) {
+        throw new TypeError(`Ranking judge ${field} is only valid for a model pin`)
+      }
+    }
+    return { kind: kind as RankingJudgeKind }
+  }
+  // The kind is this preference's own discriminator, so it is removed before
+  // the rest is validated as a model selection, which rejects unknown fields.
+  const selection: Record<string, unknown> = { ...value }
+  delete selection['kind']
+  return { kind: 'model', ...validateAgentModelSelection(selection, 'Ranking judge') }
 }
 
 const FONT_FAMILIES = new Set([
@@ -486,6 +544,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('auxiliaryAgents' in value) {
     patch.auxiliaryAgents = validateAuxiliaryAgents(value.auxiliaryAgents)
+  }
+
+  if ('rankingJudge' in value) {
+    patch.rankingJudge = validateRankingJudge(value.rankingJudge)
   }
 
   if ('agentBehaviorPrompt' in value) {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronDown, RefreshCw, Trash2 } from '@lucide/svelte'
+  import { Brain, Check, ChevronDown, Loader2, RefreshCw, Sparkles, Trash2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type {
     LocalProfileAnalytics,
@@ -9,9 +9,11 @@
     LocalProfileModelRanking,
     LocalProfileProjectBreakdown,
     LocalProfileUsageHour,
+    LocalRankingGradeScope,
+    LocalRankingQueueStatus,
     ThinkingLevel
   } from '$shared/types'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -65,6 +67,24 @@
     type UsageClearCopyPart,
     type UsageClearTarget
   } from './profile-settings-records'
+  import {
+    rankingGradeConfirmation,
+    rankingGradeNotice,
+    rankingGradeProgressLabel
+  } from './profile-settings-grading'
+  import RankingJudgePicker from './RankingJudgePicker.svelte'
+
+  /**
+   * The queue shown until the real one arrives, so the grading dialog always
+   * has copy to render and never flashes an empty sentence.
+   */
+  const EMPTY_QUEUE: LocalRankingQueueStatus = {
+    awaiting: 0,
+    due: 0,
+    failed: 0,
+    judge: { kind: 'automatic', label: 'Automatic' },
+    run: null
+  }
 
   let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
   let loading = $state(true)
@@ -143,15 +163,41 @@
   let pendingClear = $state<UsageClearTarget | null>(null)
   let clearBusy = $state(false)
   let clearNotice = $state('')
+  /** Ranking queue and its judge, read on mount and after every run. */
+  let queue = $state<LocalRankingQueueStatus | null>(null)
+  /** True while the grade request this window started is still running. */
+  let gradeBusy = $state(false)
+  let gradeNotice = $state('')
+  /** True while the grade confirmation is open. */
+  let gradeConfirmOpen = $state(false)
+
+  const gradeRun = $derived(queue?.run ?? null)
+  /**
+   * Conversations still awaiting a grade, taken from the live queue while a run
+   * is in flight so the record row counts down with the run instead of sitting
+   * on the total it had when the page loaded.
+   */
+  const awaitingGrades = $derived(
+    gradeRun ? gradeRun.remaining : (queue?.awaiting ?? usage.records.pendingGrades)
+  )
+  const liveRecords = $derived({ ...usage.records, pendingGrades: awaitingGrades })
+  const gradeConfirmation = $derived(rankingGradeConfirmation(queue ?? EMPTY_QUEUE))
+  /** True when the two scopes differ, so offering both is not a choice between equals. */
+  const gradeOffersBothScopes = $derived(
+    gradeConfirmation.dueLabel !== null && (queue?.due ?? 0) < (queue?.awaiting ?? 0)
+  )
+  /** Scope the confirmation's primary action runs. */
+  const gradePrimaryScope = $derived<LocalRankingGradeScope>(
+    gradeConfirmation.dueLabel === null ? 'all' : 'due'
+  )
 
   // Always resolved: the dialog stays mounted so the shared modal owns initial
   // focus on every open. While closed the copy belongs to the 'all' target and
   // is never rendered.
   const clearConfirmation = $derived(
-    usageClearConfirmation(pendingClear ?? 'all', usage.records, usage.range)
+    usageClearConfirmation(pendingClear ?? 'all', liveRecords, usage.range)
   )
-  const totalRecords = $derived(usageClearRecordCount('all', usage.records))
-
+  const totalRecords = $derived(usageClearRecordCount('all', liveRecords))
   const filteredRankings = $derived(
     shotFilter === 'all'
       ? usage.modelRankings
@@ -282,14 +328,72 @@
     void loadUsage(selectedRange)
   }
 
-  /** Range changes and manual refreshes retire the previous clear notice. */
+  /** Range changes and manual refreshes retire the previous notices. */
   function refresh(): void {
     clearNotice = ''
+    gradeNotice = ''
     void loadUsage()
+    void loadQueue()
+  }
+
+  /**
+   * Read the ranking queue and its judge without touching the analytics: the
+   * queue moves independently of the range the page is showing.
+   */
+  async function loadQueue(): Promise<void> {
+    try {
+      queue = await invoke('account:getRankingQueue')
+    } catch {
+      // The record row falls back to the analytics' own count, so a queue read
+      // that fails costs the grading actions, not the page.
+      queue = null
+    }
+  }
+
+  /**
+   * Grade the queue, then reload both the queue and the analytics the run feeds.
+   *
+   * Progress arrives on `account:rankingGradeProgress` while this call is in
+   * flight, so the row counts down live; the call itself answers with the run's
+   * own result, which is what the notice describes.
+   */
+  async function gradeQueue(scope: LocalRankingGradeScope): Promise<void> {
+    if (gradeBusy) return
+    gradeConfirmOpen = false
+    gradeBusy = true
+    gradeNotice = ''
+    let failure = ''
+    try {
+      const progress = await invoke('account:gradeRankingQueue', scope)
+      gradeNotice = rankingGradeNotice(progress, scope)
+    } catch {
+      failure = 'Those conversations could not be graded. The queue is unchanged.'
+    } finally {
+      gradeBusy = false
+      await loadQueue()
+      await loadUsage(usage.range)
+    }
+    if (failure) errorMessage = failure
+  }
+
+  /**
+   * Stop the run at the end of the pass in flight. The counters keep arriving
+   * until then, so the row stays live rather than looking stalled.
+   */
+  async function cancelGrade(): Promise<void> {
+    try {
+      await invoke('account:cancelRankingGrade')
+    } catch {
+      errorMessage = 'The grading run could not be stopped.'
+    }
   }
 
   onMount(() => {
     void loadUsage()
+    void loadQueue()
+    return subscribe('account:rankingGradeProgress', (progress) => {
+      queue = queue ? { ...queue, run: progress } : queue
+    })
   })
 
   function openClear(target: UsageClearTarget): void {
@@ -386,6 +490,15 @@
       role="status"
     >
       {clearNotice}
+    </p>
+  {/if}
+
+  {#if gradeNotice}
+    <p
+      class="mb-4 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+      role="status"
+    >
+      {gradeNotice}
     </p>
   {/if}
 
@@ -1149,35 +1262,80 @@
       <h2 id="usage-records-heading" class="text-sm font-semibold">Usage records</h2>
       <p class="mt-0.5 text-xs text-muted">
         The local records this page reads. Clearing one starts its section from a clean slate on
-        this device.
+        this device; grading scores the conversations still waiting in the ranking queue.
       </p>
     </div>
     <div class="divide-y">
       {#each USAGE_RECORD_STORES as store (store)}
         {@const info = usageClearInfo(store)}
-        {@const storeRecords = usageClearRecordCount(store, usage.records)}
+        {@const storeRecords = usageClearRecordCount(store, liveRecords)}
         {@const storeLabel = info.label.toLowerCase()}
-        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <div class="min-w-0">
-            <p class="text-xs font-semibold">{info.label}</p>
-            <p class="mt-0.5 text-[0.6875rem] text-muted">{info.description}</p>
-            <p class="mt-1 text-[0.6875rem] tabular-nums text-dimmed">
-              {usageRecordSummary(store, usage.records, usage.range)}
-            </p>
+        <div class="px-4 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-xs font-semibold">{info.label}</p>
+              <p class="mt-0.5 text-[0.6875rem] text-muted">{info.description}</p>
+              <p class="mt-1 text-[0.6875rem] tabular-nums text-dimmed">
+                {usageRecordSummary(store, liveRecords, usage.range)}
+              </p>
+            </div>
+            <div class="flex shrink-0 flex-wrap items-center gap-2">
+              {#if store === 'modelRankings' && gradeRun}
+                <span
+                  class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-[0.6875rem] font-semibold tabular-nums"
+                  role="status"
+                >
+                  <Loader2 size={13} class="animate-spin" />
+                  {rankingGradeProgressLabel(gradeRun)}
+                </span>
+                <button
+                  type="button"
+                  class="flex h-8 items-center rounded-lg border px-2.5 text-[0.6875rem] font-semibold hover:bg-elevated"
+                  title="Stop grading queued conversations"
+                  aria-label="Stop grading queued conversations"
+                  onclick={() => void cancelGrade()}
+                >
+                  Stop
+                </button>
+              {:else if store === 'modelRankings' && awaitingGrades > 0}
+                <button
+                  type="button"
+                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold hover:bg-elevated disabled:opacity-50"
+                  title={`Grade ${formatNumber(awaitingGrades)} queued conversations`}
+                  aria-label="Grade queued conversations"
+                  disabled={loading || gradeBusy}
+                  onclick={() => (gradeConfirmOpen = true)}
+                >
+                  <Sparkles size={13} />
+                  Grade now
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+                title={storeRecords > 0
+                  ? `Clear ${storeLabel} records`
+                  : `No ${storeLabel} records to clear`}
+                aria-label={`Clear ${storeLabel} records`}
+                disabled={loading || clearBusy || storeRecords === 0}
+                onclick={() => openClear(store)}
+              >
+                <Trash2 size={13} />
+                Clear
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
-            title={storeRecords > 0
-              ? `Clear ${storeLabel} records`
-              : `No ${storeLabel} records to clear`}
-            aria-label={`Clear ${storeLabel} records`}
-            disabled={loading || clearBusy || storeRecords === 0}
-            onclick={() => openClear(store)}
-          >
-            <Trash2 size={13} />
-            Clear
-          </button>
+          {#if store === 'modelRankings'}
+            <div class="mt-3 border-t pt-3">
+              <RankingJudgePicker
+                judge={queue?.judge ?? EMPTY_QUEUE.judge}
+                disabled={gradeBusy || gradeRun !== null}
+                onSaved={(saved) => {
+                  queue = queue ? { ...queue, judge: saved } : queue
+                }}
+              />
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -1202,6 +1360,24 @@
   <p>{@render clearCopy(clearConfirmation.scope)}</p>
   <p class="mt-2">{@render clearCopy(clearConfirmation.removal)}</p>
   <p class="mt-2 font-medium text-foreground">Are you sure you want to continue?</p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={gradeConfirmOpen}
+  title={gradeConfirmation.title}
+  confirmLabel={gradeConfirmation.dueLabel ?? gradeConfirmation.allLabel}
+  note={gradeConfirmation.note}
+  variant="primary"
+  busy={gradeBusy}
+  disabled={queue === null || queue.awaiting === 0}
+  secondaryAction={gradeOffersBothScopes
+    ? { label: gradeConfirmation.allLabel, onSelect: () => void gradeQueue('all') }
+    : undefined}
+  onCancel={() => (gradeConfirmOpen = false)}
+  onConfirm={() => void gradeQueue(gradePrimaryScope)}
+>
+  <p>{@render clearCopy(gradeConfirmation.scope)}</p>
+  <p class="mt-2">{@render clearCopy(gradeConfirmation.outcome)}</p>
 </ConfirmDialog>
 
 <style>

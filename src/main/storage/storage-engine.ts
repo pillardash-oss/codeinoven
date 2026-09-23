@@ -59,6 +59,7 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,

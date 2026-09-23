@@ -26,6 +26,30 @@ export interface ThinkingPreset {
  */
 export type AuxiliaryAgentConfig = Record<string, AgentModelSelection>
 
+/**
+ * Which model judges ranking conversations.
+ *
+ * `automatic` keeps the built-in chain (TypeSafe, then the graded harness's
+ * auxiliary model, then the graded model, then a fallback). `typesafe` pins the
+ * app-owned TypeSafe (Jev) capability first. `model` pins one exact model, so a
+ * user can grade the queue with a model the automatic chain would not pick.
+ *
+ * A pin is a preference, not a lock: a pinned judge that cannot answer falls
+ * through to the automatic chain, so an outage or a signed-out account costs a
+ * slower grade instead of a lost one.
+ */
+export type RankingJudgeKind = 'automatic' | 'typesafe' | 'model'
+
+/** Persisted ranking-judge preference. The model fields apply to `model` only. */
+export interface RankingJudgeConfig {
+  kind: RankingJudgeKind
+  harnessId?: string
+  providerId?: string
+  modelId?: string
+  accountId?: string
+  thinkingLevel?: ThinkingLevel
+}
+
 /** Optional global model defaults for Engineering's distinct agent roles. */
 export interface AgentDefaultsConfig {
   seniorEngineer?: AgentModelSelection
