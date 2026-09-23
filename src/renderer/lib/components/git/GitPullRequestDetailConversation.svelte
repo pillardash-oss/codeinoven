@@ -14,6 +14,7 @@
    * comment that quotes it. The reply box says which one it is doing.
    */
   import { MessageSquareReply, MessagesSquare } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { gitState } from '$lib/stores/git.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -162,28 +163,33 @@
   }
 </script>
 
-{#snippet replyFooter(entry: ConversationEntry)}
-  <div class="border-t border-border/60 p-1.5">
-    {#if replyEntry?.key === entry.key}
-      <PrReplyBox
-        recipient={githubDisplayLogin(entry.author)}
-        hint="Posts a new comment quoting @{githubDisplayLogin(entry.author)}"
-        {busy}
-        onSubmit={submitReply}
-        onCancel={() => (replyEntry = null)}
-      />
-    {:else}
-      <button
-        type="button"
-        class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
-        title="Reply to @{githubDisplayLogin(entry.author)}"
-        onclick={() => (replyEntry = entry)}
-      >
-        <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
-        Reply
-      </button>
+{#snippet replyFooter({ entry, reaction }: { entry: ConversationEntry; reaction: Snippet | null })}
+  {#if replyEntry?.key === entry.key}
+    <!--
+      An open composer takes the whole row: the reaction picker belongs beside
+      the reply button, not beside a box several times its height.
+    -->
+    <PrReplyBox
+      recipient={githubDisplayLogin(entry.author)}
+      hint="Posts a new comment quoting @{githubDisplayLogin(entry.author)}"
+      {busy}
+      onSubmit={submitReply}
+      onCancel={() => (replyEntry = null)}
+    />
+  {:else}
+    <button
+      type="button"
+      class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.6875rem] text-muted hover:bg-elevated hover:text-foreground"
+      title="Reply to @{githubDisplayLogin(entry.author)}"
+      onclick={() => (replyEntry = entry)}
+    >
+      <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+      Reply
+    </button>
+    {#if reaction}
+      {@render reaction()}
     {/if}
-  </div>
+  {/if}
 {/snippet}
 
 {#snippet reviewThreads(threads: ReviewThread[])}
