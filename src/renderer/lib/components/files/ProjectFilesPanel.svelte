@@ -19,6 +19,11 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import {
+    conflictSaveStep,
+    conflictSaveStepLabel,
+    conflictSaveStepTitle
+  } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -276,6 +281,18 @@
   $effect(() =>
     browserVisibility.hideWhile('files-fullscreen-editor', 'fullscreen-surface', fullscreenOpen)
   )
+  /**
+   * The conflict editor renders in two places   the sidebar body and the
+   * fullscreen modal   and each mount reports its own controller and status.
+   * The panel keeps only the surface that is on screen: the modal's content
+   * outlives its close until bits-ui's exit check runs a frame later, so the
+   * fullscreen view's teardown would otherwise land after the sidebar view has
+   * registered and leave the sidebar's save button and chord without a
+   * controller. Tagging each report with its surface lets a stale teardown be
+   * recognised and dropped.
+   */
+  type ConflictSurface = 'sidebar' | 'fullscreen'
+  let conflictSurface = $state<ConflictSurface | null>(null)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({
     canSave: false,
@@ -283,21 +300,15 @@
     dirty: false,
     saving: false
   })
+  /** What the save chord and both save buttons do right now: they write the
+   *  resolved progress as a draft until there is nothing left to draft, and
+   *  only then hand the finished file back to git. */
+  let conflictStep = $derived(conflictSaveStep(conflictStatus))
   /** A conflict save is possible while there is resolved progress the scratch
    *  file has not taken yet, or once every conflict block is resolved. */
-  let conflictSaveReady = $derived(conflictStatus.canSaveDraft || conflictStatus.canSave)
-  /** What the save chord does right now for a conflict being resolved: it
-   *  writes the resolved progress as a draft until there is nothing left to
-   *  draft, and only then hands the finished file back to git. The label says
-   *  which of the two the press performs, so marking a file resolved is never
-   *  a surprise. */
-  let conflictSaveLabel = $derived(
-    conflictStatus.canSaveDraft
-      ? 'Save conflict draft (Cmd/Ctrl+S)'
-      : conflictStatus.canSave
-        ? 'Replace the original file and mark it resolved (Cmd/Ctrl+S)'
-        : 'Accept a conflict block first: a draft needs at least one resolved block'
-  )
+  let conflictSaveReady = $derived(conflictStep !== 'none')
+  let conflictSaveLabel = $derived(conflictSaveStepTitle(conflictStep))
+  let conflictSaveText = $derived(conflictSaveStepLabel(conflictStep))
   let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
@@ -339,11 +350,28 @@
     projectFilesWorkspace.setFullscreenActive(projectId, false)
   }
 
-  function handleConflictController(next: ConflictResolutionController | null): void {
+  function handleConflictController(
+    surface: ConflictSurface,
+    next: ConflictResolutionController | null
+  ): void {
+    if (next === null) {
+      // Only the surface holding the slot may clear it. The fullscreen editor's
+      // teardown arrives after the sidebar editor is already live, and clearing
+      // the slot then is what left the sidebar's save button doing nothing.
+      if (conflictSurface !== surface) return
+      conflictSurface = null
+      conflictController = null
+      conflictStatus = { canSave: false, canSaveDraft: false, dirty: false, saving: false }
+      return
+    }
+    conflictSurface = surface
     conflictController = next
   }
 
-  function handleConflictStatus(next: ConflictResolutionStatus): void {
+  function handleConflictStatus(surface: ConflictSurface, next: ConflictResolutionStatus): void {
+    // A status from a surface that no longer owns the slot is stale: the view
+    // it describes is either closing or off screen.
+    if (conflictSurface !== surface) return
     conflictStatus = next
   }
 
@@ -354,11 +382,11 @@
   async function saveActiveFile(): Promise<void> {
     if (!activeTab) return
     if (activePathIsConflicted) {
-      if (conflictStatus.canSaveDraft) {
+      if (conflictStep === 'draft') {
         await conflictController?.saveDraft()
         return
       }
-      await conflictController?.save()
+      if (conflictStep === 'resolve') await conflictController?.save()
       return
     }
     await projectFilesWorkspace.save(projectId, activeTab.path)
@@ -929,8 +957,8 @@
             path={activeTab.path}
             wrap={wrapLines}
             onToggleWrap={() => wrapTextState.toggle()}
-            onControllerChange={handleConflictController}
-            onStatusChange={handleConflictStatus}
+            onControllerChange={(next) => handleConflictController('sidebar', next)}
+            onStatusChange={(next) => handleConflictStatus('sidebar', next)}
           />
         {/if}
       {:else if activeSession || deletedAtCheckpoint}
@@ -1075,7 +1103,7 @@
           <Save size={11} />
         {/if}
         {#if activePathIsConflicted}
-          {conflictStatus.canSaveDraft ? 'Save draft' : 'Mark as resolved'}
+          {conflictSaveText}
         {:else}Save{/if}
       </button>
     {/if}
@@ -1209,8 +1237,8 @@
               path={activeTab.path}
               wrap={wrapLines}
               onToggleWrap={() => wrapTextState.toggle()}
-              onControllerChange={handleConflictController}
-              onStatusChange={handleConflictStatus}
+              onControllerChange={(next) => handleConflictController('fullscreen', next)}
+              onStatusChange={(next) => handleConflictStatus('fullscreen', next)}
             />
           {:else}
             <ProjectTextEditor

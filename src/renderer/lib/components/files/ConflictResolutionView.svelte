@@ -22,6 +22,11 @@
   } from '$lib/editor/codemirror-file-editor'
   import { gitState } from '$lib/stores/git.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import {
+    conflictSaveStep,
+    conflictSaveStepLabel,
+    conflictSaveStepTitle
+  } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -77,6 +82,9 @@
   const resolvedCount = $derived(hunkStates.filter(isResolved).length)
   const allResolved = $derived(hunkStates.length > 0 && resolvedCount === hunkStates.length)
   const canSaveDraft = $derived(resolvedCount > 0 && dirty)
+  /** The editor's own save button follows the same two-step rule as the chord
+   *  and the panel's save button: draft first, then mark the file resolved. */
+  const saveStep = $derived(conflictSaveStep({ canSave: allResolved, canSaveDraft }))
 
   function isResolved(state: GitConflictWorkHunkState): boolean {
     return state.acceptedIncoming || state.acceptedCurrent || state.edited
@@ -292,6 +300,12 @@
       saving = false
       notifyStatus()
     }
+  }
+
+  /** Run whichever step the save button shows right now. */
+  function runSaveStep(): void {
+    if (saveStep === 'draft') void saveDraft()
+    else if (saveStep === 'resolve') void save()
   }
 
   const controller: ConflictResolutionController = { save, saveDraft }
@@ -524,12 +538,14 @@
       <button
         type="button"
         class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-        disabled={!canSaveDraft || draftSaving || saving}
-        title="Save resolved conflict progress to the scratch file (Cmd/Ctrl+S)"
-        onclick={() => void saveDraft()}
+        disabled={saveStep === 'none' || draftSaving || saving}
+        title={conflictSaveStepTitle(saveStep)}
+        onclick={runSaveStep}
       >
-        {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
-        Save draft
+        {#if draftSaving || saving}<Loader2 size={11} class="animate-spin" />{:else}<Save
+            size={11}
+          />{/if}
+        {conflictSaveStepLabel(saveStep)}
       </button>
       <button
         type="button"
