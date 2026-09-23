@@ -145,7 +145,26 @@ export const THREADS_SQL = `
 -- ─── Threads ────────────────────────────────────────────────────────────
 ${threadsTableSql('threads')}
 
-${THREAD_INDEXES_SQL}`
+${THREAD_INDEXES_SQL}
+
+-- A delegated child (an Assignment worker or an auditor) shares its recency
+-- with the Sr. Engineer row that owns it: any activity on the child advances
+-- the coordinator's last_activity, so the coordinator bubbles up the status
+-- list the moment one of its workers is touched, a plain prompt included. The
+-- ">" guard makes the newest update win, so a stale write can never roll the
+-- coordinator backwards. The coordinator row itself has a NULL
+-- coordinator_thread_id, so this never fires on its own writes.
+CREATE TRIGGER IF NOT EXISTS threads_coordinator_activity
+AFTER UPDATE OF last_activity ON threads
+WHEN new.coordinator_thread_id IS NOT NULL
+  AND new.last_activity > COALESCE(
+        (SELECT last_activity FROM threads WHERE id = new.coordinator_thread_id), 0)
+BEGIN
+  UPDATE threads
+     SET last_activity = new.last_activity,
+         updated_at = MAX(updated_at, new.last_activity)
+   WHERE id = new.coordinator_thread_id;
+END;`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
