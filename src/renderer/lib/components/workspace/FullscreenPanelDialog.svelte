@@ -23,6 +23,13 @@
     onSelect: (id: string) => void
     onCloseTab: (id: string) => void
     children: Snippet
+    /** This surface displays the browser's native view inside itself.
+     *
+     *  Only the full screen browser sets it. Every other surface here (the
+     *  terminal, the pull request reader) paints over the workspace and must
+     *  keep the native view detached; the browser surface would blank itself if
+     *  it did, because the view it suppresses is the page it is showing. */
+    hostsBrowserView?: boolean
   }
 
   let {
@@ -36,7 +43,8 @@
     onMinimize,
     onSelect,
     onCloseTab,
-    children
+    children,
+    hostsBrowserView = false
   }: Props = $props()
 
   let stripElement = $state<HTMLDivElement>()
@@ -96,6 +104,7 @@
   panelClass="bg-app"
   trapFocus={false}
   escapeCloses={false}
+  blocksBrowserView={!hostsBrowserView}
 >
   <div
     class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"

@@ -26,7 +26,8 @@
    *   - initial focus: the first text field, else the primary action
    *   - Escape, the backdrop, and Cmd/Ctrl+W (`registerOverlayClose`)
    *   - Cmd/Ctrl+Enter (`registerModalPrimaryAction`)
-   *   - browser-view suppression while a full-window surface is up
+   *   - browser-view suppression while a full-window surface is up, unless the
+   *     surface is the one displaying that view (`blocksBrowserView`)
    *
    * A variant only chooses where its panel sits (`placement`), how wide it is
    * (`size`), and whether it draws the canonical header and footer (`chrome`) or
@@ -137,6 +138,14 @@
     trapFocus?: boolean
     /** Whether Escape dismisses. Off for a surface that owns Escape itself. */
     escapeCloses?: boolean
+    /** Detach the browser's native view while this modal is open.
+     *
+     *  The native view floats above every DOM surface, so a modal that does not
+     *  detach it is covered by whatever the browser was last showing. On by
+     *  default for every surface that paints over the workspace. Off for the one
+     *  surface that hosts the view itself: the full screen browser must not
+     *  suppress the very page it exists to display. */
+    blocksBrowserView?: boolean
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
     /** Runs as the panel closes, before focus is restored. Call
@@ -164,6 +173,7 @@
     closeOnBackdrop = true,
     trapFocus = true,
     escapeCloses = true,
+    blocksBrowserView = true,
     claimInitialFocus,
     onCloseAutoFocus,
     panelEl = $bindable(null)
@@ -180,8 +190,14 @@
   // suppress it while open   otherwise a still-visible browser tab covers the
   // dialog's content and footer buttons, making them unclickable. Keyed per
   // instance so stacked modals don't clear each other's suppression.
+  //
+  // `blocksBrowserView` is false for the full screen browser, which displays the
+  // native view itself: suppressing it there leaves the surface empty. Its own
+  // panel claims the view through the store, so nothing else is left uncovered.
   const suppressionKey = `modal-${Math.random().toString(36).slice(2)}`
-  $effect(() => browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open))
+  $effect(() =>
+    browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open && blocksBrowserView)
+  )
 
   $effect(() => {
     if (!open) return

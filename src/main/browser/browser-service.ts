@@ -55,6 +55,7 @@ import {
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
   browserContextKey,
+  isSameBounds,
   validateAttention,
   validateBounds,
   validateBoundedHost,
@@ -94,6 +95,19 @@ export class BrowserService {
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
   private activeTabBounds: BrowserViewBounds | null = null
+  /** The view actually parented to the app window, and the frame it sits at, or
+   *  null while the active tab's view is parked offscreen.
+   *
+   *  The renderer re-reports the same frame once per animation frame while it
+   *  aligns the panel with an entry transform, so `showActiveView` needs to tell
+   *  "attach this now" from "it is already there": re-adding a child view is a
+   *  window-server commit, and doing that sixty times a second for a frame that
+   *  never moved is the difference between an instant switch and a hitch. */
+  private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
+  /** The dialog-context label already installed in each tab's current document.
+   *  The shim is idempotent per document, so a repeat is a script evaluation
+   *  per frame for no change. Cleared when a new document commits. */
+  private readonly injectedDialogLabels = new Map<string, string>()
   /** Parked tab ids in least-recently-used order, newest last. Drives the cap on
    *  how many tabs may render offscreen at once. */
   private readonly parkedOrder: string[] = []
@@ -344,6 +358,8 @@ export class BrowserService {
     this.activeTabId = null
     this.toastVisible = false
     this.activeTabBounds = null
+    this.displayedTab = null
+    this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
     this.agentReveals.clear()
     this.abandonedReveals.clear()
@@ -576,6 +592,9 @@ export class BrowserService {
       // Capture state belongs to the document that ended here, so the tab must
       // not keep claiming it is recording until the new page says otherwise.
       this.capture.reset(tabId)
+      // The dialog shim lived in the document that just went away, so the next
+      // report has to install it again rather than trust the old record.
+      this.injectedDialogLabels.delete(tabId)
       publish()
     })
     view.webContents.on('did-navigate-in-page', publish)
@@ -603,6 +622,9 @@ export class BrowserService {
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
         if (!isMainFrame || errorCode === -3) return
+        // The failed navigation can still commit an error document, which has no
+        // shim of its own, so the record of what is installed must not survive it.
+        this.injectedDialogLabels.delete(tabId)
         this.appendConsoleEntry(tabId, {
           level: 'error',
           message: `Navigation failed (${errorCode}): ${errorDescription}`,
@@ -612,6 +634,9 @@ export class BrowserService {
       }
     )
     view.webContents.on('render-process-gone', (_event, details) => {
+      // The recovered document is brand new and may not report a navigation
+      // commit, so nothing about the dead document's injection may be trusted.
+      this.injectedDialogLabels.delete(tabId)
       this.appendConsoleEntry(tabId, {
         level: 'error',
         message: `Browser renderer stopped: ${details.reason} (exit ${details.exitCode})`,
@@ -894,6 +919,14 @@ export class BrowserService {
       this.runDialogScript(frame, script)
       return
     }
+    // The shim installs itself once per document and rewraps the same original
+    // callables on repeat, so a document that already carries this label has
+    // nothing to gain from another pass. Callers include the renderer's per-frame
+    // alignment reporting, where a repeat is a script evaluation into every frame
+    // of the page for no change. A new document clears the record (see the
+    // `did-navigate` handler), and a renamed project or thread changes the label,
+    // so both still re-install it.
+    if (this.injectedDialogLabels.get(tabId) === label) return
     let frames: readonly WebFrameMain[]
     try {
       frames = contents.mainFrame.framesInSubtree
@@ -902,6 +935,7 @@ export class BrowserService {
       return
     }
     for (const candidate of frames) this.runDialogScript(candidate, script)
+    this.injectedDialogLabels.set(tabId, label)
   }
 
   private runDialogScript(frame: WebFrameMain, script: string): void {
@@ -1024,6 +1058,9 @@ export class BrowserService {
     if (!tab || tab.view.webContents.isDestroyed()) return
     const viewport = size ?? tab.viewport
     this.window.contentView.removeChildView(tab.view)
+    // The view is leaving the window, so whatever frame it was displayed at no
+    // longer describes where it is.
+    if (this.displayedTab?.tabId === tabId) this.displayedTab = null
     this.stage.park(tab.view, viewport)
     this.markParked(tabId)
     if (this.activeTabId === tabId && !keepActive) {
@@ -1045,12 +1082,35 @@ export class BrowserService {
   /** Mount the current active tab in the app window at its display bounds. */
   private showActiveView(): void {
     if (!this.activeTabId || this.toastVisible) return
-    const tab = this.tabs.get(this.activeTabId)
+    const tabId = this.activeTabId
+    const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
+    const bounds = this.activeTabBounds
+    const displayed = this.displayedTab
+    // Both records must agree before a repeat can be skipped. The stage's parked
+    // set is the authority on a view that is offscreen, and the stage re-parks
+    // views on its own when it has to rebuild its stage window, which can land
+    // between two of the renderer's per-frame reports. A view the stage holds has
+    // to be re-parented, so this re-attaches rather than trusting `displayedTab`
+    // alone; skipping here would leave it parked with nothing that ever recovers
+    // it.
+    if (displayed !== null && displayed.tabId === tabId && !this.stage.isParked(tab.view)) {
+      // Already mounted: only a moved frame needs a native call, so the entry
+      // loop's repeats cost one bounds comparison each instead of a re-parent.
+      this.forgetParked(tabId)
+      if (bounds !== null && !isSameBounds(displayed.bounds, bounds)) {
+        this.displayedTab = { tabId, bounds }
+        tab.view.setBounds(bounds)
+      }
+      return
+    }
     this.stage.release(tab.view)
-    this.forgetParked(this.activeTabId)
+    this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
-    if (this.activeTabBounds) tab.view.setBounds(this.activeTabBounds)
+    if (bounds !== null) {
+      this.displayedTab = { tabId, bounds }
+      tab.view.setBounds(bounds)
+    }
   }
 
   private markParked(tabId: string): void {
@@ -1169,6 +1229,8 @@ export class BrowserService {
       this.activeTabId = null
       this.activeTabBounds = null
     }
+    if (this.displayedTab?.tabId === tabId) this.displayedTab = null
+    this.injectedDialogLabels.delete(tabId)
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
     this.capture.forget(tabId)

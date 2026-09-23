@@ -296,3 +296,15 @@ export function validateBounds(value: unknown): BrowserViewBounds {
   }
   return result
 }
+
+/**
+ * Whether two validated frames place a view at exactly the same rectangle.
+ *
+ * Used to tell an actual move from a repeat report: the renderer re-measures its
+ * panel once per animation frame while it aligns the native view with an entry
+ * transform, and re-parenting or re-sizing a view to the frame it already has is
+ * a compositor commit for no difference on screen.
+ */
+export function isSameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
