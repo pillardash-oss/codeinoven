@@ -1105,6 +1105,40 @@ function parseTextPermissionStatus(output: string): CuaPermissionStatus {
   return 'unknown'
 }
 
+/**
+ * The daemon-specific wording. `daemon transport error forwarding <tool>` is what
+ * the MCP server answers when it cannot reach the daemon, and the socket path is
+ * named in the same breath.
+ */
+const CUA_DAEMON_TRANSPORT_FAILURE_PATTERN = /daemon transport error|cua-driver\.sock/iu
+/**
+ * The generic I/O renderings the driver can produce for a lost socket (a connect
+ * that finds no socket file, a write that hits a closed pipe, a response that was
+ * cut off mid-line). Deliberately not enough on their own: the driver uses the
+ * same wording for unrelated files and streams, so they only count next to a
+ * daemon reference.
+ */
+const CUA_SOCKET_FAILURE_PATTERN =
+  /os error (?:2|32|61)\b|connection refused|broken pipe|EOF while parsing/iu
+const CUA_DAEMON_CONTEXT_PATTERN = /cua[\s-]?driver|daemon|\.sock/iu
+
+/**
+ * Whether a driver failure means the MCP server lost its connection to the
+ * shared Cua daemon.
+ *
+ * That server owns one connection to the daemon and never re-establishes it, so
+ * a daemon that dies mid-run (a crash, a driver update, a quit from the menu
+ * bar) leaves it answering transport errors for the rest of its life. Measured
+ * against cua-driver 0.17.0: the connected server keeps failing after
+ * `cua-driver stop` while a freshly spawned one starts a new daemon and works.
+ * Callers use this to drop a connection they cached instead of reusing one that
+ * can never work again.
+ */
+export function isCuaDaemonTransportFailure(message: string): boolean {
+  if (CUA_DAEMON_TRANSPORT_FAILURE_PATTERN.test(message)) return true
+  return CUA_DAEMON_CONTEXT_PATTERN.test(message) && CUA_SOCKET_FAILURE_PATTERN.test(message)
+}
+
 /** The daemon mode one permission tier requires. */
 function daemonModeForPermission(permissionLevel: PermissionLevel): CuaDaemonPermissionMode {
   return permissionLevel === 'full_access' ? 'unrestricted' : 'standard'

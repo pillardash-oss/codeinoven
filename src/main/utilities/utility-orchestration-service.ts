@@ -19,7 +19,7 @@ import {
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
-import { CuaBridgeService } from './cua-bridge-service'
+import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -1373,7 +1373,12 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
-      result = await client.callTool(operation, routedInput)
+      try {
+        result = await client.callTool(operation, routedInput)
+      } catch (error) {
+        await this.dropDeadComputerUseTransport(state, resolved, client, error)
+        throw error
+      }
       if (this.isComputerUseUtility(resolved)) {
         this.cuaActivityListener?.({
           threadId: state.request.threadId,
@@ -1439,6 +1444,47 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === CUA_UTILITY_ID) return true
     const capability = normalizeCapability(resolved.binding.nativeCapability ?? '')
     return capability === 'computer_use'
+  }
+
+  /**
+   * Drop a Cua client whose daemon connection died mid-turn.
+   *
+   * The `cua-driver mcp` server owns one connection to the shared Cua daemon and
+   * never re-establishes it, so a daemon that dies while a run is in flight (a
+   * crash, a driver update, a quit from the menu bar) leaves every remaining
+   * computer-use call of that turn failing against a connection that can never
+   * work again   measured against cua-driver 0.17.0: the connected server keeps
+   * answering `daemon transport error ... cua-driver.sock: No such file or
+   * directory` while a freshly spawned one starts a new daemon and works.
+   *
+   * Closing the client and forgetting its session is what lets the next call
+   * reconnect: reconnecting re-claims the daemon, which starts a fresh one on
+   * macOS, and the cursor session is re-created on it. The session id is dropped
+   * with the client because that session lived inside the daemon that just died.
+   *
+   * The call that failed is deliberately never retried: a computer-use operation
+   * may already have moved the mouse or typed, so replaying it is not safe.
+   *
+   * The failing client is the one named here, and it is only forgotten when it is
+   * still the cached one: the gateway serves concurrent requests, so another call
+   * may already have replaced it with a fresh connection that must survive.
+   */
+  private async dropDeadComputerUseTransport(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    error: unknown
+  ): Promise<void> {
+    if (!this.isComputerUseUtility(resolved)) return
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isCuaDaemonTransportFailure(message)) return
+    const utilityId = resolved.utility.id
+    if (state.clients.get(utilityId) === client) {
+      state.clients.delete(utilityId)
+      state.cuaSessionIds.delete(utilityId)
+    }
+    await client.close().catch(() => undefined)
+    Logger.dev('Cua daemon connection was lost; the next computer-use call reconnects')
   }
 
   /** Establish a visible, never-idle-hidden cursor for one Cua turn. */
