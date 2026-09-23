@@ -22,6 +22,7 @@ const MAX_ROUTINE_NAME = 200
 const MAX_ROUTINE_DESCRIPTION = 2000
 const MAX_HOW_TO = 100_000
 const MAX_CONNECTIONS = 64
+const MAX_CONNECTION_SETUP = 4_000
 const MAX_TIMES = 24
 const MAX_FALLBACKS = 12
 
@@ -76,7 +77,10 @@ function sanitizeConnections(value: unknown): RoutineConnection[] {
       utilityId: record.utilityId.slice(0, 200),
       label: record.label.slice(0, 200),
       ...(typeof record.kind === 'string' ? { kind: record.kind.slice(0, 64) } : {}),
-      ...(record.required === true ? { required: true } : {})
+      ...(record.required === true ? { required: true } : {}),
+      ...(typeof record.setup === 'string'
+        ? { setup: record.setup.slice(0, MAX_CONNECTION_SETUP) }
+        : {})
     })
   }
   return result

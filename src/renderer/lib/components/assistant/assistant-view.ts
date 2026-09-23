@@ -800,8 +800,12 @@ export function resolveConnections(
  * that carries a `utilityId` links straight to that utility; otherwise the
  * name is matched against the library. A connection the library does not carry
  * stays as a required connection, which the panel renders as needing setup. An
- * entry already covered   by label, or by the utility it resolves to   is
- * skipped, and a plain string is accepted as shorthand for `{ name }`.
+ * entry already covered   by label, or by the utility it resolves to   is not
+ * duplicated, and a plain string is accepted as shorthand for `{ name }`.
+ *
+ * A plan may also carry a `setup` prompt for a connection the agent could not
+ * install itself. That prompt lands on the connection so the panel can prefill
+ * the agent-assisted utility setup, and a later plan that refines it wins.
  */
 export function connectionsFromPlan(
   entries: readonly (string | RoutinePlanConnection)[],
@@ -809,9 +813,9 @@ export function connectionsFromPlan(
   utilities: readonly UtilityDefinition[]
 ): RoutineConnection[] {
   const merged = [...existing]
-  const covers = (label: string, utilityId: string | null): boolean => {
+  const indexOfCover = (label: string, utilityId: string | null): number => {
     const needle = normalizeName(label)
-    return merged.some((connection) => {
+    return merged.findIndex((connection) => {
       if (utilityId !== null && connection.utilityId === utilityId) return true
       return [connection.label, connection.utilityId.replace(/^required:/, '')]
         .map(normalizeName)
@@ -822,15 +826,33 @@ export function connectionsFromPlan(
     const entry = typeof raw === 'string' ? { name: raw } : raw
     const label = entry.name.trim()
     if (!label) continue
+    const setup = entry.setup?.trim() ?? ''
     const byId = entry.utilityId
       ? (utilities.find((candidate) => candidate.id === entry.utilityId) ?? null)
       : null
     const utility = byId ?? utilities.find((candidate) => matchesUtility(label, candidate)) ?? null
-    if (covers(label, utility?.id ?? null)) continue
+    const covered = indexOfCover(label, utility?.id ?? null)
+    if (covered >= 0) {
+      const existingConnection = merged[covered]
+      if (setup && existingConnection) {
+        merged[covered] = { ...existingConnection, setup }
+      }
+      continue
+    }
     merged.push(
       utility
-        ? { utilityId: utility.id, label: utility.name, kind: utility.kind }
-        : { utilityId: `required:${normalizeName(label)}`, label, required: true }
+        ? {
+            utilityId: utility.id,
+            label: utility.name,
+            kind: utility.kind,
+            ...(setup ? { setup } : {})
+          }
+        : {
+            utilityId: `required:${normalizeName(label)}`,
+            label,
+            required: true,
+            ...(setup ? { setup } : {})
+          }
     )
   }
   return merged

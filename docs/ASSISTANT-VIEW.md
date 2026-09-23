@@ -317,6 +317,12 @@ prompt"; the user-facing term is how-to.
   (`ROUTINE_SCHEDULE_JSON_SCHEMA`, `ROUTINE_CONNECTION_JSON_SCHEMA`,
   `ROUTINE_PLAN_JSON_SCHEMA`), and the agent is shown the plan schema in the
   contract.
+- A connection the agent could not install itself carries a `setup` prompt in its
+  plan entry: a ready-to-run instruction for the utility setup agent naming what
+  the capability is, where it comes from, and what the user must supply. It is
+  stored on the routine connection (`RoutineConnection.setup`) and prefills the
+  **Set up** button in the panel's Connections tab, so the user only picks a
+  model and runs the setup instead of describing the capability again.
 - The contract belongs to the thread, so the chat engine attaches it to the
   hidden context of every user turn while the routine's how-to is missing
   (`ChatEngine.routineAuthoringHiddenContext`, text in
@@ -430,8 +436,18 @@ value and editable where the user must.
   not carry, a switched-off utility, an MCP with no command or URL, and an MCP
   whose declared `{env:NAME}` secret was never supplied all read as needing setup
   instead of as working. **Add a connection** is a searchable, full-width library
-  picker (`UtilityPicker.svelte`), never a plain select, and a half-configured row
-  links straight to the Utilities page.
+  picker (`UtilityPicker.svelte`), never a plain select.
+
+  A row that still needs setup carries a **Set up** button that opens the same
+  **Add capability** modal the Utilities page uses, so the user can wire the
+  capability up without leaving the panel. The agent-assisted path is prefilled:
+  when the authoring agent could not install a connection itself it records a
+  `setup` prompt on that connection (in the plan's `connections` entry), and
+  `ConnectionRow` hands it to `UtilityEditorModal` as `agentRequestSeed`. The user
+  only picks a model and runs it. Installing reloads both catalogs through
+  `loadConnectionLibrary`, so the row flips to ready in place; a required
+  connection relinks by label, so a later `Slack MCP` install satisfies a
+  connection the plan named `Slack`.
 
   The library is the same union the Utilities page renders, built by
   `buildConnectionLibrary` in `connection-library.ts`: the registry utilities the

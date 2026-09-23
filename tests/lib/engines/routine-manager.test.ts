@@ -51,6 +51,28 @@ describe('RoutineManager', () => {
     })
   })
 
+  it('persists a connection and the agent setup prompt it carries', () => {
+    const routine = routines.createRoutine({
+      name: 'Slack digest',
+      connections: [
+        {
+          utilityId: 'required:slack',
+          label: 'Slack',
+          required: true,
+          setup: 'Install the official Slack MCP from mcp.slack.com and collect the bot token.'
+        }
+      ]
+    })
+    expect(routines.getRoutine(routine.id)?.connections).toEqual([
+      {
+        utilityId: 'required:slack',
+        label: 'Slack',
+        required: true,
+        setup: 'Install the official Slack MCP from mcp.slack.com and collect the bot token.'
+      }
+    ])
+  })
+
   it('groups a task and resolves its schedule from the routine', async () => {
     const routine = routines.createRoutine({
       name: 'Triage',

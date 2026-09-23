@@ -22,6 +22,12 @@ export interface RoutinePlanConnection {
   name: string
   /** Exact utility id when the plan knows it, preferred over name matching. */
   utilityId?: string
+  /**
+   * How to set this connection up when the agent could not install it itself:
+   * what the capability is, where it comes from, and what the user has to
+   * provide. Prefills the agent-assisted utility setup.
+   */
+  setup?: string
 }
 
 /** The validated plan: the schedule to apply and the connections to link. */
@@ -109,6 +115,12 @@ export const ROUTINE_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
       minLength: 1,
       description:
         'Exact utility id from the library when it is known (e.g. "slack-mcp"). Takes precedence over name matching.'
+    },
+    setup: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'Include ONLY when you could not install this connection yourself. A ready-to-run prompt for the utility setup agent: what the capability is, its source (official MCP URL, npm package, or skill), and what the user must supply. The user sends it verbatim.'
     }
   },
   required: ['name']
@@ -208,7 +220,8 @@ export function normalizePlanConnections(value: unknown): RoutinePlanConnection[
     const name = typeof entry.name === 'string' ? entry.name.trim() : ''
     if (!name) continue
     const utilityId = typeof entry.utilityId === 'string' ? entry.utilityId.trim() : ''
-    result.push({ name, ...(utilityId ? { utilityId } : {}) })
+    const setup = typeof entry.setup === 'string' ? entry.setup.trim() : ''
+    result.push({ name, ...(utilityId ? { utilityId } : {}), ...(setup ? { setup } : {}) })
   }
   return result
 }

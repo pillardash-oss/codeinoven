@@ -7,11 +7,11 @@
   interface Props {
     view: ConnectionView
     onRemove: (connection: RoutineConnection) => void
-    /** Open the Utilities page so a half-configured connection can be supplied. */
-    onOpenUtilities: () => void
+    /** Open the Add capability modal, seeded with this connection's setup prompt. */
+    onSetup: (connection: RoutineConnection) => void
   }
 
-  let { view, onRemove, onOpenUtilities }: Props = $props()
+  let { view, onRemove, onSetup }: Props = $props()
 
   const KindIcon = $derived(
     utilityKindIcon(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)
@@ -73,9 +73,9 @@
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Set up {view.connection.label} in Utilities"
-        aria-label="Set up {view.connection.label} in Utilities"
-        onclick={onOpenUtilities}
+        title="Set up {view.connection.label}"
+        aria-label="Set up {view.connection.label}"
+        onclick={() => onSetup(view.connection)}
       >
         <Settings2 size={12} strokeWidth={1.8} />
       </button>

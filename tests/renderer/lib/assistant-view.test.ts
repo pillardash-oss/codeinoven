@@ -409,6 +409,28 @@ describe('routine plan schema', () => {
     ])
   })
 
+  it('carries a connection setup prompt through the plan schema', () => {
+    const plan = parseRoutinePlanJson(
+      JSON.stringify({
+        schedule: { cadence: 'daily', times: ['08:30'] },
+        connections: [
+          {
+            name: 'Slack',
+            setup:
+              'Install the official Slack MCP at https://mcp.slack.com/mcp and collect the bot token.'
+          }
+        ]
+      })
+    )
+    expect(plan?.connections).toEqual([
+      {
+        name: 'Slack',
+        setup:
+          'Install the official Slack MCP at https://mcp.slack.com/mcp and collect the bot token.'
+      }
+    ])
+  })
+
   it('normalises and sorts times, and accepts a plain-string connection', () => {
     const plan = parseRoutinePlanValue({
       schedule: { cadence: 'daily', times: ['18:00', '8:30', '8:30'] },
@@ -590,6 +612,62 @@ describe('routine connections', () => {
       [mcpUtility()]
     )
     expect(merged).toHaveLength(1)
+  })
+
+  it('carries the agent setup prompt onto a required connection', () => {
+    const merged = connectionsFromPlan(
+      [{ name: 'Slack', setup: 'Install the official Slack MCP from mcp.slack.com.' }],
+      [],
+      []
+    )
+    expect(merged).toEqual([
+      {
+        utilityId: 'required:slack',
+        label: 'Slack',
+        required: true,
+        setup: 'Install the official Slack MCP from mcp.slack.com.'
+      }
+    ])
+  })
+
+  it('keeps the newest setup prompt when a later plan refines it', () => {
+    const merged = connectionsFromPlan(
+      [{ name: 'Slack', setup: 'Use the bot token, not the user token.' }],
+      [
+        {
+          utilityId: 'required:slack',
+          label: 'Slack',
+          required: true,
+          setup: 'Install Slack.'
+        }
+      ],
+      []
+    )
+    expect(merged).toEqual([
+      {
+        utilityId: 'required:slack',
+        label: 'Slack',
+        required: true,
+        setup: 'Use the bot token, not the user token.'
+      }
+    ])
+  })
+
+  it('leaves an existing setup prompt alone when a later plan omits it', () => {
+    const merged = connectionsFromPlan(
+      ['Slack'],
+      [
+        {
+          utilityId: 'required:slack',
+          label: 'Slack',
+          required: true,
+          setup: 'Install Slack.'
+        }
+      ],
+      []
+    )
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.setup).toBe('Install Slack.')
   })
 })
 

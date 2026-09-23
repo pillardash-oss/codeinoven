@@ -70,6 +70,13 @@ export interface RoutineConnection {
    * resolve is surfaced as needing setup rather than as a working connection.
    */
   required?: boolean
+  /**
+   * The setup prompt the authoring agent recorded when it could not supply this
+   * connection itself: what the capability is, where it comes from, and how to
+   * wire it up. It prefills the agent-assisted utility setup, so the user only
+   * has to pick a model and run it.
+   */
+  setup?: string
 }
 
 /**

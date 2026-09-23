@@ -50,6 +50,7 @@
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
+  import UtilityEditorModal from '$lib/components/settings/UtilityEditorModal.svelte'
   import { buildConnectionLibrary, type ConnectionLibraryEntry } from './connection-library'
 
   interface Props {
@@ -106,14 +107,27 @@
   // The Utilities page shows the registry and the capabilities a harness discovers
   // side by side. Loading only the registry here made the picker look half empty.
   let capabilities = $state<AgentCapabilityCatalog | null>(null)
-  // One-time load, matching how UtilitiesView fetches the same two catalogs.
+
+  /**
+   * Load the two catalogs the connection library is built from. Re-run after a
+   * utility is installed so a connection that was "needs setup" flips to ready
+   * without reopening the panel.
+   */
+  async function loadConnectionLibrary(): Promise<void> {
+    try {
+      const [utilityCatalog, capabilityCatalog] = await Promise.all([
+        invoke('utilities:list'),
+        invoke('capabilities:listAll')
+      ])
+      catalog = utilityCatalog
+      capabilities = capabilityCatalog
+    } catch {
+      // The library stays as it was; a failed refresh must not blank the tab.
+    }
+  }
+
   onMount(() => {
-    void Promise.all([invoke('utilities:list'), invoke('capabilities:listAll')])
-      .then(([utilityCatalog, capabilityCatalog]) => {
-        catalog = utilityCatalog
-        capabilities = capabilityCatalog
-      })
-      .catch(() => undefined)
+    void loadConnectionLibrary()
   })
 
   /** Every connection the app can offer, registry and harness-discovered alike. */
@@ -222,6 +236,21 @@
 
   function openUtilities(): void {
     navigate('settings-utilities')
+  }
+
+  // ─── Connection setup ─────────────────────────────────────────────────────
+
+  /**
+   * The Add capability modal, opened from a connection that needs setup. It
+   * starts on the create step, and the agent-assisted path is prefilled with
+   * the setup prompt the authoring agent recorded for that connection.
+   */
+  let connectionSetupOpen = $state(false)
+  let connectionSetupSeed = $state('')
+
+  function openConnectionSetup(connection: RoutineConnection): void {
+    connectionSetupSeed = connection.setup ?? ''
+    connectionSetupOpen = true
   }
 
   // ─── Issues ───────────────────────────────────────────────────────────────
@@ -712,7 +741,7 @@
             </p>
           {:else}
             {#each connectionViews as view (view.connection.utilityId)}
-              <ConnectionRow {view} onRemove={removeConnection} onOpenUtilities={openUtilities} />
+              <ConnectionRow {view} onRemove={removeConnection} onSetup={openConnectionSetup} />
             {/each}
           {/if}
           <UtilityPicker
@@ -873,4 +902,21 @@
     </div>
     {@render howToThreadAction()}
   </FullscreenPanelDialog>
+{/if}
+
+{#if connectionSetupOpen}
+  <!--
+    The same Add capability modal the Utilities page uses, opened from a
+    connection that still needs setup. The agent-assisted step is prefilled
+    with the prompt the authoring agent recorded, and the connection library is
+    reloaded afterwards so an install flips the row to ready in place.
+  -->
+  <UtilityEditorModal
+    open
+    target={null}
+    agentRequestSeed={connectionSetupSeed}
+    onClose={() => (connectionSetupOpen = false)}
+    onChanged={() => void loadConnectionLibrary()}
+    onSaved={() => void loadConnectionLibrary()}
+  />
 {/if}
