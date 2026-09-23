@@ -40,12 +40,17 @@
   })
 
   /**
-   * Working threads per navigation family, feeding the two activity badges on
-   * the view switcher. Orchestration children are folded into their coordinator
-   * (same rule as the sidebar rows) so a delegated run counts once instead of
-   * inflating the total with hidden worker threads.
+   * Thread counts per navigation family, feeding the activity badges on
+   * the view switcher. Working threads pulse in the working tone (same rule
+   * as before); threads parked on `working-paused` pulse in the retry tone;
+   * threads in `awaiting_approval` or `failed` pulse in the attention tone
+   * (error-red when a failure is inside the family). Orchestration children
+   * are folded into their coordinator (same rule as the sidebar rows) so a
+   * delegated run counts once instead of inflating the total with hidden
+   * worker threads. A live-working thread always counts as working, never
+   * as attention/retry, so no thread is ever double-counted.
    */
-  let workingThreadCounts = $derived.by(() => {
+  let threadActivityCounts = $derived.by(() => {
     const threads = scopeState.allScopeThreads
     // Re-check on a coarse clock only while a retry deadline is tracked, so a
     // 6h+ parked wait rejoins the count once its reset gets close.
@@ -54,17 +59,42 @@
     const working = threads.filter(
       (thread) => !thread.archived && threadWorkingForIndicator(thread, now)
     )
-    let projects = 0
-    let chats = 0
+    const counts = {
+      workingProjects: 0,
+      workingChats: 0,
+      attentionProjects: 0,
+      attentionChats: 0,
+      attentionProjectsError: false,
+      attentionChatsError: false,
+      retryProjects: 0,
+      retryChats: 0
+    }
     for (const thread of threads) {
       if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const isChat = thread.projectId === INBOX_PROJECT_ID
       const isWorking =
         threadWorkingForIndicator(thread, now) || coordinatorHasActiveDelegates(thread, working)
-      if (!isWorking) continue
-      if (thread.projectId === INBOX_PROJECT_ID) chats += 1
-      else projects += 1
+      if (isWorking) {
+        if (isChat) counts.workingChats += 1
+        else counts.workingProjects += 1
+        continue
+      }
+      if (thread.status === 'working-paused') {
+        if (isChat) counts.retryChats += 1
+        else counts.retryProjects += 1
+        continue
+      }
+      if (thread.status === 'awaiting_approval' || thread.status === 'failed') {
+        if (isChat) {
+          counts.attentionChats += 1
+          if (thread.status === 'failed') counts.attentionChatsError = true
+        } else {
+          counts.attentionProjects += 1
+          if (thread.status === 'failed') counts.attentionProjectsError = true
+        }
+      }
     }
-    return { projects, chats }
+    return counts
   })
 
   /** Badge tooltip/aria text carrying the true count (the pill may saturate). */
@@ -72,8 +102,23 @@
     return `${count} ${noun}${count === 1 ? '' : 's'} working`
   }
 
-  let hasWorkingThreads = $derived(
-    workingThreadCounts.projects > 0 || workingThreadCounts.chats > 0
+  /** Tooltip/aria text for threads stalled on approval or an error. */
+  function attentionThreadLabel(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} attention`
+  }
+
+  /** Tooltip/aria text for threads parked until their automatic retry. */
+  function retryThreadLabel(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? '' : 's'} waiting to retry`
+  }
+
+  let hasThreadActivity = $derived(
+    threadActivityCounts.workingProjects > 0 ||
+      threadActivityCounts.workingChats > 0 ||
+      threadActivityCounts.attentionProjects > 0 ||
+      threadActivityCounts.attentionChats > 0 ||
+      threadActivityCounts.retryProjects > 0 ||
+      threadActivityCounts.retryChats > 0
   )
 
   /** Rendered width of the current trigger label. Measured after every label
@@ -128,20 +173,47 @@
         </span>
       </span>
       <ChevronDown size={12} class="shrink-0 text-muted" />
-      <!-- Working activity: one pulsing badge per navigation family, riding
+      <!-- Thread activity: one pulsing badge per navigation family and
+           status group (working, needs attention, waiting to retry), riding
            the top edge of the trigger (left-anchored like every other
-           header badge). The label itself stays still. -->
-      {#if hasWorkingThreads}
+           header badge). The label itself stays still. Family icons stay
+           the same as the working badges (Timeline = project threads,
+           MessageSquare = chats); the tone carries the status. -->
+      {#if hasThreadActivity}
         <span class="absolute -top-2 left-1 flex items-center gap-1">
           <WorkingCountBadge
             icon={Timeline}
-            count={workingThreadCounts.projects}
-            label={workingThreadLabel(workingThreadCounts.projects, 'project thread')}
+            count={threadActivityCounts.workingProjects}
+            label={workingThreadLabel(threadActivityCounts.workingProjects, 'project thread')}
           />
           <WorkingCountBadge
             icon={MessageSquare}
-            count={workingThreadCounts.chats}
-            label={workingThreadLabel(workingThreadCounts.chats, 'chat')}
+            count={threadActivityCounts.workingChats}
+            label={workingThreadLabel(threadActivityCounts.workingChats, 'chat')}
+          />
+          <WorkingCountBadge
+            icon={Timeline}
+            count={threadActivityCounts.attentionProjects}
+            label={attentionThreadLabel(threadActivityCounts.attentionProjects, 'project thread')}
+            tone={threadActivityCounts.attentionProjectsError ? 'error' : 'attention'}
+          />
+          <WorkingCountBadge
+            icon={MessageSquare}
+            count={threadActivityCounts.attentionChats}
+            label={attentionThreadLabel(threadActivityCounts.attentionChats, 'chat')}
+            tone={threadActivityCounts.attentionChatsError ? 'error' : 'attention'}
+          />
+          <WorkingCountBadge
+            icon={Timeline}
+            count={threadActivityCounts.retryProjects}
+            label={retryThreadLabel(threadActivityCounts.retryProjects, 'project thread')}
+            tone="retry"
+          />
+          <WorkingCountBadge
+            icon={MessageSquare}
+            count={threadActivityCounts.retryChats}
+            label={retryThreadLabel(threadActivityCounts.retryChats, 'chat')}
+            tone="retry"
           />
         </span>
       {/if}
