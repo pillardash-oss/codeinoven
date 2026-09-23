@@ -5,6 +5,7 @@
     ArrowLeftToLine,
     ArrowRightToLine,
     Check,
+    FileCode2,
     FileWarning,
     GitMerge,
     Loader2,
@@ -40,6 +41,9 @@
     onToggleWrap?: () => void
     onControllerChange?: (controller: ConflictResolutionController | null) => void
     onStatusChange?: (status: ConflictResolutionStatus) => void
+    /** Leave this file to the file editor, revealed in the file tree. Only the
+     *  size notice offers it, because that file cannot be assembled here. */
+    onOpenOriginal: () => void
   }
 
   let {
@@ -48,7 +52,8 @@
     wrap = false,
     onToggleWrap = () => {},
     onControllerChange = () => {},
-    onStatusChange = () => {}
+    onStatusChange = () => {},
+    onOpenOriginal
   }: Props = $props()
 
   let workFile = $state<GitConflictWorkFile | null>(null)
@@ -492,6 +497,21 @@
       <p class="text-xs font-medium text-foreground">
         {analysis.binary ? 'Binary conflict' : 'File too large for the merge editor'}
       </p>
+      {#if !analysis.binary}
+        <p class="max-w-[48ch] text-[0.625rem] leading-relaxed text-dimmed">
+          This file is too large for the merge editor to assemble. Open it in the file editor and
+          clear the conflict markers by hand.
+        </p>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+          title="Reveal the original conflicted file in the file tree and open it in the file editor"
+          onclick={onOpenOriginal}
+        >
+          <FileCode2 size={12} />
+          Open original file
+        </button>
+      {/if}
     </div>
   {:else}
     <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">

@@ -171,7 +171,11 @@ export function registerIpcHandlers(
   const specContextService = new SpecContextService(database, projectManager)
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
-  const gitService = new GitService()
+  const gitService = new GitService({
+    // The conflict cap is a user setting, so it is read per call instead of
+    // being frozen at construction: raising it applies to the next conflict.
+    conflictFileLimit: async () => (await storage.getConfig()).maxConflictFileBytes
+  })
   /**
    * The sync's other end is resolved once, for both the picker that lists the
    * options and the operation that acts on the choice, so the two can never name

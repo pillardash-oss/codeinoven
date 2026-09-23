@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { dirname, relative, resolve } from 'path'
 import { toPosixPath } from '../../lib/paths'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
 import type { LogOptions, SimpleGit } from 'simple-git'
 import type {
   GitBranchInfo,
@@ -123,8 +124,23 @@ function uncommittedCount(status: GitStatus): number {
  * never interleave and corrupt the working tree. Operations that talk to a
  * remote get a second lane of their own; see `enqueueRemote`.
  */
+export interface GitServiceOptions {
+  /**
+   * Byte cap on a conflicted file the service reads and writes, resolved per
+   * call so a settings change applies without a restart. Defaults to
+   * {@link DEFAULT_MAX_CONFLICT_FILE_BYTES}.
+   */
+  conflictFileLimit?: () => Promise<number>
+}
+
 export class GitService {
   private readonly queues = new Map<string, Promise<unknown>>()
+  private readonly conflictFileLimit: () => Promise<number>
+
+  constructor(options: GitServiceOptions = {}) {
+    this.conflictFileLimit =
+      options.conflictFileLimit ?? (async () => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+  }
 
   /**
    * The remote lane, one per project, deliberately separate from `queues`.
@@ -349,7 +365,11 @@ export class GitService {
       const safePath = this.assertRelativePath(directory, path)
       const status = await this.client(directory).status()
       if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
-      const file = await this.workingFileContent(directory, safePath)
+      const file = await this.workingFileContent(
+        directory,
+        safePath,
+        await this.conflictFileBytes()
+      )
       if (!file || file.binary || file.truncated) return this.readStatus(directory)
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
@@ -406,7 +426,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(projectPath, 'read', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         if (!working)
           return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
         if (working.binary) {
@@ -440,7 +464,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const analysis: GitConflictAnalysis = !working
           ? { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
           : working.binary
@@ -504,7 +532,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       await this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const source = working?.binary ? '' : (working?.content ?? '')
         const hunks = parseConflictWorkState(stateJson, content.length)
         const paths = await this.conflictWorkPaths(directory, safePath)
@@ -2148,13 +2180,26 @@ export class GitService {
   }
 
   /**
-   * Read a working-tree file bounded to the diff payload cap, detecting binary
-   * content via NUL bytes (mirrors the old untracked-diff probe).
+   * Read a working-tree file bounded to `maximumBytes`, detecting binary
+   * content via NUL bytes (mirrors the old untracked-diff probe). The diff
+   * bound is the default; the conflict path passes the configured cap.
    */
   private async workingFileContent(
     directory: string,
-    path: string
+    path: string,
+    maximumBytes?: number
   ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
-    return readWorkingFileContent(directory, path)
+    return readWorkingFileContent(directory, path, maximumBytes)
+  }
+
+  /**
+   * The configured byte cap on a conflicted file, resolved per call so a
+   * settings change applies without a restart. A missing or nonsensical
+   * provider value falls back to the shipped default rather than refusing every
+   * conflict the app can still handle.
+   */
+  private async conflictFileBytes(): Promise<number> {
+    const limit = await this.conflictFileLimit().catch(() => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_MAX_CONFLICT_FILE_BYTES
   }
 }

@@ -6,6 +6,7 @@ import {
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
+import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
 import type {
@@ -132,6 +133,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'defaultMergeMethod',
   'defaultPullStrategy',
   'maxDiffLines',
+  'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
   'sound'
 ])
@@ -415,6 +417,20 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Max diff lines must be an integer between 10 and 5000')
     }
     patch.maxDiffLines = value.maxDiffLines
+  }
+
+  if ('maxConflictFileBytes' in value) {
+    if (
+      typeof value.maxConflictFileBytes !== 'number' ||
+      !Number.isInteger(value.maxConflictFileBytes) ||
+      value.maxConflictFileBytes < MIN_MAX_CONFLICT_FILE_BYTES ||
+      value.maxConflictFileBytes > MAX_MAX_CONFLICT_FILE_BYTES
+    ) {
+      throw new TypeError(
+        `Merge editor file limit must be an integer between ${MIN_MAX_CONFLICT_FILE_BYTES} and ${MAX_MAX_CONFLICT_FILE_BYTES} bytes`
+      )
+    }
+    patch.maxConflictFileBytes = value.maxConflictFileBytes
   }
 
   if ('defaultPullStrategy' in value) {

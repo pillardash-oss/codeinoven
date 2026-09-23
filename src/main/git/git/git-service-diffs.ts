@@ -165,19 +165,21 @@ export async function readBlob(
 }
 
 /**
- * Read a working-tree file bounded to the diff payload cap, detecting binary
- * content via NUL bytes (mirrors the old untracked-diff probe).
+ * Read a working-tree file bounded to `maximumBytes`, detecting binary content
+ * via NUL bytes (mirrors the old untracked-diff probe). Callers that read a
+ * conflicted file pass the configured conflict cap instead of the diff bound.
  */
 export async function workingFileContent(
   directory: string,
-  path: string
+  path: string,
+  maximumBytes: number = MAX_DIFF_BYTES
 ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
   const filePath = resolve(directory, path)
   const metadata = await stat(filePath).catch(() => null)
   if (!metadata) return null
 
   const readHead = async (): Promise<string | null> => {
-    const size = Math.min(metadata.size, MAX_DIFF_BYTES + 1)
+    const size = Math.min(metadata.size, maximumBytes + 1)
     const buffer = Buffer.alloc(size)
     try {
       const handle = await open(filePath, 'r')
@@ -194,9 +196,9 @@ export async function workingFileContent(
 
   const head = await readHead()
   if (head === null) return null
-  const truncated = metadata.size > MAX_DIFF_BYTES
+  const truncated = metadata.size > maximumBytes
   return {
-    content: truncated ? head.slice(0, MAX_DIFF_BYTES) : head,
+    content: truncated ? head.slice(0, maximumBytes) : head,
     truncated,
     binary: head.includes('\0')
   }

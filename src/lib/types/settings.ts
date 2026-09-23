@@ -220,6 +220,9 @@ export interface AppConfig {
   /** Hunks whose changed lines exceed this are collapsed with a notice so huge
    *  diffs do not hurt diff-view performance. */
   maxDiffLines: number
+  /** Conflicted files larger than this open in the plain file editor instead of
+   *  the merge editor. Bounded to 0.25-2 MiB by `MIN/MAX_MAX_CONFLICT_FILE_BYTES`. */
+  maxConflictFileBytes: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
@@ -264,6 +267,7 @@ export type AppConfigPatch = Partial<
     | 'defaultMergeMethod'
     | 'defaultPullStrategy'
     | 'maxDiffLines'
+    | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
     | 'sound'
   >

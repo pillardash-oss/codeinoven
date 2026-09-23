@@ -1,6 +1,6 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
-import type { AppConfig } from '$shared/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES, type AppConfig } from '$shared/types'
 
 /** Baseline configuration used until the main process returns the persisted one. */
 export const defaultConfig: AppConfig = {
@@ -31,6 +31,7 @@ export const defaultConfig: AppConfig = {
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
+  maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
