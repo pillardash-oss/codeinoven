@@ -2,7 +2,7 @@ import type { ProviderCatalog, ProviderModel, ThinkingPreset } from '../../../li
 import { arrayValue, booleanValue, numberValue, recordValue, stringValue } from './v2-values'
 
 /** The harness id every V2 catalog entry is attributed to. */
-const HARNESS_ID = 'opencode2'
+const HARNESS_ID = 'opencode'
 
 /** Unwrap the `{location, data}` envelope every location-scoped list uses. */
 function listData(value: unknown): unknown[] {

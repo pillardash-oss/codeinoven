@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
+import { OPENCODE_COMMAND } from '../../lib/opencode-version'
 import { Logger } from '../system/logger'
 import type {
   AgentEvent,
@@ -196,7 +197,9 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   constructor(
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretVault,
-    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {},
+    /** The probed OpenCode binary to spawn; V1 and V2 share one harness entry. */
+    private readonly command: string = OPENCODE_COMMAND
   ) {}
 
   /** Note live traffic against a spawned server so the idle reaper skips it. */
@@ -323,7 +326,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   async ensureReady(projectPath: string): Promise<void> {
-    await runHarnessCommand('opencode', ['--version'], {
+    await runHarnessCommand(this.command, ['--version'], {
       cwd: projectPath,
       env: this.buildEnv(),
       timeoutMs: 5_000
@@ -801,7 +804,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     const connected = await this.connectedProviderIds()
     if (connected !== null && connected.size === 0) return []
-    const { stdout } = await runHarnessCommand('opencode', ['models', '--verbose'], {
+    const { stdout } = await runHarnessCommand(this.command, ['models', '--verbose'], {
       cwd: projectPath,
       env: this.buildEnv(),
       timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
@@ -1262,7 +1265,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       this.processObserver?.watchProcess(
         sessionId,
         handle.process.pid,
-        'opencode serve',
+        `${this.command} serve`,
         projectPath
       )
       handle.process.once('exit', () => {
@@ -1336,7 +1339,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
           ...this.accountEnvironment,
           ...(overlay?.env ?? {})
         })
-    const prepared = await prepareHarnessInvocation('opencode', args, { cwd: projectPath, env })
+    const prepared = await prepareHarnessInvocation(this.command, args, { cwd: projectPath, env })
 
     return new Promise((resolve, reject) => {
       const child = spawn(prepared.command, prepared.args, {
@@ -1412,7 +1415,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       resolvedUtilities: []
     })
     const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
-    const prepared = await prepareHarnessInvocation('opencode', args, {
+    const prepared = await prepareHarnessInvocation(this.command, args, {
       cwd: projectPath,
       env: buildProcessEnvironment({
         ...process.env,
@@ -1454,7 +1457,12 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
             abortController: new AbortController()
           }
           Logger.dev(`shared opencode server up on :${port}`)
-          this.processObserver?.watchProcess(undefined, child.pid, 'opencode serve', projectPath)
+          this.processObserver?.watchProcess(
+            undefined,
+            child.pid,
+            `${this.command} serve`,
+            projectPath
+          )
           resolve(handle)
         }
       })

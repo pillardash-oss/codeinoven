@@ -50,16 +50,6 @@ const HARNESS_SPECS: Record<string, HarnessSpec> = {
     projectSkillDirs: ['.opencode/skills'],
     mcpFormat: 'opencode'
   },
-  // OpenCode V2 keeps the v1 config grammar (it even exposes a v1 -> v2
-  // migration endpoint), so MCP/skill discovery reads the same paths.
-  opencode2: {
-    id: 'opencode2',
-    globalConfigPaths: ['.config/opencode/opencode.json'],
-    projectConfigPaths: ['.opencode/opencode.json', 'opencode.json'],
-    globalSkillDirs: ['.config/opencode/skills'],
-    projectSkillDirs: ['.opencode/skills'],
-    mcpFormat: 'opencode'
-  },
   'claude-code': {
     id: 'claude-code',
     globalConfigPaths: ['.claude.json'],

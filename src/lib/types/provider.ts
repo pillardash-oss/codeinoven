@@ -20,14 +20,14 @@ export interface ProviderConnectionInfo {
   executionTarget?: HarnessExecutionTarget
   /** First line of `<command> --version` output, when the probe succeeds. */
   version?: string
+  /**
+   * The probed command actually being driven, when it differs from `command`.
+   * Set for harnesses with aliases (OpenCode's `opencode2`): the app reports the
+   * name it resolved so install/update/auth act on the binary in use.
+   */
+  activeCommand?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
-  /**
-   * When set, the harness is installed but its detected version is not yet
-   * supported by CodeInOven (e.g. OpenCode V2). The harness is treated as not
-   * installed everywhere except the Harnesses page, which surfaces a notice.
-   */
-  unsupportedReason?: 'opencode-v2'
 }
 
 /** Where a confirmed harness-manifest behavior override came from. */

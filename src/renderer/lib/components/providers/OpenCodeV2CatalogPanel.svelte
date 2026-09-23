@@ -21,7 +21,7 @@
   async function load(force: boolean): Promise<void> {
     loading = true
     try {
-      result = await invoke('opencode2:discoverCatalog', force)
+      result = await invoke('opencode:discoverCatalog', force)
     } catch (error) {
       reportError(error, `Failed to read the ${harnessName} catalog`)
     } finally {

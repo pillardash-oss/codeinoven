@@ -481,7 +481,7 @@ describe('opencode v2 catalog', () => {
       contextWindow: 1000,
       thinkingPresets: [{ id: 'high', label: 'High', description: 'high reasoning effort' }]
     })
-    expect(p1?.harnessId).toBe('opencode2')
+    expect(p1?.harnessId).toBe('opencode')
   })
 
   it('drops models of a disabled provider and reads declared variants', () => {

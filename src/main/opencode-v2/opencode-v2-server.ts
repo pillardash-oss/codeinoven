@@ -4,12 +4,12 @@ import { randomBytes } from 'node:crypto'
 import { Logger } from '../system/logger'
 import { prepareHarnessInvocation } from '../drivers/harness-runtime'
 
-/** How long `opencode2 serve` may take to announce its endpoint and password. */
+/** How long the OpenCode V2 server may take to announce its endpoint and password. */
 const START_TIMEOUT_MS = 60_000
 /** Grace period between SIGTERM and SIGKILL when tearing a server down. */
 const SHUTDOWN_GRACE_MS = 2_000
 
-/** Environment variable that makes `opencode2 serve` accept a chosen password. */
+/** Environment variable that makes the V2 server accept a chosen password. */
 export const OPENCODE_V2_PASSWORD_ENV = 'OPENCODE_SERVER_PASSWORD'
 /** Environment variable carrying an inline V2 config document. */
 export const OPENCODE_V2_CONFIG_CONTENT_ENV = 'OPENCODE_CONFIG_CONTENT'
@@ -22,7 +22,7 @@ export interface OpenCodeV2Endpoint {
   password: string
 }
 
-/** A live `opencode2 serve` process owned by one caller. */
+/** A live OpenCode V2 server process owned by one caller. */
 export interface OpenCodeV2ServerHandle extends OpenCodeV2Endpoint {
   process: ChildProcess
   /** Idempotent teardown: SIGTERM, then SIGKILL after a bounded grace period. */
@@ -33,7 +33,7 @@ const LISTENING_PATTERN = /^server listening on (\S+)$/u
 const PASSWORD_PATTERN = /^server password (\S+)$/u
 
 /**
- * Extract the endpoint from the lines `opencode2 serve` prints on stdout:
+ * Extract the endpoint from the lines the V2 server prints on stdout:
  *
  *     server listening on http://127.0.0.1:50725
  *     server password <value>
@@ -67,7 +67,7 @@ export function generateOpenCodeV2Password(): string {
 }
 
 /**
- * Spawn a private `opencode2 serve` process on an ephemeral loopback port and
+ * Spawn a private OpenCode V2 server process on an ephemeral loopback port and
  * resolve once it has announced its endpoint.
  *
  * The driver always installs its own `OPENCODE_SERVER_PASSWORD`, so the
@@ -111,7 +111,7 @@ export async function startOpenCodeV2Server(options: {
       if (settled) return
       settled = true
       child.kill('SIGKILL')
-      reject(new Error(`Timed out after ${START_TIMEOUT_MS}ms waiting for opencode2 server`))
+      reject(new Error(`Timed out after ${START_TIMEOUT_MS}ms waiting for the OpenCode V2 server`))
     }, START_TIMEOUT_MS)
 
     const inspect = (text: string): void => {
@@ -121,14 +121,14 @@ export async function startOpenCodeV2Server(options: {
       if (!endpoint) return
       settled = true
       clearTimeout(timer)
-      Logger.dev(`opencode2 server up on ${endpoint.baseUrl}`, options.label ?? '')
+      Logger.dev(`OpenCode V2 server up on ${endpoint.baseUrl}`, options.label ?? '')
       resolve({ ...endpoint, process: child, close: () => stopChild(child) })
     }
 
     child.stdout?.on('data', (chunk: Buffer) => inspect(chunk.toString()))
     child.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString()
-      Logger.dev('opencode2 serve:', text.trim())
+      Logger.dev('OpenCode V2 serve:', text.trim())
       inspect(text)
     })
 
@@ -143,7 +143,7 @@ export async function startOpenCodeV2Server(options: {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      reject(new Error(`opencode2 server exited before announcing its endpoint (code ${code})`))
+      reject(new Error(`OpenCode V2 server exited before announcing its endpoint (code ${code})`))
     })
   })
 }

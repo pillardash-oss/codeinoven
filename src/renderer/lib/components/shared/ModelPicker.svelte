@@ -14,7 +14,6 @@
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
   } from '$lib/stores/provider-connect-flow.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import type {
     HarnessAccount,
@@ -141,13 +140,11 @@
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
   /** Current-project entries win when present without dropping harnesses that
-   * are still pending from its background catalog enrichment. Harnesses whose
-   * installed version is unsupported (e.g. OpenCode V2) are dropped so they
-   * behave exactly as if not installed. */
+   * are still pending from its background catalog enrichment. */
   let displayProviders = $derived(
-    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders])
-      .filter((provider) => !providerStore.isUnsupported(provider.harnessId))
-      .filter((provider) => !harnessFilter || provider.harnessId === harnessFilter)
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
+      (provider) => !harnessFilter || provider.harnessId === harnessFilter
+    )
   )
   let selectedProvider = $derived(
     displayProviders.find(

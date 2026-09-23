@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { OPENCODE_COMMAND } from '../../lib/opencode-version'
 import { Logger } from '../system/logger'
 import type {
   OpenCodeV2AgentEntry,
@@ -11,8 +12,8 @@ import type {
 import { OpenCodeV2Client } from './opencode-v2-client'
 import { startOpenCodeV2Server, type OpenCodeV2ServerHandle } from './opencode-v2-server'
 
-/** The CLI command that ships OpenCode V2 (the package also installs `opencode`). */
-export const OPENCODE_V2_COMMAND = 'opencode2'
+/** The canonical command every OpenCode install provides. */
+export { OPENCODE_COMMAND }
 
 /** Narrow an unknown JSON value to a plain object. */
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -179,6 +180,47 @@ export async function readOpenCodeV2Catalog(
 }
 
 /**
+ * How long a freshly spawned discovery server may take to publish its catalog.
+ *
+ * V2 boots a location (plugins, providers, catalogs) on its first request, so
+ * immediately after `serve` starts `/api/provider` and `/api/model` answer
+ * empty. A read taken in that window would show the user an empty catalog, so a
+ * fresh handle is polled until it settles.
+ */
+const CATALOG_SETTLE_TIMEOUT_MS = 45_000
+const CATALOG_POLL_INTERVAL_MS = 500
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Read a catalog, polling through the server's first-boot window.
+ *
+ * The catalog is considered settled as soon as it exposes any provider or
+ * model; a genuinely empty install is returned as-is once the window elapses.
+ */
+async function readSettledCatalog(
+  handle: OpenCodeV2ServerHandle
+): Promise<
+  | { ok: true; catalog: OpenCodeV2Catalog }
+  | { ok: false; reason: 'unreachable' | 'unsupported-version'; detail: string }
+> {
+  const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
+  let result = await readOpenCodeV2Catalog(handle)
+  while (
+    result.ok &&
+    result.catalog.providers.length === 0 &&
+    result.catalog.models.length === 0 &&
+    Date.now() < deadline
+  ) {
+    await delay(CATALOG_POLL_INTERVAL_MS)
+    result = await readOpenCodeV2Catalog(handle)
+  }
+  return result
+}
+
+/**
  * Spawn a private V2 server, read its catalog, and always tear the server down.
  * The server is short-lived and private (`--port 0`), so a discovery run cannot
  * collide with the user's own background service or another run.
@@ -190,7 +232,7 @@ export async function discoverOpenCodeV2Catalog(
     env?: NodeJS.ProcessEnv
   } = {}
 ): Promise<OpenCodeV2DiscoveryResult> {
-  const command = options.command ?? OPENCODE_V2_COMMAND
+  const command = options.command ?? OPENCODE_COMMAND
   let handle: OpenCodeV2ServerHandle
   try {
     handle = await startOpenCodeV2Server({
@@ -201,12 +243,12 @@ export async function discoverOpenCodeV2Catalog(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     const missing = /ENOENT|not found/u.test(detail)
-    Logger.dev('opencode2 discovery server failed to start:', detail)
+    Logger.dev('OpenCode V2 discovery server failed to start:', detail)
     return { ok: false, reason: missing ? 'not-installed' : 'unreachable', detail }
   }
 
   try {
-    const result = await readOpenCodeV2Catalog(handle)
+    const result = await readSettledCatalog(handle)
     return result.ok ? result : { ok: false, reason: result.reason, detail: result.detail }
   } finally {
     await handle.close()

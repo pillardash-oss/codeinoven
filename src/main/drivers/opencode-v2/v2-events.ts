@@ -1,7 +1,9 @@
-import type { AgentEvent, PermissionReply } from '../../../lib/types'
+import type { AgentEvent, AgentPart, AgentToolState, PermissionReply } from '../../../lib/types'
 import type { OpenCodeV2SseEvent } from '../../opencode-v2/opencode-v2-client'
 import { mapOpenCodeV2FormToQuestionRequest } from './v2-forms'
 import {
+  isOpenCodeV2SubagentTool,
+  mapOpenCodeV2SubagentPart,
   reasoningPartId,
   stepPartId,
   textPartId,
@@ -52,6 +54,29 @@ function ordinalOf(data: Record<string, unknown>): number {
 function permissionReply(value: unknown): PermissionReply {
   const reply = stringValue(value)
   return reply === 'always' || reply === 'reject' ? reply : 'once'
+}
+
+/**
+ * One V2 tool call as a shared part. A `subagent` call becomes a sub-agent part
+ * (so the UI shows the child agent) instead of a generic tool card.
+ */
+function toolPartFor(
+  messageId: string,
+  callId: string,
+  tool: string,
+  state: AgentToolState
+): AgentPart {
+  if (isOpenCodeV2SubagentTool(tool)) {
+    return mapOpenCodeV2SubagentPart(messageId, callId, state)
+  }
+  return {
+    type: 'tool',
+    id: toolPartId(messageId, callId),
+    messageID: messageId,
+    callID: callId,
+    tool,
+    state
+  }
 }
 
 /** Turn a compaction message into the shared compaction part event. */
@@ -209,14 +234,10 @@ export function mapOpenCodeV2Event(
         {
           type: 'message.part.updated',
           sessionId,
-          part: {
-            type: 'tool',
-            id: toolPartId(messageId, callId),
-            messageID: messageId,
-            callID: callId,
-            tool: stringValue(data['name']) ?? '',
-            state: { status: 'pending', input: {} }
-          }
+          part: toolPartFor(messageId, callId, stringValue(data['name']) ?? '', {
+            status: 'pending',
+            input: {}
+          })
         }
       ]
     }
@@ -244,14 +265,7 @@ export function mapOpenCodeV2Event(
         {
           type: 'message.part.updated',
           sessionId,
-          part: {
-            type: 'tool',
-            id: toolPartId(messageId, callId),
-            messageID: messageId,
-            callID: callId,
-            tool: context.toolNames?.get(callId) ?? '',
-            state
-          }
+          part: toolPartFor(messageId, callId, context.toolNames?.get(callId) ?? '', state)
         }
       ]
     }

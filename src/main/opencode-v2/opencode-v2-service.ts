@@ -1,5 +1,6 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { OpenCodeV2DiscoveryResult } from '../../lib/types'
+import { resolvedOpenCodeCommand } from '../agents/opencode-installation'
 import { Logger } from '../system/logger'
 import { discoverOpenCodeV2Catalog } from './opencode-v2-discovery'
 
@@ -7,19 +8,19 @@ import { discoverOpenCodeV2Catalog } from './opencode-v2-discovery'
 const CATALOG_CACHE_TTL_MS = 120_000
 
 /**
- * Read-only OpenCode V2 discovery.
+ * Read-only OpenCode V2 catalog discovery.
  *
- * `opencode2 serve` is a large native binary, so a discovery run is only ever
+ * The V2 server is a large native binary, so a discovery run is only ever
  * started on an explicit user action, is coalesced into a single in-flight
  * spawn, and is cached briefly. Nothing here streams or mutates V2 state   this
- * is the detection/discovery half of V2 support.
+ * is the read-only catalog half of the one `opencode` harness.
  */
 export class OpenCodeV2Service {
   private cached: { result: OpenCodeV2DiscoveryResult; at: number } | null = null
   private inFlight: Promise<OpenCodeV2DiscoveryResult> | null = null
 
   register(): void {
-    ipcMain.handle('opencode2:discoverCatalog', (_, force?: unknown) =>
+    ipcMain.handle('opencode:discoverCatalog', (_, force?: unknown) =>
       this.discover(force === true)
     )
   }
@@ -44,10 +45,10 @@ export class OpenCodeV2Service {
   }
 
   private async runDiscovery(): Promise<OpenCodeV2DiscoveryResult> {
-    const result = await discoverOpenCodeV2Catalog()
+    const result = await discoverOpenCodeV2Catalog({ command: resolvedOpenCodeCommand() })
     this.cached = { result, at: Date.now() }
     if (!result.ok) {
-      Logger.dev(`opencode2 discovery failed (${result.reason}):`, result.detail)
+      Logger.dev(`OpenCode V2 catalog discovery failed (${result.reason}):`, result.detail)
     }
     return result
   }

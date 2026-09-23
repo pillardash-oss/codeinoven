@@ -4,29 +4,31 @@ import {
   harnessSupportsManualCompaction,
   listHarnesses
 } from '../../src/main/agents/harness-registry'
+import { OPENCODE_COMMAND_ALIASES } from '../../src/lib/opencode-version'
 
-describe('harness registry opencode v2 entry', () => {
-  it('registers OpenCode V2 on its own binary, distinct from the v1 entry', () => {
-    const v2 = findHarness('opencode2')
-    expect(v2).toBeDefined()
-    expect(v2?.name).toBe('OpenCode V2')
-    expect(v2?.command).toBe('opencode2')
-    expect(v2?.versionArgs).toEqual(['--version'])
-    // `OpenCodeV2Driver` speaks the v2 `/api/*` surface, so the harness is
-    // selectable for chat like every other integrated harness.
-    expect(v2?.integration).toBe('ready')
-    // Custom base-URL providers are not claimed for the v2 entry: the app has no
-    // v2 provider writer, and v2 normalizes the entries the v1 entry manages in
-    // the same config file, so nothing a user configured is hidden.
-    expect(v2?.supportsCustomProviders).toBe(false)
-    expect(findHarness('opencode')?.command).toBe('opencode')
-    expect(findHarness('opencode')?.integration).toBe('ready')
+describe('harness registry opencode entry', () => {
+  it('registers ONE opencode harness carrying its v2 alias, not two entries', () => {
+    const opencode = findHarness('opencode')
+    expect(opencode).toBeDefined()
+    expect(opencode?.name).toBe('OpenCode')
+    expect(opencode?.command).toBe('opencode')
+    // A package-managed V2 install also drops `opencode2` on PATH; it is an
+    // alternate name for the same harness, so the app probes both and keeps the
+    // newest version instead of asking the user to choose.
+    expect(opencode?.commandAliases).toEqual(OPENCODE_COMMAND_ALIASES)
+    expect(opencode?.versionArgs).toEqual(['--version'])
+    expect(opencode?.integration).toBe('ready')
+    // One entry drives both lines, so custom base-URL providers are claimed for
+    // whichever version is installed.
+    expect(opencode?.supportsCustomProviders).toBe(true)
+    // The v2 line is a version of the same harness, never a separate entry.
+    expect(findHarness('opencode2')).toBeUndefined()
   })
 
-  it('declares AGENTS.md loading and manual compaction the driver implements', () => {
-    expect(findHarness('opencode2')?.manifest.behaviors['loadsAgentsMd']).toBe(true)
-    // `OpenCodeV2Driver.compactSession` drives `POST /api/session/{id}/compact`.
-    expect(harnessSupportsManualCompaction('opencode2')).toBe(true)
+  it('declares AGENTS.md loading and manual compaction the drivers implement', () => {
+    expect(findHarness('opencode')?.manifest.behaviors['loadsAgentsMd']).toBe(true)
+    // V1 drives its session command; V2 `POST /api/session/{id}/compact`.
+    expect(harnessSupportsManualCompaction('opencode')).toBe(true)
   })
 
   it('keeps every harness id unique', () => {

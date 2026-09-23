@@ -7,32 +7,47 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
-- OpenCode V2 support begins. The v2 CLI (`@opencode/cli`, the `opencode2`
-  binary) is now detected as its own **OpenCode V2** harness alongside the v1
-  `opencode` entry, with its own install/update/uninstall channels, and the
-  Harnesses page can read its catalog (providers, models, agents) over the V2
-  `/api/*` surface. A `opencode` install that reports a V2 version is no longer
-  labelled "not supported yet"; it now points at the OpenCode V2 entry.
+- **OpenCode is one harness, driven at whichever version is installed.**
+  OpenCode V1 and V2 both install as the `opencode` command (the vendor's V2
+  installer replaces a package-managed V1 binary, and a package-managed V2
+  install may add an `opencode2` alias). The app probes `opencode` and
+  `opencode2`, keeps the newest version, and drives the transport that matches
+  it, so a V2 machine streams over the V2 `/api/*` HTTP+SSE surface and a V1
+  machine keeps the V1 server API. There is no second harness entry and no
+  version picker: the Harnesses page shows one **OpenCode** row with its
+  detected version, and its install/update/uninstall channels now target the
+  current release.
 
-- **OpenCode V2 is now fully drivable.** The `opencode2` harness is selectable
-  for chat: its own driver speaks the V2 `/api/*` HTTP+SSE surface end to end,
-  so threads on it stream text and reasoning, run tools, ask interactive
-  questions through V2's form surface, answer or dismiss them, accept mid-turn
-  steering, mirror their native transcript, compact on demand, run slash
-  commands, and stop on interrupt. Model, agent, and thinking-level selection
-  are applied per turn (V2 scopes them to the session), attachments are
-  supported, and the model picker reads the server's own catalog. Thread
-  titles, turn grading, cheap-model one-shots, heartbeats, and every disposable
-  flow (temporary chats, transcription, image description, brainstorm/spec/
-  assignment offshoots) run on private V2 servers that are torn down when they
-  end. `opencode2 auth list/login/logout` backs the provider account UI.
+  The V2 transport is fully drivable: threads stream text and reasoning, run
+  tools, ask interactive questions through V2's form surface, answer or dismiss
+  them, accept mid-turn steering, mirror their native transcript, compact on
+  demand, run slash commands, and stop on interrupt. Model, agent, and
+  thinking-level selection are applied per turn (V2 scopes them to the session),
+  attachments are supported, and the model picker reads the server's own
+  catalog. Thread titles, turn grading, cheap-model one-shots, heartbeats, and
+  every disposable flow (temporary chats, transcription, image description,
+  brainstorm/spec/assignment offshoots) run on private V2 servers that are torn
+  down when they end, and a delegated sub-agent is surfaced as a child-agent
+  card (V2 announces the child session with a non-null `parentID`).
+  `opencode auth list/login/logout` backs the provider account UI at both
+  version lines.
 
-  V2 cannot restrict `read` in a session permission ruleset (harness-side
-  provider entitlement is evaluated through the same ruleset), so a restricted
-  V2 turn denies everything that mutates instead of every tool. Custom base-URL
-  providers and quota telemetry are not claimed for the entry: V2 still reads
-  the provider entries the v1 entry manages in the same config file, and the V1
-  usage endpoint does not exist on V2.
+  Custom base-URL providers are claimed for the single entry. V2 cannot restrict
+  `read` in a session permission ruleset (its own provider entitlement is
+  evaluated through the same ruleset), so a restricted V2 turn denies everything
+  that mutates instead of every tool. Token and cost usage is read from the V2
+  session stats and message payloads; account-level rate limits and monthly
+  budgets live only in the hosted Console API behind a service-account key, so
+  they are not claimed as a local-server capability. Structured output is not
+  claimed for either line (V2 has no JSON-schema mode, and V1 deliberately keeps
+  deterministic JSON flows off its history endpoint).
+
+- An end-to-end suite for the OpenCode harness is committed and gated on
+  `OPENCODE_E2E_BINARY`: with a real install it proves the app selects the
+  transport matching the detected line, that the V2 catalog is read over the
+  HTTP API (waiting out the server's first-boot window), and that a real turn
+  streams and mirrors its history. It reports as skipped wherever no OpenCode
+  binary is present, so CI stays green.
 
 - The agent can now collect secrets without ever seeing them. A new
   `cio_ask_secret` **gateway** tool (the utility gateway every harness already

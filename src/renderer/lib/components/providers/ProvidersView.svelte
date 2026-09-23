@@ -9,6 +9,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
     HarnessManifestEntry,
     ProviderAccountAuthStatus,
@@ -47,9 +48,6 @@
   import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
   import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
-  /** Human copy shown when the v1 `opencode` entry resolves to a V2 binary. */
-  const OPENCODE_V2_NOTICE =
-    'This install is OpenCode V2. Use the “OpenCode V2” harness entry for it.'
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
   /** How long a copy confirmation stays visible on the Path column. */
@@ -151,9 +149,16 @@
   function hasDisclosure(provider: ProviderConnectionInfo): boolean {
     return (
       (provider.status === 'available' && provider.integration === 'ready') ||
-      provider.status === 'error' ||
-      (provider.status === 'available' && provider.id === 'opencode2')
+      provider.status === 'error'
     )
+  }
+
+  /**
+   * True when this row is an OpenCode V2 install. One `opencode` harness covers
+   * both lines, so the V2-only catalog panel is gated on the detected version.
+   */
+  function isOpenCodeV2Row(provider: ProviderConnectionInfo): boolean {
+    return provider.id === 'opencode' && isOpenCodeV2Version(provider.version ?? '')
   }
 
   function manifestFor(harnessId: string): HarnessManifestEntry | undefined {
@@ -169,13 +174,6 @@
 
   /** Single, mutually-exclusive status badge per harness row. */
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
-    if (provider.unsupportedReason === 'opencode-v2') {
-      return {
-        Icon: AlertTriangle,
-        label: 'See OpenCode V2',
-        classes: 'border-warning/30 bg-warning/10 text-warning'
-      }
-    }
     if (provider.status === 'error') {
       return {
         Icon: AlertTriangle,
@@ -241,9 +239,6 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
-    if (provider.unsupportedReason === 'opencode-v2') {
-      items.push({ label: `divider-${provider.id}`, divider: true })
-    }
     if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
       items.push({ label: `divider-${provider.id}`, divider: true })
       items.push({
@@ -884,15 +879,6 @@
             </div>
           </div>
 
-          {#if provider.unsupportedReason === 'opencode-v2'}
-            <div class="mt-3 flex items-start gap-1.5 border-t border-border pt-2">
-              <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
-              <span class="min-w-0 break-words text-xs font-medium text-warning">
-                {OPENCODE_V2_NOTICE}
-              </span>
-            </div>
-          {/if}
-
           {#if expanded}
             <div
               class="mt-3 space-y-2.5 border-t border-border pt-3"
@@ -966,7 +952,7 @@
                     />
                   </div>
                 </div>
-                {#if provider.id === 'opencode2'}
+                {#if isOpenCodeV2Row(provider)}
                   <div class="border-t border-border pt-2.5">
                     <OpenCodeV2CatalogPanel harnessName={provider.name} />
                   </div>

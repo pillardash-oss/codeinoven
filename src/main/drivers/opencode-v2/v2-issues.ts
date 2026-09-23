@@ -8,7 +8,7 @@ import {
 import { numberValue, recordValue, stringValue } from './v2-values'
 
 /** Harness id every V2 issue is attributed to. */
-const HARNESS_ID = 'opencode2'
+const HARNESS_ID = 'opencode'
 
 /**
  * Convert one V2 structured error into the shared provider issue.

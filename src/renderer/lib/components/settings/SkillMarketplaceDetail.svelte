@@ -89,13 +89,13 @@
     const harnessNames: Record<string, string> = {}
 
     for (const provider of cachedProviders) {
-      if (!provider.harnessId || providerStore.isUnsupported(provider.harnessId)) continue
+      if (!provider.harnessId) continue
       harnessNames[provider.harnessId] =
         getAgentIcon(provider.harnessId)?.name ?? provider.harnessId
     }
 
     for (const provider of providerStore.providers) {
-      if (provider.status !== 'available' || providerStore.isUnsupported(provider.id)) continue
+      if (provider.status !== 'available') continue
       harnessNames[provider.id] = getAgentIcon(provider.id)?.name ?? provider.name
     }
 

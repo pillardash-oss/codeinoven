@@ -5,6 +5,8 @@ import { dirname, join } from 'path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { isOpenCodeV2Version } from '../../lib/opencode-version'
+import { cachedOpenCodeInstallation } from '../agents/opencode-installation'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -145,7 +147,7 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
 }
 
 /**
- * Read `opencode2 auth list --format json`.
+ * Read `opencode auth list --format json` (V2's credential store).
  *
  * V2's credential list has not been observed with a populated store, so the
  * parser is deliberately tolerant: it accepts the array form the empty store
@@ -645,34 +647,57 @@ async function readConfigOrEmpty(filePath: string): Promise<string> {
   }
 }
 
-const AUTH_DEFINITIONS: AuthDefinition[] = [
-  {
+/**
+ * OpenCode V1 auth: `opencode auth list`, with a `--provider` login target and
+ * a credential store CodeInOven can edit directly (`~/.local/share/opencode`).
+ */
+const OPENCODE_V1_AUTH: AuthDefinition = {
+  id: 'opencode',
+  name: 'OpenCode',
+  command: 'opencode',
+  statusArgs: ['auth', 'list'],
+  parseStatus: parseOpenCodeStatus,
+  loginArgs: (options) => [
+    'auth',
+    'login',
+    ...(options.providerId ? ['--provider', options.providerId] : [])
+  ],
+  logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+  resolveLogoutTarget: resolveOpencodeLogoutTarget,
+  pickerLogin: true
+}
+
+/**
+ * OpenCode V2 auth: credentials live in its own SQLite store and are read with
+ * `auth list --format json`, while login/logout take a positional provider id.
+ */
+function openCodeV2Auth(command: string): AuthDefinition {
+  return {
     id: 'opencode',
     name: 'OpenCode',
-    command: 'opencode',
-    statusArgs: ['auth', 'list'],
-    parseStatus: parseOpenCodeStatus,
-    loginArgs: (options) => [
-      'auth',
-      'login',
-      ...(options.providerId ? ['--provider', options.providerId] : [])
-    ],
-    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
-    resolveLogoutTarget: resolveOpencodeLogoutTarget,
-    pickerLogin: true
-  },
-  {
-    // V2 keeps credentials in its own SQLite store and exposes them through
-    // `opencode2 auth`, with a JSON list and a positional login target.
-    id: 'opencode2',
-    name: 'OpenCode V2',
-    command: 'opencode2',
+    command,
     statusArgs: ['auth', 'list', '--format', 'json'],
     parseStatus: parseOpenCodeV2Status,
     loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
     pickerLogin: true
-  },
+  }
+}
+
+/**
+ * The auth definition for whichever OpenCode line is installed. One harness id
+ * (`opencode`) covers both, so the CLI grammar is chosen from the detected
+ * version instead of a second harness entry.
+ */
+function openCodeAuthDefinition(): AuthDefinition {
+  const installation = cachedOpenCodeInstallation()
+  if (installation && isOpenCodeV2Version(installation.version)) {
+    return openCodeV2Auth(installation.command)
+  }
+  return OPENCODE_V1_AUTH
+}
+
+const AUTH_DEFINITIONS: AuthDefinition[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
@@ -1129,6 +1154,7 @@ export class ProviderAccountOrchestrator {
   // ─── Offered-provider catalog ──────────────────────────────────────────────
 
   private definition(harnessId: string): AuthDefinition | undefined {
+    if (harnessId === 'opencode') return openCodeAuthDefinition()
     return AUTH_DEFINITIONS.find((definition) => definition.id === harnessId)
   }
 

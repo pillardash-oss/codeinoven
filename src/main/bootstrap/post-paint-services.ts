@@ -122,6 +122,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
+  // Resolve which OpenCode line is installed before the chat engine builds its
+  // driver map, so a V2-only machine never starts a turn on the V1 transport.
+  // Bounded and non-fatal: a missing binary just leaves the canonical default.
+  const { detectOpenCodeInstallation } = await import('../agents/opencode-installation')
+  await detectOpenCodeInstallation().catch((error) =>
+    Logger.dev('opencode install detection failed (non-fatal):', error)
+  )
   state.chatEngine = new ChatEngine(
     storage,
     database,
@@ -363,9 +370,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     )
     // A probe that changes a harness's install state (new install, version
-    // bump) invalidates cached provider catalogs so the model picker reflects it.
+    // bump) invalidates cached provider catalogs so the model picker reflects
+    // it, and rebuilds the `opencode` driver when the detected line changed.
     state.providerConnection = new ProviderConnectionService(() => {
       void state.chatEngine?.invalidateProviderCatalogs()
+      state.chatEngine?.refreshOpenCodeHarness()
     })
     state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)

@@ -75,7 +75,7 @@ export const invokeProviderContract = {
   'cioPrompts:reset': {} as Contract<[id: CioPromptId], CioPromptSetting[]>,
   'workerNames:getSettings': {} as Contract<[], WorkerNameSettings>,
   'workerNames:saveCustom': {} as Contract<[names: string[]], void>,
-  'opencode2:discoverCatalog': {} as Contract<[force?: boolean], OpenCodeV2DiscoveryResult>,
+  'opencode:discoverCatalog': {} as Contract<[force?: boolean], OpenCodeV2DiscoveryResult>,
   'providers:check': {} as Contract<[providerId: string], ProviderConnectionInfo>,
   'providers:checkAll': {} as Contract<[force?: boolean], ProviderConnectionInfo[]>,
   'providers:getStatus': {} as Contract<[], ProviderConnectionInfo[]>,

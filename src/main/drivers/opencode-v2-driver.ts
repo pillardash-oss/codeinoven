@@ -45,7 +45,7 @@ import {
   startOpenCodeV2Server,
   type OpenCodeV2ServerHandle
 } from '../opencode-v2/opencode-v2-server'
-import { OPENCODE_V2_COMMAND } from '../opencode-v2/opencode-v2-discovery'
+import { OPENCODE_COMMAND } from '../../lib/opencode-version'
 import {
   mapOpenCodeV2Catalogs,
   mapOpenCodeV2Commands,
@@ -126,7 +126,7 @@ interface IsolatedHandle extends ServerHandle {
 }
 
 /**
- * Driver for OpenCode V2 (`@opencode/cli`, the `opencode2` binary).
+ * Driver for OpenCode V2 (the `opencode` command, `@opencode/cli`).
  *
  * V2 shares a family with the V1 harness and almost nothing else: a different
  * HTTP surface under `/api/*` with Basic auth, prompts without model/agent/
@@ -137,8 +137,8 @@ interface IsolatedHandle extends ServerHandle {
  * needs its own config, one per disposable session) is deliberately the same.
  */
 export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
-  readonly id = 'opencode2'
-  readonly name = 'OpenCode V2'
+  readonly id = 'opencode'
+  readonly name = 'OpenCode'
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'shared_server', scope: 'application' },
     streaming: true,
@@ -153,11 +153,12 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: true,
-    // V2 exposes no child-agent lifecycle on its event stream; a delegated
-    // `task` call surfaces as an ordinary tool part.
-    subagents: false,
-    // V2 has no JSON-schema output mode (only a blocking, history-free
-    // `generate` route), so deterministic JSON flows must not target it.
+    // V2 reports a delegated child agent as a `subagent` tool call whose result
+    // carries the child session id (`metadata.sessionID`), and announces the
+    // child with a `session.created` event carrying a non-null `parentID`.
+    subagents: true,
+    // V2 has no JSON-schema output mode: both `generate` routes take only a
+    // prompt and return text, so deterministic JSON flows must not target it.
     structuredOutput: false,
     nativeUtilities: ['web_fetch', 'web_search'],
     // Retries are not events in V2; they appear as `retry` on the message.
@@ -212,7 +213,9 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   constructor(
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretVault,
-    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {},
+    /** The probed OpenCode binary to spawn; V1 and V2 share one harness entry. */
+    private readonly command: string = OPENCODE_COMMAND
   ) {}
 
   // ─── HarnessDriver interface ──────────────────────────────────────────────
@@ -226,7 +229,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   async ensureReady(projectPath: string): Promise<void> {
-    await runHarnessCommand(OPENCODE_V2_COMMAND, ['--version'], {
+    await runHarnessCommand(this.command, ['--version'], {
       cwd: projectPath,
       env: this.buildEnv(),
       timeoutMs: 10_000
@@ -1116,7 +1119,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       this.processObserver?.watchProcess(
         sessionId,
         handle.process.pid,
-        `${OPENCODE_V2_COMMAND} serve`,
+        `${this.command} serve`,
         projectPath
       )
       handle.process.once('exit', () => {
@@ -1182,7 +1185,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
           ...(overlay?.env ?? {})
         })
     const spawned = await startOpenCodeV2Server({
-      command: OPENCODE_V2_COMMAND,
+      command: this.command,
       cwd: projectPath,
       env,
       ...(configContent ? { configContent } : {}),
@@ -1201,7 +1204,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   private async startServer(projectPath: string): Promise<ServerHandle> {
     const overlay = await this.prepareUtilityRuntime({ projectPath, resolvedUtilities: [] })
     const spawned = await startOpenCodeV2Server({
-      command: OPENCODE_V2_COMMAND,
+      command: this.command,
       cwd: projectPath,
       env: buildProcessEnvironment({
         ...process.env,
@@ -1217,7 +1220,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     this.processObserver?.watchProcess(
       undefined,
       spawned.process.pid,
-      `${OPENCODE_V2_COMMAND} serve`,
+      `${this.command} serve`,
       projectPath
     )
     this.ensureProjectSubscription(handle, projectPath)
@@ -1279,7 +1282,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       try {
         this.sweepIdleHandles()
       } catch (error) {
-        Logger.dev('opencode2 idle sweep failed:', error)
+        Logger.dev('OpenCode V2 idle sweep failed:', error)
       }
     }, OpenCodeV2Driver.IDLE_SWEEP_INTERVAL_MS)
     this.idleSweepTimer.unref?.()
@@ -1294,12 +1297,12 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       ) {
         continue
       }
-      Logger.info('Reaping idle opencode2 turn server', { sessionId, port: handle.port })
+      Logger.info('Reaping idle OpenCode V2 turn server', { sessionId, port: handle.port })
       void this.stopTurnServer(sessionId)
     }
     for (const handle of [...this.isolatedServers.values()]) {
       if (this.idleMs(handle.port) < OpenCodeV2Driver.ISOLATED_SERVER_IDLE_TTL_MS) continue
-      Logger.info('Reaping idle isolated opencode2 server', { port: handle.port })
+      Logger.info('Reaping idle isolated OpenCode V2 server', { port: handle.port })
       this.disposeIsolatedSession(handle)
     }
     const shared = this.server
@@ -1309,7 +1312,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       this.idleMs(shared.port) >= OpenCodeV2Driver.SHARED_SERVER_IDLE_TTL_MS &&
       ![...this.activeSessions.keys()].some((sessionId) => this.isSessionLive(sessionId))
     ) {
-      Logger.info('Reaping idle opencode2 serve host', { port: shared.port })
+      Logger.info('Reaping idle OpenCode V2 serve host', { port: shared.port })
       this.stopSharedServer()
     }
   }
@@ -1320,7 +1323,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     for (const sessionId of [...this.activeSessions.keys()]) {
       const at = this.lastSessionActivityAt.get(sessionId)
       if (at !== undefined && now - at >= OpenCodeV2Driver.GHOST_SESSION_TTL_MS) {
-        Logger.info('Dropping ghost opencode2 session tracking entry', { sessionId })
+        Logger.info('Dropping ghost OpenCode V2 session tracking entry', { sessionId })
         this.activeSessions.delete(sessionId)
         this.lastSessionActivityAt.delete(sessionId)
       }

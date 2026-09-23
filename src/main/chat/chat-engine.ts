@@ -27,8 +27,10 @@ import { AuditEngine } from '../../lib/engines/audit-engine'
 import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assignment-engine'
 import { PrdEngine } from '../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
-import { OpenCodeDriver } from '../drivers/opencode-driver'
-import { OpenCodeV2Driver } from '../drivers/opencode-v2-driver'
+import {
+  createOpenCodeHarnessDriver,
+  isOpenCodeV2Installed
+} from '../drivers/opencode-harness-driver'
 import type { IsolatedSessionHandle } from '../drivers/isolated-session'
 import { supportsIsolatedSessions } from '../drivers/isolated-session'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
@@ -754,6 +756,8 @@ export class ChatEngine {
   private readonly customProviderUsage = new CustomProviderUsageClient()
 
   private sessionRegistry = new Map<string, SessionInfo>()
+  /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
+  private openCodeDriverIsV2 = false
 
   private childSessionOwners = new Map<string, ChildSessionInfo>()
 
@@ -1366,8 +1370,7 @@ export class ChatEngine {
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
     const driverFactories: Record<string, () => HarnessDriver> = {
-      opencode: () => new OpenCodeDriver(this.baseUrlProviders, this.secretVault),
-      opencode2: () => new OpenCodeV2Driver(this.baseUrlProviders, this.secretVault),
+      opencode: () => createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault),
       codex: () => new CodexDriver(storage, this.baseUrlProviders, this.secretVault),
       'claude-code': () => new ClaudeCodeDriver(storage, this.baseUrlProviders, this.secretVault),
       pi: () => new PiDriver(storage, this.baseUrlProviders, this.secretVault),
@@ -1379,6 +1382,9 @@ export class ChatEngine {
       const create = driverFactories[harness.id]
       if (create) this.drivers.set(harness.id, create())
     }
+    // Remember which OpenCode transport the map was built for, so a runtime
+    // install/upgrade can swap it without rebuilding the whole map.
+    this.openCodeDriverIsV2 = isOpenCodeV2Installed()
 
     // Wire each driver's event output to the broadcast + permission policy.
     for (const driver of this.drivers.values()) {
@@ -1390,9 +1396,7 @@ export class ChatEngine {
   private createAccountDriver(harnessId: string, environment: NodeJS.ProcessEnv): HarnessDriver {
     switch (harnessId) {
       case 'opencode':
-        return new OpenCodeDriver(this.baseUrlProviders, this.secretVault, environment)
-      case 'opencode2':
-        return new OpenCodeV2Driver(this.baseUrlProviders, this.secretVault, environment)
+        return createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault, environment)
       case 'codex':
         return new CodexDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
       case 'claude-code':
@@ -2977,8 +2981,8 @@ export class ChatEngine {
     const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
     if (!applyRuntime) return ''
     // Capture before the instanceof check below: control-flow analysis widens
-    // `driver` to `HarnessDriver | OpenCodeDriver` afterwards, and the union
-    // hides this optional method.
+    // `driver` to `HarnessDriver | IsolatedSessionDriver` afterwards, and the
+    // union hides this optional method.
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     // A native bridge owns credentials internally. Other harnesses use their
     // existing MCP runtime; prompt prose is never a transport fallback.
@@ -3387,6 +3391,35 @@ export class ChatEngine {
     })
     this.catalogInvalidationInFlight = run
     return run
+  }
+
+  /**
+   * Rebuild the single `opencode` driver when the detected install crossed the
+   * V1/V2 line while the app was running (for example right after the user ran
+   * the harness's own updater). A swap mid-turn would route the in-flight turn's
+   * events to the new driver, so it is deferred until the harness is idle; the
+   * next probe change or app restart picks it up otherwise.
+   */
+  refreshOpenCodeHarness(): void {
+    if (!this.drivers.has('opencode')) return
+    const desiredV2 = isOpenCodeV2Installed()
+    if (desiredV2 === this.openCodeDriverIsV2) return
+    if (this.harnessHasActiveTurn('opencode')) return
+    const driver = createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault)
+    driver.setProcessObserver?.(this.agentProcesses)
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
+    this.drivers.set('opencode', driver)
+    this.openCodeDriverIsV2 = desiredV2
+  }
+
+  /** True when a harness driver reports a live turn on any known session. */
+  private harnessHasActiveTurn(harnessId: string): boolean {
+    const driver = this.drivers.get(harnessId)
+    if (!driver?.hasActiveTurn) return false
+    for (const sessionId of this.sessionRegistry.keys()) {
+      if (driver.hasActiveTurn(sessionId)) return true
+    }
+    return false
   }
 
   /**

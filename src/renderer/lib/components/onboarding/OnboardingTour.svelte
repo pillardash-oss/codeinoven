@@ -104,9 +104,7 @@
   let installError = $state('')
 
   const pi = $derived(providerStore.providers.find((provider) => provider.id === 'pi'))
-  const piReady = $derived(
-    pi?.status === 'available' && pi.integration === 'ready' && pi.unsupportedReason === undefined
-  )
+  const piReady = $derived(pi?.status === 'available' && pi.integration === 'ready')
   const piChecking = $derived(pi?.status === 'checking')
   const piBundled = $derived(pi?.executionTarget?.kind === 'bundled')
 

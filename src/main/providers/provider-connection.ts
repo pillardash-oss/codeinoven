@@ -1,12 +1,15 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { ProviderConnectionInfo } from '../../lib/types'
+import { parseOpenCodeMajor } from '../../lib/opencode-version'
+import { selectNewestCandidate } from '../../lib/version-compare'
 import {
   findHarness,
   harnessSupportsManualCompaction,
   listHarnesses,
   type HarnessDescriptor
 } from '../agents/harness-registry'
+import { rememberOpenCodeInstallation } from '../agents/opencode-installation'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   discoverHarnessRuntimes,
@@ -21,20 +24,9 @@ const PROBE_YIELD_MS = 50
 /** Coalesce renderer work while still reporting progress during a full pass. */
 const PROBE_BROADCAST_BATCH_SIZE = 2
 
-/**
- * The `opencode` command resolved to an OpenCode V2 binary. That entry's driver
- * speaks the v1 API only, so the install is reported as installed-but-not-
- * drivable here; the `opencode2` entry owns V2. The Harnesses page surfaces
- * this as a notice rather than treating it as a working install.
- */
-export const OPENCODE_V2_UNSUPPORTED_DETAIL =
-  'This binary reports OpenCode V2. Use the OpenCode V2 entry for this harness.'
-
-/** True when a `--version` line reports a major version >= 2 (OpenCode V2). */
-function isOpenCodeV2(version: string): boolean {
-  const match = /(\d+)/u.exec(version)
-  const major = match ? Number.parseInt(match[1], 10) : Number.NaN
-  return Number.isFinite(major) && major >= 2
+/** Every command that can satisfy a harness: its canonical name plus aliases. */
+function commandCandidates(definition: HarnessDescriptor): string[] {
+  return [definition.command, ...(definition.commandAliases ?? [])]
 }
 
 /**
@@ -111,8 +103,8 @@ export class ProviderConnectionService {
     }
 
     this.update({ ...current, status: 'checking', detail: undefined })
-    const runtime = (await discoverHarnessRuntimes([def.command], { force: true })).get(def.command)
-    const result = await this.enqueueProbe(() => this.probe(def, runtime ?? null))
+    const runtimes = await discoverHarnessRuntimes(commandCandidates(def), { force: true })
+    const result = await this.enqueueProbe(() => this.probe(def, runtimes))
     this.update(result)
     return result
   }
@@ -144,14 +136,12 @@ export class ProviderConnectionService {
     }
     this.broadcast()
     const runtimes = await discoverHarnessRuntimes(
-      harnesses.map((harness) => harness.command),
+      harnesses.flatMap((harness) => commandCandidates(harness)),
       { force }
     )
 
     for (const [index, definition] of harnesses.entries()) {
-      const result = await this.enqueueProbe(() =>
-        this.probe(definition, runtimes.get(definition.command) ?? null)
-      )
+      const result = await this.enqueueProbe(() => this.probe(definition, runtimes))
       this.statuses.set(result.id, result)
       this.noteSettled(result)
       if ((index + 1) % PROBE_BROADCAST_BATCH_SIZE === 0 || index === harnesses.length - 1) {
@@ -199,7 +189,7 @@ export class ProviderConnectionService {
   /** Resolve the binary, then verify it actually responds to a version probe. */
   private async probe(
     def: HarnessDescriptor,
-    runtime: HarnessRuntime | null
+    runtimes: Map<string, HarnessRuntime | null>
   ): Promise<ProviderConnectionInfo> {
     const base: ProviderConnectionInfo = {
       id: def.id,
@@ -211,7 +201,51 @@ export class ProviderConnectionService {
       status: 'idle'
     }
 
-    if (!runtime) {
+    // Probe every command that can satisfy this harness (canonical + aliases).
+    // The newest answering command wins, so a v2 install always supersedes a v1
+    // one   and a v1 binary squatting on an alias never masks the real install.
+    const candidates: Array<{ version: string; value: HarnessRuntime }> = []
+    const failures: string[] = []
+    let resolved: HarnessRuntime | null = null
+    for (const command of commandCandidates(def)) {
+      const runtime = runtimes.get(command)
+      if (!runtime) continue
+      resolved ??= runtime
+      const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
+      if (!versionResult.ok) {
+        failures.push(`${command}: ${versionResult.reason}`)
+        continue
+      }
+      const version =
+        (versionResult.stdout || versionResult.stderr).split(/\r?\n/u)[0]?.trim() ?? ''
+      candidates.push({ version, value: runtime })
+    }
+
+    const best = selectNewestCandidate(candidates)
+    if (def.id === 'opencode') {
+      rememberOpenCodeInstallation(
+        best
+          ? {
+              command: best.value.command,
+              version: best.version,
+              major: parseOpenCodeMajor(best.version)
+            }
+          : null
+      )
+    }
+
+    if (best) {
+      return {
+        ...base,
+        status: 'available',
+        resolvedPath: best.value.resolvedPath,
+        executionTarget: best.value.target,
+        version: best.version,
+        ...(best.value.command === def.command ? {} : { activeCommand: best.value.command })
+      }
+    }
+
+    if (!resolved) {
       return {
         ...base,
         status: 'not_found',
@@ -222,52 +256,12 @@ export class ProviderConnectionService {
       }
     }
 
-    const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
-    if (versionResult.ok) {
-      const version =
-        (versionResult.stdout || versionResult.stderr).split(/\r?\n/u)[0]?.trim() ?? ''
-      // The v1 `opencode` entry cannot drive a v2 binary: the API moved to
-      // `/api/*` with Basic auth. Report it as installed-but-not-drivable here
-      // and let the dedicated `opencode2` entry own V2.
-      if (def.id === 'opencode' && isOpenCodeV2(version)) {
-        return {
-          ...base,
-          status: 'error',
-          resolvedPath: runtime.resolvedPath,
-          executionTarget: runtime.target,
-          version,
-          unsupportedReason: 'opencode-v2',
-          detail: OPENCODE_V2_UNSUPPORTED_DETAIL
-        }
-      }
-      // The `opencode2` entry must actually be the v2 binary. A v1 binary on
-      // that command (e.g. a stale alias) would otherwise be reported as a
-      // working V2 install and fail later.
-      if (def.id === 'opencode2' && !isOpenCodeV2(version)) {
-        return {
-          ...base,
-          status: 'error',
-          resolvedPath: runtime.resolvedPath,
-          executionTarget: runtime.target,
-          version,
-          detail: `"opencode2" reported a non-V2 version (${version || 'unknown'}).`
-        }
-      }
-      return {
-        ...base,
-        status: 'available',
-        resolvedPath: runtime.resolvedPath,
-        executionTarget: runtime.target,
-        version
-      }
-    }
-
     return {
       ...base,
       status: 'error',
-      resolvedPath: runtime.resolvedPath,
-      executionTarget: runtime.target,
-      detail: versionResult.reason
+      resolvedPath: resolved.resolvedPath,
+      executionTarget: resolved.target,
+      detail: failures[0] ?? `"${def.command}" did not answer its version probe.`
     }
   }
 

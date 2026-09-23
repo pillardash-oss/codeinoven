@@ -135,13 +135,11 @@
   /** Installed, supported harnesses the editor may bind a capability to.
    *  Follows the model picker's protocol: the provider catalog (persisted
    *  snapshot + background refresh, never a cold Harnesses-page probe) decides
-   *  which harnesses exist, while `providerStore` supplies canonical names and
-   *  drops harnesses whose installed version is unsupported. Probing status is
+   *  which harnesses exist, while `providerStore` supplies canonical names. Probing status is
    *  only ever additive   a confirmed `available` harness stays listed. */
   let availableHarnesses = $derived.by((): Array<{ id: string; name: string }> => {
     const catalogIds = new Set(providerCatalog.allCached().map((catalog) => catalog.harnessId))
     return providerStore.providers
-      .filter((provider) => !providerStore.isUnsupported(provider.id))
       .filter(
         (provider) =>
           provider.status === 'available' ||

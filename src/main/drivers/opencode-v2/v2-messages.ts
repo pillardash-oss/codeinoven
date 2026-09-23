@@ -31,6 +31,59 @@ export function stepPartId(messageId: string, ordinal: number): string {
   return `${messageId}:step:${ordinal}`
 }
 
+/** V2 tool names that represent a delegated child agent. */
+const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'task'])
+
+/** True when a V2 tool name is a delegated sub-agent invocation. */
+export function isOpenCodeV2SubagentTool(tool: string): boolean {
+  return SUBAGENT_TOOL_NAMES.has(tool.toLowerCase())
+}
+
+/**
+ * Map a V2 `subagent` tool call to the shared sub-agent part.
+ *
+ * V2 reports a delegated child agent as an ordinary tool named `subagent`; the
+ * child session id arrives on the tool result's `metadata.sessionID`, and the
+ * launch arguments carry the agent id, description, and prompt. Mapping it to a
+ * sub-agent part instead of a generic tool card is what lets the UI show the
+ * child agent, and matches how the V1 transport reports `task`.
+ */
+export function mapOpenCodeV2SubagentPart(
+  messageId: string,
+  callId: string,
+  state: AgentToolState
+): AgentPart {
+  const input = state.input
+  const metadata = recordValue(state.metadata) ?? {}
+  const prompt = stringValue(input['prompt'])
+  const childSessionId =
+    stringValue(metadata['sessionID']) ??
+    stringValue(input['session_id']) ??
+    stringValue(input['task_id'])
+  const model = recordValue(metadata['model'])
+  const providerId = stringValue(model?.['providerID'])
+  const modelId = stringValue(model?.['modelID'])
+  return {
+    type: 'subagent',
+    id: toolPartId(messageId, callId),
+    messageID: messageId,
+    callID: callId,
+    activity: {
+      status: state.status,
+      agent: stringValue(input['agent']) ?? stringValue(input['subagent_type']) ?? '',
+      description: stringValue(input['description']) ?? state.title ?? 'Delegated task',
+      ...(prompt === undefined ? {} : { prompt }),
+      ...(childSessionId === undefined ? {} : { childSessionId }),
+      ...(providerId === undefined ? {} : { providerId }),
+      ...(modelId === undefined ? {} : { modelId }),
+      background: metadata['background'] === true || input['background'] === true,
+      ...(state.output === undefined ? {} : { output: state.output }),
+      ...(state.error === undefined ? {} : { error: state.error }),
+      ...(state.time === undefined ? {} : { time: state.time })
+    }
+  }
+}
+
 /**
  * Map a V2 `ToolState` onto the shared tool state.
  *
@@ -130,16 +183,21 @@ function mapAssistantContent(
       const toolTime = recordValue(record['time'])
       const start = numberValue(toolTime?.['created'])
       const end = numberValue(toolTime?.['completed'])
+      const withTime: AgentToolState =
+        state.time === undefined && start !== undefined
+          ? { ...state, time: { start, end: end === undefined ? undefined : end } }
+          : state
+      const name = stringValue(record['name']) ?? ''
+      if (isOpenCodeV2SubagentTool(name)) {
+        return mapOpenCodeV2SubagentPart(messageId, callId, withTime)
+      }
       return {
         type: 'tool',
         id: toolPartId(messageId, callId),
         messageID: messageId,
         callID: callId,
-        tool: stringValue(record['name']) ?? '',
-        state:
-          state.time === undefined && start !== undefined
-            ? { ...state, time: { start, end: end === undefined ? undefined : end } }
-            : state
+        tool: name,
+        state: withTime
       }
     }
     default:

@@ -1,4 +1,5 @@
 import type { ProviderConnectionInfo } from '../../lib/types'
+import { OPENCODE_COMMAND_ALIASES } from '../../lib/opencode-version'
 
 /** The schema version of `HarnessManifest`. Bump when behaviors are added or renamed. */
 export const HARNESS_MANIFEST_SCHEMA_VERSION = 1
@@ -29,6 +30,13 @@ export interface HarnessDescriptor {
   id: string
   name: string
   command: string
+  /**
+   * Alternate command names that satisfy the SAME harness, probed alongside
+   * `command`. Used where one product ships under more than one binary name
+   * (OpenCode's `opencode` and its `opencode2` alias): the newest version that
+   * answers wins, so a v2 install always supersedes a v1 one.
+   */
+  commandAliases?: readonly string[]
   versionArgs: string[]
   integration: ProviderConnectionInfo['integration']
   /** Whether this harness driver can inject custom base-URL providers. */
@@ -85,32 +93,21 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
   },
   {
+    // One OpenCode harness. V1 and V2 both install as `opencode` and are no
+    // longer installed side by side by default (the V2 installer replaces the
+    // V1 binary); a package-managed V2 install may also add the `opencode2`
+    // alias. The app probes both, keeps the newest, and drives the matching
+    // transport (see `opencode-installation.ts` and `opencode-harness-driver.ts`).
+    // The user never picks a version.
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
+    commandAliases: OPENCODE_COMMAND_ALIASES,
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
-  },
-  {
-    // OpenCode V2 ships its own binary (`opencode2`) whose HTTP API lives under
-    // `/api/*` with Basic auth   entirely separate from the v1 CLI the
-    // `opencode` driver drives, and it is driven by `OpenCodeV2Driver`.
-    //
-    // Custom base-URL providers are deliberately NOT claimed for V2 yet: the
-    // app cannot write V2's own provider dialect for this entry, and nothing a
-    // user configures is hidden by that, because V2 reads the same
-    // `~/.config/opencode/opencode.json` the v1 entry manages and normalizes
-    // the provider entries it finds there. See the driver's `listProviders`.
-    id: 'opencode2',
-    name: 'OpenCode V2',
-    command: 'opencode2',
-    versionArgs: ['--version'],
-    integration: 'ready',
-    supportsCustomProviders: false,
-    // V2 reads AGENTS.md itself, and implements an explicit manual compaction
-    // (`POST /api/session/{id}/compact`).
+    // Both lines read AGENTS.md and implement an explicit manual compaction
+    // (V1 `opencode` session command; V2 `POST /api/session/{id}/compact`).
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {

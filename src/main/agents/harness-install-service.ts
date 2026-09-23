@@ -27,11 +27,6 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
     linux: 'https://opencode.ai/download',
     win32: 'https://opencode.ai/download'
   },
-  opencode2: {
-    darwin: 'https://www.npmjs.com/package/@opencode/cli',
-    linux: 'https://www.npmjs.com/package/@opencode/cli',
-    win32: 'https://www.npmjs.com/package/@opencode/cli'
-  },
   codex: {
     darwin: 'https://developers.openai.com/codex/cli/',
     linux: 'https://developers.openai.com/codex/cli/',
@@ -66,16 +61,12 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
 
 /** The install methods each harness officially documents per platform. */
 const INSTALL_METHODS: Record<string, Partial<Record<Platform, HarnessInstallMethod[]>>> = {
+  // OpenCode V2 is the current release and installs under the same `opencode`
+  // command; the app offers its documented channels (npm `@opencode/cli`, the
+  // `opencode-v2` brew tap, the `/v2/install` curl script).
   opencode: {
     darwin: ['npm', 'brew', 'native'],
     linux: ['npm', 'brew', 'native'],
-    win32: ['npm', 'native']
-  },
-  // OpenCode V2 is published as `@opencode/cli`; the vendor's curl/brew channels
-  // still resolve to the v1 line, so npm is the only verified v2 install method.
-  opencode2: {
-    darwin: ['npm'],
-    linux: ['npm'],
     win32: ['npm']
   },
   codex: {
@@ -122,12 +113,9 @@ const UNINSTALL_COMMANDS: Record<
   Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>
 > = {
   opencode: {
-    npm: { command: 'npm', args: ['uninstall', '-g', 'opencode-ai'] },
-    brew: { command: 'brew', args: ['uninstall', 'anomalyco/tap/opencode'] },
+    npm: { command: 'npm', args: ['uninstall', '-g', '@opencode/cli', 'opencode-ai'] },
+    brew: { command: 'brew', args: ['uninstall', 'anomalyco/tap/opencode-v2'] },
     native: { command: 'rm', args: ['-rf', '~/.opencode'] }
-  },
-  opencode2: {
-    npm: { command: 'npm', args: ['uninstall', '-g', '@opencode/cli'] }
   },
   codex: {
     npm: { command: 'npm', args: ['uninstall', '-g', '@openai/codex'] },
@@ -176,28 +164,14 @@ const INSTALL_COMMANDS: Record<
 > = {
   opencode: {
     darwin: {
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] },
-      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode'] },
-      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/install | bash'] }
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] },
+      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode-v2'] },
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
     },
     linux: {
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] },
-      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/install | bash'] }
-    },
-    win32: {
-      native: {
-        command: 'powershell',
-        args: ['-NoProfile', '-Command', 'irm https://opencode.ai/install.ps1 | iex']
-      },
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] }
-    }
-  },
-  opencode2: {
-    darwin: {
-      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
-    },
-    linux: {
-      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] },
+      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode-v2'] },
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
     },
     win32: {
       npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
