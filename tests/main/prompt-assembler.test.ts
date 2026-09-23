@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { MemoryService } from '../../src/main/chat/memory-service'
-import {
-  abbreviatedWorkspaceGuard,
-  PromptAssembler
-} from '../../src/main/chat/prompt-assembler'
+import { abbreviatedWorkspaceGuard, PromptAssembler } from '../../src/main/chat/prompt-assembler'
+import { defaultCioPrompt } from '../../src/lib/cio-prompts'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT, SKILLS_SECTION_BODY } from '../../src/lib/agent-behavior'
 
 function assembler(): PromptAssembler {
   const memoryService = { formatCurrent: async () => '' } as unknown as MemoryService
@@ -112,5 +111,38 @@ describe('PromptAssembler application behavior', () => {
     expect(guard).toContain('project')
     expect(guard).toContain('.cio/')
     expect(guard).not.toContain('WORKING SCOPE')
+  })
+
+  it('gives the assistant scope its own behavior layer and no project guard', async () => {
+    const layers = await assembler().getLayers(
+      'assistant',
+      'thread-1',
+      '/assistant-cwd/routine-1',
+      { id: 'opencode', name: 'OpenCode' },
+      undefined,
+      'assistant',
+      defaultCioPrompt('assistant'),
+      undefined,
+      'assistant',
+      'omitted'
+    )
+    const behavior = layers.find((layer) => layer.title === 'Agent behavior (Assistant)')
+    expect(behavior?.content).toContain('## Skills')
+    expect(behavior?.content).not.toContain('Agent behavior for implementation work')
+    // No project-scope guard claims the route is a user project.
+    expect(layers.some((layer) => layer.title.startsWith('Harness:'))).toBe(false)
+    const app = layers.find((layer) => layer.title.startsWith('Application:'))
+    expect(app?.title).toContain('Assistant')
+  })
+
+  it('keeps the shared skills discipline identical in both behavior prompts', () => {
+    // The work-ethics prompt indents the section into its numbered list; the
+    // assistant prompt appends it whole. Both must carry the same rules.
+    for (const line of SKILLS_SECTION_BODY.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.length === 0) continue
+      expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain(trimmed)
+      expect(defaultCioPrompt('assistant')).toContain(trimmed)
+    }
   })
 })

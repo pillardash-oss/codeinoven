@@ -128,6 +128,7 @@ export function attributionModeFor(
   fileSystemMode: boolean
 ): AttributionMode {
   if (executionScope === 'project-thread') return 'engineering'
+  if (executionScope === 'assistant') return 'assistant'
   if (executionScope === 'ephemeral') return 'ephemeral'
   return fileSystemMode ? 'file-system-chat' : 'inbox-chat'
 }

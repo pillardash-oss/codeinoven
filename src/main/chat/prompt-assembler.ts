@@ -52,10 +52,17 @@ export interface DriverInfo {
  * - `'chat'`   engineering prompts are omitted. Execution scope independently decides
  *   whether Agent behavior applies; standalone Chats and ephemeral sessions receive none.
  */
-export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
+export type BehaviorMode = 'brainstorm' | 'implement' | 'chat' | 'assistant'
 
-/** Runtime scope deciding whether the user-editable Agent behavior is applicable. */
-export type BehaviorExecutionScope = 'project-thread' | 'standalone-chat' | 'ephemeral'
+/**
+ * Runtime scope deciding whether the user-editable Agent behavior is applicable.
+ *
+ * `'assistant'` is its own class: a routine run is neither a project thread nor
+ * a chat, so it carries the app-owned assistant prompt instead of the
+ * engineering work-ethics prompt, and no project workspace guard.
+ */
+export type BehaviorExecutionScope =
+  'project-thread' | 'standalone-chat' | 'assistant' | 'ephemeral'
 
 /**
  * How much workspace/scratch-scope guard ships in a turn's Harness layer.
@@ -137,7 +144,16 @@ export class PromptAssembler {
       )
     }
 
-    if (executionScope === 'project-thread') {
+    if (executionScope === 'assistant') {
+      layers.push(
+        withLayerAccounting({
+          title: 'Agent behavior (Assistant)',
+          content: normalizeAgentBehaviorPrompt(agentBehaviorPrompt),
+          editable: true,
+          defaultOpen: false
+        })
+      )
+    } else if (executionScope === 'project-thread') {
       layers.push(
         withLayerAccounting({
           title: 'Agent behavior (Project thread)',
@@ -359,5 +375,7 @@ function modeLabel(mode: BehaviorMode): string {
       return 'Chat'
     case 'brainstorm':
       return 'Brainstorm'
+    case 'assistant':
+      return 'Assistant'
   }
 }

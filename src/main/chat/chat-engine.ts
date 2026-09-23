@@ -5949,6 +5949,12 @@ export class ChatEngine {
       const driver = this.drivers.get(harnessId)
       behaviorDriver = driver
       const config = await this.storage.getConfig()
+      // An assistant task does not inherit the engineering work-ethics prompt:
+      // the assistant is its own class and the app owns its standing behavior.
+      const behaviorPrompt =
+        executionScope === 'assistant'
+          ? await this.cioPrompt('assistant')
+          : config.agentBehaviorPrompt
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
       const workspaceScope: WorkspaceScopeMode =
@@ -5975,7 +5981,7 @@ export class ChatEngine {
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
-        config.agentBehaviorPrompt,
+        behaviorPrompt,
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
@@ -7706,6 +7712,9 @@ export class ChatEngine {
     )
     if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
+    // An assistant task is its own class: neither a project thread nor a chat.
+    // It carries the app-owned assistant prompt and its own lean harness agent.
+    const isAssistantTask = project.id === ASSISTANT_SPACE_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
     // A parked lifecycle (no circle actively running and no decision gate
     // pending) means the user is free to chat: their message must NOT be
@@ -8096,8 +8105,18 @@ export class ChatEngine {
     // Behavior and vision layers are branch-agnostic and needed both for the
     // system-prompt base estimate and the final composition below, so compute
     // them once before the history recap budget is derived.
-    const behaviorMode =
-      specAction === 'implement' ? 'implement' : planningSpecTurn ? 'brainstorm' : 'chat'
+    const behaviorMode = isAssistantTask
+      ? 'assistant'
+      : specAction === 'implement'
+        ? 'implement'
+        : planningSpecTurn
+          ? 'brainstorm'
+          : 'chat'
+    const behaviorScope: BehaviorExecutionScope = isChatThread
+      ? 'standalone-chat'
+      : isAssistantTask
+        ? 'assistant'
+        : 'project-thread'
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
       checkpointPromise,
       utilityInstructionsPromise,
@@ -8107,7 +8126,7 @@ export class ChatEngine {
         projectPath,
         behaviorMode,
         settings,
-        isChatThread ? 'standalone-chat' : 'project-thread',
+        behaviorScope,
         messageId
       ),
       this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId),
@@ -8522,18 +8541,22 @@ export class ChatEngine {
             : undefined,
         agent: utilitySetupRequested
           ? leanAgentNameForMode('utility-setup')
-          : isChatThread
-            ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
-            : undefined,
+          : isAssistantTask
+            ? leanAgentNameForMode('assistant')
+            : isChatThread
+              ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+              : undefined,
         userMessageId: messageId
       })
-      if (utilitySetupRequested || isChatThread) {
+      if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
           utilitySetupRequested
             ? 'utility-setup'
-            : chatFileSystemEnabled
-              ? 'file-system-chat'
-              : 'inbox-chat',
+            : isAssistantTask
+              ? 'assistant'
+              : chatFileSystemEnabled
+                ? 'file-system-chat'
+                : 'inbox-chat',
           sessionId,
           driverId
         )

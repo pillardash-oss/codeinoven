@@ -616,7 +616,8 @@ export function formatOpenAnnotations(
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
  * planning or implementation instruction exactly once; mermaid and question
- * instructions are injected here only in `chat` mode, where no app layer exists.
+ * instructions are injected here for the conversational modes (`chat` and
+ * `assistant`), where no app layer supplies them.
  */
 export function composeTurnSystemPrompt(input: {
   chatPrompt: string
@@ -632,9 +633,13 @@ export function composeTurnSystemPrompt(input: {
    * accumulates a copy per turn.
    */
   routineInstruction?: string
-  behaviorMode: 'implement' | 'brainstorm' | 'chat'
+  behaviorMode: 'implement' | 'brainstorm' | 'chat' | 'assistant'
   historyRecap: string
 }): string {
+  // A chat and an assistant task are both non-engineering conversations, so
+  // both carry the mermaid rules and the question-tool instruction; a project
+  // thread gets them from its own application layer instead.
+  const conversational = input.behaviorMode === 'chat' || input.behaviorMode === 'assistant'
   return [
     input.chatPrompt,
     input.memoryInstruction,
@@ -643,8 +648,8 @@ export function composeTurnSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.routineInstruction,
-    input.behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
-    input.behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
+    conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+    conversational ? QUESTION_TOOL_INSTRUCTION : undefined,
     input.historyRecap
   ]
     .filter(Boolean)

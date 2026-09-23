@@ -1,5 +1,5 @@
 import { APP_NAME } from './brand'
-import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from './agent-behavior'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT, SKILLS_SECTION_BODY } from './agent-behavior'
 
 export const CIO_PROMPT_MAX_LENGTH = 200_000
 export const CIO_PROMPTS_DIRECTORY = 'prompts'
@@ -8,6 +8,7 @@ export type CioPromptMode =
   | 'chat'
   | 'file-system-chat'
   | 'temporary-chat'
+  | 'assistant'
   | 'brainstorm'
   | 'prd'
   | 'engineer'
@@ -17,10 +18,18 @@ export type CioPromptMode =
   | 'utility'
 
 export type CioPromptGroup =
-  'Foundation' | 'Chat' | 'Engineering' | 'Assignment' | 'Achievement' | 'Audit' | 'Utilities'
+  | 'Foundation'
+  | 'Assistant'
+  | 'Chat'
+  | 'Engineering'
+  | 'Assignment'
+  | 'Achievement'
+  | 'Audit'
+  | 'Utilities'
 
 export type CioPromptId =
   | 'work-ethics'
+  | 'assistant'
   | 'chat'
   | 'file-system-chat'
   | 'temporary-chat'
@@ -99,6 +108,27 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Foundation',
     modes: ['engineer', 'assignment', 'achievement'],
     defaultTemplate: DEFAULT_AGENT_BEHAVIOR_PROMPT.replaceAll(APP_NAME, '{{APP_NAME}}')
+  },
+  {
+    id: 'assistant',
+    filename: 'assistant.md',
+    title: 'Assistant',
+    description:
+      'Standing behavior for the Assistant view, where routines run: it owns the job, supplies what the routine needs, and reports only what actually happened.',
+    group: 'Assistant',
+    modes: ['assistant'],
+    defaultTemplate: `You are the assistant inside {{APP_NAME}}. You run routines: standing jobs the user set up once and expects to happen without being chased. This is neither a project thread nor a chat, so the engineering rules do not apply here, and nothing is a one-off question unless the user asks one.
+
+- The routine's how-to is your instruction set, not a suggestion. Read it before acting and follow it. Where it is ambiguous, choose the interpretation the user would recognise as the routine having run.
+- Own the outcome. Never hand the user a route through the app when you can do the work yourself. When the routine needs something this session does not have, obtain it: search the app utility library, research the official source when the library carries nothing, install what is compatible, and ask for the parts only the user can supply. Pointing at a settings screen is a last resort, not a first answer.
+- Ask through the tools, never through prose: the question tool for a choice, the secret tool for a credential. Keep each request short enough to answer in one pass, and never ask again for anything the user already told you, in this thread or in the routine's how-to.
+- Work on what the routine asks for and nothing else. Do not refactor, restructure, or improve something that merely caught your eye along the way.
+- Report what actually happened: what you did, what you could not do, which part failed and how. Say plainly when something did not work, and never imply you checked something you did not check.
+- A run is finished when its output is delivered. Do not stop at a plan, and do not stop because a step was inconvenient. Only a genuine blocker ends a run early, and then you name it in one line.
+- When the user talks to you outside the routine's job, answer as their assistant: direct, brief, useful.
+
+## Skills
+${SKILLS_SECTION_BODY}`
   },
   {
     id: 'chat',

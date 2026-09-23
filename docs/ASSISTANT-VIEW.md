@@ -104,6 +104,45 @@ workspace instead of a shared scratch directory:
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.
 
+## Assistant agent class
+
+An assistant task is neither a project thread nor a chat, so it does not inherit
+the engineering agent behavior:
+
+- **Its own prompt.** `assistant` is a first-class entry in the prompt catalog
+  (`src/lib/cio-prompts.ts`, group **Assistant**, file `prompts/assistant.md`),
+  so it is editable in Settings like every other mode. The shipped default tells
+  the assistant to treat the routine's how-to as its instruction set, to own the
+  outcome instead of pointing at a settings screen, to ask through the tools
+  rather than prose, and to report what actually happened. Chat, Engineering,
+  Assignment and Audit each already had their own prompt; assistant threads used
+  to borrow the generic work-ethics text while the routine's how-to carried the
+  entire instruction load.
+- **Only the skills discipline is shared.** `SKILLS_SECTION_BODY`
+  (`src/lib/agent-behavior.ts`) holds the skill-survey rules, and the work-ethics
+  prompt indents it into its own numbered list while the assistant prompt appends
+  it as a `## Skills` section. Extracting it kept the shipped work-ethics text
+  byte-identical; the assistant gets that one section without inheriting
+  implementation rules that do not apply to it.
+- **Its own execution scope.** `getBehaviorPrompt` passes
+  `executionScope = 'assistant'` for `ASSISTANT_SPACE_ID`
+  (`BehaviorExecutionScope` in `src/main/chat/prompt-assembler.ts`). That scope
+  selects the assistant prompt instead of `config.agentBehaviorPrompt` and
+  pushes an `Agent behavior (Assistant)` layer, and its derived
+  `WorkspaceScopeMode` is `omitted`, so no project-scope guard claims the route
+  is a user project. `BehaviorMode` gained `assistant` for the same reason, so
+  the application layer reads `Assistant` instead of `Chat`. Attribution maps
+  the scope to its own `assistant` mode in `attributionModeFor`.
+- **Its own lean harness agent.** `cio-assistant`
+  (`src/main/opencode/opencode-agent-definitions.ts`, mode `assistant`) is the
+  opencode agent a routine run selects through `leanAgentNameForMode('assistant')`
+  in `sendPrompt`. It keeps the workspace tools inside the routine directory
+  (`read`/`edit`/`glob`/`grep`/`list`/`bash`), the web (`webfetch`/`websearch`),
+  the shared skills (`skill`), todos, and the question tool, and denies the rest;
+  delegating to a sub-agent stays off the table. The app's permission policy, not
+  the deny matrix, governs the risk of any individual call. An explicit
+  `@cio-utility` turn keeps its own `cio-utility-setup` agent.
+
 ## Scheduler contract
 
 `RoutineSchedulerService` (`src/main/scheduler/routine-scheduler-service.ts`) is
