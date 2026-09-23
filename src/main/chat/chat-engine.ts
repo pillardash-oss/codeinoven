@@ -2856,16 +2856,19 @@ export class ChatEngine {
    *
    * A thread with a feature slug owns `.cio/specs/<slug>`, the authoritative
    * pair for engineering work. Every other thread keeps its plan beside its own
-   * scratch work, so the newest `.cio/work/<feature>` pair is used instead: the
-   * app cannot know which directory a chat chose, and the most recently written
-   * plan is the one the thread is following.
+   * scratch work, in the `.cio/work/<feature>` directory named after the slug of
+   * its own title   the same derivation the rest of the app uses. The newest
+   * work directory in the project is deliberately not consulted: it belongs to
+   * whichever chat wrote last, so it attached another thread's plan to this
+   * thread's checkpoint. Publishing no plan is the honest outcome when this
+   * thread's directory is not there.
    */
   private async resolveThreadPlan(
     projectPath: string,
     threadId: string
   ): Promise<CompactionFallbackContext> {
-    const row = this.database.get<{ feature_slug: string | null }>(
-      'SELECT feature_slug FROM threads WHERE id=?',
+    const row = this.database.get<{ feature_slug: string | null; title: string | null }>(
+      'SELECT feature_slug, title FROM threads WHERE id=?',
       threadId
     )
     // A slug that no longer round-trips is not a directory this app wrote, so
@@ -2875,7 +2878,8 @@ export class ChatEngine {
       slug && featureSlugFromTitle(slug) === slug
         ? join(projectPath, featureArtifactDirectory(slug))
         : null
-    const directory = specDirectory ?? (await this.newestWorkDirectory(projectPath))
+    const directory =
+      specDirectory ?? (await this.threadWorkDirectory(projectPath, threadId, row?.title ?? ''))
     if (!directory) return { plan: null, progress: null, planPath: null, progressPath: null }
     const plan = await this.readPlanArtifact(join(directory, 'plan.md'))
     const progress = await this.readPlanArtifact(join(directory, 'progress.md'))
@@ -2897,30 +2901,28 @@ export class ChatEngine {
     }
   }
 
-  /** Newest `.cio/work/<feature>` directory holding a plan, or null. */
-  private async newestWorkDirectory(projectPath: string): Promise<string | null> {
-    try {
-      const root = join(projectPath, PROJECT_DATA_DIRECTORY, 'work')
-      let newest: string | null = null
-      let newestAt = 0
-      for (const entry of await readdir(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const directory = join(root, entry.name)
-        try {
-          const modified = (await stat(join(directory, 'plan.md'))).mtimeMs
-          if (modified > newestAt) {
-            newestAt = modified
-            newest = directory
-          }
-        } catch {
-          // A work directory without a plan is not a plan candidate.
-        }
+  /**
+   * This thread's own `.cio/work/<feature>` scratch directory, or null.
+   *
+   * The feature slug comes from the thread's title, matching
+   * `projectArtifactDirectory()`, and both the feature-level layout
+   * (`.cio/work/<feature>/plan.md`) and the thread-scoped one
+   * (`.cio/work/<feature>/<threadId>/plan.md`) are accepted.
+   */
+  private async threadWorkDirectory(
+    projectPath: string,
+    threadId: string,
+    title: string
+  ): Promise<string | null> {
+    const root = join(projectPath, PROJECT_DATA_DIRECTORY, 'work', featureSlugFromTitle(title))
+    for (const directory of [root, join(root, threadId)]) {
+      try {
+        if ((await stat(join(directory, 'plan.md'))).isFile()) return directory
+      } catch {
+        // Not this layout; try the next one.
       }
-      return newest
-    } catch {
-      // No scratch directory, or a project with no local filesystem root.
-      return null
     }
+    return null
   }
 
   /**

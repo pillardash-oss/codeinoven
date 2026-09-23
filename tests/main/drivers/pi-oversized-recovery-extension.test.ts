@@ -13,6 +13,7 @@ afterEach(async () => {
 interface ContextMessage {
   role: string
   content: unknown
+  toolCallId?: string
 }
 
 /** Load the generated extension with a stub ExtensionAPI and flag file. */
@@ -78,8 +79,10 @@ async function loadExtension(armed: boolean): Promise<{
 describe('piCompactionExtension', () => {
   const messages: ContextMessage[] = [
     { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'call_1', name: 'read', arguments: {} }] },
     {
       role: 'toolResult',
+      toolCallId: 'call_1',
       content: [
         { type: 'text', text: 'ok' },
         { type: 'image', data: 'QUFBQQ==', mimeType: 'image/png' }
@@ -91,11 +94,11 @@ describe('piCompactionExtension', () => {
     const { context } = await loadExtension(true)
     const result = await context({ messages: structuredClone(messages) })
     expect(result).toBeDefined()
-    const tool = result?.messages[1]?.content as Array<{ type: string; text?: string }>
+    const tool = result?.messages[2]?.content as Array<{ type: string; text?: string }>
     expect(tool.some((part) => part.type === 'image')).toBe(false)
     expect(tool[1]?.text).toContain('image removed from the provider request')
     // The caller's messages are untouched (non-destructive).
-    const original = messages[1]?.content as Array<{ type: string }>
+    const original = messages[2]?.content as Array<{ type: string }>
     expect(original.some((part) => part.type === 'image')).toBe(true)
   })
 
