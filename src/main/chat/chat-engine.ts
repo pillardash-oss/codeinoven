@@ -84,6 +84,8 @@ import type {
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
+import { RoutineRepo } from '../database/repositories/routine-repo'
+import { routineAuthoringContext } from '../../lib/routine-authoring'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
@@ -279,6 +281,7 @@ import {
   isAssistantThread,
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
+  routineHowToComplete,
   workerReportsToCoordinator
 } from '../../lib/types'
 import {
@@ -1265,6 +1268,8 @@ export class ChatEngine {
 
   private rankingSnapshotRepo: ModelRankingSnapshotRepo
 
+  private routineRepo: RoutineRepo
+
   /**
    * The app's TypeSafe (Jev) decision capability, attached during boot.
    *
@@ -1357,6 +1362,7 @@ export class ChatEngine {
     this.usageRepo = new HarnessUsageRepo(database)
     this.rankingRepo = new ModelRankingRepo(database)
     this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
+    this.routineRepo = new RoutineRepo(database)
     this.projectManager = new ProjectManager(database)
     // Tagged composer references are resolved against the sending thread's
     // scope root, so this service needs the same scope authority every other
@@ -6308,6 +6314,20 @@ export class ChatEngine {
   }
 
   /**
+   * The how-to authoring contract for a turn in a routine that still has no
+   * how-to. The contract is a property of the thread, so the engine attaches it
+   * rather than the composer: a resend from the message editor, a steer, or a
+   * queued delivery reaches the agent with the same contract as a fresh
+   * composer send.
+   */
+  private routineAuthoringHiddenContext(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || routineHowToComplete(routine)) return undefined
+    return routineAuthoringContext(routine.name)
+  }
+
+  /**
    * The reporting contract every worker prompt carries. A reporting thread gets
    * the Assignment API contract and the report-task instruction; a thread whose
    * reporting the user switched off gets the explicit instruction to finish in
@@ -6904,6 +6924,10 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    const steerAuthoringContext = this.routineAuthoringHiddenContext(thread)
+    if (steerAuthoringContext) {
+      hiddenContext = [hiddenContext, steerAuthoringContext].filter(Boolean).join('\n\n')
+    }
     const steerInputBudget = this.selectedModelInputBudget(
       thread.settings?.providerId,
       thread.settings?.modelId,
@@ -7393,6 +7417,14 @@ export class ChatEngine {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
       if (workerDirective) {
         hiddenContext = [hiddenContext, workerDirective].filter(Boolean).join('\n\n')
+      }
+      // The how-to authoring contract belongs to the thread, not to one send
+      // path: a routine that still lacks its how-to turns every user turn in
+      // its task threads into a how-to conversation, whether it arrives from
+      // the composer, a resend from the message editor, or a queued delivery.
+      const authoringContext = this.routineAuthoringHiddenContext(targetThread)
+      if (authoringContext) {
+        hiddenContext = [hiddenContext, authoringContext].filter(Boolean).join('\n\n')
       }
     }
     // One aggregate selected-model input budget for the turn (A-13). The
