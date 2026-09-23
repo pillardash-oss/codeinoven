@@ -12,6 +12,7 @@ import {
   mapCodexRateLimits,
   mapCodexUsage
 } from '../../../src/main/drivers/codex-driver'
+import { InactiveQuestionTurnError } from '../../../src/main/drivers/driver.interface'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 const codexQuestionInstruction =
@@ -545,6 +546,121 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       }
     })
     expect(fetchMock).toHaveBeenCalledTimes(calls)
+  })
+
+  it('answers a live dynamic cio_ask_user question through the app-server', async () => {
+    // The dynamic `item/tool/call` question path is the one Codex uses in
+    // default mode. A reply while the owning turn is live must reach Codex.
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'ask me', attachments: [] })
+    child.emitPayload({
+      id: 'q-live',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        tool: 'cio_ask_user',
+        arguments: {
+          questions: [
+            {
+              header: 'Scope',
+              question: 'Which channel?',
+              options: [{ label: '#general', description: 'The general channel.' }]
+            }
+          ]
+        }
+      }
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'question.asked', sessionId, requestId: 'q-live' })
+    )
+    await driver.replyToQuestion('/project', sessionId, 'q-live', [['#general']])
+    const response = child
+      .requests()
+      .find((request) => request['id'] === 'q-live' && 'result' in request)
+    expect(response).toMatchObject({ id: 'q-live', result: { success: true } })
+    expect(JSON.stringify(response)).toContain('#general')
+  })
+
+  it('reports a dynamic question answered after its turn ended as an inactive turn', async () => {
+    // The turn completed while the card was still on screen. Writing the answer
+    // into the closed app-server conversation would be silently dropped and the
+    // thread would sit idle on an answered card, so the driver must report the
+    // turn as inactive and leave no stale response behind.
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'ask me', attachments: [] })
+    child.emitPayload({
+      id: 'q-stale',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        tool: 'cio_ask_user',
+        arguments: {
+          questions: [
+            {
+              header: 'Scope',
+              question: 'Which channel?',
+              options: [{ label: '#general', description: 'The general channel.' }]
+            }
+          ]
+        }
+      }
+    })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: { threadId: 'native-1', turn: { id: 'turn-1', status: 'completed' } }
+    })
+    await vi.waitFor(() => expect(driver.hasActiveTurn(sessionId)).toBe(false))
+    await expect(
+      driver.replyToQuestion('/project', sessionId, 'q-stale', [['#general']])
+    ).rejects.toBeInstanceOf(InactiveQuestionTurnError)
+    const stale = child
+      .requests()
+      .find((request) => request['id'] === 'q-stale' && 'result' in request)
+    expect(stale).toBeUndefined()
+  })
+
+  it('reports a dynamic question dismissed after its turn ended as an inactive turn', async () => {
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'ask me', attachments: [] })
+    child.emitPayload({
+      id: 'q-dismissed',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        tool: 'cio_ask_user',
+        arguments: {
+          questions: [
+            {
+              header: 'Scope',
+              question: 'Which channel?',
+              options: [{ label: '#general', description: 'The general channel.' }]
+            }
+          ]
+        }
+      }
+    })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: { threadId: 'native-1', turn: { id: 'turn-1', status: 'completed' } }
+    })
+    await vi.waitFor(() => expect(driver.hasActiveTurn(sessionId)).toBe(false))
+    await expect(
+      driver.rejectQuestion('/project', sessionId, 'q-dismissed')
+    ).rejects.toBeInstanceOf(InactiveQuestionTurnError)
   })
 
   it('delivers a dispatch that lands on a still-registered native turn as a steer', async () => {
