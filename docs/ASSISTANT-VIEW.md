@@ -305,6 +305,12 @@ prompt"; the user-facing term is how-to.
   (`ROUTINE_SCHEDULE_JSON_SCHEMA`, `ROUTINE_CONNECTION_JSON_SCHEMA`,
   `ROUTINE_PLAN_JSON_SCHEMA`), and the agent is shown the plan schema in the
   contract.
+- The contract belongs to the thread, so the chat engine attaches it to the
+  hidden context of every user turn while the routine's how-to is missing
+  (`ChatEngine.routineAuthoringHiddenContext`, text in
+  `src/lib/routine-authoring.ts`). The composer does not assemble it. A turn
+  that arrives from the message editor's resend, a steer, or a queued delivery
+  therefore reaches the agent with the same contract as a fresh composer send.
 - The agent then asks the user to confirm   it never saves the routine itself
   and never tells the user to run a command. Confirming is one click on the
   **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
