@@ -59,7 +59,8 @@ export type BehaviorMode = 'brainstorm' | 'implement' | 'chat' | 'assistant'
  *
  * `'assistant'` is its own class: a routine run is neither a project thread nor
  * a chat, so it carries the app-owned assistant prompt instead of the
- * engineering work-ethics prompt, and no project workspace guard.
+ * engineering work-ethics prompt, and its workspace is the routine's own
+ * app-storage directory rather than a project the user opened.
  */
 export type BehaviorExecutionScope =
   'project-thread' | 'standalone-chat' | 'assistant' | 'ephemeral'
@@ -70,10 +71,13 @@ export type BehaviorExecutionScope =
  * - `'abbreviated'`: a compact scope guard for trimmed modes that still run
  *   inside a real project directory (file-system chat, ephemeral, brainstorm,
  *   PR compose)   the control-plane guarantee is kept, not silently dropped.
+ * - `'assistant'`: the assistant's own guard, which names the routine's
+ *   app-storage workspace instead of claiming a project the user never opened,
+ *   and keeps the harness boundary and the citation rules.
  * - `'omitted'`: no guard at all for pure inbox chat (no project scope) and
  *   image description.
  */
-export type WorkspaceScopeMode = 'full' | 'abbreviated' | 'omitted'
+export type WorkspaceScopeMode = 'full' | 'abbreviated' | 'assistant' | 'omitted'
 
 /**
  * Collapse every whitespace run into a single space so structurally identical
@@ -128,15 +132,19 @@ export class PromptAssembler {
 
     if (workspaceScope !== 'omitted') {
       const harnessContent =
-        workspaceScope === 'abbreviated'
-          ? abbreviatedWorkspaceGuard(driver, projectPath)
-          : buildWorkspaceContext(driver, projectPath)
+        workspaceScope === 'assistant'
+          ? assistantWorkspaceGuard(driver, projectPath)
+          : workspaceScope === 'abbreviated'
+            ? abbreviatedWorkspaceGuard(driver, projectPath)
+            : buildWorkspaceContext(driver, projectPath)
       layers.push(
         withLayerAccounting({
           title:
-            workspaceScope === 'abbreviated'
-              ? `Harness: ${driver?.name ?? 'Agent Harness'} (scope guard)`
-              : `Harness: ${driver?.name ?? 'Agent Harness'}`,
+            workspaceScope === 'assistant'
+              ? 'Assistant workspace'
+              : workspaceScope === 'abbreviated'
+                ? `Harness: ${driver?.name ?? 'Agent Harness'} (scope guard)`
+                : `Harness: ${driver?.name ?? 'Agent Harness'}`,
           content: harnessContent,
           editable: false,
           defaultOpen: false
@@ -358,6 +366,29 @@ export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath
     'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
     "Keep every non-source output inside the project's `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
     'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
+  ].join(' ')
+}
+
+/**
+ * Scope guard for an assistant task.
+ *
+ * A routine is neither a project thread nor a chat, so this names the routine's
+ * own workspace in app storage instead of claiming a project the user never
+ * opened, and keeps the two guarantees that still apply: the harness is only the
+ * execution engine, and every report cites its sources.
+ */
+export function assistantWorkspaceGuard(driver: DriverInfo | null, projectPath: string): string {
+  const harnessLine = driver
+    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session   it is NOT your project or the user's target.`
+    : 'No agent harness is selected; this session may be limited.'
+  const workspaceLine = projectPath.trim()
+    ? `Your workspace is ${projectPath}   this routine's own app-storage directory. Work inside it only.`
+    : 'Work only inside this routine\u2019s own workspace directory.'
+  return [
+    harnessLine,
+    workspaceLine,
+    "Never read or write the user's other projects, and never inspect the agent harness's own repository or global configuration.",
+    'Keep every artifact the routine produces inside that workspace, and cite the source of every factual claim: a file by its path inside the workspace, an external reference as a Markdown link (e.g. `[issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a bare filename.'
   ].join(' ')
 }
 

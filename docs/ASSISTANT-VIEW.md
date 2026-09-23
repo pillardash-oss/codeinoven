@@ -128,11 +128,19 @@ the engineering agent behavior:
   `executionScope = 'assistant'` for `ASSISTANT_SPACE_ID`
   (`BehaviorExecutionScope` in `src/main/chat/prompt-assembler.ts`). That scope
   selects the assistant prompt instead of `config.agentBehaviorPrompt` and
-  pushes an `Agent behavior (Assistant)` layer, and its derived
-  `WorkspaceScopeMode` is `omitted`, so no project-scope guard claims the route
-  is a user project. `BehaviorMode` gained `assistant` for the same reason, so
-  the application layer reads `Assistant` instead of `Chat`. Attribution maps
-  the scope to its own `assistant` mode in `attributionModeFor`.
+  pushes an `Agent behavior (Assistant)` layer. `BehaviorMode` gained `assistant`
+  for the same reason, so the application layer reads `Assistant` instead of
+  `Chat`, and attribution maps the scope to its own `assistant` mode in
+  `attributionModeFor`.
+- **Its own workspace guard.** The assistant scope derives
+  `WorkspaceScopeMode = 'assistant'`, which ships `assistantWorkspaceGuard`: the
+  harness boundary and the citation rule, with the routine's own
+  `assistant-cwd/<routineId>` workspace named as the workspace instead of a
+  project the user never opened. It deliberately does not reuse
+  `abbreviatedWorkspaceGuard`, whose text would call that directory "the user's
+  project". An assistant turn keeps the mermaid and question instructions
+  `composeTurnSystemPrompt` gives the conversational modes, so nothing else
+  about its system prompt changed.
 - **Its own lean harness agent.** `cio-assistant`
   (`src/main/opencode/opencode-agent-definitions.ts`, mode `assistant`) is the
   opencode agent a routine run selects through `leanAgentNameForMode('assistant')`

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { MemoryService } from '../../src/main/chat/memory-service'
-import { abbreviatedWorkspaceGuard, PromptAssembler } from '../../src/main/chat/prompt-assembler'
+import {
+  abbreviatedWorkspaceGuard,
+  assistantWorkspaceGuard,
+  PromptAssembler
+} from '../../src/main/chat/prompt-assembler'
 import { defaultCioPrompt } from '../../src/lib/cio-prompts'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT, SKILLS_SECTION_BODY } from '../../src/lib/agent-behavior'
 
@@ -113,7 +117,7 @@ describe('PromptAssembler application behavior', () => {
     expect(guard).not.toContain('WORKING SCOPE')
   })
 
-  it('gives the assistant scope its own behavior layer and no project guard', async () => {
+  it('gives the assistant scope its own behavior layer and workspace guard', async () => {
     const layers = await assembler().getLayers(
       'assistant',
       'thread-1',
@@ -124,15 +128,32 @@ describe('PromptAssembler application behavior', () => {
       defaultCioPrompt('assistant'),
       undefined,
       'assistant',
-      'omitted'
+      'assistant'
     )
     const behavior = layers.find((layer) => layer.title === 'Agent behavior (Assistant)')
     expect(behavior?.content).toContain('## Skills')
     expect(behavior?.content).not.toContain('Agent behavior for implementation work')
-    // No project-scope guard claims the route is a user project.
-    expect(layers.some((layer) => layer.title.startsWith('Harness:'))).toBe(false)
+    // The guard names the routine's own workspace and keeps the citation rule;
+    // it never claims a project the user opened.
+    const workspace = layers.find((layer) => layer.title === 'Assistant workspace')
+    expect(workspace).toBeDefined()
+    expect(workspace?.content).toContain('/assistant-cwd/routine-1')
+    expect(workspace?.content).toContain('Markdown link')
+    expect(workspace?.content).not.toContain('WORKING SCOPE')
     const app = layers.find((layer) => layer.title.startsWith('Application:'))
     expect(app?.title).toContain('Assistant')
+  })
+
+  it('exported assistant guard is compact and keeps the citation rule', () => {
+    const guard = assistantWorkspaceGuard(
+      { id: 'opencode', name: 'OpenCode' },
+      '/assistant-cwd/routine-1'
+    )
+    expect(guard.length).toBeLessThan(900)
+    expect(guard).toContain('/assistant-cwd/routine-1')
+    expect(guard).toContain('Markdown link')
+    expect(guard).not.toContain('WORKING SCOPE')
+    expect(guard).not.toContain("the user's project")
   })
 
   it('keeps the shared skills discipline identical in both behavior prompts', () => {

@@ -5958,11 +5958,13 @@ export class ChatEngine {
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
       const workspaceScope: WorkspaceScopeMode =
-        executionScope === 'project-thread'
-          ? 'full'
-          : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
-            ? 'abbreviated'
-            : 'omitted'
+        executionScope === 'assistant'
+          ? 'assistant'
+          : executionScope === 'project-thread'
+            ? 'full'
+            : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
+              ? 'abbreviated'
+              : 'omitted'
       const assembled = await this.promptAssembler.getAssembledPromptWithLayers(
         projectId,
         threadId,
