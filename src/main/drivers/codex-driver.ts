@@ -535,7 +535,23 @@ export class CodexDriver extends PersistentCliDriver {
     this.serverRequests.delete(requestId)
   }
 
+  /** Whether the app-server turn that owns a server request is still live.
+   *  Replying to a request whose turn already ended writes into a closed
+   *  conversation, so the caller reports the turn as inactive instead. */
+  private serverRequestTurnIsLive(request: CodexServerRequest): boolean {
+    const active = this.activeTurns.get(request.sessionId)
+    return Boolean(active && !active.finished && active.host === request.host)
+  }
+
   private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+    // A reply written after the owning turn ended reaches nothing: Codex has
+    // already finished, so the answer would be silently dropped and the thread
+    // would sit idle with an answered card. Report the turn as inactive so the
+    // chat engine resumes the persisted session with the user's decision.
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(String(request.id))
+      throw new InactiveQuestionTurnError(request.sessionId, String(request.id), this.name)
+    }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
     const decisions = questions.map((question, index) => ({
       question: question.prompt,

@@ -2300,7 +2300,9 @@ export class ChatEngine {
         )
       )
     } catch (error) {
-      if (await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error)) {
+      if (
+        await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error, driver)
+      ) {
         return
       }
       throw error
@@ -2577,7 +2579,9 @@ export class ChatEngine {
         driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
       )
     } catch (error) {
-      if (await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error)) {
+      if (
+        await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error, driver)
+      ) {
         return
       }
       throw error
@@ -2590,7 +2594,11 @@ export class ChatEngine {
    * `QuestionRequestGoneError` (the harness already dropped the request, for
    * example because the process holding it exited) closes it in place, and
    * `InactiveQuestionTurnError` (the owning turn process exited) resumes the
-   * session with the user's decision instead of losing it.
+   * session with the user's decision instead of losing it. A dropped request is
+   * only closed in place while its driver can still prove a live turn holds the
+   * reply: when it cannot, the answer has nowhere to go, so the persisted
+   * session is resumed with the decision rather than left idle on a card that
+   * can never reach the agent.
    *
    * Returns false for an unrelated error, which the caller keeps propagating.
    */
@@ -2598,13 +2606,18 @@ export class ChatEngine {
     pending: PendingQuestionInfo,
     resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
     answers: string[][] | undefined,
-    error: unknown
+    error: unknown,
+    driver: HarnessDriver
   ): Promise<boolean> {
     if (error instanceof InactiveQuestionTurnError) {
       await this.resumeAfterInactiveQuestion(pending, resolution, answers)
       return true
     }
     if (error instanceof QuestionRequestGoneError) {
+      if (!this.questionAnswerCanReachLiveTurn(pending, driver)) {
+        await this.resumeAfterInactiveQuestion(pending, resolution, answers)
+        return true
+      }
       this.finalizePendingQuestion(pending.request.requestId, resolution, answers)
       return true
     }
@@ -2640,8 +2653,25 @@ export class ChatEngine {
       undefined,
       undefined,
       'internal',
-      decision.presentation
+      // An answered question already persisted its own visible record
+      // (`persistQuestionAnswer`), so the resume turn stays hidden rather than
+      // duplicating the "Answered agent question" bubble. A dismissal has no
+      // such record, so its presentation still has to render.
+      resolution === 'answered' ? undefined : decision.presentation
     )
+  }
+
+  /**
+   * Whether an answer to a pending question can still reach a live turn. A
+   * driver that can prove it has no registered turn (codex, pi) means the reply
+   * would be written into a closed conversation; drivers without the probe are
+   * assumed to still hold one, preserving the existing finalize behavior.
+   */
+  private questionAnswerCanReachLiveTurn(
+    pending: PendingQuestionInfo,
+    driver: HarnessDriver
+  ): boolean {
+    return driver.hasActiveTurn ? driver.hasActiveTurn(pending.request.sessionId) : true
   }
 
   /** Whether the thread's Engineering lifecycle currently has an active stage
@@ -2705,7 +2735,9 @@ export class ChatEngine {
           // One question the harness can no longer accept must never fail the
           // whole pending-question list: settle it when it is simply gone, and
           // otherwise keep the card and let the next poll retry.
-          if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+          if (
+            !(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error, driver))
+          ) {
             Logger.error('Provider question auto-answer failed:', error)
           }
         }
@@ -3313,7 +3345,13 @@ export class ChatEngine {
   ): Promise<void> {
     const previous = this.utilityTurns.get(sessionId)
     if (previous?.cleanupPromise) await previous.cleanupPromise
-    const allowManagement = await this.hasCioUtilityInvocation(projectId, threadId)
+    const steeringThread = await this.threadManager.getThread(projectId, threadId)
+    // A routine's how-to authoring thread keeps management for the whole
+    // authoring conversation, exactly like a turn where the user typed
+    // @cio-utility; a steer landing mid-conversation must not drop it.
+    const allowManagement =
+      this.routineAuthoringHiddenContext(steeringThread) !== undefined ||
+      (await this.hasCioUtilityInvocation(projectId, threadId))
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -3336,7 +3374,6 @@ export class ChatEngine {
     }
     let gateway: UtilityTurnGateway | undefined
     try {
-      const steeringThread = await this.threadManager.getThread(projectId, threadId)
       gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
@@ -7930,12 +7967,21 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // The routine how-to authoring thread carries the utility gateway from the
+    // start: the agent has to research and install the skills, MCPs and plugins
+    // a routine needs while it writes the how-to, without the user first arming
+    // setup by hand. It grants the same contract as an explicit @cio-utility
+    // invocation, and it is derived from the thread on every turn rather than
+    // memoized, so it ends the moment the how-to is saved.
+    const assistantAuthoringTurn = this.routineAuthoringHiddenContext(targetThread) !== undefined
     // Once @cio-utility has been invoked in this thread (earlier or now), later
     // turns keep the setup + diagnostics contract reusable without repeating
     // the invocation. Other utilities were already freely invocable whenever
     // the gateway runs.
     const utilitySetupAllowed =
-      utilitySetupRequested || (await this.hasCioUtilityInvocation(projectId, threadId))
+      utilitySetupRequested ||
+      assistantAuthoringTurn ||
+      (await this.hasCioUtilityInvocation(projectId, threadId))
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
     // the gateway at all. Pi has NO native web tools   the gateway is its only
@@ -7961,7 +8007,7 @@ export class ChatEngine {
         (driverHasNativeWebSearch || !driverCanPublishGateway),
       utilitySetupAllowed,
       activeBrainstormSession,
-      utilitySetupRequested
+      utilitySetupRequested || assistantAuthoringTurn
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -20103,7 +20149,9 @@ export class ChatEngine {
           driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
         )
       } catch (error) {
-        if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+        if (
+          !(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error, driver))
+        ) {
           throw error
         }
       }
@@ -26350,7 +26398,7 @@ export class ChatEngine {
       return {
         status: 'memory_unavailable',
         message:
-          'Memory is not collected on a routine\'s getting-started thread. Save the how-to first, then propose memory on a task.'
+          "Memory is not collected on a routine's getting-started thread. Save the how-to first, then propose memory on a task."
       }
     }
     const routineId = ownerThread?.routineId
@@ -26363,7 +26411,10 @@ export class ChatEngine {
     }
     const audience = memoryAudienceForContainer(projectId)
     const allowedScopes = MEMORY_AUDIENCE_SCOPES[audience]
-    if (input.scopes.length === 0 || !input.scopes.every((scope) => allowedScopes.includes(scope))) {
+    if (
+      input.scopes.length === 0 ||
+      !input.scopes.every((scope) => allowedScopes.includes(scope))
+    ) {
       throw new TypeError(`This context supports only ${allowedScopes.join(', ')} memory`)
     }
 

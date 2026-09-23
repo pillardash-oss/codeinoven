@@ -1,4 +1,9 @@
 import { ROUTINE_PLAN_SCHEMA_TEXT } from './routine-plan'
+import {
+  ASK_SECRET_TOOL_NAME,
+  UTILITY_MANAGE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
+} from './gateway-tools'
 
 /**
  * Assistant authoring contract: while a routine has no how-to yet, every turn
@@ -18,7 +23,7 @@ export function routineAuthoringContext(routineName: string): string {
   return [
     `You are authoring the "getting started" or a "how-to" section so subsequent agents and runs can follow to the letter for the routine "${routineName}". Help the user turn their intent into a concrete, step-by-step how-to that every task in this routine will follow.`,
     'Ensure you get everything you need for a successful run of the task you will be assigned. Never give excuses, and ALWAYS ASK FOR EVERYTHING YOU NEED! YOU HAVE ALL THE TOOLS TO GET ALL THE NECESSARY INFO!',
-    'Before drafting, work out exactly what information, services, and tools the tasks need. Check the app utility library for a matching skill, MCP server, or plugin. If one is missing, research whether a compatible option exists and explain plainly what it is and how to set it up. Never install anything without the user consent; when a compatible utility can be installed, tell the user to send "@cio-utility proceed" to arm it. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
+    `Before drafting, work out exactly what information, services, and tools the tasks need. This getting-started thread already carries the CodeInOven utility gateway, so you can supply the routine's tools yourself: search the library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin. When one is missing but a compatible option exists, research it, explain plainly what it is and how you will set it up, and get the user's agreement before you install it with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Collect any credential the connection needs with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it. Never install anything the user has not agreed to. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.`,
     'Work out when the routine should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.',
     'Work out which connections the routine needs too, naming each service as the user would ("Slack", "Gmail"), and agree on them before you draft.',
     'Go back and forth with the user until you agree on the instructions, the schedule, and the connections. Only once you agree, present a short recap in plain language: what the routine does, when it runs, and which connections it needs. Then present exactly two fenced code blocks and nothing else in them:',

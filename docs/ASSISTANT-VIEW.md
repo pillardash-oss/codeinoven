@@ -366,10 +366,16 @@ prompt"; the user-facing term is how-to.
   own command fence (a `bash` example inside the instructions) is kept whole
   instead of being silently truncated, and prose written after a block stays out
   of the saved content.
-- When a routine lacks the utilities it needs, the agent checks the app utility
-  library, researches compatible skills/MCPs/plugins, and asks the user to send
-  `@cio-utility proceed` before anything is installed. No silent installs; the
-  only acceptable blockers are network and a closed app.
+- The how-to authoring thread carries the CodeInOven utility gateway from the
+  start: `sendPrompt` grants the same management contract an explicit
+  `@cio-utility` invocation does whenever the thread is a routine whose how-to
+  is still missing (`routineAuthoringHiddenContext`), so the agent can search the
+  library with `cio_util_find`, research compatible skills/MCPs/plugins, and
+  install them itself with `cio_util_manage` once the user agrees. The grant is
+  derived from the thread every turn, never memoized, so it ends the moment the
+  how-to is saved. Credentials are collected with `cio_ask_secret`, never pasted
+  into chat, and nothing is installed without the user's agreement; the only
+  acceptable blockers are network and a closed app.
 
 ## Assistant panel
 
