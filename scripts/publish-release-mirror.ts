@@ -29,8 +29,13 @@
  * download with a stale one.
  *
  * Run this from CI. A release is about 970 MB of multipart uploads, which a home
- * uplink turns into an hour-long job; an interrupted run leaves orphaned upload
- * parts until the bucket's lifecycle rule aborts them (docs/DOWNLOAD-MIRROR.md).
+ * uplink turns into an hour-long job. A run that is killed leaves its unfinished
+ * multipart uploads behind: the key stays unreadable (the origin answers 404 for
+ * it), but the parts are billed and the bucket lists them as a half-uploaded
+ * object. Every publish therefore aborts the unfinished uploads of an earlier
+ * run in the channel it is about to write, and the bucket lifecycle rule
+ * (docs/DOWNLOAD-MIRROR.md) is the backstop for a channel that is never
+ * published again.
  *
  * Usage:
  *   bun scripts/publish-release-mirror.ts --tag v0.5.57
@@ -73,6 +78,11 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  abortInterruptedUpload,
+  listInterruptedUploads,
+  type InterruptedUpload
+} from './lib/s3-multipart'
 import {
   DOWNLOAD_MIRROR_URL,
   MIRROR_CHECKSUMS_FILE,
@@ -499,6 +509,75 @@ async function listChannel(bucket: MirrorBucket, channel: ReleaseChannel): Promi
   return keys
 }
 
+/**
+ * Abort the multipart uploads an earlier run started and never finished.
+ *
+ * Installers are uploaded with multipart requests, so a run that is killed
+ * (Ctrl-C, a cancelled CI job, a dropped connection) leaves its parts behind.
+ * The key never becomes readable, but the parts are billed and the bucket
+ * dashboard lists them as a half-uploaded object. This run owns the channel
+ * while it runs, so every unfinished upload in the channel that was started
+ * before it began is a leftover and is aborted; one started after this run began
+ * belongs to a concurrent process and is left alone.
+ */
+async function sweepInterruptedUploads(
+  config: MirrorConfig,
+  channel: ReleaseChannel,
+  runStartedAt: Date,
+  dryRun: boolean
+): Promise<void> {
+  let uploads: InterruptedUpload[]
+  try {
+    uploads = await listInterruptedUploads(config, `${channel}/`)
+  } catch (error) {
+    annotate(
+      'warning',
+      `Download mirror: could not list unfinished uploads in ${channel}/ (${reasonOf(error)}); the bucket lifecycle rule still clears them`
+    )
+    return
+  }
+
+  if (uploads.length === 0) {
+    say(`Unfinished uploads: none in ${channel}/`)
+    return
+  }
+
+  const startedAtMs = runStartedAt.getTime()
+  const leftover = uploads.filter((upload) => {
+    const initiated = Date.parse(upload.initiated)
+    return Number.isNaN(initiated) || initiated <= startedAtMs
+  })
+  const inFlight = uploads.length - leftover.length
+  const list = (items: readonly InterruptedUpload[]): void => {
+    for (const upload of items.slice(0, 8)) say(`  - ${upload.key} (started ${upload.initiated})`)
+    if (items.length > 8) say(`  and ${items.length - 8} more`)
+  }
+
+  if (leftover.length === 0) {
+    say(`Unfinished uploads: ${uploads.length} in flight from another process; left alone`)
+    return
+  }
+  if (dryRun) {
+    say(`Unfinished uploads: would abort ${leftover.length} left by an earlier run:`)
+    list(leftover)
+    return
+  }
+
+  const aborted: InterruptedUpload[] = []
+  for (const upload of leftover) {
+    try {
+      await abortInterruptedUpload(config, upload)
+    } catch (error) {
+      annotate('warning', `Download mirror: could not abort ${upload.key} (${reasonOf(error)})`)
+      continue
+    }
+    aborted.push(upload)
+  }
+  say(`Unfinished uploads: aborted ${aborted.length} left by an earlier run:`)
+  list(aborted)
+  if (inFlight > 0) say(`  ${inFlight} more are in flight from another process; left alone`)
+}
+
 async function upload(bucket: MirrorBucket, item: PlannedUpload): Promise<void> {
   const startedAt = Date.now()
   const file = bucket.file(item.key)
@@ -550,6 +629,7 @@ function buildManifest(input: {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const runStartedAt = new Date()
   let flags: CliFlags
   try {
     flags = parseFlags(argv)
@@ -789,6 +869,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return fail(
       `${channel}/ serves a newer release than ${release.tag}: mirroring it would replace the live download and delete ${newerTargets.length} object(s) of that release. Pass --allow-downgrade to mirror it anyway.`
     )
+  }
+
+  // --- abort the parts an earlier run left behind --------------------------
+  if (config !== null) {
+    say('')
+    await sweepInterruptedUploads(config, channel, runStartedAt, flags.dryRun)
   }
 
   if (flags.dryRun || bucket === null) {

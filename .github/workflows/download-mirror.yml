@@ -5,6 +5,7 @@ name: Download mirror
 #
 # Nothing is rebuilt here: the job downloads the assets GitHub already
 # published, verifies every installer against the release's own SHA256SUMS.txt,
+# aborts any unfinished multipart upload an earlier run left in that channel,
 # uploads them with their update feeds and a RELEASE.json manifest, HEAD-checks
 # what the origin actually serves, and deletes the previous release of that
 # channel, so the bucket holds only the release it serves (GitHub Releases is

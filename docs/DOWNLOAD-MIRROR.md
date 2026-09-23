@@ -130,10 +130,27 @@ fees), but downloads are then not edge-cached.
 ### 3b. Abort incomplete multipart uploads
 
 Artifacts are larger than S3's single-request limit, so each one is a multipart upload. An
-upload that is interrupted (a cancelled workflow, a closed laptop) leaves its parts behind,
-and R2 bills those parts as stored data even though the object never appears in a listing.
+upload that is interrupted (a cancelled workflow, a closed laptop, `Ctrl-C`) leaves its parts
+behind: the key stays unreadable, because R2 answers 404 for an object that never completed,
+but the parts are billed as stored data and the bucket's object list shows the key as a
+half-uploaded object. That entry is not a partial download and nothing can download from it.
+
+Every publish aborts the unfinished uploads an earlier run left in the channel it is about to
+write, so a backfill or the next release clears them, and it prints what it removed. The
+lifecycle rule below is the backstop for a channel that is never published again:
+
 Bucket, **Settings**, **Object lifecycle rules**, **Add rule**: condition **Abort incomplete
 multipart uploads**, 1 day after initiation. Finished objects are untouched by this rule.
+
+To see what is waiting, without uploading anything:
+
+```bash
+bun run release:mirror --tag v0.5.56 --channel stable --dry-run
+
+# Or straight from the bucket (any S3 client works)
+curl -s --aws-sigv4 "aws:amz:auto:s3" --user "$ACCESS_KEY_ID:$SECRET_ACCESS_KEY" \
+  "$ENDPOINT/$BUCKET?uploads" | grep -E "<Key>|<Initiated>"
+```
 
 ### 4. CORS (only for browser-side fetches)
 
@@ -179,10 +196,12 @@ The script (`scripts/publish-release-mirror.ts`):
    prerelease flag;
 2. downloads the release assets (or uses `--artifacts-dir`) and **verifies every installer
    against `SHA256SUMS.txt`** before uploading anything: a mismatch aborts the run;
-3. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
+3. aborts any unfinished multipart upload in that channel left by an earlier run, and
+   reports what it removed;
+4. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
    feed never points at a file that is not there yet;
-4. HEAD-verifies every uploaded key's size against the local file;
-5. deletes the release the channel no longer serves (with the default `--keep 1`, everything
+5. HEAD-verifies every uploaded key's size against the local file;
+6. deletes the release the channel no longer serves (with the default `--keep 1`, everything
    except the release just uploaded), never touching feeds, checksums or the manifest.
 
 Two guards keep the sweep from taking away the release the channel is serving:
