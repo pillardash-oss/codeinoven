@@ -9,11 +9,30 @@ All notable changes to CodeInOven are documented here. This project follows
 
 - OpenCode V2 support begins. The v2 CLI (`@opencode/cli`, the `opencode2`
   binary) is now detected as its own **OpenCode V2** harness alongside the v1
-  `opencode` entry, with its own install/update/uninstall channels. The
-  Harnesses page can read the harness's catalog (providers, models, agents)
-  over the V2 `/api/*` surface without streaming a chat turn yet. A `opencode`
-  install that reports a V2 version is no longer labelled "not supported yet";
-  it now points at the OpenCode V2 entry.
+  `opencode` entry, with its own install/update/uninstall channels, and the
+  Harnesses page can read its catalog (providers, models, agents) over the V2
+  `/api/*` surface. A `opencode` install that reports a V2 version is no longer
+  labelled "not supported yet"; it now points at the OpenCode V2 entry.
+
+- **OpenCode V2 is now fully drivable.** The `opencode2` harness is selectable
+  for chat: its own driver speaks the V2 `/api/*` HTTP+SSE surface end to end,
+  so threads on it stream text and reasoning, run tools, ask interactive
+  questions through V2's form surface, answer or dismiss them, accept mid-turn
+  steering, mirror their native transcript, compact on demand, run slash
+  commands, and stop on interrupt. Model, agent, and thinking-level selection
+  are applied per turn (V2 scopes them to the session), attachments are
+  supported, and the model picker reads the server's own catalog. Thread
+  titles, turn grading, cheap-model one-shots, heartbeats, and every disposable
+  flow (temporary chats, transcription, image description, brainstorm/spec/
+  assignment offshoots) run on private V2 servers that are torn down when they
+  end. `opencode2 auth list/login/logout` backs the provider account UI.
+
+  V2 cannot restrict `read` in a session permission ruleset (harness-side
+  provider entitlement is evaluated through the same ruleset), so a restricted
+  V2 turn denies everything that mutates instead of every tool. Custom base-URL
+  providers and quota telemetry are not claimed for the entry: V2 still reads
+  the provider entries the v1 entry manages in the same config file, and the V1
+  usage endpoint does not exist on V2.
 
 - The agent can now collect secrets without ever seeing them. A new
   `cio_ask_secret` **gateway** tool (the utility gateway every harness already
@@ -32,8 +51,8 @@ All notable changes to CodeInOven are documented here. This project follows
 - The secret card now offers **Provide alternative**, the same escape hatch the
   permission card has. A user who cannot reach a value they already supplied
   answers with an instruction instead of pasting, and the app resolves every
-  requested name from state the device already holds   this thread's registry, a
-  credential bound to an installed utility, or another thread's registry   adopts
+  requested name from state the device already holds this thread's registry, a
+  credential bound to an installed utility, or another thread's registry adopts
   it for the current thread and exposes it exactly like a pasted value (session
   environment and owner-only file, or the utility credential). The user may name
   the stored variable when it was saved under a different spelling. Names with

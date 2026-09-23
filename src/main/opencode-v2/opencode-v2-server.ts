@@ -1,14 +1,20 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { Logger } from '../system/logger'
 import { prepareHarnessInvocation } from '../drivers/harness-runtime'
 
 /** How long `opencode2 serve` may take to announce its endpoint and password. */
-const START_TIMEOUT_MS = 30_000
+const START_TIMEOUT_MS = 60_000
 /** Grace period between SIGTERM and SIGKILL when tearing a server down. */
 const SHUTDOWN_GRACE_MS = 2_000
 
-/** Loopback endpoint plus the Basic-auth password `opencode2 serve` announces. */
+/** Environment variable that makes `opencode2 serve` accept a chosen password. */
+export const OPENCODE_V2_PASSWORD_ENV = 'OPENCODE_SERVER_PASSWORD'
+/** Environment variable carrying an inline V2 config document. */
+export const OPENCODE_V2_CONFIG_CONTENT_ENV = 'OPENCODE_CONFIG_CONTENT'
+
+/** Loopback endpoint plus the Basic-auth password this process authenticates with. */
 export interface OpenCodeV2Endpoint {
   /** Base URL the server announced, e.g. `http://127.0.0.1:50725`. */
   baseUrl: string
@@ -16,7 +22,7 @@ export interface OpenCodeV2Endpoint {
   password: string
 }
 
-/** A live `opencode2 serve` process owned by one discovery run. */
+/** A live `opencode2 serve` process owned by one caller. */
 export interface OpenCodeV2ServerHandle extends OpenCodeV2Endpoint {
   process: ChildProcess
   /** Idempotent teardown: SIGTERM, then SIGKILL after a bounded grace period. */
@@ -27,43 +33,68 @@ const LISTENING_PATTERN = /^server listening on (\S+)$/u
 const PASSWORD_PATTERN = /^server password (\S+)$/u
 
 /**
- * Extract the endpoint from the two lines `opencode2 serve` prints on stdout:
+ * Extract the endpoint from the lines `opencode2 serve` prints on stdout:
  *
  *     server listening on http://127.0.0.1:50725
  *     server password <value>
  *
- * Returns `null` until both lines have arrived   a partial buffer must never
- * yield a half-populated endpoint that would then fail every request with 401.
- * Pure and dependency-free so it can be tested against captured output.
+ * `expectedPassword` is the password the caller installed through
+ * `OPENCODE_SERVER_PASSWORD`. A server started that way prints only the
+ * listening line, and the password line must then be unnecessary   waiting for
+ * it would hang every start. Pure and dependency-free so it can be tested
+ * against captured output.
  */
-export function parseOpenCodeV2Handshake(output: string): OpenCodeV2Endpoint | null {
+export function parseOpenCodeV2Handshake(
+  output: string,
+  expectedPassword?: string
+): OpenCodeV2Endpoint | null {
   let baseUrl: string | null = null
-  let password: string | null = null
+  let announced: string | null = null
   for (const rawLine of output.split(/\r?\n/u)) {
     const line = rawLine.trim()
     const listening = LISTENING_PATTERN.exec(line)
     if (listening?.[1]) baseUrl = listening[1]
     const secret = PASSWORD_PATTERN.exec(line)
-    if (secret?.[1]) password = secret[1]
+    if (secret?.[1]) announced = secret[1]
   }
+  const password = announced ?? expectedPassword ?? null
   return baseUrl && password ? { baseUrl, password } : null
+}
+
+/** A fresh Basic-auth password for one spawned server, never logged. */
+export function generateOpenCodeV2Password(): string {
+  return randomBytes(32).toString('base64url')
 }
 
 /**
  * Spawn a private `opencode2 serve` process on an ephemeral loopback port and
- * resolve once it has announced its URL and password. The server is private
- * (`--port 0`), so it cannot collide with a background service or another
- * discovery run. Callers must always `close()` the returned handle.
+ * resolve once it has announced its endpoint.
+ *
+ * The driver always installs its own `OPENCODE_SERVER_PASSWORD`, so the
+ * password is known before the process starts and never has to be scraped off
+ * stdout (where it would otherwise reach any log sink). The server is private
+ * (`--port 0`), so it cannot collide with the user's own background service or
+ * another driver instance. Callers must always `close()` the handle.
  */
 export async function startOpenCodeV2Server(options: {
   command: string
   cwd?: string
   env?: NodeJS.ProcessEnv
+  /** Extra config document merged on top of the user's own V2 config. */
+  configContent?: string
+  password?: string
+  /** Label used in dev logs so several pooled servers stay distinguishable. */
+  label?: string
 }): Promise<OpenCodeV2ServerHandle> {
   const args = ['serve', '--hostname', '127.0.0.1', '--port', '0']
+  const password = options.password ?? generateOpenCodeV2Password()
   const prepared = await prepareHarnessInvocation(options.command, args, {
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.env ? { env: options.env } : {})
+    env: {
+      ...options.env,
+      [OPENCODE_V2_PASSWORD_ENV]: password,
+      ...(options.configContent ? { [OPENCODE_V2_CONFIG_CONTENT_ENV]: options.configContent } : {})
+    }
   })
 
   return new Promise<OpenCodeV2ServerHandle>((resolve, reject) => {
@@ -86,11 +117,11 @@ export async function startOpenCodeV2Server(options: {
     const inspect = (text: string): void => {
       if (settled) return
       output += text
-      const endpoint = parseOpenCodeV2Handshake(output)
+      const endpoint = parseOpenCodeV2Handshake(output, password)
       if (!endpoint) return
       settled = true
       clearTimeout(timer)
-      Logger.dev(`opencode2 discovery server up on ${endpoint.baseUrl}`)
+      Logger.dev(`opencode2 server up on ${endpoint.baseUrl}`, options.label ?? '')
       resolve({ ...endpoint, process: child, close: () => stopChild(child) })
     }
 

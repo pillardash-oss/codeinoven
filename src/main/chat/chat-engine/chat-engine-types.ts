@@ -1,4 +1,4 @@
-import type { IsolatedHandle } from '../../drivers/opencode-driver'
+import type { IsolatedSessionHandle } from '../../drivers/isolated-session'
 import type { ProjectFingerprint } from '../../git/change-tracking-service'
 import type { PermissionDecisionResult } from '../../permissions/permission-policy'
 import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/driver.interface'
@@ -145,7 +145,7 @@ export interface TemporaryChatSession {
   /** Provider the session's turns run against, for quota reads. */
   providerId?: string
   sessionId: string
-  isolated?: IsolatedHandle
+  isolated?: IsolatedSessionHandle
   contextApplied: boolean
   inactivityMs: number
   expiresAt: number
@@ -200,7 +200,7 @@ export interface ActiveBrainstormSession {
   driver: HarnessDriver
   driverId: string
   projectPath: string
-  isolated?: IsolatedHandle
+  isolated?: IsolatedSessionHandle
 }
 
 export interface TurnStreamCacheEntry {
@@ -220,7 +220,7 @@ export interface ActiveAssignmentDraftSession {
   driver: HarnessDriver
   driverId: string
   projectPath: string
-  isolated?: IsolatedHandle
+  isolated?: IsolatedSessionHandle
 }
 
 export interface ActiveInitialSpecSession {
@@ -228,7 +228,7 @@ export interface ActiveInitialSpecSession {
   threadSessionId: string
   driver: HarnessDriver
   projectPath: string
-  isolated?: IsolatedHandle
+  isolated?: IsolatedSessionHandle
   startedAt: number
   attempt: number
 }

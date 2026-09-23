@@ -28,7 +28,9 @@ import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assig
 import { PrdEngine } from '../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
 import { OpenCodeDriver } from '../drivers/opencode-driver'
-import type { IsolatedHandle } from '../drivers/opencode-driver'
+import { OpenCodeV2Driver } from '../drivers/opencode-v2-driver'
+import type { IsolatedSessionHandle } from '../drivers/isolated-session'
+import { supportsIsolatedSessions } from '../drivers/isolated-session'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
 import { CodexDriver } from '../drivers/codex-driver'
 import { ClineDriver } from '../drivers/cline-driver'
@@ -1365,6 +1367,7 @@ export class ChatEngine {
     // page agree. Only harnesses with an integrated driver are instantiated.
     const driverFactories: Record<string, () => HarnessDriver> = {
       opencode: () => new OpenCodeDriver(this.baseUrlProviders, this.secretVault),
+      opencode2: () => new OpenCodeV2Driver(this.baseUrlProviders, this.secretVault),
       codex: () => new CodexDriver(storage, this.baseUrlProviders, this.secretVault),
       'claude-code': () => new ClaudeCodeDriver(storage, this.baseUrlProviders, this.secretVault),
       pi: () => new PiDriver(storage, this.baseUrlProviders, this.secretVault),
@@ -1388,6 +1391,8 @@ export class ChatEngine {
     switch (harnessId) {
       case 'opencode':
         return new OpenCodeDriver(this.baseUrlProviders, this.secretVault, environment)
+      case 'opencode2':
+        return new OpenCodeV2Driver(this.baseUrlProviders, this.secretVault, environment)
       case 'codex':
         return new CodexDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
       case 'claude-code':
@@ -4670,10 +4675,9 @@ export class ChatEngine {
       loopMode: false
     }
     const { driver, projectPath } = await this.resolve(projectId, settings.harnessId, threadId)
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Transcript cleanup')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Transcript cleanup')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Transcript cleanup'))
     this.registerSession(
@@ -4715,14 +4719,14 @@ export class ChatEngine {
         readOnly: true,
         userMessageId: createMessageId()
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -4740,7 +4744,7 @@ export class ChatEngine {
       this.sessionRegistry.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else if (driver.deleteSession) {
         await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -4829,10 +4833,9 @@ export class ChatEngine {
       loopMode: false
     }
     const { driver, projectPath } = await this.resolve(projectId, settings.harnessId, threadId)
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Voice transcription')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Voice transcription')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Voice transcription'))
     this.registerSession(
@@ -4864,14 +4867,14 @@ export class ChatEngine {
         readOnly: true,
         userMessageId: createMessageId()
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -4889,7 +4892,7 @@ export class ChatEngine {
       this.sessionRegistry.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else if (driver.deleteSession) {
         await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -6828,10 +6831,10 @@ export class ChatEngine {
     const steer = driver.steerPrompt.bind(driver) as (
       projectPath: string,
       opts: SteerPromptOptions,
-      isolated?: IsolatedHandle
+      isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
-      if (activeBrainstorm?.isolated && driver instanceof OpenCodeDriver) {
+      if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
         await steer(projectPath, steerOptions, activeBrainstorm.isolated)
       } else {
         await steer(projectPath, steerOptions)
@@ -8320,10 +8323,9 @@ export class ChatEngine {
         )
       ).id
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
+        : undefined
       const sessionId =
         isolated?.sessionId ?? (await driver.createSession(projectPath, 'Temporary read-only chat'))
       const expiresAt = Date.now() + ChatEngine.TEMPORARY_CHAT_INACTIVITY_MS
@@ -8446,7 +8448,7 @@ export class ChatEngine {
           ]
         })
       )
-      if (temporary.isolated && driver instanceof OpenCodeDriver) {
+      if (temporary.isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(temporary.projectPath, request, temporary.isolated)
       } else {
         await driver.sendPrompt(temporary.projectPath, request)
@@ -8463,7 +8465,7 @@ export class ChatEngine {
       temporary.contextApplied = true
       await completion
       const messages =
-        temporary.isolated && driver instanceof OpenCodeDriver
+        temporary.isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(
               temporary.projectPath,
               temporary.sessionId,
@@ -8546,7 +8548,7 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     const isolated =
-      driver instanceof OpenCodeDriver &&
+      supportsIsolatedSessions(driver) &&
       (options.isolateOpenCode ?? options.utilityManagement === true)
         ? await driver.createIsolatedSession(projectPath, title)
         : undefined
@@ -8614,14 +8616,14 @@ export class ChatEngine {
         prompt: SendPromptOptions,
         completion: Promise<unknown | undefined>
       ): Promise<AgentMessage> => {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
         }
         await completion
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -8692,7 +8694,7 @@ export class ChatEngine {
       }
       return response
     } catch (error) {
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
       } else {
         await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -8706,7 +8708,7 @@ export class ChatEngine {
         await this.agentProcesses
           .releaseThread(projectId, virtualTaskId)
           .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else if (driver.deleteSession) {
           await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -8817,10 +8819,10 @@ export class ChatEngine {
     const steerTemporary = driver.steerPrompt.bind(driver) as (
       projectPath: string,
       opts: SteerPromptOptions,
-      isolated?: IsolatedHandle
+      isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverTemporarySteer = async (): Promise<void> => {
-      if (temporary.isolated && driver instanceof OpenCodeDriver) {
+      if (temporary.isolated && supportsIsolatedSessions(driver)) {
         await steerTemporary(temporary.projectPath, steerOptions, temporary.isolated)
       } else {
         await steerTemporary(temporary.projectPath, steerOptions)
@@ -8900,7 +8902,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (driver) {
       try {
-        if (temporary.isolated && driver instanceof OpenCodeDriver) {
+        if (temporary.isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
         } else {
           await driver.abort(temporary.projectPath, temporary.sessionId)
@@ -9013,7 +9015,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     const messages =
-      temporary.isolated && driver instanceof OpenCodeDriver
+      temporary.isolated && supportsIsolatedSessions(driver)
         ? await driver.loadMessages(temporary.projectPath, temporary.sessionId, temporary.isolated)
         : await driver.loadMessages(temporary.projectPath, temporary.sessionId)
     this.applyReasoningStamps(temporary.sessionId, messages)
@@ -9175,7 +9177,7 @@ export class ChatEngine {
     this.toolTimes.delete(temporary.sessionId)
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) return true
-    if (temporary.isolated && driver instanceof OpenCodeDriver) {
+    if (temporary.isolated && supportsIsolatedSessions(driver)) {
       try {
         await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
       } catch (error) {
@@ -9457,10 +9459,9 @@ export class ChatEngine {
       assignmentMode: false,
       loopMode: false
     }
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(request.projectPath, 'Image description')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(request.projectPath, 'Image description')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(request.projectPath, 'Image description'))
     this.registerSession(
@@ -9502,14 +9503,14 @@ export class ChatEngine {
         userMessageId: createMessageId(),
         structuredOutput: { schema: IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA }
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(request.projectPath, requestOptions, isolated)
       } else {
         await driver.sendPrompt(request.projectPath, requestOptions)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(request.projectPath, sessionId, isolated)
           : await driver.loadMessages(request.projectPath, sessionId)
       response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -9547,7 +9548,7 @@ export class ChatEngine {
       this.sessionStatuses.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else {
         try {
@@ -9856,10 +9857,9 @@ export class ChatEngine {
       assignmentMode: false,
       loopMode: false
     }
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Image description')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Image description')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Image description'))
     this.registerSession(
@@ -9912,14 +9912,14 @@ export class ChatEngine {
           pieces: [{ title: 'Image descriptor prompt', content: imageDescriptionPrompt }]
         })
       )
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -9966,7 +9966,7 @@ export class ChatEngine {
       this.sessionStatuses.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else {
         try {
@@ -10784,7 +10784,7 @@ export class ChatEngine {
       markNotificationAborting(projectId, threadId)
       this.userAbortedBrainstormOperations.add(brainstormKey)
       this.userAbortedSessions.add(activeBrainstorm.sessionId)
-      if (activeBrainstorm.isolated && activeBrainstorm.driver instanceof OpenCodeDriver) {
+      if (activeBrainstorm.isolated && supportsIsolatedSessions(activeBrainstorm.driver)) {
         await activeBrainstorm.driver.abort(
           activeBrainstorm.projectPath,
           activeBrainstorm.sessionId,
@@ -10807,7 +10807,7 @@ export class ChatEngine {
       markNotificationAborting(projectId, threadId)
       this.userAbortedInitialSpecOperations.add(brainstormKey)
       this.userAbortedSessions.add(activeInitialSpec.sessionId)
-      if (activeInitialSpec.isolated && activeInitialSpec.driver instanceof OpenCodeDriver) {
+      if (activeInitialSpec.isolated && supportsIsolatedSessions(activeInitialSpec.driver)) {
         await activeInitialSpec.driver.abort(
           activeInitialSpec.projectPath,
           activeInitialSpec.sessionId,
@@ -10832,7 +10832,7 @@ export class ChatEngine {
       this.userAbortedSessions.add(activeAssignmentDraft.sessionId)
       if (
         activeAssignmentDraft.isolated &&
-        activeAssignmentDraft.driver instanceof OpenCodeDriver
+        supportsIsolatedSessions(activeAssignmentDraft.driver)
       ) {
         await activeAssignmentDraft.driver.abort(
           activeAssignmentDraft.projectPath,
@@ -13339,12 +13339,11 @@ export class ChatEngine {
     ].join('\n\n')
     const structured = driver.capabilities?.structuredOutput === true
     let sessionId = ''
-    let isolated: IsolatedHandle | undefined
+    let isolated: IsolatedSessionHandle | undefined
     try {
-      isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(projectPath, `PRD ${new Date().toISOString()}`)
-          : undefined
+      isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `PRD ${new Date().toISOString()}`)
+        : undefined
       sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `PRD ${new Date().toISOString()}`))
@@ -13391,7 +13390,7 @@ export class ChatEngine {
           ? { structuredOutput: { schema: PRD_DOCUMENT_JSON_SCHEMA, retryCount: 2 } }
           : {})
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, prompt, isolated)
       } else {
         await driver.sendPrompt(projectPath, prompt)
@@ -13399,7 +13398,7 @@ export class ChatEngine {
       const streamed = await completion
       const generatedMessages =
         streamed === undefined
-          ? isolated && driver instanceof OpenCodeDriver
+          ? isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
           : []
@@ -13458,7 +13457,7 @@ export class ChatEngine {
       return created
     } catch (error) {
       if (sessionId) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -13513,7 +13512,7 @@ export class ChatEngine {
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
       }
-      if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+      if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
     }
   }
 
@@ -14060,13 +14059,9 @@ export class ChatEngine {
     const operationKey = `${projectId}:${threadId}`
     for (const [attemptIndex, attempt] of attempts.entries()) {
       const useStructuredOutput = attempt === 'structured'
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Brainstorm ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `Brainstorm ${new Date().toISOString()}`)
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Brainstorm ${new Date().toISOString()}`))
@@ -14161,7 +14156,7 @@ export class ChatEngine {
           })
         )
         traceLeanAgent('brainstorm', sessionId, driverId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
@@ -14171,7 +14166,7 @@ export class ChatEngine {
           return finish(parseBrainstormGeneratedOutput(streamed, useStructuredOutput))
         }
         const generated =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
@@ -14203,7 +14198,7 @@ export class ChatEngine {
           )
         )
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -14263,7 +14258,7 @@ export class ChatEngine {
         if (this.activeBrainstormSessions.get(operationKey)?.sessionId === sessionId) {
           this.activeBrainstormSessions.delete(operationKey)
         }
-        if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
       }
     }
     const failure = repairError ?? lastError ?? new Error('The Brainstorm agent failed.')
@@ -14467,13 +14462,9 @@ export class ChatEngine {
     let repairError: GeneratedSpecOutputError | null = null
 
     for (const useStructuredOutput of formatModes) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Spec draft ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `Spec draft ${new Date().toISOString()}`)
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Spec draft ${new Date().toISOString()}`))
@@ -14516,7 +14507,7 @@ export class ChatEngine {
       if (this.userAbortedInitialSpecOperations.has(workflowKey)) {
         this.activeInitialSpecSessions.delete(workflowKey)
         this.sessionRegistry.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else {
           await driver.deleteSession?.(projectPath, sessionId).catch(() => undefined)
@@ -14549,7 +14540,7 @@ export class ChatEngine {
               }
             : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
@@ -14559,7 +14550,7 @@ export class ChatEngine {
           return validateGeneratedSpecContent(streamedStructuredOutput, assignmentRequired)
         }
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -14574,7 +14565,7 @@ export class ChatEngine {
           .join('\n')
         return parseGeneratedSpecContent(text, assignmentRequired)
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -14627,7 +14618,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         }
         if (this.activeInitialSpecSessions.get(workflowKey)?.sessionId === sessionId) {
@@ -14884,13 +14875,12 @@ export class ChatEngine {
     const draftKey = `${projectId}:${coordinatorThreadId}`
 
     for (const useStructuredOutput of structured ? [true, false] : [false]) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Assignment draft ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(
+            projectPath,
+            `Assignment draft ${new Date().toISOString()}`
+          )
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Assignment draft ${new Date().toISOString()}`))
@@ -14929,7 +14919,7 @@ export class ChatEngine {
             ? { structuredOutput: { schema: ASSIGNMENT_PLAN_SCHEMA, retryCount: 2 } }
             : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, request, isolated)
         } else {
           await driver.sendPrompt(projectPath, request)
@@ -14937,7 +14927,7 @@ export class ChatEngine {
         const streamed = await completion
         if (streamed !== undefined) return parseGeneratedAssignmentContent(streamed)
         const generated =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
@@ -14954,7 +14944,7 @@ export class ChatEngine {
           parseGeneratedJson(text, 'The Sr. Engineer returned invalid Assignment JSON')
         )
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -14983,7 +14973,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
         if (this.activeAssignmentDraftSessions.get(draftKey)?.sessionId === sessionId) {
           this.activeAssignmentDraftSessions.delete(draftKey)
         }
@@ -22958,11 +22948,11 @@ export class ChatEngine {
     sessionId: string
     projectPath: string
     driver: HarnessDriver
-    isolated?: IsolatedHandle
+    isolated?: IsolatedSessionHandle
   }): Promise<void> {
     try {
       const messages =
-        input.isolated && input.driver instanceof OpenCodeDriver
+        input.isolated && supportsIsolatedSessions(input.driver)
           ? await input.driver.loadMessages(input.projectPath, input.sessionId, input.isolated)
           : await input.driver.loadMessages(input.projectPath, input.sessionId)
       for (const message of messages) {
@@ -25417,13 +25407,12 @@ export class ChatEngine {
     let lastError: Error | null = null
 
     for (const [formatIndex, structured] of formatModes.entries()) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Memory proposal ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(
+            projectPath,
+            `Memory proposal ${new Date().toISOString()}`
+          )
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Memory proposal ${new Date().toISOString()}`))
@@ -25462,14 +25451,14 @@ export class ChatEngine {
           allowedTools: [],
           ...(structured ? { structuredOutput: { schema: proposalSchema, retryCount: 2 } } : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
         }
         const streamed = await completion
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         response = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
@@ -25490,7 +25479,7 @@ export class ChatEngine {
         )
       } catch (error) {
         attemptFailure = rawErrorMessage(error)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -25516,7 +25505,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else if (driver.deleteSession) {
           await driver.deleteSession(projectPath, sessionId).catch(() => undefined)

@@ -96,18 +96,22 @@ const HARNESSES: readonly HarnessDescriptor[] = [
   {
     // OpenCode V2 ships its own binary (`opencode2`) whose HTTP API lives under
     // `/api/*` with Basic auth   entirely separate from the v1 CLI the
-    // `opencode` driver drives. It is detected and can be inspected read-only
-    // (see `OpenCodeV2Service`); it has no chat driver yet, so it is `planned`.
+    // `opencode` driver drives, and it is driven by `OpenCodeV2Driver`.
+    //
+    // Custom base-URL providers are deliberately NOT claimed for V2 yet: the
+    // app cannot write V2's own provider dialect for this entry, and nothing a
+    // user configures is hidden by that, because V2 reads the same
+    // `~/.config/opencode/opencode.json` the v1 entry manages and normalizes
+    // the provider entries it finds there. See the driver's `listProviders`.
     id: 'opencode2',
     name: 'OpenCode V2',
     command: 'opencode2',
     versionArgs: ['--version'],
-    integration: 'planned',
+    integration: 'ready',
     supportsCustomProviders: false,
-    // V2 reads AGENTS.md itself. Manual compaction is declared `false` until a
-    // V2 chat driver implements `compactSession`; the declaration tracks the
-    // driver capability that gates the UI action, not the upstream API.
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
+    // V2 reads AGENTS.md itself, and implements an explicit manual compaction
+    // (`POST /api/session/{id}/compact`).
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {
     id: 'cline',

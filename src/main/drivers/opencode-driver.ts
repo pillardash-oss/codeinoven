@@ -31,6 +31,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
+import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { opencodeNativeProviderIds } from '../agents/native-provider-config-service'
 import { SecretVault } from '../storage/secret-vault'
@@ -79,6 +80,23 @@ interface ServerHandle {
 }
 
 /**
+ * Whether a caller-held handle is the driver's own full transport record
+ * rather than a bare id pair.
+ *
+ * The shared contract only requires the two ids, so a handle is accepted on
+ * structural evidence: it names a URL, owns an abort signal, and holds the
+ * process that serves the session.
+ */
+function isConcreteIsolatedHandle(handle: IsolatedSessionHandle): handle is IsolatedHandle {
+  const candidate: Partial<IsolatedHandle> = handle
+  return (
+    typeof candidate.baseUrl === 'string' &&
+    candidate.abortController instanceof AbortController &&
+    candidate.process !== undefined
+  )
+}
+
+/**
  * Handle for an isolated `opencode serve` process used for ephemeral work
  * (e.g., thread title generation) so it cannot block the project's main
  * pooled server.
@@ -87,7 +105,7 @@ export interface IsolatedHandle extends ServerHandle {
   sessionId: string
 }
 
-export class OpenCodeDriver implements HarnessDriver {
+export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   readonly id = 'opencode'
   readonly name = 'OpenCode'
   readonly capabilities: HarnessCapabilities = {
@@ -127,7 +145,8 @@ export class OpenCodeDriver implements HarnessDriver {
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
   private messageRoles = new Map<string, 'user' | 'assistant'>()
   private eventCallback: AgentEventCallback | null = null
-  private isolatedServers = new Set<IsolatedHandle>()
+  /** Isolated transports, keyed by the session running on each one. */
+  private isolatedServers = new Map<string, IsolatedHandle>()
   private titleSessions = new Set<string>()
   private processObserver: AgentProcessObserver | null = null
 
@@ -225,12 +244,12 @@ export class OpenCodeDriver implements HarnessDriver {
       void this.stopTurnServer(sessionId)
     }
 
-    for (const handle of [...this.isolatedServers]) {
+    for (const handle of [...this.isolatedServers.values()]) {
       if (this.idleMs(handle.port) < OpenCodeDriver.ISOLATED_SERVER_IDLE_TTL_MS) continue
       Logger.info('Reaping idle isolated opencode server', { port: handle.port })
       if (!handle.process.killed) handle.process.kill()
       handle.abortController.abort()
-      this.isolatedServers.delete(handle)
+      this.isolatedServers.delete(handle.sessionId)
     }
 
     const shared = this.server
@@ -509,9 +528,11 @@ export class OpenCodeDriver implements HarnessDriver {
     try {
       const sessionId = await this.createSessionOnHandle(handle, title)
       const isolated: IsolatedHandle = { ...handle, sessionId }
-      this.isolatedServers.add(isolated)
+      this.isolatedServers.set(sessionId, isolated)
       isolated.process.on('exit', () => {
-        this.isolatedServers.delete(isolated)
+        if (this.isolatedServers.get(sessionId) === isolated) {
+          this.isolatedServers.delete(sessionId)
+        }
       })
       return isolated
     } catch (error) {
@@ -522,14 +543,36 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /** Delete the disposable session, then tear down its isolated server. */
-  disposeIsolatedSession(handle: IsolatedHandle): void {
-    this.isolatedServers.delete(handle)
-    void this.deleteSessionOnHandle(handle, handle.sessionId)
+  disposeIsolatedSession(handle: IsolatedSessionHandle): void {
+    const isolated = this.resolveIsolatedSession(handle)
+    if (!isolated) return
+    this.isolatedServers.delete(isolated.sessionId)
+    void this.deleteSessionOnHandle(isolated, isolated.sessionId)
       .catch((error) => Logger.dev('Isolated opencode session cleanup was incomplete:', error))
       .finally(() => {
-        handle.abortController.abort()
-        handle.process.kill()
+        isolated.abortController.abort()
+        isolated.process.kill()
       })
+  }
+
+  /**
+   * Resolve a caller-held isolated handle back to this driver's own record for
+   * it. A handle that names no live isolated session is an engine bookkeeping
+   * bug, so it is reported instead of silently falling back to the pooled
+   * server (which does not host that session at all).
+   */
+  private resolveIsolatedSession(
+    handle: IsolatedSessionHandle | undefined
+  ): IsolatedHandle | undefined {
+    if (!handle) return undefined
+    const isolated = this.isolatedServers.get(handle.sessionId)
+    if (isolated) return isolated
+    // A handle that carries its own transport is usable even when this driver
+    // instance never registered it: the registry is in-memory bookkeeping, and
+    // a caller that still holds the connection must not be cut off from a
+    // session that is demonstrably alive.
+    if (isConcreteIsolatedHandle(handle)) return handle
+    throw new Error(`No live isolated opencode session for ${handle.sessionId}`)
   }
 
   private async createSessionOnHandle(handle: ServerHandle, title: string): Promise<string> {
@@ -546,10 +589,10 @@ export class OpenCodeDriver implements HarnessDriver {
   async sendPrompt(
     projectPath: string,
     opts: SendPromptOptions,
-    isolated?: IsolatedHandle
+    isolated?: IsolatedSessionHandle
   ): Promise<void> {
     const handle =
-      isolated ??
+      this.resolveIsolatedSession(isolated) ??
       (this.utilityRuntimes.has(opts.sessionId)
         ? await this.ensureTurnServer(projectPath, opts.sessionId, opts.settings.providerId)
         : await this.ensureServer(projectPath))
@@ -581,10 +624,12 @@ export class OpenCodeDriver implements HarnessDriver {
   async steerPrompt(
     projectPath: string,
     opts: SteerPromptOptions,
-    isolated?: IsolatedHandle
+    isolated?: IsolatedSessionHandle
   ): Promise<void> {
     const handle =
-      isolated ?? this.turnServers.get(opts.sessionId) ?? (await this.ensureServer(projectPath))
+      this.resolveIsolatedSession(isolated) ??
+      this.turnServers.get(opts.sessionId) ??
+      (await this.ensureServer(projectPath))
     const parts: Array<Record<string, unknown>> = [
       { type: 'text', text: opts.text },
       ...(await buildOpenCodePromptParts(opts.attachments))
@@ -632,10 +677,11 @@ export class OpenCodeDriver implements HarnessDriver {
   async loadMessages(
     projectPath: string,
     sessionId: string,
-    isolated?: IsolatedHandle
+    isolated?: IsolatedSessionHandle
   ): Promise<AgentMessage[]> {
-    const turnHandle = isolated ? undefined : this.turnServers.get(sessionId)
-    const handle = isolated ?? turnHandle ?? (await this.ensureServer(projectPath))
+    const isolatedHandle = this.resolveIsolatedSession(isolated)
+    const turnHandle = isolatedHandle ? undefined : this.turnServers.get(sessionId)
+    const handle = isolatedHandle ?? turnHandle ?? (await this.ensureServer(projectPath))
     try {
       return await this.fetchMessages(handle, sessionId)
     } catch (error) {
@@ -644,16 +690,24 @@ export class OpenCodeDriver implements HarnessDriver {
       // canonical mirror finishes, which terminates any other fetch already in
       // flight. OpenCode sessions persist outside that process, so retry the
       // read once through whichever transport owns the session now.
-      if (!turnHandle || isolated || this.turnServers.get(sessionId) === turnHandle) throw error
+      if (!turnHandle || isolatedHandle || this.turnServers.get(sessionId) === turnHandle) {
+        throw error
+      }
       const replacementHandle =
         this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
       return this.fetchMessages(replacementHandle, sessionId)
     }
   }
 
-  async abort(projectPath: string, sessionId: string, isolated?: IsolatedHandle): Promise<void> {
+  async abort(
+    projectPath: string,
+    sessionId: string,
+    isolated?: IsolatedSessionHandle
+  ): Promise<void> {
     const handle =
-      isolated ?? this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
+      this.resolveIsolatedSession(isolated) ??
+      this.turnServers.get(sessionId) ??
+      (await this.ensureServer(projectPath))
     await fetch(`${handle.baseUrl}/session/${sessionId}/abort`, {
       method: 'POST',
       headers: this.headersFor(handle),
@@ -719,9 +773,11 @@ export class OpenCodeDriver implements HarnessDriver {
       const base = await this.startIsolatedServer(projectPath)
       transient = { ...base, sessionId }
       const handle = transient
-      this.isolatedServers.add(handle)
+      this.isolatedServers.set(handle.sessionId, handle)
       handle.process.on('exit', () => {
-        this.isolatedServers.delete(handle)
+        if (this.isolatedServers.get(handle.sessionId) === handle) {
+          this.isolatedServers.delete(handle.sessionId)
+        }
       })
       await this.deleteSessionOnHandle(handle, sessionId)
     } catch (error) {
@@ -1115,7 +1171,7 @@ export class OpenCodeDriver implements HarnessDriver {
       handle.process.kill()
     }
     this.turnServers.clear()
-    for (const handle of this.isolatedServers) {
+    for (const handle of this.isolatedServers.values()) {
       handle.abortController.abort()
       handle.process.kill()
     }
@@ -1480,7 +1536,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private async stopProjectServers(projectPath: string): Promise<void> {
     this.projectSubscriptions.get(projectPath)?.abort()
     this.projectSubscriptions.delete(projectPath)
-    for (const isolated of this.isolatedServers) {
+    for (const isolated of this.isolatedServers.values()) {
       if (isolated.projectPath !== projectPath) continue
       this.disposeIsolatedSession(isolated)
     }

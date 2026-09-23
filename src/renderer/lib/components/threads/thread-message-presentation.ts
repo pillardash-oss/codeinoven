@@ -205,6 +205,7 @@ export function messageHarnessName(msg: AgentMessage, fallbackHarnessId: string)
  */
 export function harnessDisplayName(harnessId: string): string {
   if (harnessId === 'opencode') return 'OpenCode'
+  if (harnessId === 'opencode2') return 'OpenCode V2'
   if (harnessId === 'claude-code') return 'Claude Code'
   if (harnessId === 'codex') return 'Codex'
   if (harnessId === 'cline') return 'Cline'

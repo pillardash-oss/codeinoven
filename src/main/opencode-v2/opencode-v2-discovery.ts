@@ -8,7 +8,7 @@ import type {
   OpenCodeV2ProviderEntry,
   OpenCodeV2ServerIdentity
 } from '../../lib/types'
-import { fetchOpenCodeV2Json } from './opencode-v2-client'
+import { OpenCodeV2Client } from './opencode-v2-client'
 import { startOpenCodeV2Server, type OpenCodeV2ServerHandle } from './opencode-v2-server'
 
 /** The CLI command that ships OpenCode V2 (the package also installs `opencode`). */
@@ -144,11 +144,12 @@ export async function readOpenCodeV2Catalog(
   | { ok: false; reason: 'unreachable' | 'unsupported-version'; detail: string }
 > {
   try {
+    const client = new OpenCodeV2Client(handle)
     const [info, providers, models, agents] = await Promise.all([
-      fetchOpenCodeV2Json(handle, '/api/info'),
-      fetchOpenCodeV2Json(handle, '/api/provider'),
-      fetchOpenCodeV2Json(handle, '/api/model'),
-      fetchOpenCodeV2Json(handle, '/api/agent')
+      client.json('/api/info'),
+      client.json('/api/provider'),
+      client.json('/api/model'),
+      client.json('/api/agent')
     ])
     const server = mapOpenCodeV2ServerIdentity(info)
     if (!server) {

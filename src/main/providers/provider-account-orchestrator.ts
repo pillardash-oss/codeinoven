@@ -144,6 +144,75 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
   }
 }
 
+/**
+ * Read `opencode2 auth list --format json`.
+ *
+ * V2's credential list has not been observed with a populated store, so the
+ * parser is deliberately tolerant: it accepts the array form the empty store
+ * prints, the `{credentials|accounts: [...]}` container form, and per-entry
+ * objects whose identity fields may be named `integrationID`, `providerID`,
+ * `provider`, or `id`. Anything it cannot read reports `unknown` rather than
+ * claiming the account is signed out.
+ */
+function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthStatus {
+  const clean = stripAnsi(output).trim()
+  if (clean.length === 0) {
+    return {
+      state: succeeded ? 'unauthenticated' : 'error',
+      accounts: [],
+      ...(succeeded ? {} : { detail: 'OpenCode V2 did not report a credential status.' })
+    }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(clean) as unknown
+  } catch {
+    return {
+      state: succeeded ? 'unknown' : 'error',
+      accounts: [],
+      detail: 'OpenCode V2 did not report credentials as JSON.'
+    }
+  }
+  const container = isRecord(parsed) ? parsed : undefined
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(container?.['credentials'])
+      ? (container['credentials'] as unknown[])
+      : Array.isArray(container?.['accounts'])
+        ? (container['accounts'] as unknown[])
+        : []
+  const accounts: HarnessAuthAccount[] = entries.flatMap((entry) => {
+    const record = isRecord(entry) ? entry : undefined
+    if (!record) return []
+    const providerId =
+      firstAuthString(record['integrationID']) ??
+      firstAuthString(record['providerID']) ??
+      firstAuthString(record['provider']) ??
+      firstAuthString(record['id'])
+    if (!providerId) return []
+    const label = firstAuthString(record['label']) ?? firstAuthString(record['name']) ?? providerId
+    const method = firstAuthString(record['method'])
+    return [
+      {
+        id: accountId(label),
+        providerId,
+        label,
+        ...(method ? { method } : {}),
+        ...(record['active'] === true || record['activated'] === true ? { active: true } : {})
+      }
+    ]
+  })
+  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function firstAuthString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
 function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatus {
   try {
     const parsed = JSON.parse(output) as unknown
@@ -590,6 +659,18 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     ],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
     resolveLogoutTarget: resolveOpencodeLogoutTarget,
+    pickerLogin: true
+  },
+  {
+    // V2 keeps credentials in its own SQLite store and exposes them through
+    // `opencode2 auth`, with a JSON list and a positional login target.
+    id: 'opencode2',
+    name: 'OpenCode V2',
+    command: 'opencode2',
+    statusArgs: ['auth', 'list', '--format', 'json'],
+    parseStatus: parseOpenCodeV2Status,
+    loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
+    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
     pickerLogin: true
   },
   {
