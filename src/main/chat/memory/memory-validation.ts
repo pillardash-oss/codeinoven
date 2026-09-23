@@ -3,6 +3,7 @@ import type {
   MemoryConfig,
   MemoryEntry,
   MemoryPriority,
+  MemoryProposal,
   MemoryScope,
   MemorySource
 } from '../../../lib/types'
@@ -26,6 +27,11 @@ export const VALID_CATEGORIES: MemoryCategory[] = [
 export const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
 export const VALID_SCOPES: MemoryScope[] = [...MEMORY_AUDIENCES, ...MEMORY_LOCATION_SCOPES]
 export const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
+export const VALID_PROPOSAL_STATUSES: MemoryProposal['status'][] = [
+  'pending',
+  'approved',
+  'rejected'
+]
 const MAX_MODEL_KEYS = 50
 const MODEL_KEY_MAX_CHARACTERS = 512
 
@@ -231,6 +237,71 @@ export function parseModelKeysMetadata(value: string | undefined): string[] {
     return validateModelKeys(JSON.parse(value) as unknown, 'Memory model keys')
   } catch {
     return []
+  }
+}
+
+/**
+ * Normalize one stored proposal, or drop it when it is malformed.
+ *
+ * Proposals are persisted as raw JSON, so a file written before scope sets
+ * existed still carries a single legacy `scope` and no `scopes` array. Every
+ * read goes through here so the rest of the app (and the renderer over IPC)
+ * only ever sees a normalized scope set, exactly like memory entries do.
+ */
+export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
+  if (!isRecord(value)) return null
+  try {
+    const id = text(value.id, 'Proposal ID', 1, 128)
+    if (!SAFE_ID.test(id)) return null
+    const status = enumValue(
+      value.status,
+      VALID_PROPOSAL_STATUSES,
+      'pending',
+      'Proposal status'
+    )
+    const label = text(value.label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters)
+    const content = text(value.content, 'Proposal content', 1, MEMORY_LIMITS.maxEntryCharacters)
+    const category = enumValue(
+      value.category,
+      VALID_CATEGORIES,
+      'preference',
+      'Proposal category'
+    )
+    const priority = enumValue(value.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
+    const projectId = optionalEntityId(value.projectId, 'Proposal project ID')
+    const threadId = optionalEntityId(value.threadId, 'Proposal thread ID')
+    const routineId = optionalEntityId(value.routineId, 'Proposal routine ID')
+    const legacyScope = typeof value.scope === 'string' ? value.scope : undefined
+    const scopes = validateMemoryScopes(
+      value.scopes,
+      { scope: legacyScope, projectId },
+      'Proposal scopes'
+    )
+    const modelKeys = validateModelKeys(value.modelKeys, 'Proposal model keys')
+    const createdAt = optionalSafeInteger(value.createdAt, Date.now(), 'Proposal createdAt', 0)
+    const expiresAt = optionalSafeInteger(
+      value.expiresAt,
+      createdAt + MEMORY_LIMITS.proposalExpiryMs,
+      'Proposal expiresAt',
+      0
+    )
+    return {
+      id,
+      label,
+      content,
+      category,
+      priority,
+      scopes,
+      projectId,
+      threadId,
+      routineId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
+      createdAt,
+      expiresAt,
+      status
+    }
+  } catch {
+    return null
   }
 }
 

@@ -67,6 +67,7 @@ import {
   enumValue,
   isRecord,
   optionalEntityId,
+  normalizeStoredProposal,
   text,
   validateMemoryConfig,
   validateMemoryScopes,
@@ -602,13 +603,13 @@ export class MemoryService {
     try {
       const parsed = await this.storage.read<unknown>(this.getProposalsPath(projectId))
       if (!Array.isArray(parsed)) return []
-      return parsed.filter(
-        (p): p is MemoryProposal =>
-          isRecord(p) &&
-          typeof p.id === 'string' &&
-          typeof p.status === 'string' &&
-          ['pending', 'approved', 'rejected'].includes(p.status)
-      )
+      // Proposals are stored as raw JSON, so a file written before scope sets
+      // existed still has the legacy single `scope`. Normalizing here keeps
+      // every consumer (including the renderer over IPC) on the scope-set
+      // contract instead of handing it an undefined `scopes`.
+      return parsed
+        .map((proposal) => normalizeStoredProposal(proposal))
+        .filter((proposal): proposal is MemoryProposal => proposal !== null)
     } catch {
       return []
     }

@@ -86,11 +86,13 @@ const PRIORITY_OPTIONS: Record<MemoryPriority, string> = {
 }
 
 const SCOPE_OPTIONS: Record<MemoryScope, string> = {
-  global: 'Applies everywhere: every project and every chat.',
   projects: 'Applies to every project, but not to standalone chats.',
+  chat: 'Applies to this chat and other standalone chats.',
+  assistant: 'Applies to every assistant task, whatever its routine.',
   project: 'Applies only to this project.',
   thread: 'Applies only to this conversation.',
-  chat: 'Applies to this chat and other standalone chats.'
+  routine: 'Applies only to tasks in this routine.',
+  task: 'Applies only to this assistant task.'
 }
 
 /** Split prose into the sentences a span may be cut on. */
@@ -262,7 +264,7 @@ export function readMemoryDecision(input: {
 }): StructuredMemoryProposal {
   const fallbackScope = input.allowedScopes.includes(input.defaultScope)
     ? input.defaultScope
-    : (input.allowedScopes[0] ?? 'global')
+    : (input.allowedScopes[0] ?? 'projects')
   const nothing: StructuredMemoryProposal = {
     propose: false,
     title: '',

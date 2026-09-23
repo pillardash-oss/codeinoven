@@ -5,6 +5,7 @@ import { join } from 'path'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../src/lib/types'
 import type { MemoryConfig, MemoryEntry } from '../../src/lib/types'
 import { modelKey } from '../../src/lib/model-keys'
+import { locationScopeOf } from '../../src/lib/memory/memory-scopes'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { parseMemoryMd, serializeMemoryMd } from '../../src/main/chat/memory/memory-markdown'
 import {
@@ -534,5 +535,67 @@ describe('model titles and token estimation', () => {
     expect(estimateTokens('')).toBe(0)
     expect(estimateTokens('abcd')).toBe(1)
     expect(estimateTokens('a'.repeat(9))).toBe(3)
+  })
+})
+
+describe('stored memory proposals', () => {
+  const now = Date.now()
+
+  it('normalizes a legacy single-scope proposal instead of returning an undefined scope set', async () => {
+    const { storage, service } = await openMemoryService()
+    await storage.write(join('memory', 'projects', ASSISTANT_SPACE_ID, 'memory-proposals.json'), [
+      {
+        id: 'proposal-legacy-assistant',
+        label: 'Keep answers short',
+        content: 'Answer in short sentences.',
+        category: 'preference',
+        priority: 'medium',
+        // A file written before scope sets existed carries this single field
+        // and no `scopes` array.
+        scope: 'project',
+        projectId: ASSISTANT_SPACE_ID,
+        createdAt: 1,
+        expiresAt: now + 60_000,
+        status: 'pending'
+      }
+    ])
+
+    const [proposal] = await service.getPendingProposals(ASSISTANT_SPACE_ID)
+    // An assistant-container `project` pin is the assistant audience, so the
+    // matcher the renderer runs must be able to read it without crashing.
+    expect(proposal.scopes).toEqual(['assistant'])
+    expect(proposal.projectId).toBe(ASSISTANT_SPACE_ID)
+    expect(locationScopeOf(proposal.scopes)).toBeNull()
+  })
+
+  it('keeps a legacy project proposal pinned to its project', async () => {
+    const { storage, service } = await openMemoryService()
+    await storage.write(join('memory', 'projects', 'project-1', 'memory-proposals.json'), [
+      {
+        id: 'proposal-legacy-project',
+        label: 'Pin me',
+        content: 'A rule for one project only.',
+        category: 'project-rule',
+        priority: 'high',
+        scope: 'project',
+        projectId: 'project-1',
+        createdAt: 1,
+        expiresAt: now + 60_000,
+        status: 'pending'
+      }
+    ])
+
+    const [proposal] = await service.getPendingProposals('project-1')
+    expect(proposal.scopes).toEqual(['project'])
+    expect(locationScopeOf(proposal.scopes)).toBe('project')
+  })
+
+  it('drops a proposal it cannot normalize', async () => {
+    const { storage, service } = await openMemoryService()
+    await storage.write(join('memory', 'memory-proposals.json'), [
+      { id: 'proposal-bad', status: 'pending' }
+    ])
+
+    await expect(service.getPendingProposals()).resolves.toEqual([])
   })
 })
