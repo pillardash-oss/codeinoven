@@ -33,7 +33,7 @@ flowchart LR
 1. Core view + how-to panel (`src/renderer/lib/components/assistant/`).
 2. Main-process scheduler with missed-run detection
    (`src/main/scheduler/routine-scheduler-service.ts`).
-3. Agent-authored how-to flow (in-thread authoring, `/save-how-to`).
+3. Agent-authored how-to flow (in-thread authoring, a recap the user confirms).
 4. Fork hand-off to a project, from the task's own context menu
    (`assistant-handoff.svelte.ts`, `AssistantHandoffModals.svelte`).
 
@@ -297,18 +297,34 @@ prompt"; the user-facing term is how-to.
   the way back: its **Show how-to thread** action reveals the thread through
   `assistant:howToThread` (which finds the routine's thread even while hidden,
   because archived rows never reach the hydrated thread list) and opens it.
-- The authoring contract asks for **two** fenced blocks once the user agrees:
-  the how-to itself (tag `how-to`) and a machine-readable plan (tag `routine`)
-  carrying `cadence`, `times`, `weekdays`, and `connections`. The user then sends
-  `/save-how-to`, which commits all three: the instructions, the schedule, and
-  the connections.
-- The user never hand-builds a schedule. `parseRoutinePlan` turns the plan block
-  into a `RoutineSchedule`, accepting `8`, `8:30`, `8am`, `8:30 pm` and `18:00`
-  as times, full or abbreviated weekday names, and a free-text
-  `schedule: every day at 8:05am` line. A phrase it cannot parse ("Monday to
-  Friday") contributes nothing rather than silently changing the cadence.
-  `connectionsFromPlan` links each named service to a library utility when one
-  matches, and otherwise records it as a required connection the panel shows as
+- The authoring contract asks the agent to agree on the instructions, the
+  schedule, and the connections, then present a short **recap** plus **two**
+  fenced blocks: the how-to itself (tag `how-to`) and a machine-readable plan
+  (tag `routine`) holding one JSON object. The plan is validated against the
+  schedule and connections schemas in `src/lib/routine-plan.ts`
+  (`ROUTINE_SCHEDULE_JSON_SCHEMA`, `ROUTINE_CONNECTION_JSON_SCHEMA`,
+  `ROUTINE_PLAN_JSON_SCHEMA`), and the agent is shown the plan schema in the
+  contract.
+- The agent then asks the user to confirm   it never saves the routine itself
+  and never tells the user to run a command. Confirming is one click on the
+  **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
+  with the schedule, the connections, and the instruction section count; a plain
+  typed "yes" commits the same pending draft. The card's **Keep editing** hides
+  it for that draft revision only, so a revised draft brings it back.
+- The app commits all three together: the instructions, the schedule, and the
+  connections. `/save-how-to` remains only as a fallback: it is offered only
+  while a complete draft is waiting to be committed, and it disappears for good
+  once the routine is saved.
+- The user never hand-builds a schedule. The plan is JSON matching the schemas,
+  so a schedule or connection the schema rejects contributes nothing instead of
+  silently changing the cadence. The tolerant `key: value` text parser
+  (`parseRoutinePlan`) stays as a fallback so an older or non-conforming draft
+  can still commit; it accepts `8`, `8:30`, `8am`, `8:30 pm` and `18:00` as
+  times, full or abbreviated weekday names, and a free-text
+  `schedule: every day at 8:05am` line.
+- `connectionsFromPlan` links each planned connection to a library utility: an
+  explicit `utilityId` wins, otherwise the name is matched, and a name the
+  library does not carry is recorded as a required connection the panel shows as
   needing setup.
 - Draft detection is deliberately tolerant, because the commit command has to
   work against how a model actually formats the block, not only the contract.
@@ -356,7 +372,8 @@ value and editable where the user must.
   an indented numbered line is not), never splits inside a fenced code block, and
   round-trips through `serializeHowToSections`. Each section is edited on its own
   with `RichMarkdownEditor` and rendered with `MarkdownView`. The schedule appears
-  here as a read-only line: the agent sets it from the plan block, so no manual
+  here as a read-only line: the agent sets it from the plan block the user
+  confirmed, so no manual
   schedule editor exists anywhere in the app.
 - **Connections** — the routine's utilities, resolved against the connection
   library by `resolveConnections`. Each row carries its kind and a **Ready / Off /

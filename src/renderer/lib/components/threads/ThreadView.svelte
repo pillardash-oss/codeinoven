@@ -142,9 +142,13 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     connectionsFromPlan,
+    isRoutineConfirmation,
     latestHowToDraft as latestHowToDraftIn,
-    latestRoutinePlanDraft as latestRoutinePlanDraftIn
+    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
+    type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
+  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import { ROUTINE_PLAN_SCHEMA_TEXT } from '$shared/routine-plan'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -1434,16 +1438,18 @@
     })
 
     // Assistant authoring: the agent drafts the routine how-to in conversation
-    // and tells the user to commit it with this action, which persists the
-    // agreed draft   the user never hand-writes the how-to in a panel.
-    if (assistantMode && assistantRoutineId && !assistantHowToComplete) {
+    // and asks the user to confirm the recap. The recap card commits the agreed
+    // draft in one click; this command is only the fallback for when that path
+    // cannot run, so it appears only while a draft is waiting to be committed
+    // and disappears for good once the routine is saved.
+    if (assistantRoutineDraft) {
       actions.push({
         id: 'command:save-how-to',
         title: '/save-how-to',
-        description: 'Save the how-to the agent drafted for this routine',
+        description: 'Fallback: save the how-to the agent drafted for this routine',
         category: 'command',
         source: applicationActionSource,
-        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant'],
+        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
         slashCommand: true,
         ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
       })
@@ -2126,6 +2132,11 @@
   /**
    * Assistant authoring contract: while a routine has no how-to yet, every turn
    * in its task threads is a how-to conversation, not a task run.
+   *
+   * The agent gathers the instructions, the schedule, and the connections, then
+   * presents a recap plus the two fenced blocks and asks the user to confirm.
+   * The app   not the agent and not a slash command   saves the routine from
+   * that recap the moment the user agrees.
    */
   function assistantAuthoringContext(): string | undefined {
     if (!assistantMode || !assistantRoutineId || assistantHowToComplete) return undefined
@@ -2134,10 +2145,11 @@
       `You are authoring the how-to for the routine "${routineName}". Help the user turn their intent into a concrete, step-by-step how-to that every task in this routine will follow.`,
       'Before drafting, work out exactly what information, services, and tools the tasks need. Check the app utility library for a matching skill, MCP server, or plugin. If one is missing, research whether a compatible option exists and explain plainly what it is and how to set it up. Never install anything without the user consent; when a compatible utility can be installed, tell the user to send "@cio-utility proceed" to arm it. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
       'Work out when the routine should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.',
-      'Go back and forth with the user until you agree on the instructions and the schedule. Only then present exactly two fenced code blocks and nothing else in them:',
+      'Work out which connections the routine needs too, naming each service as the user would ("Slack", "Gmail"), and agree on them before you draft.',
+      'Go back and forth with the user until you agree on the instructions, the schedule, and the connections. Only once you agree, present a short recap in plain language: what the routine does, when it runs, and which connections it needs. Then present exactly two fenced code blocks and nothing else in them:',
       'First, the how-to itself. Open the fence with the tag how-to alone on its line, with no title after it and no title line inside the block. It must contain the exact instruction set the routine will run, not a summary of the conversation.',
-      'Second, the machine-readable plan the app uses to build the schedule. Open the fence with the tag routine alone on its line, then write one key per line: cadence (once, hourly, daily, weekdays, or weekly), times (comma-separated 24-hour HH:mm values), weekdays (comma-separated day names, weekly only), and connections (comma-separated names of the services the routine needs).',
-      'After both blocks, tell the user to send /save-how-to to commit the instructions, the schedule, and the connections together.'
+      `Second, the machine-readable plan. Open the fence with the tag routine alone on its line, then write one JSON object that matches this schema: ${ROUTINE_PLAN_SCHEMA_TEXT}`,
+      'After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app saves the instructions, the schedule, and the connections from your recap as soon as the user confirms. If they ask for a change, revise and present the recap and blocks again.'
     ].join('\n')
   }
 
@@ -2149,6 +2161,12 @@
     taskReferences: PromptAssignmentTaskReference[] = [],
     startAfterThreads: StartAfterThreadReference[] = []
   ): void {
+    // The user answered the agent's "shall I save it?" with a plain yes. The app
+    // owns the commit, so save the pending draft before the turn goes out; the
+    // recap card's Save button is the other way to give the same go-ahead.
+    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
+      void saveRoutineHowTo(assistantRoutineDraft)
+    }
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -5906,6 +5924,59 @@
     requestSkillUse(skill.name, args)
   }
 
+  /** The routine this assistant thread is authoring, when it is one. */
+  const assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
+      : null
+  )
+
+  /**
+   * The complete draft the agent has presented for this routine: the how-to it
+   * wrote plus the machine-readable plan (schedule and connections). A draft is
+   * what makes the routine committable, so the recap card and the fallback
+   * command both key off it. It is computed only while the agent is idle: a
+   * running turn streams the draft token by token, and re-parsing fences on
+   * every delta would be wasted work for a card that cannot show yet anyway.
+   * The authoring conversation is short and lives only until the routine is
+   * saved, so scanning it once per settled turn is bounded work.
+   */
+  const assistantRoutineDraft = $derived.by(
+    (): {
+      howTo: string
+      plan: RoutinePlanDraft | null
+    } | null => {
+      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
+      const howTo = latestHowToDraft()
+      if (!howTo) return null
+      return { howTo, plan: latestRoutinePlanDraft() }
+    }
+  )
+
+  /**
+   * Identity of the current draft. Dismissing the recap card hides it only for
+   * this revision, so a revised draft brings the card back.
+   */
+  const assistantRoutineDraftSignature = $derived(
+    assistantRoutineDraft
+      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+      : ''
+  )
+
+  /** The draft revision the user chose to keep editing; empty means none. */
+  let routineRecapDismissed = $state('')
+  let routineSaving = $state(false)
+
+  const routineRecapVisible = $derived(
+    assistantRoutineDraft !== null &&
+      !routineSaving &&
+      routineRecapDismissed !== assistantRoutineDraftSignature
+  )
+
+  function keepEditingRoutine(): void {
+    routineRecapDismissed = assistantRoutineDraftSignature
+  }
+
   /**
    * The how-to the agent last drafted for this routine, taken from the newest
    * how-to fenced block in an assistant message. The authoring contract asks
@@ -5931,20 +6002,27 @@
     return latestRoutinePlanDraftIn(assistantTexts)
   }
 
-  /** Commit the agent-drafted how-to, schedule, and connections to the routine
-   *  after the user agrees. The plan block is optional: without it the how-to is
-   *  saved on its own and the existing schedule is left untouched. */
-  async function saveRoutineHowTo(): Promise<void> {
+  /**
+   * Commit the agent-drafted how-to, schedule, and connections to the routine
+   * once the user agrees. Called by the recap card and by the `/save-how-to`
+   * fallback. The plan block is optional: without it the how-to is saved on its
+   * own and the existing schedule is left untouched.
+   */
+  async function saveRoutineHowTo(draftOverride?: {
+    howTo: string
+    plan: RoutinePlanDraft | null
+  }): Promise<boolean> {
     const routineId = assistantRoutineId
-    if (!routineId) return
-    const draft = latestHowToDraft()
+    if (!routineId || routineSaving) return false
+    const draft = draftOverride ?? assistantRoutineDraft
     if (!draft) {
-      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then send /save-how-to again.`
-      return
+      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      return false
     }
+    routineSaving = true
     try {
-      const plan = latestRoutinePlanDraft()
-      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft }
+      const plan = draft.plan
+      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
       if (plan?.schedule) patch.schedule = plan.schedule
       if (plan && plan.connections.length > 0) {
         const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
@@ -5957,8 +6035,13 @@
       }
       await assistantRoutines.updateRoutine(routineId, patch)
       toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      routineRecapDismissed = ''
+      return true
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      return false
+    } finally {
+      routineSaving = false
     }
   }
 
@@ -11783,8 +11866,7 @@
                       How should this routine happen? Describe it properly for the agent. Say what
                       it should do, how often, and where the information comes from. The agent works
                       out what it needs, asks about anything missing, and drafts the how-to with you
-                      until you agree. Then send <span class="text-foreground">/save-how-to</span> to
-                      commit it.
+                      until you agree. It then shows a recap for you to save.
                     {:else if assistantRoutineName}
                       This task follows the <span class="text-foreground"
                         >{assistantRoutineName}</span
@@ -11900,6 +11982,20 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {/if}
+            {#if routineRecapVisible && assistantRoutineDraft}
+              <div class="conversation-gutter shrink-0 px-6 pb-2">
+                <div class="mx-auto max-w-3xl">
+                  <RoutineRecapCard
+                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
+                    howTo={assistantRoutineDraft.howTo}
+                    plan={assistantRoutineDraft.plan}
+                    saving={routineSaving}
+                    onSave={() => void saveRoutineHowTo()}
+                    onKeepEditing={keepEditingRoutine}
+                  />
+                </div>
+              </div>
             {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard

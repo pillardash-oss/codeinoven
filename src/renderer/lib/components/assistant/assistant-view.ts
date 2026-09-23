@@ -12,6 +12,11 @@ import {
   type UtilityCatalog,
   type UtilityDefinition
 } from '$shared/types'
+import {
+  parseRoutinePlanJson,
+  type RoutinePlan,
+  type RoutinePlanConnection
+} from '$shared/routine-plan'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import {
   buildConnectionLibrary,
@@ -420,12 +425,7 @@ const WEEKDAY_NAMES: ReadonlyArray<readonly [RegExp, number]> = [
 ]
 
 /** The structured plan the authoring agent emits alongside the how-to. */
-export interface RoutinePlanDraft {
-  /** Machine-readable schedule the app applies, or null when the plan omits one. */
-  schedule: RoutineSchedule | null
-  /** Service names the routine needs, exactly as the agent wrote them. */
-  connections: string[]
-}
+export type RoutinePlanDraft = RoutinePlan
 
 /** Normalise one time to `HH:mm`, accepting `8`, `8:30`, `8am`, `8:30 pm`, `18:00`. */
 export function parsePlanTime(raw: string): string | null {
@@ -508,14 +508,16 @@ function buildPlanSchedule(
 }
 
 /**
- * Read one `key: value` plan block. Unknown keys are ignored rather than
- * rejected, so a model that adds an explanatory line does not break the plan.
+ * Read one `key: value` plan block   the tolerant fallback for a draft written
+ * before the JSON plan contract, or by a model that ignored it. Unknown keys
+ * are ignored rather than rejected, so an explanatory line does not break the
+ * plan. The strict JSON schema in `$shared/routine-plan` is the primary shape.
  */
 export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
   let cadence: ScheduleCadence | null = null
   const times: string[] = []
   const weekdays: number[] = []
-  const connections: string[] = []
+  const connections: RoutinePlanConnection[] = []
   let sawAnything = false
 
   for (const rawLine of body.split('\n')) {
@@ -529,7 +531,7 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
     if (
       ['connections', 'connection', 'services', 'service', 'tools', 'integrations'].includes(key)
     ) {
-      connections.push(...splitList(value))
+      for (const name of splitList(value)) connections.push({ name })
       sawAnything = true
       continue
     }
@@ -565,11 +567,17 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
   if (!sawAnything) return null
   return {
     schedule: buildPlanSchedule(cadence, times, weekdays),
-    connections: [...new Set(connections)]
+    connections: [
+      ...new Map(connections.map((entry) => [entry.name.toLowerCase(), entry])).values()
+    ]
   }
 }
 
-/** The routine plan inside one assistant message, or null when it holds none. */
+/**
+ * The routine plan inside one assistant message, or null when it holds none.
+ * The plan is JSON matching `ROUTINE_PLAN_JSON_SCHEMA`; a `key: value` body is
+ * still read as a fallback so an older or non-conforming draft can commit.
+ */
 export function extractRoutinePlanDraft(text: string): RoutinePlanDraft | null {
   const body = newestTaggedBlock(
     text,
@@ -577,7 +585,7 @@ export function extractRoutinePlanDraft(text: string): RoutinePlanDraft | null {
     (line) => ROUTINE_MARKER_LINE.test(line)
   )
   if (!body) return null
-  return parseRoutinePlan(body)
+  return parseRoutinePlanJson(body) ?? parseRoutinePlan(body)
 }
 
 /** The newest routine plan across assistant messages, newest message first. */
@@ -587,6 +595,28 @@ export function latestRoutinePlanDraft(assistantTexts: readonly string[]): Routi
     if (draft) return draft
   }
   return null
+}
+
+// ─── Authoring confirmation ───────────────────────────────────────────────
+
+/**
+ * A plain, unambiguous "yes" and nothing else. The authoring agent asks the
+ * user to confirm the routine recap, and this is the typed spelling of that
+ * go-ahead   it must never match a message that also carries an instruction, so
+ * only a short, whole-message confirmation counts.
+ */
+const ROUTINE_CONFIRMATION =
+  /^(?:yes|y|yeah|yep|yup|sure|ok|okay|k|go ahead|go for it|do it|save it|save|looks good|looks great|sounds good|that works|perfect|great|nice|confirm|confirmed|approve|approved|ship it|lgtm|👍)$/
+
+/** Whether a user message is a plain go-ahead for the pending routine recap. */
+export function isRoutineConfirmation(text: string): boolean {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[\s.!?,]+$/u, '')
+    .trim()
+  if (!normalized || normalized.length > 32) return false
+  return ROUTINE_CONFIRMATION.test(normalized)
 }
 
 /**
@@ -766,13 +796,15 @@ export function resolveConnections(
 }
 
 /**
- * Fold the service names a plan names into a routine's connection list. A name
- * the library already carries links to that utility; a name it does not stays
- * as a required connection, which the panel renders as needing setup. A name
- * already covered   by label, or by the utility it resolves to   is skipped.
+ * Fold the connections a plan names into a routine's connection list. An entry
+ * that carries a `utilityId` links straight to that utility; otherwise the
+ * name is matched against the library. A connection the library does not carry
+ * stays as a required connection, which the panel renders as needing setup. An
+ * entry already covered   by label, or by the utility it resolves to   is
+ * skipped, and a plain string is accepted as shorthand for `{ name }`.
  */
 export function connectionsFromPlan(
-  names: readonly string[],
+  entries: readonly (string | RoutinePlanConnection)[],
   existing: readonly RoutineConnection[],
   utilities: readonly UtilityDefinition[]
 ): RoutineConnection[] {
@@ -786,10 +818,14 @@ export function connectionsFromPlan(
         .some((candidate) => candidate === needle)
     })
   }
-  for (const raw of names) {
-    const label = raw.trim()
+  for (const raw of entries) {
+    const entry = typeof raw === 'string' ? { name: raw } : raw
+    const label = entry.name.trim()
     if (!label) continue
-    const utility = utilities.find((candidate) => matchesUtility(label, candidate)) ?? null
+    const byId = entry.utilityId
+      ? (utilities.find((candidate) => candidate.id === entry.utilityId) ?? null)
+      : null
+    const utility = byId ?? utilities.find((candidate) => matchesUtility(label, candidate)) ?? null
     if (covers(label, utility?.id ?? null)) continue
     merged.push(
       utility

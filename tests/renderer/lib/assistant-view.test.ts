@@ -6,6 +6,7 @@ import {
   extractRoutinePlanDraft,
   groupMissedRunsByRoutine,
   handoffSummary,
+  isRoutineConfirmation,
   routineGap,
   latestHowToDraft,
   latestRoutinePlanDraft,
@@ -19,10 +20,20 @@ import {
   taskRowIconKey,
   taskRunLine
 } from '$lib/components/assistant/assistant-view'
+import {
+  ROUTINE_PLAN_JSON_SCHEMA,
+  parseRoutinePlanJson,
+  parseRoutinePlanValue
+} from '$shared/routine-plan'
 import { STATUS_TONE_COLORS } from '$lib/stores/scope-board'
 import { STATUS_TONE_COLORS as STATUS_TONE_COLORS_VIA_SCOPE } from '$lib/stores/scope.svelte'
 import { THREAD_STATUS_POLICY } from '$shared/thread-status-policy'
-import type { MissedRun, RoutineConnection, UtilityCatalog, UtilityDefinitionFor } from '$shared/types'
+import type {
+  MissedRun,
+  RoutineConnection,
+  UtilityCatalog,
+  UtilityDefinitionFor
+} from '$shared/types'
 
 function missedRun(overrides: Partial<MissedRun> = {}): MissedRun {
   return {
@@ -315,15 +326,18 @@ describe('routine plan parsing', () => {
 
   it('reads cadence, times, weekdays, and connections', () => {
     const plan = parseRoutinePlan(
-      ['cadence: weekdays', 'times: 08:30, 18:00', 'weekdays: mon,tue,wed,thu,fri', 'connections: Slack, Gmail'].join(
-        '\n'
-      )
+      [
+        'cadence: weekdays',
+        'times: 08:30, 18:00',
+        'weekdays: mon,tue,wed,thu,fri',
+        'connections: Slack, Gmail'
+      ].join('\n')
     )
     expect(plan?.schedule).toEqual({
       cadence: 'weekdays',
       times: ['08:30', '18:00']
     })
-    expect(plan?.connections).toEqual(['Slack', 'Gmail'])
+    expect(plan?.connections).toEqual([{ name: 'Slack' }, { name: 'Gmail' }])
   })
 
   it('reads a free-text schedule line and ignores a weekday phrase it cannot parse', () => {
@@ -377,6 +391,93 @@ describe('routine plan parsing', () => {
       times: ['17:00'],
       weekdays: [1, 5]
     })
+  })
+})
+
+describe('routine plan schema', () => {
+  it('validates a schedule and connections from JSON', () => {
+    const plan = parseRoutinePlanJson(
+      JSON.stringify({
+        schedule: { cadence: 'weekdays', times: ['08:30', '18:00'] },
+        connections: [{ name: 'Slack' }, { name: 'Gmail', utilityId: 'gmail-mcp' }]
+      })
+    )
+    expect(plan?.schedule).toEqual({ cadence: 'weekdays', times: ['08:30', '18:00'] })
+    expect(plan?.connections).toEqual([
+      { name: 'Slack' },
+      { name: 'Gmail', utilityId: 'gmail-mcp' }
+    ])
+  })
+
+  it('normalises and sorts times, and accepts a plain-string connection', () => {
+    const plan = parseRoutinePlanValue({
+      schedule: { cadence: 'daily', times: ['18:00', '8:30', '8:30'] },
+      connections: ['Slack', { name: '  ' }, { name: 'Gmail' }]
+    })
+    expect(plan?.schedule).toEqual({ cadence: 'daily', times: ['08:30', '18:00'] })
+    expect(plan?.connections).toEqual([{ name: 'Slack' }, { name: 'Gmail' }])
+  })
+
+  it('rejects a schedule the scheduler could never fire', () => {
+    expect(parseRoutinePlanValue({ schedule: { cadence: 'daily', times: [] } })).toBeNull()
+    expect(parseRoutinePlanValue({ schedule: { cadence: 'once' } })).toBeNull()
+    expect(
+      parseRoutinePlanValue({ schedule: { cadence: 'nonsense', times: ['09:00'] } })
+    ).toBeNull()
+  })
+
+  it('keeps a one-shot schedule with its fire time', () => {
+    expect(
+      parseRoutinePlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
+    ).toEqual({
+      schedule: { cadence: 'once', times: [], onceAt: 1_700_000_000_000 },
+      connections: []
+    })
+  })
+
+  it('ignores JSON that is not a plan and a non-JSON body', () => {
+    expect(parseRoutinePlanJson('notes: nothing here')).toBeNull()
+    expect(parseRoutinePlanJson('{ not json')).toBeNull()
+    expect(parseRoutinePlanValue({ connections: [] })).toBeNull()
+  })
+
+  it('reads a JSON plan inside the routine fence, ahead of the text fallback', () => {
+    const message = [
+      '```routine',
+      '{"schedule":{"cadence":"hourly"},"connections":[{"name":"Slack"}]}',
+      '```'
+    ].join('\n')
+    const plan = extractRoutinePlanDraft(message)
+    expect(plan?.schedule).toEqual({ cadence: 'hourly', times: [] })
+    expect(plan?.connections).toEqual([{ name: 'Slack' }])
+  })
+
+  it('describes the plan contract for the authoring prompt', () => {
+    const schema = ROUTINE_PLAN_JSON_SCHEMA as {
+      required: string[]
+      properties: Record<string, unknown>
+    }
+    expect(schema.required).toEqual(['schedule', 'connections'])
+    expect(Object.keys(schema.properties)).toEqual(['schedule', 'connections'])
+  })
+})
+
+describe('routine confirmation', () => {
+  it('accepts a plain go-ahead and nothing more', () => {
+    expect(isRoutineConfirmation('yes')).toBe(true)
+    expect(isRoutineConfirmation('Yes!')).toBe(true)
+    expect(isRoutineConfirmation('  go ahead  ')).toBe(true)
+    expect(isRoutineConfirmation('looks good.')).toBe(true)
+    expect(isRoutineConfirmation('👍')).toBe(true)
+  })
+
+  it('never reads a message that carries an instruction as a confirmation', () => {
+    expect(isRoutineConfirmation('yes, but change the time to 9am')).toBe(false)
+    expect(isRoutineConfirmation('no, make it weekly')).toBe(false)
+    expect(isRoutineConfirmation('')).toBe(false)
+    expect(
+      isRoutineConfirmation('yes and also please add a section about retries to the how-to')
+    ).toBe(false)
   })
 })
 
@@ -466,15 +567,20 @@ describe('routine connections', () => {
   })
 
   it('links a plan name to a library utility and keeps an unknown name required', () => {
-    const merged = connectionsFromPlan(
-      ['Slack', 'Gmail'],
-      [],
-      [mcpUtility()]
-    )
+    const merged = connectionsFromPlan(['Slack', 'Gmail'], [], [mcpUtility()])
     expect(merged).toEqual([
       { utilityId: 'slack-mcp', label: 'Slack MCP', kind: 'mcp' },
       { utilityId: 'required:gmail', label: 'Gmail', required: true }
     ])
+  })
+
+  it("prefers a plan connection's explicit utility id over name matching", () => {
+    const merged = connectionsFromPlan(
+      [{ name: 'Team chat', utilityId: 'slack-mcp' }],
+      [],
+      [mcpUtility()]
+    )
+    expect(merged).toEqual([{ utilityId: 'slack-mcp', label: 'Slack MCP', kind: 'mcp' }])
   })
 
   it('never duplicates a connection a plan names twice', () => {
@@ -484,14 +590,18 @@ describe('routine connections', () => {
       [mcpUtility()]
     )
     expect(merged).toHaveLength(1)
-  })})
+  })
+})
 
 describe('routine readiness', () => {
   it('names every gap a routine still has', () => {
     expect(routineGap({ howTo: '', agents: undefined })).toBe('Needs a how-to and a model')
     expect(routineGap({ howTo: 'Do it.', agents: undefined })).toBe('Needs a model')
     expect(
-      routineGap({ howTo: '', agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] } })
+      routineGap({
+        howTo: '',
+        agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] }
+      })
     ).toBe('Needs a how-to')
   })
 
