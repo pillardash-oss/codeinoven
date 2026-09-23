@@ -14,6 +14,7 @@ import {
   composeBrainstormSystemPrompt,
   composeTurnSystemPrompt
 } from '../../src/main/chat/chat-engine'
+import { routineRunContext } from '$shared/routine-run'
 import {
   composeBudgetedSend,
   computePromptBudget,
@@ -134,5 +135,38 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     })
     const total = estimateTextTokens(finalSystem) + estimateTextTokens(composition.driverText)
     expect(total).toBeLessThanOrEqual(available)
+  })
+
+  it('carries the routine contract in the system prompt, never in the user message', () => {
+    const available = modelBudget()
+    const contract = routineRunContext({ name: 'Slack digest', connections: [] })
+    const systemBase = composeTurnSystemPrompt({
+      chatPrompt: 'You are the CodeInOven assistant.',
+      memoryInstruction: '',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt: '',
+      utilityInstructions: 'CodeInOven utility contract (run)',
+      routineInstruction: contract,
+      behaviorMode: 'chat',
+      historyRecap: ''
+    })
+    expect(systemBase).toContain(contract)
+    // The user message stays the user's own words: a contract appended here
+    // would be kept in the harness transcript and replayed on every later turn.
+    const composition = composeBudgetedSend({
+      availableInputTokens: available,
+      userText: 'Run this scheduled task now: Getting started',
+      systemPrompt: systemBase,
+      hiddenText: '',
+      recapText: ''
+    })
+    expect(composition.driverText).toBe('Run this scheduled task now: Getting started')
+    expect(composition.driverText).not.toContain('cio_util_manage')
+  })
+
+  it('omits the routine layer when no routine thread applies', () => {
+    const withoutRoutine = implementSystemBase('')
+    expect(withoutRoutine).not.toContain('install_bundle')
   })
 })

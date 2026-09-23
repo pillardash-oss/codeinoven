@@ -625,6 +625,13 @@ export function composeTurnSystemPrompt(input: {
   assignmentCoordinatorSystemPrompt: string
   behaviorPrompt: string
   utilityInstructions: string
+  /**
+   * The routine contract for this thread (how-to authoring, or a saved
+   * routine's run), when one applies. It rides the system prompt rather than
+   * the user message so every turn re-states it and no harness transcript
+   * accumulates a copy per turn.
+   */
+  routineInstruction?: string
   behaviorMode: 'implement' | 'brainstorm' | 'chat'
   historyRecap: string
 }): string {
@@ -635,6 +642,7 @@ export function composeTurnSystemPrompt(input: {
     input.assignmentCoordinatorSystemPrompt,
     input.behaviorPrompt,
     input.utilityInstructions,
+    input.routineInstruction,
     input.behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
     input.behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
     input.historyRecap
@@ -658,6 +666,8 @@ export function composeBrainstormSystemPrompt(input: {
   imageDescriptorNote: string
   behaviorPrompt: string
   utilityInstructions: string
+  /** The routine contract, when the planning turn belongs to a routine thread. */
+  routineInstruction?: string
   historyRecap: string
 }): string {
   const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
@@ -679,6 +689,7 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
+    input.routineInstruction,
     input.historyRecap
   ]
     .filter(Boolean)

@@ -6997,16 +6997,11 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
-    const steerAuthoringContext = this.routineAuthoringHiddenContext(thread)
-    if (steerAuthoringContext) {
-      hiddenContext = [hiddenContext, steerAuthoringContext].filter(Boolean).join('\n\n')
-    }
-    // A steer landing during a run of a saved routine keeps the same
-    // self-provisioning contract as the run's first turn.
-    const steerRunContext = this.routineRunHiddenContext(thread)
-    if (steerRunContext) {
-      hiddenContext = [hiddenContext, steerRunContext].filter(Boolean).join('\n\n')
-    }
+    // A steer lands inside the running turn, and that turn's SYSTEM PROMPT
+    // already carries the routine contract (authoring or run), because the
+    // engine composes it on every turn of a routine thread. Re-stating it in
+    // the steer message would only add a copy to the harness transcript, so the
+    // steer relies on the prompt it is already running under.
     const steerInputBudget = this.selectedModelInputBudget(
       thread.settings?.providerId,
       thread.settings?.modelId,
@@ -7505,21 +7500,21 @@ export class ChatEngine {
     // both carry the self-provisioning contract and the run grant; gating it on
     // an internal origin left a follow-up with only the reuse contract, which
     // reserves installing and dead-ends on "connect it yourself".
-    if (assistantTaskTurn && routineRun) {
-      hiddenContext = [hiddenContext, routineRun].filter(Boolean).join('\n\n')
-    }
+    //
+    // The contracts are instructions for the agent's behavior on this thread, so
+    // they ride the SYSTEM PROMPT rather than the user message. Every harness
+    // rewrites that prompt each turn, while text appended to a user message is
+    // kept in the harness transcript and replayed once more on every later turn,
+    // which would accumulate one copy per turn for the life of the thread.
+    const routineInstruction = assistantTaskTurn
+      ? routineRun
+      : origin === 'user'
+        ? this.routineAuthoringHiddenContext(targetThread)
+        : undefined
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
       if (workerDirective) {
         hiddenContext = [hiddenContext, workerDirective].filter(Boolean).join('\n\n')
-      }
-      // The how-to authoring contract belongs to the thread, not to one send
-      // path: a routine that still lacks its how-to turns every user turn in
-      // its task threads into a how-to conversation, whether it arrives from
-      // the composer, a resend from the message editor, or a queued delivery.
-      const authoringContext = this.routineAuthoringHiddenContext(targetThread)
-      if (authoringContext) {
-        hiddenContext = [hiddenContext, authoringContext].filter(Boolean).join('\n\n')
       }
     }
     // One aggregate selected-model input budget for the turn (A-13). The
@@ -8172,6 +8167,7 @@ export class ChatEngine {
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
+          routineInstruction,
           historyRecap: ''
         })
       : composeTurnSystemPrompt({
@@ -8181,6 +8177,7 @@ export class ChatEngine {
           assignmentCoordinatorSystemPrompt,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
+          routineInstruction,
           behaviorMode,
           historyRecap: ''
         })
@@ -8392,6 +8389,7 @@ export class ChatEngine {
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
+            routineInstruction,
             historyRecap
           }),
           allowedTools:
@@ -8487,6 +8485,7 @@ export class ChatEngine {
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
+            routineInstruction,
             behaviorMode,
             historyRecap
           }) || undefined,

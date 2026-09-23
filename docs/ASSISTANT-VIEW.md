@@ -379,7 +379,9 @@ prompt"; the user-facing term is how-to.
   library with `cio_util_find`, research compatible skills/MCPs/plugins, and
   install them itself with `cio_util_manage` once the user agrees. The grant is
   derived from the thread every turn, never memoized, so it ends the moment the
-  how-to is saved. Credentials are collected with `cio_ask_secret`, never pasted
+  how-to is saved. The contract text itself rides the turn's system prompt (see
+  the placement note below), so it is restated per turn without accumulating in
+  the harness transcript. Credentials are collected with `cio_ask_secret`, never pasted
   into chat, and nothing is installed without the user's agreement; the only
   acceptable blockers are network and a closed app.
 - A saved routine's run provisions itself the same way. The how-to is the
@@ -402,6 +404,20 @@ prompt"; the user-facing term is how-to.
   the contract on an internal origin was a real bug: a follow-up got only the
   reuse contract, which reserves installing, and the assistant dead-ended on
   "connect it yourself" instead of supplying the connection.
+- Both routine contracts ride the SYSTEM PROMPT, not the user message.
+  `sendPrompt` composes them into the turn prompt as `routineInstruction`
+  (`composeTurnSystemPrompt` / `composeBrainstormSystemPrompt` in
+  `src/main/chat/chat-engine/chat-engine-prompts.ts`), alongside
+  `utilityInstructions`. Every harness rewrites that prompt on each turn (codex
+  replaces `developer_instructions` on `thread/resume`, Pi rewrites its
+  `system-prompt.txt` handoff file), so the contract is restated every turn and
+  costs one copy. Text appended to a user message instead stays in the harness
+  transcript, so the thread would replay one more copy on every later turn. That
+  placement is pinned by `tests/main/send-composition.test.ts`, which asserts the
+  contract lands in the system prompt and the user message stays the user's own
+  words. A steer needs no re-statement either: it runs under the prompt the turn
+  already started with, and `rearmSteerUtilities` republishes only the gateway
+  endpoint, never the prompt.
 - When `cio_util_find` finds no direct match it says so and points at the
   research path in its fallback message, so a run that has exhausted the library
   is told it may go online rather than concluding the capability is impossible.
