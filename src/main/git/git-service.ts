@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { dirname, relative, resolve } from 'path'
 import { toPosixPath } from '../../lib/paths'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
 import type { LogOptions, SimpleGit } from 'simple-git'
 import type {
   GitBranchInfo,
@@ -114,6 +115,27 @@ function uncommittedCount(status: GitStatus): number {
 }
 
 /**
+ * How much of git's own output a failed rebase step keeps in the error log. The
+ * reason the sequencer refused is its last words, while the summary of every
+ * commit it replayed comes first, so the tail is the part worth keeping and the
+ * whole thing would bury the log line.
+ */
+const REBASE_FAILURE_LOG_CHARS = 2000
+
+/**
+ * The tail of git's own output for a rebase step git could not move, for the
+ * error log. A rebase prints a summary for every commit it replayed before the
+ * lines that say why it stopped, so this reads from the end and never hands the
+ * panel the wall of output it would have to render as a message.
+ */
+function rebaseFailureDetail(failure: unknown): string {
+  const text = failure instanceof Error ? failure.message : String(failure)
+  return text.length > REBASE_FAILURE_LOG_CHARS
+    ? `...${text.slice(-REBASE_FAILURE_LOG_CHARS)}`
+    : text
+}
+
+/**
  * Main-process git runtime built on `simple-git`   the same thin wrapper over
  * the system `git` binary the app already execs in `repository-service`,
  * `change-tracking-service`, and `project-file-index-service`.
@@ -123,8 +145,23 @@ function uncommittedCount(status: GitStatus): number {
  * never interleave and corrupt the working tree. Operations that talk to a
  * remote get a second lane of their own; see `enqueueRemote`.
  */
+export interface GitServiceOptions {
+  /**
+   * Byte cap on a conflicted file the service reads and writes, resolved per
+   * call so a settings change applies without a restart. Defaults to
+   * {@link DEFAULT_MAX_CONFLICT_FILE_BYTES}.
+   */
+  conflictFileLimit?: () => Promise<number>
+}
+
 export class GitService {
   private readonly queues = new Map<string, Promise<unknown>>()
+  private readonly conflictFileLimit: () => Promise<number>
+
+  constructor(options: GitServiceOptions = {}) {
+    this.conflictFileLimit =
+      options.conflictFileLimit ?? (async () => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+  }
 
   /**
    * The remote lane, one per project, deliberately separate from `queues`.
@@ -349,7 +386,11 @@ export class GitService {
       const safePath = this.assertRelativePath(directory, path)
       const status = await this.client(directory).status()
       if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
-      const file = await this.workingFileContent(directory, safePath)
+      const file = await this.workingFileContent(
+        directory,
+        safePath,
+        await this.conflictFileBytes()
+      )
       if (!file || file.binary || file.truncated) return this.readStatus(directory)
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
@@ -406,7 +447,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(projectPath, 'read', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         if (!working)
           return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
         if (working.binary) {
@@ -440,7 +485,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const analysis: GitConflictAnalysis = !working
           ? { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
           : working.binary
@@ -504,7 +553,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       await this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const source = working?.binary ? '' : (working?.content ?? '')
         const hunks = parseConflictWorkState(stateJson, content.length)
         const paths = await this.conflictWorkPaths(directory, safePath)
@@ -1048,14 +1101,40 @@ export class GitService {
    * `git rebase --onto <target>^ <target>` replays every commit after `target`
    * onto its parent, skipping `target` itself. Only safe for unpushed commits;
    * pushed commits need a force-push afterwards.
+   *
+   * A replay that conflicts stops the rebase, and that stop is where the drop is
+   * finished from: the conflicts land in this checkout, the panel's Rebase in
+   * progress notice offers Continue, Skip and Abort, and continuing the rebase
+   * completes the drop. It is reported as the step the user owes rather than as
+   * git's own output, which is a summary of every commit it replayed plus three
+   * hints, and a refusal that never started the rebase says so instead of leaving
+   * the panel to guess.
    */
   async deleteCommit(projectPath: string, target: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
-      })
-      return this.readStatus(directory)
+      const short = target.slice(0, 7)
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
+        })
+      } catch (error) {
+        failure = error
+      }
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      Logger.error(`Deleting ${short} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      if (status.conflictState === 'rebase') {
+        throw new GitRefusal(
+          `Deleting ${short} stopped on a conflict in the commits after it. Resolve and continue the rebase to finish the drop, or abort the rebase to keep the commit`
+        )
+      }
+      throw new GitRefusal(
+        isUncommittedChangesRefusal(failure)
+          ? `Deleting ${short} needs a clean working tree. Commit or stash the uncommitted changes, then try again`
+          : `Deleting ${short} could not start, so nothing was changed`
+      )
     })
   }
 
@@ -1847,6 +1926,13 @@ export class GitService {
    * can stop again on the next commit's conflict, which is not an error   the
    * refreshed status carries the new conflict state for the panel to show.
    *
+   * git exits non-zero with the conflict in its output when it stops again, so
+   * that failure is caught here instead of reported: a stop that left conflicted
+   * files is the same state the first stop was, and the panel renders it from
+   * the refreshed status. Only a failure that left no conflict to resolve is
+   * reported, and then as the step the user owes, because git's own output for a
+   * rebase is a summary of every commit it replayed followed by three hints.
+   *
    * Unresolved conflicts are refused here rather than left to git: `rebase
    * --continue` reports them on stdout with an empty stderr, and simple-git only
    * raises a task error when stderr has something in it, so git's refusal would
@@ -1868,13 +1954,29 @@ export class GitService {
           `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
         )
       }
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.clientWithoutEditor(directory).raw([
-          'rebase',
-          action === 'continue' ? '--continue' : '--skip'
-        ])
-      })
-      return this.readStatus(directory)
+      const verb = action === 'continue' ? 'continue' : 'skip'
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.clientWithoutEditor(directory).raw([
+            'rebase',
+            action === 'continue' ? '--continue' : '--skip'
+          ])
+        })
+      } catch (error) {
+        failure = error
+      }
+      // Read the state back either way: it is what says whether the action moved
+      // the rebase on, stopped it again, or left nothing to continue.
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      if (status.conflictState === 'rebase' && status.conflicted.length > 0) return status
+      Logger.error(`Rebase ${verb} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      throw new GitRefusal(
+        status.conflictState === 'rebase'
+          ? `Git could not ${verb} the rebase. Resolve and stage what it is holding, skip this commit, or abort the rebase`
+          : `Git could not ${verb} the rebase, and no rebase is in progress any more`
+      )
     })
   }
 
@@ -2148,13 +2250,26 @@ export class GitService {
   }
 
   /**
-   * Read a working-tree file bounded to the diff payload cap, detecting binary
-   * content via NUL bytes (mirrors the old untracked-diff probe).
+   * Read a working-tree file bounded to `maximumBytes`, detecting binary
+   * content via NUL bytes (mirrors the old untracked-diff probe). The diff
+   * bound is the default; the conflict path passes the configured cap.
    */
   private async workingFileContent(
     directory: string,
-    path: string
+    path: string,
+    maximumBytes?: number
   ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
-    return readWorkingFileContent(directory, path)
+    return readWorkingFileContent(directory, path, maximumBytes)
+  }
+
+  /**
+   * The configured byte cap on a conflicted file, resolved per call so a
+   * settings change applies without a restart. A missing or nonsensical
+   * provider value falls back to the shipped default rather than refusing every
+   * conflict the app can still handle.
+   */
+  private async conflictFileBytes(): Promise<number> {
+    const limit = await this.conflictFileLimit().catch(() => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_MAX_CONFLICT_FILE_BYTES
   }
 }

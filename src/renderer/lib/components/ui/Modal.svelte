@@ -10,6 +10,7 @@
     focusOwnsEnter,
     isFocusableTarget
   } from '$lib/modal-primary-action.svelte'
+  import { isWithinToastLayer } from '$lib/toast-layer'
 
   /**
    * The canonical modal.
@@ -249,6 +250,13 @@
           if (!escapeCloses) event.preventDefault()
         }}
         onInteractOutside={(event) => {
+          // A toast is drawn above this modal (svelte-sonner stacks at
+          // `z-index: 999999999`) and stays interactive there, so a press that
+          // lands on one is not a backdrop press. Without this the pointerdown
+          // bubbled to the dismissible layer and dismissed the modal as well as
+          // the toast it was aimed at: pressing a toast's close button threw the
+          // full screen surface away behind it.
+          if (isWithinToastLayer(event.target)) event.preventDefault()
           if (!closeOnBackdrop) event.preventDefault()
         }}
         class="{PANEL_BASE} {layout} {widthClass} {panelClass}"

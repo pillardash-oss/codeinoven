@@ -11,16 +11,41 @@ import {
 import { spawnInUtilityHost } from './harness-utility-host'
 
 /**
- * Base directory of the bundled Pi resource (see `scripts/build-pi-harness.ts`),
- * or `undefined` if it's missing (e.g. a dev checkout that never ran the
- * build script). Used only as a fallback when no `pi` is found on PATH or in
+ * Entry points of the bundled Pi resource (see `scripts/build-pi-harness.ts`).
+ *
+ * `'rpc'` is the session entry point every turn spawns: it hard-codes
+ * `--mode rpc` ahead of the caller's arguments. `'cli'` is the plain command
+ * entry point a PATH install exposes, and it is the only one that reaches
+ * Pi's own argument parser with the caller's arguments intact   one-shot
+ * package/config commands such as `pi update --models` need it.
+ */
+type BundledPiEntry = 'rpc' | 'cli'
+
+/**
+ * Absolute path of one bundled Pi entry point, or `undefined` when the bundled
+ * runtime (or that entry point) is missing   e.g. a dev checkout that never ran
+ * the build script. Used only as a fallback when no `pi` is found on PATH or in
  * WSL   a real install always takes priority.
  */
-function bundledPiBase(): string | undefined {
+function bundledPiEntryPath(entry: BundledPiEntry): string | undefined {
   const base = app.isPackaged
     ? join(process.resourcesPath, 'harnesses/pi')
     : join(app.getAppPath(), 'resources/harnesses/pi')
-  return existsSync(join(base, 'dist/bundle/rpc-entry.js')) ? base : undefined
+  const path = join(base, entry === 'cli' ? 'dist/bundle/cli.js' : 'dist/bundle/rpc-entry.js')
+  return existsSync(path) ? path : undefined
+}
+
+/**
+ * Point a resolved runtime at another bundled Pi entry point. Only a bundled
+ * runtime has more than one; a native or WSL install is returned untouched.
+ */
+function applyBundledEntry(
+  runtime: HarnessRuntime | null,
+  entry: BundledPiEntry | undefined
+): HarnessRuntime | null {
+  if (!runtime || !entry || entry === 'rpc' || runtime.target.kind !== 'bundled') return runtime
+  const resolvedPath = bundledPiEntryPath(entry)
+  return resolvedPath ? { ...runtime, resolvedPath } : runtime
 }
 
 /**
@@ -38,14 +63,14 @@ export function bundledPiVendorDir(): string | undefined {
 }
 
 /** The bundled Pi runtime, spawned via Electron's own embedded Node. */
-function bundledPiRuntime(command: string): HarnessRuntime | null {
+function bundledPiRuntime(command: string, entry: BundledPiEntry = 'rpc'): HarnessRuntime | null {
   if (command !== 'pi') return null
-  const base = bundledPiBase()
-  return base
+  const resolvedPath = bundledPiEntryPath(entry)
+  return resolvedPath
     ? {
         command,
         executable: process.execPath,
-        resolvedPath: join(base, 'dist/bundle/rpc-entry.js'),
+        resolvedPath,
         target: { kind: 'bundled' }
       }
     : null
@@ -644,16 +669,31 @@ function prepareNativeInvocation(
   }
 }
 
+export interface HarnessInvocationOptions {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+  /**
+   * Which bundled Pi entry point to launch when the command resolves to the
+   * runtime bundled with the app (ignored for native and WSL installs, which
+   * expose a single entry point). `'rpc'` (the default) is the session entry
+   * point; `'cli'` is the command entry point, required by one-shot
+   * package/config commands such as `pi update --models` because the RPC entry
+   * point hard-codes `--mode rpc` ahead of the caller's arguments and Pi then
+   * rejects them.
+   */
+  bundledEntry?: BundledPiEntry
+}
+
 /** Prepare one harness launch while preserving structured arguments and stdio. */
 export async function prepareHarnessInvocation(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+  options: HarnessInvocationOptions = {}
 ): Promise<PreparedHarnessInvocation> {
   const env = options.env ?? buildProcessEnvironment()
   if (process.platform !== 'win32') {
     if (!resolveExecutablePath(command, env)) {
-      const bundled = bundledPiRuntime(command)
+      const bundled = bundledPiRuntime(command, options.bundledEntry)
       if (bundled) {
         return {
           command: bundled.executable,
@@ -674,7 +714,10 @@ export async function prepareHarnessInvocation(
       runtime: { command, executable: command, resolvedPath: command, target: { kind: 'native' } }
     }
   }
-  const runtime = await resolveHarnessRuntime(command, options.cwd)
+  const runtime = applyBundledEntry(
+    await resolveHarnessRuntime(command, options.cwd),
+    options.bundledEntry
+  )
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
   if (runtime.target.kind === 'bundled') {
     return {
@@ -854,16 +897,15 @@ export class HarnessCommandError extends Error {
 export async function runHarnessCommand(
   command: string,
   args: string[],
-  options: {
-    cwd?: string
-    env?: NodeJS.ProcessEnv
+  options: HarnessInvocationOptions & {
     timeoutMs?: number
     maxOutputBytes?: number
   } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   const prepared = await prepareHarnessInvocation(command, args, {
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.env ? { env: options.env } : {})
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.bundledEntry ? { bundledEntry: options.bundledEntry } : {})
   })
   const result = await capture(prepared.command, prepared.args, {
     ...(prepared.cwd ? { cwd: prepared.cwd } : {}),

@@ -104,7 +104,12 @@ export type IpcChatEngine = Pick<
   Partial<
     Pick<
       ChatEngine,
-      'runVirtualTask' | 'setScopeToolService' | 'setAssignmentWorkerScopeProvisioner'
+      | 'runVirtualTask'
+      | 'setScopeToolService'
+      | 'setAssignmentWorkerScopeProvisioner'
+      | 'gradeRankingQueueNow'
+      | 'cancelRankingGrade'
+      | 'rankingGradeRunStatus'
     >
   >
 

@@ -1,3 +1,4 @@
+import type { RankingJudgeKind } from './agent'
 import type { ThinkingLevel } from './common'
 import type { AccountActivityDay, AccountUsageBreakdown } from './usage'
 
@@ -39,6 +40,52 @@ export interface LocalUsageClearInput {
   store: LocalUsageRecordStore | 'all'
   /** Range whose ledger rows are removed. The ranking store ignores it. */
   range: LocalProfileAnalyticsRange
+}
+
+/**
+ * What a manual ranking grade run covers.
+ *
+ * `due` grades only conversations whose inactivity window already closed, which
+ * is exactly what the automatic drain is about to take. `all` grades every
+ * conversation still waiting, pulling it forward, and gives a conversation
+ * parked after exhausting its retries one fresh attempt.
+ */
+export type LocalRankingGradeScope = 'due' | 'all'
+
+/** Progress of a manual ranking grade run, and the queue it is working through. */
+export interface LocalRankingQueueStatus {
+  /** Every conversation still waiting for a grade, including parked failures. */
+  awaiting: number
+  /** Conversations whose inactivity window has closed, so the next pass takes them. */
+  due: number
+  /** Conversations parked after exhausting their retry budget. */
+  failed: number
+  /** The judge a manual run would use, and whether that judge can run at all. */
+  judge: LocalRankingJudgeView
+  /** The run in flight, or null when the queue is idle. */
+  run: LocalRankingGradeProgress | null
+}
+
+/** The judge a manual run would use, resolved for display. */
+export interface LocalRankingJudgeView {
+  /** Pinned judge kind, or `automatic` when the chain decides. */
+  kind: RankingJudgeKind
+  /** One line naming the judge, e.g. `TypeSafe (Jev)` or `pi · openai/gpt-5`. */
+  label: string
+}
+
+/** Live counters of one manual ranking grade run. */
+export interface LocalRankingGradeProgress {
+  /** Conversations the run set out to grade. */
+  requested: number
+  /** Conversations graded and folded into the aggregates so far. */
+  graded: number
+  /** Conversations the judge could not score, left queued for a later attempt. */
+  failed: number
+  /** Conversations still awaiting a grade. */
+  remaining: number
+  /** True once the user cancelled the run; the current pass still finished. */
+  cancelled: boolean
 }
 
 /** Date-range usage row with enough identity to render harness and provider marks. */

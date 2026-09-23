@@ -30,6 +30,7 @@ import type {
   PromptProjectReference,
   PromptReference,
   ProviderCatalog,
+  ProviderCatalogRefreshOptions,
   ScopedHarnessCommand,
   SpecActionIntent,
   SpecGenerationRequest,
@@ -248,7 +249,7 @@ export const invokeAgentContract = {
   'agent:listProviders': {} as Contract<[projectId: string], ProviderCatalog[]>,
   'agent:listProviderSnapshot': {} as Contract<[projectId: string], ProviderCatalog[]>,
   'agent:refreshProviderCatalog': {} as Contract<
-    [projectId: string, force?: boolean],
+    [projectId: string, options?: ProviderCatalogRefreshOptions],
     ProviderCatalog[]
   >,
   'agent:refreshAccountUsage': {} as Contract<

@@ -123,6 +123,7 @@ import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
+import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
@@ -243,6 +244,7 @@ import type {
   PromptProjectReference,
   PromptReference,
   ProviderCatalog,
+  ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
   SessionAgentEvent,
   SpecGenerationRequest,
@@ -263,14 +265,22 @@ import type {
   UsageEventFeature,
   UsagePricingProvenance,
   BrainstormPrototypeFidelity,
-  ModelRankingSnapshotRow
+  ModelRankingSnapshotRow,
+  LocalRankingGradeProgress,
+  LocalRankingGradeScope,
+  RankingJudgeConfig
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
+  isWorkflowCoordinatorThread,
   workerReportsToCoordinator
 } from '../../lib/types'
+import {
+  resolveWorkflowCoordinatorThreadId,
+  workflowGroupThreads
+} from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
@@ -385,6 +395,7 @@ import type {
   PersistedProviderCatalog,
   QueuedCoordinatorHandoff,
   RankingGradeCandidate,
+  RankingDrainOutcome,
   RankingJudgeOutcome,
   RankingPassPlan,
   RejectedSpecArtifact,
@@ -728,6 +739,24 @@ export class ChatEngine {
    */
   private static readonly RANKING_DRAIN_RESTART_MS = 2_000
 
+  /**
+   * Breath between the passes of one user-requested run. Shorter than the
+   * automatic restart because a person is watching, and long enough that the
+   * main thread, the database worker and the provider are never hammered by a
+   * backlog being cleared as fast as the queue allows.
+   */
+  private static readonly RANKING_MANUAL_PASS_PAUSE_MS = 250
+
+  /** Wait before re-checking a queue another pass currently owns. */
+  private static readonly RANKING_MANUAL_POLL_MS = 500
+
+  /**
+   * Consecutive passes that grade nothing before a user-requested run stops and
+   * reports what is left. A run must end even when the queue cannot move, for
+   * instance while every judge route sits inside a closed provider window.
+   */
+  private static readonly RANKING_MANUAL_IDLE_PASSES = 2
+
   /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
    *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
    *  pauses between visible output. */
@@ -975,6 +1004,7 @@ export class ChatEngine {
   private threadManager: ThreadManager
 
   private checkpointManager: CheckpointManager
+  private workflowOwnership: WorkflowOwnershipService
 
   private specEngine: SpecEngine
 
@@ -1229,6 +1259,20 @@ export class ChatEngine {
   private gradeDrainRunning = false
 
   /**
+   * The user-requested run in flight, or null when the queue is idle. Held here
+   * (not only in the IPC layer) so the panel can read live progress from
+   * anywhere and a second request joins the run instead of starting a rival one.
+   */
+  private rankingManualRun: LocalRankingGradeProgress | null = null
+
+  /**
+   * The run in flight, so a second request awaits the same result instead of
+   * reading a half-filled snapshot of it. Cleared by whichever caller started
+   * the run, once that run settles.
+   */
+  private rankingManualRunPromise: Promise<LocalRankingGradeProgress> | null = null
+
+  /**
    * Earliest moment the next ranking pass may run, set while rows a pass could
    * not re-date are still due in the queue. Read by every `scheduleRankingDrain`
    * call, so no external trigger can bypass it; cleared as soon as it passes.
@@ -1295,6 +1339,7 @@ export class ChatEngine {
     // (the Default scope included) fails closed before a turn can start.
     this.projectFilesService = new ProjectFilesService(this.projectManager, this.scopeRoots)
     this.checkpointManager = new CheckpointManager(database)
+    this.workflowOwnership = new WorkflowOwnershipService(database)
     this.threadManager = new ThreadManager(
       database,
       broadcastThreadUpdate,
@@ -1568,16 +1613,28 @@ export class ChatEngine {
     ipcMain.handle('agent:listProviderSnapshot', (_, projectId: string) =>
       this.listProviderSnapshot(projectId)
     )
-    ipcMain.handle('agent:refreshProviderCatalog', async (_, projectId: string, force = true) => {
-      // A forced picker refresh also re-probes every custom provider's model
-      // endpoint so newly added/removed upstream models reach the catalog.
-      if (force === true) {
-        await refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
-          // Per-provider failures already preserve their old model lists.
-        })
+    ipcMain.handle(
+      'agent:refreshProviderCatalog',
+      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) => {
+        const force = options.force ?? true
+        if (force) {
+          // A forced picker refresh also re-probes every custom provider's model
+          // endpoint so newly added/removed upstream models reach the catalog.
+          // An explicit user refresh additionally forces each harness to
+          // re-fetch its own model catalog from upstream first; the two are
+          // independent network passes, so they run together.
+          await Promise.all([
+            refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+              // Per-provider failures already preserve their old model lists.
+            }),
+            options.refreshModelCatalogs === true
+              ? this.refreshHarnessModelCatalogs()
+              : Promise.resolve()
+          ])
+        }
+        return this.listProviders(projectId, force)
       }
-      return this.listProviders(projectId, force === true)
-    })
+    )
     ipcMain.handle('agent:refreshAccountUsage', (_, overrides?: AgentAccountUsageOverrides) =>
       this.refreshAccountUsage(overrides)
     )
@@ -2212,12 +2269,7 @@ export class ChatEngine {
         )
       )
     } catch (error) {
-      if (error instanceof InactiveQuestionTurnError) {
-        await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
-        return
-      }
-      if (error instanceof QuestionRequestGoneError) {
-        this.finalizePendingQuestion(requestId, 'answered', safeAnswers)
+      if (await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error)) {
         return
       }
       throw error
@@ -2494,16 +2546,38 @@ export class ChatEngine {
         driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
       )
     } catch (error) {
-      if (error instanceof InactiveQuestionTurnError) {
-        await this.resumeAfterInactiveQuestion(pending, 'dismissed')
-        return
-      }
-      if (error instanceof QuestionRequestGoneError) {
-        this.finalizePendingQuestion(requestId, 'dismissed')
+      if (await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error)) {
         return
       }
       throw error
     }
+  }
+
+  /**
+   * Settle a question the harness can no longer accept. Both outcomes mean the
+   * card on screen is stale, so neither may reach the renderer as a failure:
+   * `QuestionRequestGoneError` (the harness already dropped the request, for
+   * example because the process holding it exited) closes it in place, and
+   * `InactiveQuestionTurnError` (the owning turn process exited) resumes the
+   * session with the user's decision instead of losing it.
+   *
+   * Returns false for an unrelated error, which the caller keeps propagating.
+   */
+  private async reconcileUnanswerableQuestion(
+    pending: PendingQuestionInfo,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers: string[][] | undefined,
+    error: unknown
+  ): Promise<boolean> {
+    if (error instanceof InactiveQuestionTurnError) {
+      await this.resumeAfterInactiveQuestion(pending, resolution, answers)
+      return true
+    }
+    if (error instanceof QuestionRequestGoneError) {
+      this.finalizePendingQuestion(pending.request.requestId, resolution, answers)
+      return true
+    }
+    return false
   }
 
   /** Resume a persisted session when its provider process exited while waiting for a question. */
@@ -2592,9 +2666,18 @@ export class ChatEngine {
       )
       if ((await this.achievementOwnsDecisions(thread)) && !pending.resolving) {
         const answers = request.questions.map((question) => [recommendedQuestionAnswer(question)])
-        await this.resolvePendingQuestion(pending, 'answered', answers, () =>
-          driver.replyToQuestion(projectPath, request.sessionId, request.requestId, answers)
-        )
+        try {
+          await this.resolvePendingQuestion(pending, 'answered', answers, () =>
+            driver.replyToQuestion(projectPath, request.sessionId, request.requestId, answers)
+          )
+        } catch (error) {
+          // One question the harness can no longer accept must never fail the
+          // whole pending-question list: settle it when it is simply gone, and
+          // otherwise keep the card and let the next poll retry.
+          if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+            Logger.error('Provider question auto-answer failed:', error)
+          }
+        }
       }
     }
     return [...this.pendingQuestions.values()]
@@ -3604,9 +3687,13 @@ export class ChatEngine {
     return status.state === 'authenticated'
   }
 
-  /** One app-wide discovery pass; all projects share installed harness models. */
-  private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
-    const projectPath = await this.resolveProjectPath(projectId)
+  /**
+   * The drivers that take part in app-wide provider discovery: every installed
+   * default driver, plus one driver per managed account container. Discovery
+   * and the explicit model-catalog refresh must cover the same set, so both
+   * read it from here instead of keeping their own copy of the rule.
+   */
+  private async catalogDrivers(): Promise<HarnessDriver[]> {
     const harnessEnv = buildProcessEnvironment()
     const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
@@ -3621,7 +3708,47 @@ export class ChatEngine {
     const managedDrivers = await Promise.all(
       managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
     )
-    const drivers = [...defaultDrivers, ...managedDrivers]
+    return [...defaultDrivers, ...managedDrivers]
+  }
+
+  /**
+   * Force every harness that keeps its own model catalog to re-fetch it from
+   * upstream before the next discovery. Only an explicit user-triggered
+   * refresh pays for this   it is a network round trip per provider   so the
+   * TTL sweeps, retries and picker opens never call it.
+   */
+  private async refreshHarnessModelCatalogs(): Promise<void> {
+    let drivers: HarnessDriver[]
+    try {
+      drivers = (await this.catalogDrivers()).filter(
+        (driver) => driver.refreshModelCatalog !== undefined
+      )
+    } catch (error) {
+      Logger.info('Harness model catalog refresh skipped', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return
+    }
+    await Promise.allSettled(
+      drivers.map(async (driver) => {
+        try {
+          await driver.refreshModelCatalog?.()
+        } catch (error) {
+          // A failed upstream pass leaves the harness's stored catalog in
+          // place, so discovery still returns the best list available.
+          Logger.info('Harness model catalog refresh failed', {
+            driverId: driver.id,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      })
+    )
+  }
+
+  /** One app-wide discovery pass; all projects share installed harness models. */
+  private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
+    const projectPath = await this.resolveProjectPath(projectId)
+    const drivers = await this.catalogDrivers()
     const results: DriverDiscovery[] = []
     for (let offset = 0; offset < drivers.length; offset += 4) {
       const batch = await Promise.all(
@@ -7111,17 +7238,26 @@ export class ChatEngine {
    * Runs at launch and again when this process takes over from a sibling that
    * exited, so a deferred queue is never stranded. Delivery is otherwise driven
    * by the coordinator's own runtime (`queueCoordinatorHandoff` and the session
-   * idle signal), which is why the launch pass defers to a live instance: the
-   * queue file is shared, and only the instance running the coordinator may
-   * decide that its handoff is due.
+   * idle signal), which is why the launch pass must not touch a queue another
+   * instance owns: the file is shared, and only the instance running the
+   * coordinator may decide that its handoff is due. A queue file is named by its
+   * coordinator thread, so each one is gated as the workflow it belongs to.
    */
   async restoreCoordinatorHandoffQueues(): Promise<void> {
-    if (this.deferAutomaticResumeToLiveInstance('queued coordinator handoffs')) return
     for (const projectId of await this.storage.listDirectories(COORDINATOR_HANDOFF_QUEUE_DIR)) {
       const projectQueuePath = join(COORDINATOR_HANDOFF_QUEUE_DIR, projectId)
       for (const entry of await this.storage.list(projectQueuePath)) {
         if (!entry.endsWith('.json')) continue
         const threadId = entry.slice(0, -'.json'.length)
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        // A queue whose thread is gone is a leftover the drain itself removes,
+        // so it needs no owner.
+        if (
+          thread &&
+          !(await this.claimWorkflowForDrive(projectId, thread, 'queued coordinator handoffs'))
+        ) {
+          continue
+        }
         void this.drainCoordinatorHandoffQueue(projectId, threadId).catch((error) =>
           Logger.error('Queued coordinator handoff could not be restored', {
             projectId,
@@ -7186,6 +7322,11 @@ export class ChatEngine {
       await this.ensureAchievementScope(projectId, threadId)
       targetThread = await this.threadManager.getThread(projectId, threadId)
     }
+    // This process is about to drive the workflow this thread belongs to, so it
+    // records ownership for the whole group now. A peer launching between two of
+    // the workflow's turns must see a live owner rather than an unowned persisted
+    // workflow it could adopt and double-drive.
+    if (targetThread) await this.claimWorkflowOwnershipForThread(projectId, targetThread)
     if (
       specAction === undefined &&
       targetThread?.sessionId &&
@@ -10931,18 +11072,14 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return { released: false, reason: 'The thread no longer exists.' }
+    // A coordinated workflow moves as one unit, so a release for any of its
+    // threads is a release for the whole group.
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId !== null) {
+      return this.releaseWorkflowForTransfer(projectId, coordinatorThreadId)
+    }
     if (!thread.sessionId || !thread.settings) {
       return { released: false, reason: 'This thread has no resumable session to transfer.' }
-    }
-    if (
-      thread.assignmentRole === 'coordinator' ||
-      thread.achievementRole === 'coordinator' ||
-      isOrchestrationChildThread(thread)
-    ) {
-      return {
-        released: false,
-        reason: 'This thread belongs to a coordinated workflow and cannot be moved while it runs.'
-      }
     }
     const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
     if (ownerPid !== process.pid) {
@@ -10952,6 +11089,57 @@ export class ChatEngine {
     await this.settleThreadTurnForTransfer(projectId, threadId)
     instanceRegistry.publishTurnActivity()
     return { released: true }
+  }
+
+  /**
+   * Hand a coordinated workflow to a sibling instance, as one unit.
+   *
+   * The Sr. Engineer and its workers are never split across instances, so a
+   * release stops and settles every member this process is running, then drops
+   * the workflow's ownership row so the adopter can claim the whole group. The
+   * row goes last, because it is what tells a peer the workflow is still owned
+   * here.
+   */
+  async releaseWorkflowForTransfer(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<{ released: boolean; reason?: string }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator Thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || !isWorkflowCoordinatorThread(coordinator)) {
+      return { released: false, reason: 'This thread is not the Sr. Engineer of a workflow.' }
+    }
+    const group = await this.workflowGroup(projectId, coordinatorThreadId)
+    if (!(await this.ownsWorkflow(projectId, coordinatorThreadId, group))) {
+      return { released: false, reason: 'This instance is no longer running that workflow.' }
+    }
+    for (const member of group) {
+      const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)
+      if (ownerPid !== process.pid) continue
+      await this.abort(projectId, member.id, { reason: 'transfer' })
+      await this.settleThreadTurnForTransfer(projectId, member.id)
+    }
+    await this.workflowOwnership.release(projectId, coordinatorThreadId)
+    instanceRegistry.publishTurnActivity()
+    return { released: true }
+  }
+
+  /** Whether this process is the one driving the workflow, by row or by turn. */
+  private async ownsWorkflow(
+    projectId: string,
+    coordinatorThreadId: string,
+    group: Thread[]
+  ): Promise<boolean> {
+    if ((await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)) === process.pid) {
+      return true
+    }
+    for (const member of group) {
+      if ((await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)) === process.pid) {
+        return true
+      }
+    }
+    return false
   }
 
   /**
@@ -10967,6 +11155,11 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return { ok: false, reason: 'The thread no longer exists.' }
+    // A coordinated workflow is adopted as one unit, never thread by thread.
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId !== null) {
+      return this.adoptTransferredWorkflow(projectId, coordinatorThreadId)
+    }
     if (!thread.sessionId || !thread.settings) {
       return { ok: false, reason: 'This thread has no resumable session.' }
     }
@@ -10996,6 +11189,73 @@ export class ChatEngine {
         ok: false,
         reason: `The transfer could not resume this run: ${rawErrorMessage(error)}`
       }
+    }
+  }
+
+  /**
+   * Take a transferred workflow over on this instance.
+   *
+   * The departing instance stopped every member's run and released the
+   * workflow's ownership row, so this process claims the group and resumes it
+   * through the same path restart recovery uses. A workflow waiting on a user
+   * gate starts no turn, and that is still a successful transfer: the whole group
+   * now belongs here.
+   */
+  async adoptTransferredWorkflow(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<ThreadTransferResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator Thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator) return { ok: false, reason: 'The workflow no longer exists.' }
+    await this.workflowOwnership.claim(projectId, coordinatorThreadId)
+    try {
+      const group = await this.workflowGroup(projectId, coordinatorThreadId)
+      await this.resumePendingWorkflow(coordinator, group)
+      instanceRegistry.publishTurnActivity()
+      return { ok: true }
+    } catch (error) {
+      Logger.error('Transferred workflow resume failed:', {
+        projectId,
+        coordinatorThreadId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        ok: false,
+        reason: `The transfer could not resume this workflow: ${rawErrorMessage(error)}`
+      }
+    }
+  }
+
+  /**
+   * What a transfer request for `threadId` actually moves, and which process owns
+   * it right now.
+   *
+   * A coordinated workflow moves as a whole, so the target is its coordinator and
+   * the owner is whoever holds the workflow: the durable ownership row first,
+   * then an in-flight turn on any member. Everything else transfers on its own
+   * thread, exactly as before.
+   */
+  async resolveTransferTarget(
+    projectId: string,
+    threadId: string
+  ): Promise<{ rootThreadId: string; ownerPid: number | null }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { rootThreadId: threadId, ownerPid: null }
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId === null) {
+      return {
+        rootThreadId: threadId,
+        ownerPid: await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+      }
+    }
+    const claimOwner = await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)
+    return {
+      rootThreadId: coordinatorThreadId,
+      ownerPid: claimOwner ?? (await this.workflowActiveTurnOwner(projectId, coordinatorThreadId))
     }
   }
 
@@ -17544,10 +17804,118 @@ export class ChatEngine {
   }
 
   /**
-   * Whether this launch must leave work that carries no turn owner alone.
+   * The Sr. Engineer coordinator that owns the workflow `thread` belongs to, or
+   * `null` when the thread is not part of a coordinated workflow.
+   *
+   * A coordinator is its own root. A worker or auditor walks up its
+   * `coordinatorThreadId` chain, which is one hop for every workflow the app
+   * creates and is walked transitively only to stay correct if a sub-agent ever
+   * dispatches one of its own. Pass `threads` to resolve from an already-loaded
+   * snapshot instead of reading again.
+   */
+  private async workflowCoordinatorFor(
+    projectId: string,
+    thread: Thread,
+    threads?: Thread[]
+  ): Promise<string | null> {
+    if (threads) return resolveWorkflowCoordinatorThreadId(threads, thread.id)
+    if (isWorkflowCoordinatorThread(thread)) return thread.id
+    const seen = new Set<string>([thread.id])
+    let current: Thread | undefined = thread
+    while (current?.coordinatorThreadId) {
+      const parentId = current.coordinatorThreadId
+      if (seen.has(parentId)) return null
+      seen.add(parentId)
+      const parent = await this.threadManager.getThread(projectId, parentId)
+      if (!parent) return parentId
+      if (isWorkflowCoordinatorThread(parent)) return parent.id
+      current = parent
+    }
+    return null
+  }
+
+  /** Every thread of the workflow rooted at `coordinatorThreadId`, coordinator first. */
+  private async workflowGroup(
+    projectId: string,
+    coordinatorThreadId: string,
+    threads?: Thread[]
+  ): Promise<Thread[]> {
+    const snapshot =
+      threads ?? (await this.threadManager.listProjectThreads(projectId, { includeArchived: true }))
+    return workflowGroupThreads(snapshot, coordinatorThreadId)
+  }
+
+  /** Record this process as the owner of the workflow `thread` belongs to. */
+  private async claimWorkflowOwnershipForThread(projectId: string, thread: Thread): Promise<void> {
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId === null) return
+    await this.workflowOwnership.claim(projectId, coordinatorThreadId)
+  }
+
+  /**
+   * The process running a turn on any thread of the workflow, or `null` when the
+   * whole group is idle. This is the "driving right now" signal, independent of
+   * the durable ownership row.
+   */
+  private async workflowActiveTurnOwner(
+    projectId: string,
+    coordinatorThreadId: string,
+    threads?: Thread[]
+  ): Promise<number | null> {
+    for (const member of await this.workflowGroup(projectId, coordinatorThreadId, threads)) {
+      const owner = await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)
+      if (owner !== null) return owner
+    }
+    return null
+  }
+
+  /**
+   * Whether this process may drive the workflow `thread` belongs to.
+   *
+   * A coordinated workflow is one unit of ownership, so the whole group answers
+   * one question, never per thread. The owner is the durable `workflow_owners`
+   * row; a live in-flight turn on any member also counts, so a workflow a peer is
+   * running right now is never adopted even when its ownership row was never
+   * written (an older build, or a failed write). Work that is not part of a
+   * workflow keeps the blanket live-instance gate it has always used.
+   */
+  private async claimWorkflowForDrive(
+    projectId: string,
+    thread: Thread,
+    reason: string,
+    threads?: Thread[]
+  ): Promise<boolean> {
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread, threads)
+    if (coordinatorThreadId === null) return !this.deferAutomaticResumeToLiveInstance(reason)
+    const claimOwner = await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)
+    if (claimOwner === process.pid) return true
+    if (claimOwner !== null && instanceRegistry.isRunOwnerAlive(claimOwner)) {
+      this.logWorkflowResumeDeferred(coordinatorThreadId, claimOwner)
+      return false
+    }
+    const driver = await this.workflowActiveTurnOwner(projectId, coordinatorThreadId, threads)
+    if (driver !== null && driver !== process.pid && instanceRegistry.isRunOwnerAlive(driver)) {
+      this.logWorkflowResumeDeferred(coordinatorThreadId, driver)
+      return false
+    }
+    const claimed = await this.workflowOwnership.claimIfOwnerGone(projectId, coordinatorThreadId)
+    if (!claimed) this.logWorkflowResumeDeferred(coordinatorThreadId, claimOwner)
+    return claimed
+  }
+
+  private logWorkflowResumeDeferred(coordinatorThreadId: string, ownerPid: number | null): void {
+    Logger.info('Workflow resume deferred to the instance that owns it', {
+      pid: process.pid,
+      coordinatorThreadId,
+      ownerPid
+    })
+  }
+
+  /**
+   * Whether this launch must leave work that carries no owner at all alone.
    *
    * Every instance shares one config root, so the thread table, the persisted
-   * retry ledger, and the queued coordinator handoffs are common. The paths this
+   * retry ledger, and the ready-spec/Brainstorm rows are common. The paths this
    * guards resume work from persisted state that names no owning process, so a
    * launch that finds another live instance cannot tell whether that instance is
    * already driving it. The driver busy probes cannot help: `isSessionBusy` only
@@ -17556,9 +17924,10 @@ export class ChatEngine {
    * that is already working   which then rewrites that session's per-turn runtime
    * files and strips the original run of its tools.
    *
-   * Turns that DO record an owner are handled precisely instead: restart recovery
-   * settles only turns whose owner process is gone, so a launch never has to
-   * guess about them.
+   * This is the fallback for work with no ownership record. Coordinated workflows
+   * do have one   {@link claimWorkflowForDrive} decides them per workflow   and
+   * turns that record an owner are handled precisely by restart recovery, which
+   * settles only turns whose owner process is gone.
    */
   private deferAutomaticResumeToLiveInstance(reason: string): boolean {
     if (!instanceRegistry.hasOtherLiveInstance()) return false
@@ -17570,49 +17939,73 @@ export class ChatEngine {
   }
 
   async resumePendingWork(): Promise<void> {
-    if (this.deferAutomaticResumeToLiveInstance('pending workflows')) return
     try {
       const config = await this.storage.getConfig()
       if (config.resumeWorkOnRestart === false) return
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
         if (thread.archived) continue
-        let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
-        if (assignment?.status === 'draft') {
-          continue
-        }
-        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
-          assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
-          await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
-          continue
-        }
-        if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'running') {
-          void this.resumeInterruptedAssignmentAudit(assignment, thread.settings)
-          continue
-        }
-        if (thread.settings?.loopMode !== true) continue
-        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
-        if (
-          activeSpec?.status !== 'approved' ||
-          this.engineeringLifecycleActive(thread.projectId, thread.id)
-        ) {
-          continue
-        }
-        if (
-          !thread.auditState &&
-          (thread.loopIteration ?? 0) === 0 &&
-          thread.status !== 'completed'
-        ) {
-          continue
-        }
-        if (thread.auditState === 'running') {
-          await this.threadManager.setAuditState(thread.projectId, thread.id, 'offered')
-        }
-        void this.continueLoop(thread.projectId, thread.id)
+        await this.resumePendingWorkflow(thread, threads)
       }
     } catch (error) {
       Logger.error('Achievement recovery failed:', error)
     }
+  }
+
+  /**
+   * Resume one thread's persisted workflow, if it needs it and this process may
+   * own it.
+   *
+   * Every workflow is gated as a unit before it is touched: an Assignment, its
+   * interrupted audit cycle, and an Achievement loop all belong to one
+   * coordinated group, and that group is only driven by the instance that owns it
+   * (see {@link claimWorkflowForDrive}). This is also the resumption a
+   * cross-instance workflow transfer uses, so the two can never drift apart in
+   * what they skip or how they resume.
+   */
+  private async resumePendingWorkflow(thread: Thread, threads: Thread[]): Promise<boolean> {
+    let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
+    if (assignment?.status === 'draft') return false
+    if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
+      if (
+        !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+      ) {
+        return false
+      }
+      assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
+      await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
+      return true
+    }
+    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'running') {
+      if (
+        !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+      ) {
+        return false
+      }
+      void this.resumeInterruptedAssignmentAudit(assignment, thread.settings)
+      return true
+    }
+    if (thread.settings?.loopMode !== true) return false
+    const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+    if (
+      activeSpec?.status !== 'approved' ||
+      this.engineeringLifecycleActive(thread.projectId, thread.id)
+    ) {
+      return false
+    }
+    if (!thread.auditState && (thread.loopIteration ?? 0) === 0 && thread.status !== 'completed') {
+      return false
+    }
+    if (
+      !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+    ) {
+      return false
+    }
+    if (thread.auditState === 'running') {
+      await this.threadManager.setAuditState(thread.projectId, thread.id, 'offered')
+    }
+    void this.continueLoop(thread.projectId, thread.id)
+    return true
   }
 
   /**
@@ -19626,9 +20019,15 @@ export class ChatEngine {
       const driver = this.driverForRuntime(driverId, session.accountId)
       if (!driver) return
       const answers = event.questions.map((question) => [recommendedQuestionAnswer(question)])
-      await this.resolvePendingQuestion(pending, 'answered', answers, () =>
-        driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
-      )
+      try {
+        await this.resolvePendingQuestion(pending, 'answered', answers, () =>
+          driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
+        )
+      } catch (error) {
+        if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+          throw error
+        }
+      }
       return
     }
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
@@ -22991,6 +23390,177 @@ export class ChatEngine {
     await this.drainRankingQueue(true)
   }
 
+  /** Live progress of the user-requested run, or null when the queue is idle. */
+  rankingGradeRunStatus(): LocalRankingGradeProgress | null {
+    return this.rankingManualRun ? { ...this.rankingManualRun } : null
+  }
+
+  /**
+   * Stop the user-requested run at the end of the pass in flight.
+   *
+   * A pass is up to three harness processes, so cancelling cannot interrupt one
+   * mid-judge; what it guarantees is that no further row is claimed, which is
+   * what keeps a cancel from costing more than the batch already running.
+   */
+  cancelRankingGrade(): void {
+    if (this.rankingManualRun) this.rankingManualRun.cancelled = true
+  }
+
+  /**
+   * Grade the ranking queue now, on the user's explicit request.
+   *
+   * `due` runs the passes the automatic drain was about to run anyway, only
+   * sooner. `all` additionally pulls every conversation still inside its
+   * inactivity window forward and gives a conversation parked after exhausting
+   * its retries one fresh attempt, so the queue a user is looking at actually
+   * empties.
+   *
+   * The work stays in bounded passes: each one claims at most three rows, waits
+   * for a breath, and re-reads the queue, so a backlog is never graded in one
+   * burst and the main thread is never held. A second request while a run is in
+   * flight joins it rather than starting a rival one, and two consecutive passes
+   * that grade nothing end the run and report what is left, so a queue whose
+   * judge routes are all inside a closed provider window cannot spin.
+   */
+  async gradeRankingQueueNow(
+    scope: LocalRankingGradeScope,
+    onProgress?: (progress: LocalRankingGradeProgress) => void
+  ): Promise<LocalRankingGradeProgress> {
+    const inFlight = this.rankingManualRunPromise
+    if (inFlight) return inFlight
+    const run = this.runRankingGradeQueue(scope, onProgress)
+    this.rankingManualRunPromise = run
+    try {
+      return await run
+    } finally {
+      this.rankingManualRunPromise = null
+    }
+  }
+
+  /**
+   * The body of one user-requested run. Separate from the public entry point so
+   * a joining request can await the very same promise and read its result.
+   */
+  private async runRankingGradeQueue(
+    scope: LocalRankingGradeScope,
+    onProgress?: (progress: LocalRankingGradeProgress) => void
+  ): Promise<LocalRankingGradeProgress> {
+    const run: LocalRankingGradeProgress = {
+      requested: 0,
+      graded: 0,
+      failed: 0,
+      remaining: 0,
+      cancelled: false
+    }
+    this.rankingManualRun = run
+    const emit = (): void => onProgress?.({ ...run })
+    try {
+      const nowMs = Date.now()
+      if (scope === 'all') {
+        await this.rankingSnapshotRepo.requeueFailedRowsViaWorker(nowMs)
+        await this.rankingSnapshotRepo.pullPendingForwardViaWorker(nowMs)
+      }
+      // A hold left by an earlier pass must not pace work the user just asked
+      // for, and the stale-claim sweep runs on the first pass of a full run so
+      // rows a crash left mid-judge are not counted as ungradable.
+      this.rankingHeldRetryAtMs = null
+      const inScope = (): number => {
+        const counts = this.rankingSnapshotRepo.queueCounts(Date.now())
+        return scope === 'all' ? counts.awaiting : counts.due
+      }
+      run.requested = inScope()
+      // What the row shows while the run works: every conversation still
+      // waiting, not only the ones this scope may grade, so a user grading the
+      // due rows still sees how much of the queue is left behind them.
+      run.remaining = await this.rankingSnapshotRepo.totalCount()
+      emit()
+      let firstPass = true
+      let idlePasses = 0
+      while (!run.cancelled && inScope() > 0) {
+        const outcome = await this.drainRankingQueue(firstPass && scope === 'all')
+        firstPass = false
+        // Another pass owns the drain right now: wait for it instead of
+        // counting its work as an idle pass and giving up early.
+        if (outcome === null) {
+          await new Promise((resolve) => setTimeout(resolve, ChatEngine.RANKING_MANUAL_POLL_MS))
+          run.remaining = await this.rankingSnapshotRepo.totalCount()
+          emit()
+          continue
+        }
+        if (outcome.scored === 0 && outcome.failed === 0) {
+          idlePasses += 1
+          if (idlePasses >= ChatEngine.RANKING_MANUAL_IDLE_PASSES) {
+            run.remaining = await this.rankingSnapshotRepo.totalCount()
+            emit()
+            break
+          }
+        } else {
+          idlePasses = 0
+        }
+        run.graded += outcome.scored
+        run.failed += outcome.failed
+        run.remaining = await this.rankingSnapshotRepo.totalCount()
+        emit()
+        if (!run.cancelled && inScope() > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, ChatEngine.RANKING_MANUAL_PASS_PAUSE_MS)
+          )
+        }
+      }
+      return { ...run }
+    } finally {
+      this.rankingManualRun = null
+      emit()
+    }
+  }
+
+  /**
+   * The judge preference, defaulting to the automatic chain for a config
+   * written before the setting existed.
+   */
+  private async rankingJudgePreference(): Promise<RankingJudgeConfig> {
+    const config = await this.storage.getConfig()
+    return config.rankingJudge ?? { kind: 'automatic' }
+  }
+
+  /**
+   * The route of a judge the user pinned to one exact model, or null when the
+   * preference is not a model pin or the pin cannot be resolved (harness gone,
+   * account signed out). An unresolvable pin is not an error: the caller falls
+   * through to the automatic chain, which is the same route the app took before
+   * the setting existed.
+   */
+  private async resolvePinnedRankingJudge(projectPath: string): Promise<AuxiliaryRoute | null> {
+    const preference = await this.rankingJudgePreference()
+    if (preference.kind !== 'model') return null
+    const { harnessId, providerId, modelId } = preference
+    if (!harnessId || !providerId || !modelId) return null
+    const selection: AgentModelSelection = {
+      harnessId,
+      providerId,
+      modelId,
+      ...(preference.accountId === undefined ? {} : { accountId: preference.accountId }),
+      ...(preference.thinkingLevel === undefined ? {} : { thinkingLevel: preference.thinkingLevel })
+    }
+    try {
+      const account = await this.accountRegistry.resolveForProvider(
+        selection.harnessId,
+        selection.providerId,
+        selection.accountId
+      )
+      const driver = await this.driverForAccount(selection.harnessId, account.id)
+      return this.buildAuxiliaryRoute(selection, account.id, driver, projectPath)
+    } catch (error) {
+      Logger.dev('Pinned ranking judge could not be resolved; using the automatic chain', {
+        harnessId,
+        providerId,
+        modelId,
+        error: rawErrorMessage(error)
+      })
+      return null
+    }
+  }
+
   /**
    * Arm one process-wide wake-up for the earliest durable queue row.
    *
@@ -23033,10 +23603,12 @@ export class ChatEngine {
    * harness whose judge keeps failing has its queue held back instead of being
    * retried row by row (see `deferJudgeFailure`).
    */
-  private async drainRankingQueue(requeueStale = false): Promise<void> {
-    if (this.gradeDrainRunning) return
+  private async drainRankingQueue(requeueStale = false): Promise<RankingDrainOutcome | null> {
+    if (this.gradeDrainRunning) return null
     this.gradeDrainRunning = true
     let processed = 0
+    let scored = 0
+    let failed = 0
     let plan: RankingPassPlan = { claimIds: [], heldBack: [] }
     let planFailed = false
     let heldBackDeferral: { failed: boolean; earliestUntilMs: number } | null = null
@@ -23083,11 +23655,15 @@ export class ChatEngine {
           )
           // The snapshot vanished mid-drain or was re-claimed by a later
           // generation (stale judge result); never defer or double-count it.
-          if (applied) processed += 1
+          if (applied) {
+            processed += 1
+            scored += 1
+          }
           continue
         }
         await this.deferJudgeFailure(row, outcome)
         processed += 1
+        failed += 1
       }
     } finally {
       this.gradeDrainRunning = false
@@ -23110,6 +23686,10 @@ export class ChatEngine {
           : undefined
       )
     }
+    // Returned after the `finally` on purpose: returning from inside it would
+    // swallow a judge error thrown by the pass, turning a real failure into a
+    // quiet "graded nothing" result.
+    return { scored, failed }
   }
 
   /**
@@ -23164,9 +23744,14 @@ export class ChatEngine {
     }
     const claimIds: string[] = []
     const heldBack = new Map<number, string[]>()
+    // A pinned judge stands in for the auxiliary lane across the whole window:
+    // it is one route for every row, so it is resolved once, and it is the lane
+    // the pass would actually grade with. An unresolvable pin leaves the lane
+    // exactly as it was, because grading then falls back to the same chain.
+    const pinned = await this.resolvePinnedRankingJudge(projectPath)
     for (const row of head) {
       const native = await driverFor(row.harness_id)
-      const auxiliary = await routeFor(row.harness_id)
+      const auxiliary = pinned ?? (await routeFor(row.harness_id))
       const fallback = await fallbackFor(
         row.harness_id,
         auxiliary ? [row.harness_id, auxiliary.harnessId] : [row.harness_id]
@@ -23451,13 +24036,51 @@ export class ChatEngine {
       viaAuxiliary: false
     }
     try {
-      // TypeSafe first whenever it is available: one HTTPS call with no process
+      // A pinned judge runs first, so the model a user chose on the Usage page is
+      // the model that grades. The pin is a preference, never a lock: anything
+      // short of a readable score falls through to the chain below, so choosing a
+      // judge can only ever cost a slower grade, never a lost one.
+      const workingDirectory = await this.auxiliaryWorkingDirectory()
+      const preference = await this.rankingJudgePreference()
+      if (preference.kind === 'model') {
+        const pinned = await this.resolvePinnedRankingJudge(workingDirectory)
+        if (pinned) {
+          judge = {
+            score: null,
+            judgeHarnessId: pinned.harnessId,
+            judgeModelId: pinned.modelId,
+            viaAuxiliary: true
+          }
+          const pinnedScore = await pinned.driver.gradeTurn(workingDirectory, {
+            settings: pinned.settings,
+            candidates: pinned.candidates,
+            userMessage: candidate.userMessage,
+            assistantOutput: candidate.assistantOutput,
+            followUp: candidate.followUp
+          })
+          if (typeof pinnedScore === 'number') {
+            Logger.dev('Ranking grading completed on the pinned judge', {
+              judgeHarnessId: pinned.harnessId,
+              judgeModelId: pinned.modelId,
+              gradedHarnessId: candidate.harnessId,
+              gradedModelId: candidate.modelId,
+              score: pinnedScore
+            })
+            return { ...judge, score: pinnedScore }
+          }
+          Logger.dev('Pinned judge returned no score; using the automatic chain', {
+            judgeHarnessId: pinned.harnessId,
+            judgeModelId: pinned.modelId,
+            gradedHarnessId: candidate.harnessId
+          })
+        }
+      }
+      // TypeSafe whenever it is available: one HTTPS call with no process
       // spawn, no provider account and a judge outside every harness. Anything
       // short of a readable score falls through to the lanes below.
       const typesafe = await this.gradeWithTypesafe(candidate)
       if (typesafe) return typesafe
 
-      const workingDirectory = await this.auxiliaryWorkingDirectory()
       // A user-assigned auxiliary model judges the conversation when one is
       // configured for the graded model's harness. Grading has no thread, so a
       // failed or unusable judge falls back to the graded model's own harness

@@ -144,6 +144,10 @@ const PI_ABORT_ENFORCE_INTERVAL_MS = 500
 /** Bound on the post-abort `get_state` probe so a busy process cannot stall the
  *  stop behind the RPC client's full request timeout. */
 const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+/** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
+ *  own refresh after 15s and reports the failure, so this only bounds a process
+ *  that never exits. */
+const PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 20_000
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -579,6 +583,28 @@ export class PiDriver extends PersistentCliDriver {
       .sort()
       .join('|')
     return JSON.stringify([[...connected].sort(), overlayModels])
+  }
+
+  /**
+   * Force Pi's own model catalog to re-fetch from upstream (`pi update
+   * --models`) against THIS account's agent directory, so the discovery that
+   * follows reads catalogs that are fresh at the source instead of the store
+   * Pi already has. Pi throttles remote catalogs to once per provider every
+   * four hours unless the refresh is forced, which is exactly what the model
+   * picker's refresh button has to bypass.
+   *
+   * The CLI entry point is required here: the bundled RPC entry point
+   * hard-codes `--mode rpc` ahead of the arguments, and Pi's own parser then
+   * rejects the package command. Pi reports a non-zero exit when any provider
+   * fails, so a failed pass leaves the stored catalog untouched   the caller
+   * still gets whatever the store holds.
+   */
+  async refreshModelCatalog(): Promise<void> {
+    await runHarnessCommand('pi', ['update', '--models'], {
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      timeoutMs: PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS,
+      bundledEntry: 'cli'
+    })
   }
 
   private async discoverModels(

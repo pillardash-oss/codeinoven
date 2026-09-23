@@ -40,11 +40,14 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>): boolea
 
 class ForeignRunsStore {
   #keys = new Set<string>()
+  #workflowKeys = new Set<string>()
   /** Bumped by every push, so a hydration response that arrives after a newer
    *  event can never overwrite it. */
   #revision = 0
   /** Reactive cache of `projectId:threadId` keys. */
   runs = $state(new Set<string>())
+  /** Reactive cache of the subset of `runs` that belongs to a coordinated workflow. */
+  workflows = $state(new Set<string>())
   /** Reactive cache of transfer state, keyed the same way. */
   transferStates = new SvelteMap<string, ForeignTransferState>()
 
@@ -59,6 +62,12 @@ class ForeignRunsStore {
   /** Whether another instance is running this thread's turn right now. */
   isForeign(projectId: string, threadId: string): boolean {
     return this.runs.has(threadKey(projectId, threadId))
+  }
+
+  /** Whether this foreign run belongs to a coordinated workflow, which moves as
+   *  one unit: transferring it moves the Sr. Engineer and every worker. */
+  isWorkflow(projectId: string, threadId: string): boolean {
+    return this.workflows.has(threadKey(projectId, threadId))
   }
 
   /** Transfer progress and the last failure, for the transfer card. */
@@ -113,9 +122,16 @@ class ForeignRunsStore {
 
   private replace(notices: ForeignRunNotice[]): void {
     const keys = new Set(notices.map((notice) => threadKey(notice.projectId, notice.threadId)))
-    if (sameKeys(keys, this.#keys)) return
+    const workflowKeys = new Set(
+      notices
+        .filter((notice) => notice.workflow)
+        .map((notice) => threadKey(notice.projectId, notice.threadId))
+    )
+    if (sameKeys(keys, this.#keys) && sameKeys(workflowKeys, this.#workflowKeys)) return
     this.#keys = keys
+    this.#workflowKeys = workflowKeys
     this.runs = new Set(keys)
+    this.workflows = new Set(workflowKeys)
     // A thread that is no longer foreign (this instance took it over, or it
     // settled) has no card left to show a transfer verdict on.
     for (const key of [...this.transferStates.keys()]) {

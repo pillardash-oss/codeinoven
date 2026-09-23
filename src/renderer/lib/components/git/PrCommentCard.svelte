@@ -50,8 +50,13 @@
     authorLogin: string
     /** Draw this row's own card frame. False when the unit around it is framed. */
     framed?: boolean
-    /** Rendered inside the frame, under the body: the reply affordance. */
-    footer?: Snippet<[ConversationEntry]>
+    /**
+     * Rendered inside the frame, under the body, on the row that carries this
+     * comment's own actions. It is handed the reaction control so a caller can
+     * put it beside those actions: reacting is something a reader does once they
+     * have read the comment, and that row is where the reader is by then.
+     */
+    footer?: Snippet<[{ entry: ConversationEntry; reaction: Snippet | null }]>
     /** Insert a quote of this entry into the reader's composer. */
     onQuote: (entry: ConversationEntry) => void
     /**
@@ -278,6 +283,10 @@
   }
 </script>
 
+{#snippet reactionControl()}
+  <PrReactionPicker nodeId={entry.nodeId ?? ''} groups={reactions} onToggle={react} />
+{/snippet}
+
 <article
   class={['overflow-hidden bg-surface', framed && 'rounded-lg border border-border']}
   data-entry-url={entry.url}
@@ -350,9 +359,10 @@
     {/if}
     {#if !editing && reactable}
       <!--
-        Reactions live in the header rather than under the body: the invitation to
-        react must not cost every comment a line, and the chips that appear once
-        someone has reacted sit under the body where a reader looks for them.
+        The header keeps the invitation, so reacting never needs the comment read
+        first; the row under the body repeats it for the reader who only decides
+        once they have read. The chips that appear after a reaction sit under the
+        body, where a reader looks to see who agreed.
       -->
       <PrReactionPicker nodeId={entry.nodeId ?? ''} groups={reactions} onToggle={react} />
     {/if}
@@ -469,7 +479,20 @@
     <PrReactionChips nodeId={entry.nodeId} groups={reactions} onToggle={react} />
   {/if}
 
-  {#if footer && !editing && !folded}
-    {@render footer(entry)}
+  {#if !editing && !folded && (footer || reactable)}
+    <!--
+      The row under the body is where a reader is when they decide to react, so
+      the picker lives here as well as in the header. A caller that draws its own
+      actions shares the row and places the picker beside them; a comment with no
+      caller actions (an inline comment in a thread) still gets the picker on its
+      own.
+    -->
+    <div class="flex items-center gap-1.5 border-t border-border/60 p-1.5">
+      {#if footer}
+        {@render footer({ entry, reaction: reactable ? reactionControl : null })}
+      {:else if reactable}
+        {@render reactionControl()}
+      {/if}
+    </div>
   {/if}
 </article>

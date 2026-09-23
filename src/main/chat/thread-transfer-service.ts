@@ -20,7 +20,6 @@
  */
 
 import type { ThreadTransferResult } from '../../lib/types'
-import type { Database } from '../database/database'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { InstanceHandoffBus, instanceHandoffBus } from '../system/instance-handoff-bus'
 import type { HandoffRequest } from '../system/instance-handoff-bus'
@@ -34,7 +33,7 @@ import type { ChatEngine } from './chat-engine'
  */
 export type ThreadTransferEngine = Pick<
   ChatEngine,
-  'releaseThreadForTransfer' | 'adoptTransferredThread'
+  'releaseThreadForTransfer' | 'adoptTransferredThread' | 'resolveTransferTarget'
 >
 
 /**
@@ -56,7 +55,6 @@ export class ThreadTransferService {
   private readonly bus: InstanceHandoffBus
 
   constructor(
-    private readonly db: Database,
     private readonly chatEngine: ThreadTransferEngine,
     options: ThreadTransferServiceOptions = {}
   ) {
@@ -103,7 +101,12 @@ export class ThreadTransferService {
    */
   async transferToThisInstance(projectId: string, threadId: string): Promise<ThreadTransferResult> {
     try {
-      const ownerPid = await this.ownerPidFor(projectId, threadId)
+      // A coordinated workflow is addressed by its coordinator and moves as one
+      // unit; a plain thread is its own target. The engine resolves which, and
+      // who owns it, from the same ledgers recovery uses, so a workflow can no
+      // longer be split across two instances.
+      const target = await this.chatEngine.resolveTransferTarget(projectId, threadId)
+      const ownerPid = target.ownerPid
       if (ownerPid === null || ownerPid === this.bus.localPid) return { ok: true }
       if (!this.isRunOwnerAlive(ownerPid)) {
         return {
@@ -111,14 +114,14 @@ export class ThreadTransferService {
           reason: 'The instance running this thread is no longer running.'
         }
       }
-      const ack = await this.bus.request(ownerPid, projectId, threadId)
+      const ack = await this.bus.request(ownerPid, projectId, target.rootThreadId)
       if (ack.status !== 'accepted') {
         return {
           ok: false,
           reason: ack.reason ?? 'The instance running this thread did not hand it over.'
         }
       }
-      return await this.chatEngine.adoptTransferredThread(projectId, threadId)
+      return await this.chatEngine.adoptTransferredThread(projectId, target.rootThreadId)
     } catch (error) {
       Logger.error('Cross-instance thread transfer failed:', error)
       return { ok: false, reason: 'The transfer could not be completed.' }
@@ -142,19 +145,5 @@ export class ThreadTransferService {
         'The instance running this thread could not stop its run.'
       )
     }
-  }
-
-  /** The process that recorded the thread's in-flight turn, if any. */
-  private async ownerPidFor(projectId: string, threadId: string): Promise<number | null> {
-    const result = await this.db.queryViaWorker(
-      'SELECT owner_pid FROM active_turns WHERE project_id = ? AND thread_id = ?',
-      [projectId, threadId],
-      1
-    )
-    if (!result.ok) throw new Error(result.error ?? 'turn ownership query failed')
-    const row = result.rows[0]
-    if (!row) return null
-    const owner = Number(row['owner_pid'])
-    return Number.isInteger(owner) && owner > 0 ? owner : null
   }
 }

@@ -227,8 +227,19 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-git',
     title: 'Git',
-    description: 'Default pull strategy, merge method, and maximum diff lines.',
-    keywords: ['pull', 'merge', 'squash', 'rebase', 'fast-forward', 'diff'],
+    description: 'Default pull strategy, merge method, maximum diff lines, and merge editor limit.',
+    keywords: [
+      'pull',
+      'merge',
+      'squash',
+      'rebase',
+      'fast-forward',
+      'diff',
+      'conflict',
+      'merge editor',
+      'file size',
+      'too large'
+    ],
     icon: SlidersHorizontal
   },
   {

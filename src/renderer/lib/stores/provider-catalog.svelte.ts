@@ -105,6 +105,10 @@ class ProviderCatalogStore {
   private inflight = new Map<string, Promise<ProviderCatalog[]>>()
   /** Projects with a driver probe currently in flight, for picker spinners. */
   private refreshingProjects = new SvelteSet<string>()
+  /** Projects whose in-flight probe already includes the upstream catalog
+   *  refresh, so a repeated explicit refresh shares it instead of repeating the
+   *  network pass. */
+  private upstreamRefreshes = new Set<string>()
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retrySweeping = false
   /** Timer for the background staleness sweep (re-hydrates stale caches alone). */
@@ -254,6 +258,25 @@ class ProviderCatalogStore {
    * failed hydration is never trusted beyond a short backoff).
    */
   refresh(projectId: string, force = false): Promise<ProviderCatalog[]> {
+    return this.run(projectId, force, false)
+  }
+
+  /**
+   * Explicit user-triggered refresh (the model picker's refresh button): force
+   * every harness to re-fetch its own model catalog from upstream before the
+   * probe, then re-probe. That upstream pass costs a network round trip per
+   * provider, so nothing else pays for it — picker opens, TTL sweeps and
+   * retries all go through `refresh()` and stay on the harness's own store.
+   */
+  refreshFromUpstream(projectId: string): Promise<ProviderCatalog[]> {
+    return this.run(projectId, true, true)
+  }
+
+  private run(
+    projectId: string,
+    force: boolean,
+    refreshModelCatalogs: boolean
+  ): Promise<ProviderCatalog[]> {
     const existing = this.cache.get(projectId)
     const lastFetched = this.refreshedAt.get(projectId)
     const lastFailed = this.failedAt.get(projectId)
@@ -275,15 +298,26 @@ class ProviderCatalogStore {
       }
     }
     const pending = this.inflight.get(projectId)
-    if (pending) return pending
-    const request = this.probe(projectId)
+    // A probe already in flight started before the upstream refresh, so an
+    // explicit user refresh waits for it and probes again instead of sharing a
+    // result that predates the refresh. Ordinary callers share the probe, and
+    // so does an explicit refresh that finds its own upstream pass running.
+    if (pending && (!refreshModelCatalogs || this.upstreamRefreshes.has(projectId))) return pending
+    if (refreshModelCatalogs) this.upstreamRefreshes.add(projectId)
+    const request = (pending ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.probe(projectId, refreshModelCatalogs))
       .then(() => this.cached(projectId) ?? [])
-      .finally(() => {
-        this.inflight.delete(projectId)
-        this.refreshingProjects.delete(projectId)
-      })
     this.inflight.set(projectId, request)
     this.refreshingProjects.add(projectId)
+    const release = (): void => {
+      if (this.inflight.get(projectId) === request) {
+        this.inflight.delete(projectId)
+        this.refreshingProjects.delete(projectId)
+      }
+      if (refreshModelCatalogs) this.upstreamRefreshes.delete(projectId)
+    }
+    void request.then(release, release)
     return request
   }
 
@@ -303,14 +337,17 @@ class ProviderCatalogStore {
    * failure state; failure records the timestamp and schedules a background
    * retry so a transient start-up hiccup recovers without user action.
    */
-  private async probe(projectId: string): Promise<void> {
+  private async probe(projectId: string, refreshModelCatalogs = false): Promise<void> {
     try {
       const cachedHarnessIds = (this.cache.get(projectId) ?? []).map((catalog) => catalog.harnessId)
       // Keep account discovery on the same refresh lifecycle as model discovery.
       // It runs independently so a slow authentication probe never delays the
       // model catalog or the main thread.
       void harnessAccountCache.refreshHarnesses(cachedHarnessIds)
-      const catalogs = await invoke('agent:refreshProviderCatalog', projectId)
+      const catalogs = await invoke('agent:refreshProviderCatalog', projectId, {
+        force: true,
+        refreshModelCatalogs
+      })
       this.cache.set(projectId, catalogs)
       void harnessAccountCache.refreshHarnesses(catalogs.map((catalog) => catalog.harnessId))
       this.knownProjects.add(projectId)

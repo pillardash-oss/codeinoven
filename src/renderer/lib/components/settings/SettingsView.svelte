@@ -11,14 +11,16 @@
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
-  import type {
-    AppConfig,
-    AppConfigPatch,
-    GitPullPreference,
-    PrMergeMethod,
-    SkillMarketEntry,
-    SlashCommandMode,
-    ThemePreference
+  import {
+    MAX_MAX_CONFLICT_FILE_BYTES,
+    MIN_MAX_CONFLICT_FILE_BYTES,
+    type AppConfig,
+    type AppConfigPatch,
+    type GitPullPreference,
+    type PrMergeMethod,
+    type SkillMarketEntry,
+    type SlashCommandMode,
+    type ThemePreference
   } from '$shared/types'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
@@ -359,6 +361,32 @@
     }
 
     void updateConfig({ maxDiffLines: value })
+  }
+
+  /** The conflicted-file limit is stored in bytes and shown in MiB, which is
+   *  how the file editor states its own text cap. */
+  const MEBIBYTE = 1024 * 1024
+  /** The stored limit as the MiB number the input shows. Two decimals, because
+   *  a typed 1.7 MiB is stored as whole bytes and is not exactly representable
+   *  in MiB. */
+  let conflictFileLimitMib = $derived(Number((config.maxConflictFileBytes / MEBIBYTE).toFixed(2)))
+
+  function saveMaxConflictFileBytes(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const mebibytes = Number(input.value)
+    const bytes = Math.round(mebibytes * MEBIBYTE)
+    if (
+      !Number.isFinite(mebibytes) ||
+      bytes < MIN_MAX_CONFLICT_FILE_BYTES ||
+      bytes > MAX_MAX_CONFLICT_FILE_BYTES
+    ) {
+      input.value = String(conflictFileLimitMib)
+      return
+    }
+
+    void updateConfig({ maxConflictFileBytes: bytes })
   }
 
   async function exportDiagnostics(): Promise<void> {
@@ -887,6 +915,29 @@
                     onchange={saveMaxDiffLines}
                   />
                   lines
+                </label>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Merge editor file limit</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Conflicted files larger than this open in the file editor instead of the merge
+                    editor
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
+                    max={MAX_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
+                    step="0.25"
+                    value={conflictFileLimitMib}
+                    disabled={!settingsReady}
+                    aria-label="Merge editor file limit in MiB"
+                    onchange={saveMaxConflictFileBytes}
+                  />
+                  MiB
                 </label>
               </div>
             </div>

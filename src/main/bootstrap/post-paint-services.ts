@@ -307,7 +307,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
-  state.threadTransfer = new ThreadTransferService(database, state.chatEngine)
+  state.threadTransfer = new ThreadTransferService(state.chatEngine)
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
   state.featuresReady = true

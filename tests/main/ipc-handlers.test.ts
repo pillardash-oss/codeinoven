@@ -51,6 +51,7 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent
 } from '../../src/lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -97,6 +98,7 @@ const defaultConfig: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -108,6 +110,7 @@ const defaultConfig: AppConfig = {
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
+  maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 

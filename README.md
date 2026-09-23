@@ -43,7 +43,7 @@ It is designed as a starting point for software work, not a demo app.
 
 ## Quick start
 
-1. Download the app from [codeinoven.com](https://codeinoven.com), where installers are served from our own mirror at `dl.codeinoven.com`, or from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases), and install for macOS, Windows, or Linux.
+1. Download the app from [codeinoven.com](https://codeinoven.com), where installers are served from our own mirror at `dl.codeinoven.com` under versionless links (`stable/codeinoven-arm64.dmg`, `stable/codeinoven-setup.exe`), or from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases) for an older version, and install for macOS, Windows, or Linux.
    Machine-readable download metadata for scripts and the website: [`https://dl.codeinoven.com/stable/RELEASE.json`](https://dl.codeinoven.com/stable/RELEASE.json).
 2. Open a repository in **Projects**.
 3. Start a new thread, choose your preferred coding harness, and describe your goal.

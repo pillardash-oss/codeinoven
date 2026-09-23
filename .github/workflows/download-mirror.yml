@@ -43,7 +43,7 @@ on:
           - nightly
         default: auto
       keep:
-        description: Releases retained per channel (0 keeps every release)
+        description: '1 sweeps the channel down to the release being published; 0 deletes nothing'
         default: '1'
       allow_downgrade:
         description: Mirror an older release even though that deletes the newer one

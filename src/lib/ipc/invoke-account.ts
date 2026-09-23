@@ -9,6 +9,12 @@ export const invokeAccountContract = {
     [input: import('../types').LocalUsageClearInput],
     import('../types').LocalUsageRecordCounts
   >,
+  'account:getRankingQueue': {} as Contract<[], import('../types').LocalRankingQueueStatus>,
+  'account:gradeRankingQueue': {} as Contract<
+    [scope: import('../types').LocalRankingGradeScope],
+    import('../types').LocalRankingGradeProgress
+  >,
+  'account:cancelRankingGrade': {} as Contract<[], void>,
   'memory:getLayers': {} as Contract<
     [projectId: string, threadId: string],
     import('../types').BehaviorLayer[]

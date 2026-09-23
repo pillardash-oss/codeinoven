@@ -183,7 +183,7 @@ export const invokeGitContract = {
   >,
   'git:deleteCommit': {} as Contract<
     [projectId: string, target: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:getIdentity': {} as Contract<[projectId: string, scopeBucketId?: string], GitIdentity>,
   'git:setIdentity': {} as Contract<

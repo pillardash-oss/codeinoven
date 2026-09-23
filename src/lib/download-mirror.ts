@@ -4,23 +4,28 @@
  * GitHub Releases stays the published feed, the archive and the fallback. The
  * app resolves update metadata (a few KB of YAML/JSON) from GitHub, then only
  * downloads the artifact bytes from the mirror when the mirror publishes the
- * same hash for that file (see {@link mirrorManifestHoldsArtifact}); otherwise
- * the bytes come from GitHub itself.
+ * same hash for that file (see {@link findMirrorArtifact}); otherwise the bytes
+ * come from GitHub itself.
  *
  * Bucket keys, served from {@link DOWNLOAD_MIRROR_URL}:
  *
- *   <channel>/<artifact file name>   e.g. stable/codeinoven-0.5.57-arm64.zip
- *   <channel>/latest-mac.yml         the channel's update feed, one per platform
+ *   <channel>/codeinoven-arm64.dmg   the installers, named without a version:
+ *                                    a channel serves one release, so its file
+ *                                    names are the channel's names and a link
+ *                                    to the mirror never rots
+ *   <channel>/latest-mac.yml         the release's own update feeds, per platform
  *   <channel>/latest.yml
  *   <channel>/latest-linux.yml
- *   <channel>/SHA256SUMS.txt         checksums of the channel's newest release
+ *   <channel>/SHA256SUMS.txt         checksums of the installers, for the names
+ *                                    the mirror actually serves
  *   <channel>/RELEASE.json           machine-readable manifest of that release
  *
- * Each channel directory is a self-contained generic update-feed root: the feed
- * and the artifacts it points at live side by side, so pointing a feed provider
- * at a different channel is a base-URL change, never a layout change. A channel
- * holds one release at a time, the one it currently serves: publishing the next
- * release deletes the previous one, because GitHub Releases is the archive.
+ * Each channel directory is the channel's current download set: one release,
+ * under versionless names, plus the feeds and the manifest that describe it. A
+ * channel holds one release at a time, the one it currently serves: publishing
+ * the next release overwrites the same keys and deletes everything the channel
+ * no longer serves, because GitHub Releases is the archive. Nothing here links to
+ * an older version; a user who wants one downloads it from GitHub.
  *
  * Written by `scripts/publish-release-mirror.ts`, documented in
  * `docs/DOWNLOAD-MIRROR.md`.
@@ -55,18 +60,26 @@ export const MIRROR_CHECKSUMS_FILE = 'SHA256SUMS.txt'
 export const MIRROR_MANIFEST_FILE = 'RELEASE.json'
 
 /**
- * Contract version of {@link ReleaseManifest}. Version 2 adds the per-artifact
+ * Contract version of {@link ReleaseManifest}. Version 2 added the per-artifact
  * `sha512` the updater compares against the GitHub feed before it trusts the
- * mirror for a download.
+ * mirror for a download. Version 3 adds `source`, the GitHub release asset name
+ * each served file came from, because the mirror's own file names are versionless
+ * and the update feed's entry is not.
  */
-export const MIRROR_MANIFEST_SCHEMA_VERSION = 2
+export const MIRROR_MANIFEST_SCHEMA_VERSION = 3
 
 /** How long the updater waits for a channel manifest before falling back to GitHub. */
 export const MIRROR_MANIFEST_TIMEOUT_MS = 8_000
 
 export interface ReleaseManifestArtifact {
-  /** File name inside the channel directory. */
+  /** File name inside the channel directory, without a version. */
   name: string
+  /**
+   * The file name in the GitHub release this copy came from, with its version,
+   * e.g. `codeinoven-0.5.57-arm64.dmg`. The update feed points at this name, so
+   * it is what the app matches a mirror entry against.
+   */
+  source: string
   /** `macos` | `windows` | `linux`. */
   platform: string
   /** `arm64` | `x64`. */
@@ -86,7 +99,10 @@ export interface ReleaseManifestArtifact {
 }
 
 /** The manifest fields the mirror trust check reads; the rest is ignored. */
-export type MirrorManifestArtifact = Pick<ReleaseManifestArtifact, 'name' | 'sha512' | 'sizeBytes'>
+export type MirrorManifestArtifact = Pick<
+  ReleaseManifestArtifact,
+  'name' | 'source' | 'sha512' | 'sizeBytes'
+>
 
 /**
  * Contract of `<channel>/RELEASE.json`: everything a download page needs to
@@ -120,7 +136,7 @@ export function mirrorChannelUrl(
   return `${withoutTrailingSlash(base)}/${channel}`
 }
 
-/** Public URL of one artifact inside a channel directory. */
+/** Public URL of one versionless artifact inside a channel directory. */
 export function mirrorArtifactUrl(
   fileName: string,
   channel: ReleaseChannel,
@@ -200,12 +216,20 @@ export function parseMirrorManifestArtifacts(value: unknown): MirrorManifestArti
     const record = asRecord(entry)
     if (record === null) continue
     const name = record['name']
+    const source = record['source']
     const sha512 = record['sha512']
     const sizeBytes = record['sizeBytes']
     if (typeof name !== 'string' || name.length === 0) continue
     if (typeof sha512 !== 'string' || sha512.length === 0) continue
     if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes < 0) continue
-    artifacts.push({ name, sha512, sizeBytes })
+    // A schema-2 manifest has no `source`: there the mirror file name was the
+    // release asset name, so the two are the same value.
+    artifacts.push({
+      name,
+      source: typeof source === 'string' && source.length > 0 ? source : name,
+      sha512,
+      sizeBytes
+    })
   }
   return artifacts
 }
@@ -215,7 +239,7 @@ export function parseMirrorManifestArtifacts(value: unknown): MirrorManifestArti
  * points at, with the digest and size the feed reports for it.
  */
 export interface MirrorTrustQuery {
-  /** Artifact file name, e.g. `codeinoven-0.5.57-arm64.zip`. */
+  /** Release asset file name from the update feed, e.g. `codeinoven-0.5.57-arm64.zip`. */
   fileName: string
   /** Base64 sha512 from the update feed. */
   sha512: string
@@ -224,20 +248,26 @@ export interface MirrorTrustQuery {
 }
 
 /**
- * Whether a channel manifest vouches for exactly the artifact the update feed
- * points at: the file name is listed with an identical sha512 and, when the feed
- * reports a size, an identical size. A mirror that lags behind the feed, or was
- * populated from different bytes, fails this check and is never downloaded from.
+ * The channel manifest entry that vouches for exactly the artifact the update
+ * feed points at, or null when none does: it must list that file name with an
+ * identical sha512 and, when the feed reports a size, an identical size. The
+ * versioned release asset name is matched through `source` (or through `name`,
+ * which is what a schema-2 manifest carried); the returned entry is the mirror's
+ * own versionless file, and its `name` is what a download URL is built from. A
+ * mirror that lags behind the feed, or was populated from different bytes, fails
+ * this check and is never downloaded from.
  */
-export function mirrorManifestHoldsArtifact(
+export function findMirrorArtifact(
   artifacts: readonly MirrorManifestArtifact[],
   query: MirrorTrustQuery
-): boolean {
-  return artifacts.some(
-    (artifact) =>
-      artifact.name === query.fileName &&
-      digestMatches(artifact.sha512, query.sha512) &&
-      (query.size === 0 || artifact.sizeBytes === query.size)
+): MirrorManifestArtifact | null {
+  return (
+    artifacts.find(
+      (artifact) =>
+        (artifact.source === query.fileName || artifact.name === query.fileName) &&
+        digestMatches(artifact.sha512, query.sha512) &&
+        (query.size === 0 || artifact.sizeBytes === query.size)
+    ) ?? null
   )
 }
 
