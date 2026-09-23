@@ -49,6 +49,7 @@
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
@@ -230,12 +231,32 @@
     void persistRoutine({ connections }, 'Could not add the connection')
   }
 
+  /**
+   * Removing a connection is destructive, so the row's X only stages it and the
+   * shared confirmation dialog commits it. The trigger is a small icon, so a
+   * stray click must never drop a connection the routine depends on.
+   */
+  let connectionRemoveTarget = $state<RoutineConnection | null>(null)
+  let connectionRemoveBusy = $state(false)
+
   function removeConnection(connection: RoutineConnection): void {
     if (!routine) return
-    const connections = routine.connections.filter(
-      (candidate) => candidate.utilityId !== connection.utilityId
-    )
-    void persistRoutine({ connections }, 'Could not remove the connection')
+    connectionRemoveTarget = connection
+  }
+
+  async function confirmRemoveConnection(): Promise<void> {
+    const connection = connectionRemoveTarget
+    if (!routine || !connection) return
+    connectionRemoveBusy = true
+    try {
+      const connections = routine.connections.filter(
+        (candidate) => candidate.utilityId !== connection.utilityId
+      )
+      await persistRoutine({ connections }, 'Could not remove the connection')
+      connectionRemoveTarget = null
+    } finally {
+      connectionRemoveBusy = false
+    }
   }
 
   function openUtilities(): void {
@@ -934,3 +955,17 @@
     onSaved={() => void loadConnectionLibrary()}
   />
 {/if}
+
+<ConfirmDialog
+  open={connectionRemoveTarget !== null}
+  title="Remove connection"
+  confirmLabel="Remove connection"
+  busy={connectionRemoveBusy}
+  onCancel={() => (connectionRemoveTarget = null)}
+  onConfirm={confirmRemoveConnection}
+>
+  <p>
+    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this
+    routine? The agent will no longer use it when this routine runs.
+  </p>
+</ConfirmDialog>
