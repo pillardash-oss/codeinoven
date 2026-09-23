@@ -4,7 +4,6 @@
   import {
     Bell,
     Bot,
-    BotMessageSquare,
     BrainCircuit,
     Bug,
     ChevronDown,
@@ -14,6 +13,7 @@
     Files,
     GitBranch,
     Globe2,
+    Hammer,
     Info,
     Maximize2,
     MessageCircleDashed,
@@ -300,7 +300,7 @@
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'assistant-how-to'}
-      <BotMessageSquare size={12} class="shrink-0 text-primary" />
+      <Hammer size={12} class="shrink-0 text-primary" />
     {:else}
       <Bot size={12} class="shrink-0 text-info" />
     {/if}

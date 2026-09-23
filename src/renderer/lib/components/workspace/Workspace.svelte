@@ -8,14 +8,15 @@
     Plus,
     SquarePen,
     Bot,
-    BotMessageSquare,
     BrainCircuit,
     Bug,
+    Clock1,
     Cloud,
     FileDiff,
     MonitorCog,
     FolderTree,
     Globe2,
+    Hammer,
     History,
     Info,
     MessageCircleDashed,
@@ -854,7 +855,7 @@
           {
             id: 'assistant-how-to',
             label: 'How to',
-            icon: BotMessageSquare,
+            icon: Hammer,
             active: dockKindActive('assistant-how-to'),
             onSelect: () =>
               toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
@@ -1329,7 +1330,16 @@
 
   let pinnedThreads = $derived(
     allThreads
-      .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
+      .filter(
+        (t) =>
+          t.pinned &&
+          !t.archived &&
+          t.projectId !== INBOX_PROJECT_ID &&
+          // Assistant tasks live only in Assistant View: a pinned assistant
+          // thread (every routine's how-to thread is pinned) must never surface
+          // in the Projects sidebar's pinned section.
+          t.projectId !== ASSISTANT_SPACE_ID
+      )
       .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
@@ -1399,6 +1409,9 @@
       (t) =>
         !t.archived &&
         t.projectId !== INBOX_PROJECT_ID &&
+        // Assistant tasks are Assistant View's own rows, never the Threads
+        // timeline's, so a pinned how-to thread cannot appear among them.
+        t.projectId !== ASSISTANT_SPACE_ID &&
         threadProjectFilterState.matches(t.projectId)
     )
     // Pinned threads keep one shared pin-time order; the default status sort
@@ -1907,7 +1920,7 @@
         },
         {
           id: 'new-task',
-          icon: BotMessageSquare,
+          icon: Clock1,
           ariaLabel: 'New task',
           title: 'New task',
           shortcut: keymapKeys('assistant-new-task'),
@@ -2718,6 +2731,9 @@
       if (regroup || needsSetupPatch) {
         const optimistic: Thread = {
           ...existing,
+          // A routine's how-to ("Getting started") thread is pinned for life, and
+          // a reused blank row must join the Pinned section too.
+          ...(gettingStarted ? { pinned: true } : {}),
           ...(regroup ? { routineId } : {}),
           ...(gettingStarted
             ? {
@@ -2742,6 +2758,11 @@
                 titleSource: 'manual',
                 assistantGettingStarted: true
               })
+            )
+            // `thread:update` cannot carry the pin, and the how-to thread is
+            // pinned for life, so a reused blank row is pinned in its own write.
+            upsertThreadInList(
+              await invoke('thread:setPinned', existing.projectId, existing.id, true)
             )
           }
           const current = allThreads.find((candidate) => candidate.id === existing.id)
@@ -2795,7 +2816,9 @@
       title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
       titleSource: gettingStarted ? ('manual' as const) : ('default' as const),
       status: 'created' as const,
-      pinned: false,
+      // The how-to thread is pinned from the instant it exists, so it never
+      // appears outside the Pinned section and is never an eviction candidate.
+      pinned: gettingStarted,
       archived: false,
       read: true,
       settings: inheritedSettings,
@@ -3026,7 +3049,9 @@
   function currentAssistantModelSelection(): AgentModelSelection | undefined {
     const selected = workspaceState.selectedThread
     const settings =
-      selected && selected.projectId === ASSISTANT_SPACE_ID ? selected.settings : chatSettings.lastUsed
+      selected && selected.projectId === ASSISTANT_SPACE_ID
+        ? selected.settings
+        : chatSettings.lastUsed
     if (!settings?.modelId) return undefined
     return {
       harnessId: settings.harnessId,
@@ -3138,6 +3163,22 @@
     await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
   }
 
+  /**
+   * Hide a routine's how-to thread. Hiding is the only state the thread can
+   * change: it stays pinned, so archiving it is what takes it out of the
+   * sidebar until the how-to panel reveals it again.
+   */
+  async function hideAssistantHowTo(task: Thread): Promise<void> {
+    if (!task.routineId) return
+    try {
+      const updated = await assistantRoutines.setHowToHidden(task.routineId, true)
+      upsertThreadInList(updated)
+      scopeState.updateThread(updated)
+    } catch (error) {
+      reportError(error, 'Could not hide the how-to thread')
+    }
+  }
+
   /** Reorder routines by drag: move the dragged routine around its drop target. */
   async function moveAssistantRoutine(
     draggedId: string,
@@ -3184,6 +3225,12 @@
       (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
         ? workspaceState.selectedThread
         : undefined)
+    if (!anchor) {
+      // A routine whose only task is a hidden how-to thread still has an anchor:
+      // ask the main process for it, because hidden rows never reach the
+      // hydrated thread list the sidebar renders from.
+      anchor = (await invoke('assistant:howToThread', routine.id)) ?? undefined
+    }
     if (!anchor) {
       if (!assistantProject) return
       await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
@@ -3432,6 +3479,7 @@
       onForkTask={(task) => void forkThread(task)}
       onOpenTaskNotes={openAssistantTaskNotes}
       onHandedOffTask={handleAssistantHandoff}
+      onHideHowTo={(task) => void hideAssistantHowTo(task)}
       onDeleteRoutine={deleteAssistantRoutine}
       onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
       onMoveRoutine={(draggedId, targetId, position) =>

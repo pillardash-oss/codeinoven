@@ -6,7 +6,7 @@ import {
   removeIconFile,
   storeIconFile
 } from '../icon-file'
-import { ASSISTANT_SPACE_ID } from '../types'
+import { ASSISTANT_SPACE_ID, isAssistantSetupThread } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import type { Database } from '../../main/database/database'
 import { RoutineRepo } from '../../main/database/repositories/routine-repo'
@@ -126,8 +126,10 @@ export class RoutineManager {
 
   /** Delete a routine and ungroup its tasks (they survive as routine-less). */
   deleteRoutine(routineId: string): void {
-    const tasks = this.listRoutineTasks(routineId)
-    for (const task of tasks) {
+    // Archived tasks are ungrouped too: a routine deleted while its how-to
+    // thread is hidden must not leave that thread pointing at a routine that
+    // no longer exists.
+    for (const task of this.allRoutineThreads(routineId)) {
       const ungrouped: Thread = { ...task, routineId: undefined, updatedAt: Date.now() }
       this.threadRepo.upsert(ungrouped)
     }
@@ -162,7 +164,9 @@ export class RoutineManager {
 
   /** Every assistant task thread, newest activity first. */
   listAssistantTasks(): Thread[] {
-    return [...this.threadRepo.listByProject(ASSISTANT_SPACE_ID)].sort(
+    // Archived tasks are hidden tasks: they keep their thread and their
+    // history but are never listed, scheduled, or counted again.
+    return [...this.threadRepo.listByProject(ASSISTANT_SPACE_ID, { includeArchived: false })].sort(
       (a, b) => b.lastActivity - a.lastActivity
     )
   }
@@ -170,6 +174,44 @@ export class RoutineManager {
   /** Tasks grouped under one routine, ordered by activity. */
   listRoutineTasks(routineId: string): Thread[] {
     return this.listAssistantTasks().filter((task) => task.routineId === routineId)
+  }
+
+  /** Every thread of a routine, hidden ones included. */
+  private allRoutineThreads(routineId: string): Thread[] {
+    return this.threadRepo
+      .listByProject(ASSISTANT_SPACE_ID)
+      .filter((task) => task.routineId === routineId)
+  }
+
+  /**
+   * The routine's how-to ("Getting started") thread, whether or not it is
+   * hidden. A routine is created with exactly one, the user can only hide it,
+   * so this is how the panel knows what it is hiding and revealing.
+   */
+  howToThread(routineId: string): Thread | null {
+    const threads = this.allRoutineThreads(routineId).filter(isAssistantSetupThread)
+    if (threads.length === 0) return null
+    return threads.reduce((newest, thread) =>
+      thread.createdAt > newest.createdAt ? thread : newest
+    )
+  }
+
+  /**
+   * Hide or reveal a routine's how-to thread by archiving it. The thread stays
+   * pinned in both states, so it is never evicted and never unpinnable; the
+   * archive flag is only what takes it out of the sidebar's lists.
+   */
+  setHowToHidden(routineId: string, hidden: boolean): Thread {
+    const existing = this.howToThread(routineId)
+    if (!existing) throw new Error(`Routine has no how-to thread: ${routineId}`)
+    const updated: Thread = {
+      ...existing,
+      archived: hidden,
+      pinned: true,
+      updatedAt: Date.now()
+    }
+    this.threadRepo.upsert(updated)
+    return updated
   }
 
   /** Group a task into a routine, or ungroup it with `null`. */

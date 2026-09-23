@@ -16,7 +16,7 @@
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
   import { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
   import AppHeaderViewSwitcher from './AppHeaderViewSwitcher.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
@@ -111,7 +111,23 @@
       contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
         edit: true,
         focusEditor: true
-      })
+      }),
+    // The selected thread can be a routine's how-to thread. It is pinned for
+    // life, so the header menu hides it instead of offering Unpin/Delete, which
+    // the thread manager would refuse anyway.
+    isHowToThread: () => isAssistantSetupThread(workspaceState.selectedThread ?? {}),
+    onHideHowTo: async (thread) => {
+      if (!thread.routineId) return
+      try {
+        const updated = await invoke('assistant:setHowToHidden', thread.routineId, true)
+        workspaceState.updateThread(updated)
+        if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
+          scopeState.updateThread(updated)
+        }
+      } catch (error) {
+        reportError(error, 'Could not hide the how-to thread')
+      }
+    }
   })
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm

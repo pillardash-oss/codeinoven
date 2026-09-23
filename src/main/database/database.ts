@@ -1127,6 +1127,14 @@ export class Database {
         'ALTER TABLE threads ADD COLUMN assistant_getting_started INTEGER NOT NULL DEFAULT 0'
       )
     }
+    // A routine's how-to ("Getting started") thread is pinned for its whole
+    // life: pinning keeps it out of automatic eviction and puts it in the
+    // sidebar's Pinned section. Rows created before that rule are pinned once
+    // here, and the guard makes the statement a no-op on every later boot.
+    connection.exec(
+      'UPDATE threads SET pinned = 1, pinned_at = COALESCE(pinned_at, updated_at) ' +
+        'WHERE assistant_getting_started = 1 AND pinned = 0'
+    )
   }
 
   /** Existing databases predate the per-message generation duration used by

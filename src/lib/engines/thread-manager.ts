@@ -32,7 +32,8 @@ import {
   type ThreadMessagePage,
   type UsageBearingMessage,
   type UserMessageSummary,
-  isOrchestrationChildThread
+  isOrchestrationChildThread,
+  isAssistantSetupThread
 } from '../types'
 import {
   REGULAR_BUCKET,
@@ -250,7 +251,10 @@ export class ThreadManager {
       title: input.title,
       titleSource: input.titleSource ?? 'default',
       status: 'created',
-      pinned: false,
+      // A routine's how-to ("Getting started") thread is always pinned: pinning is
+      // what keeps it out of automatic eviction, and the invariant lives here so
+      // no caller can create it unpinned.
+      pinned: input.assistantGettingStarted === true,
       archived: false,
       read: true,
       settings: input.settings,
@@ -1010,6 +1014,11 @@ export class ThreadManager {
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+    // The how-to thread is pinned for its whole life: it is never evicted and
+    // the user can only hide it, so no surface may unpin it.
+    if (!pinned && isAssistantSetupThread(existing)) {
+      throw new Error('The how-to thread stays pinned. Hide it instead.')
+    }
 
     const pinnedAt = pinned ? Date.now() : undefined
     this.threadRepo.setPinned(threadId, pinned, pinnedAt)

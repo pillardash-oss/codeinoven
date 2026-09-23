@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, BotMessageSquare } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, Pin } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
@@ -22,9 +22,9 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { isThreadWorking, type Thread } from '$shared/types'
+  import { isAssistantSetupThread, isThreadWorking, type Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import { taskPopoverState, taskRunLine } from './assistant-view'
+  import { taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
 
   interface Props {
     task: Thread
@@ -46,6 +46,8 @@
     onOpenNotes: (task: Thread) => void
     /** Hand this task off to a project, forking it and seeding a summary. */
     onHandedOff: (forked: Thread) => void
+    /** Hide a routine's how-to thread (the only state its row can change). */
+    onHideHowTo: (task: Thread) => void
   }
 
   let {
@@ -61,7 +63,8 @@
     onDelete,
     onFork,
     onOpenNotes,
-    onHandedOff
+    onHandedOff,
+    onHideHowTo
   }: Props = $props()
 
   const TASK_DRAG_TYPE = 'application/x-assistant-task'
@@ -79,6 +82,8 @@
   const taskIcon = $derived(
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
   )
+  const iconKey = $derived(taskRowIconKey(task))
+  const howToThread = $derived(isAssistantSetupThread(task))
 
   /** Line 2: next-run time for scheduled tasks, last-run time for unscheduled. */
   const runLine = $derived.by(() => {
@@ -124,7 +129,11 @@
     showCopyId: () => true,
     // Hand-off belongs to the task's own menu, never to the panel.
     onHandoff: () => handoff.open(),
-    showHandoff: () => true
+    showHandoff: () => true,
+    // A how-to thread is pinned for life and cannot be deleted, so it offers
+    // Hide instead of Pin/Unpin and carries no destructive item at all.
+    isHowToThread: () => howToThread,
+    onHideHowTo: (t) => onHideHowTo(t)
   })
 
   // ─── Hover popover ───────────────────────────────────────────────────────
@@ -233,11 +242,19 @@
     <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
       {#if taskIcon}
         <img src={taskIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-      {:else}
-        <BotMessageSquare
+      {:else if iconKey === 'how-to'}
+        <Hammer
           size={14}
           strokeWidth={1.8}
           style="color: {color ?? 'var(--color-muted)'}"
+          aria-hidden="true"
+        />
+      {:else}
+        <Clock1
+          size={14}
+          strokeWidth={1.8}
+          style="color: {color ?? 'var(--color-muted)'}"
+          aria-hidden="true"
         />
       {/if}
     </span>
@@ -249,6 +266,16 @@
         >
           {task.title}
         </span>
+        {#if task.pinned}
+          <span
+            class="flex shrink-0 items-center"
+            role="img"
+            aria-label="Pinned task"
+            title="Pinned"
+          >
+            <Pin size={11} strokeWidth={1.8} class="text-accent" />
+          </span>
+        {/if}
         {#if missed}
           <span
             class="flex shrink-0 items-center"

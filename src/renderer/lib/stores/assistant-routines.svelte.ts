@@ -182,6 +182,20 @@ class AssistantRoutinesState {
     return invoke('assistant:setTaskRoutine', threadId, routineId)
   }
 
+  /**
+   * A routine's how-to ("Getting started") thread, hidden or not. Hidden rows
+   * never reach the hydrated thread list, so the how-to panel asks for its own
+   * routine's thread here instead of reading the workspace's rows.
+   */
+  howToThread(routineId: string): Promise<Thread | null> {
+    return invoke('assistant:howToThread', routineId)
+  }
+
+  /** Hide or reveal a routine's how-to thread. It stays pinned either way. */
+  setHowToHidden(routineId: string, hidden: boolean): Promise<Thread> {
+    return invoke('assistant:setHowToHidden', routineId, hidden)
+  }
+
   async setTaskSchedule(threadId: string, schedule: RoutineSchedule | null): Promise<Thread> {
     return invoke('assistant:setTaskSchedule', threadId, schedule)
   }

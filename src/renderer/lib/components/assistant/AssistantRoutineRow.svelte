@@ -3,7 +3,7 @@
     AlertTriangle,
     ChevronRight,
     Ellipsis,
-    PanelRightOpen,
+    Hammer,
     Pause,
     Pencil,
     Pin,
@@ -354,7 +354,7 @@
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onOpenHowTo(routine)}
           >
-            <PanelRightOpen size={14} class="text-muted" />
+            <Hammer size={14} class="text-muted" />
             How to
           </DropdownMenu.Item>
           <DropdownMenu.Item

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Search, Workflow, BotMessageSquare, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, Search, Workflow, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import type { Routine, Thread } from '$shared/types'
@@ -153,7 +153,11 @@
                 class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectTask(task)}
               >
-                <BotMessageSquare size={14} class="shrink-0 text-muted" />
+                {#if task.assistantGettingStarted}
+                  <Hammer size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                {:else}
+                  <Clock1 size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
+                {/if}
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{task.title}</span>
               </button>
             {/each}

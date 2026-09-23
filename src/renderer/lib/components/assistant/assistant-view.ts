@@ -92,10 +92,14 @@ export function taskRunLine(
 
 /**
  * The task row icon key: a custom icon when the task carries one, otherwise the
- * BotMessageSquare fallback.
+ * Hammer for a routine's how-to ("Getting started") thread, otherwise the plain
+ * task clock. The generic assistant robot is deliberately gone.
  */
-export function taskRowIconKey(task: Pick<Thread, 'assistantIconType'>): 'custom' | 'bot' {
-  return task.assistantIconType ? 'custom' : 'bot'
+export function taskRowIconKey(
+  task: Pick<Thread, 'assistantIconType' | 'assistantGettingStarted'>
+): 'custom' | 'how-to' | 'task' {
+  if (task.assistantIconType) return 'custom'
+  return task.assistantGettingStarted === true ? 'how-to' : 'task'
 }
 
 /**

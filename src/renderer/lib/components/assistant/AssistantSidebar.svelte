@@ -4,8 +4,10 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import SidebarFooterControls from '$lib/components/workspace/SidebarFooterControls.svelte'
+  import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
   import type { Routine, Thread } from '$shared/types'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
@@ -32,6 +34,8 @@
     onOpenTaskNotes: (task: Thread) => void
     /** Hand a task off to a project, forking it and seeding a summary. */
     onHandedOffTask: (forked: Thread) => void
+    /** Hide a routine's how-to thread (its row has no other state change). */
+    onHideHowTo: (task: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
@@ -55,6 +59,7 @@
     onForkTask,
     onOpenTaskNotes,
     onHandedOffTask,
+    onHideHowTo,
     onDeleteRoutine,
     onTogglePinRoutine,
     onMoveRoutine,
@@ -83,15 +88,46 @@
     })
   )
 
-  /** Routine-less tasks, most recently active first. */
+  /** Routine-less, unpinned tasks, most recently active first. */
   const standaloneTasks = $derived(
-    tasks.filter((task) => !task.routineId).sort((a, b) => b.lastActivity - a.lastActivity)
+    tasks
+      .filter((task) => !task.routineId && !task.pinned)
+      .sort((a, b) => b.lastActivity - a.lastActivity)
   )
 
+  /**
+   * Every pinned task, in one shared pin order. A pinned task leaves its
+   * routine's nested list and the Tasks list, so it appears exactly once   the
+   * same rule the project sidebar uses for pinned threads.
+   */
+  const pinnedTasks = $derived(
+    tasks.filter((task) => task.pinned).sort((a, b) => pinnedThreadSort(a, b))
+  )
+
+  /** Open a pinned task, docking its routine's how-to panel like a nested row. */
+  function openPinnedTask(task: Thread): void {
+    onOpenTask(task)
+    const routine = routines.find((entry) => entry.id === task.routineId)
+    if (routine) onOpenRoutineHowTo(routine)
+    else onOpenTaskHowTo(task)
+  }
+
+  /** Every task of a routine, pinned ones included, most recent first. */
   function routineTasks(routineId: string): Thread[] {
     return tasks
       .filter((task) => task.routineId === routineId)
       .sort((a, b) => b.lastActivity - a.lastActivity)
+  }
+
+  /** The routine's tasks that render nested under it (pinned rows do not). */
+  function nestedRoutineTasks(routineId: string): Thread[] {
+    return routineTasks(routineId).filter((task) => !task.pinned)
+  }
+
+  /** The accent colour a flat (pinned) row should tint its icon with. */
+  function routineColorFor(task: Thread): string | undefined {
+    if (!task.routineId) return undefined
+    return routines.find((routine) => routine.id === task.routineId)?.color
   }
 
   function routineWorking(routineId: string): boolean {
@@ -126,7 +162,7 @@
 
   function filteredRoutineTasks(routine: Routine): Thread[] {
     const query = (routineSearchQueries.get(routine.id) ?? '').trim().toLowerCase()
-    const list = routineTasks(routine.id)
+    const list = nestedRoutineTasks(routine.id)
     if (!routineSearchOpen.has(routine.id) || query.length === 0) return list
     return list.filter((task) => task.title.toLowerCase().includes(query))
   }
@@ -159,7 +195,7 @@
       role="list"
       aria-label="Routines and tasks"
     >
-      {#if orderedRoutines.length === 0 && standaloneTasks.length === 0}
+      {#if orderedRoutines.length === 0 && pinnedTasks.length === 0 && standaloneTasks.length === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
           <Workflow size={18} class="text-dimmed" />
           <p class="text-[0.6875rem] text-dimmed">
@@ -167,12 +203,47 @@
           </p>
         </div>
       {:else}
+        <!-- Pinned tasks lead the list, above the routines: the shared
+             PinnedSection owns the header, the fold state, and the row list,
+             and the assistant supplies its own task row to it. -->
+        <PinnedSection
+          sectionKey="assistant"
+          label="Pinned"
+          threads={pinnedTasks}
+          activeThreadId={selectedThreadId}
+          onOpen={openPinnedTask}
+          onRename={onRenameTask}
+          onTogglePin={onTogglePinTask}
+          onDelete={onDeleteTask}
+          onFork={onForkTask}
+        >
+          {#snippet row(task: Thread)}
+            <AssistantTaskRow
+              {task}
+              active={task.id === selectedThreadId}
+              color={routineColorFor(task)}
+              missed={assistantRoutines.missedForTask(task.id).length > 0}
+              nextRunAt={assistantRoutines.nextRunForTask(task)}
+              onSelect={openPinnedTask}
+              onRename={onRenameTask}
+              onTogglePin={onTogglePinTask}
+              onDelete={onDeleteTask}
+              onFork={onForkTask}
+              onOpenNotes={onOpenTaskNotes}
+              onHandedOff={onHandedOffTask}
+              {onHideHowTo}
+            />
+          {/snippet}
+        </PinnedSection>
+
         {#each orderedRoutines as routine (routine.id)}
           {@const routineTaskList = routineTasks(routine.id)}
           {@const visibleTasks = filteredRoutineTasks(routine)}
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
-          {@const holdsSelected = routineTaskList.some((task) => task.id === selectedThreadId)}
+          {@const holdsSelected = nestedRoutineTasks(routine.id).some(
+            (task) => task.id === selectedThreadId
+          )}
           <AssistantRoutineRow
             {routine}
             expanded={expanded.has(routine.id) || searching || holdsSelected}
@@ -217,9 +288,14 @@
                     onFork={onForkTask}
                     onOpenNotes={onOpenTaskNotes}
                     onHandedOff={onHandedOffTask}
+                    {onHideHowTo}
                   />
                 {:else}
-                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">No tasks in this routine yet.</p>
+                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">
+                    {routineTaskList.length > 0
+                      ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
+                      : 'No tasks in this routine yet.'}
+                  </p>
                 {/each}
               {/if}
             </div>
@@ -248,6 +324,7 @@
               onFork={onForkTask}
               onOpenNotes={onOpenTaskNotes}
               onHandedOff={onHandedOffTask}
+              {onHideHowTo}
             />
           {/each}
         {/if}

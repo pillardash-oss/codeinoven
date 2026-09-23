@@ -5,6 +5,7 @@
     Ban,
     ChevronRight,
     Gauge,
+    Hammer,
     Maximize2,
     Pause,
     Pencil,
@@ -302,6 +303,62 @@
   )
 
   let running = $state(false)
+
+  // ─── The routine's how-to thread ──────────────────────────────────────────
+
+  /**
+   * The routine's how-to ("Getting started") thread, hidden or not. A hidden
+   * row never reaches the hydrated thread list the sidebar renders from, so the
+   * panel asks the main process for its own routine's thread instead of reading
+   * the workspace's rows.
+   */
+  let howToThread = $state<Thread | null>(null)
+  let howToThreadBusy = $state(false)
+
+  $effect(() => {
+    const routineIdValue = routine?.id ?? null
+    if (!routineIdValue) {
+      howToThread = null
+      return
+    }
+    let cancelled = false
+    void assistantRoutines
+      .howToThread(routineIdValue)
+      .then((thread) => {
+        if (!cancelled) howToThread = thread
+      })
+      .catch(() => {
+        if (!cancelled) howToThread = null
+      })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  const howToThreadHidden = $derived(howToThread?.archived === true)
+
+  /**
+   * Hide or reveal the how-to thread. It stays pinned either way, so this is
+   * the thread's only state change, and revealing also opens the authoring
+   * thread so the user lands where the how-to is written.
+   */
+  async function toggleHowToThread(): Promise<void> {
+    if (!routine || !howToThread || howToThreadBusy) return
+    const revealing = howToThreadHidden
+    howToThreadBusy = true
+    try {
+      const updated = await assistantRoutines.setHowToHidden(routine.id, !revealing)
+      howToThread = updated
+      if (revealing) onOpenTask(updated)
+    } catch (error) {
+      reportError(
+        error,
+        revealing ? 'Could not show the how-to thread' : 'Could not hide the how-to thread'
+      )
+    } finally {
+      howToThreadBusy = false
+    }
+  }
 
   /**
    * Run the routine immediately, ignoring its schedule and pause state, so the
@@ -758,10 +815,33 @@
   </div>
 {/snippet}
 
+{#snippet howToThreadAction()}
+  {#if routine && howToThread}
+    <!-- The how-to thread is pinned for life and has exactly two states. Hide
+         puts it away for the session, Show brings it back and opens it, so the
+         panel is always the way back to the routine's authoring thread. -->
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      title={howToThreadHidden
+        ? 'Show the routine’s how-to thread again'
+        : 'Hide the routine’s how-to thread from the sidebar'}
+      disabled={howToThreadBusy}
+      onclick={() => void toggleHowToThread()}
+    >
+      <Hammer size={12} strokeWidth={1.8} class="shrink-0" />
+      <span class="truncate">
+        {howToThreadHidden ? 'Show how-to thread' : 'Hide how-to thread'}
+      </span>
+    </button>
+  {/if}
+{/snippet}
+
 {#if !fullscreen}
   <div class="flex h-full min-h-0 flex-col" aria-label="Assistant routine panel">
     {@render panelHeader()}
     {@render panelContent()}
+    {@render howToThreadAction()}
   </div>
 {/if}
 
@@ -783,5 +863,6 @@
     <div class="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
       {@render panelContent()}
     </div>
+    {@render howToThreadAction()}
   </FullscreenPanelDialog>
 {/if}

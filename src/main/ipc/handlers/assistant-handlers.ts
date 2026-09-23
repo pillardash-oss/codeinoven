@@ -5,6 +5,7 @@ import {
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
+import { broadcastThreadUpdate } from '../../chat/thread-events'
 import type { IpcHandlerContext } from './context'
 import type {
   CreateRoutineInput,
@@ -242,6 +243,19 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     const safeRoutineId = routineId === null ? null : validateEntityId(routineId, 'Routine ID')
     return routineManager.setTaskRoutine(safeThreadId, safeRoutineId)
+  })
+
+  ipcMain.handle('assistant:howToThread', (_, routineId: unknown) =>
+    routineManager.howToThread(validateEntityId(routineId, 'Routine ID'))
+  )
+
+  ipcMain.handle('assistant:setHowToHidden', (_, routineId: unknown, hidden: unknown) => {
+    if (typeof hidden !== 'boolean') throw new TypeError('How-to hidden state must be a boolean')
+    const thread = routineManager.setHowToHidden(validateEntityId(routineId, 'Routine ID'), hidden)
+    // The row moved in or out of the archived set, so every renderer needs the
+    // fresh thread to drop or restore the row without a reload.
+    broadcastThreadUpdate(thread)
+    return thread
   })
 
   ipcMain.handle('assistant:setTaskSchedule', (_, threadId: unknown, schedule: unknown) => {

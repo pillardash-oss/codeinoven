@@ -190,6 +190,28 @@ suppressed via `hideProject`). A new task is created already inside its routine
 (`routineId` travels through `thread:create`), so the creation broadcast can
 never leave it stranded outside the routine.
 
+Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
+section rendered by the same `PinnedSection.svelte` the project sidebar uses.
+The section is the thread sidebar's, not a copy of it: `PinnedSection` takes an
+optional `row` snippet, so the assistant supplies its own `AssistantTaskRow`
+while the header, the persisted fold state (`pinnedFold`, keyed `assistant`),
+the divider, and the row list stay one implementation. A pinned task leaves its
+routine's nested list and the Tasks list, so it appears exactly once, and its
+row carries the pin indicator next to the title. The routine row's task count
+still counts it, and a routine whose every task is pinned says so in place of an
+empty list. Assistant tasks are excluded from the Projects sidebar's pinned
+section and from the Threads timeline, so a pinned assistant thread (every
+routine's how-to thread) is only ever a row in Assistant View, never a Projects
+row.
+
+Task rows carry no generic assistant robot. The icon slot resolves a custom
+`assistantIconType` image first, then the **Hammer** for a routine's how-to
+("Getting started") thread, then the plain task clock (`Clock1`). The task row's
+fallback is the same `Clock1` the header's **New task** action and the search
+results use, and the Hammer is the single how-to mark everywhere it appears: the
+row, the rail's **How to** item, the routine row's **How to** menu item, the
+`assistant-how-to` sidebar tab, and the panel's Show/Hide action.
+
 The how-to panel opens in the right context sidebar from the rail's **How to**
 toggle or a routine's **How to** menu item. An assistant thread's rail carries
 the conversation tools only: **History**, **How to**, **Workspace files**
@@ -251,7 +273,19 @@ prompt"; the user-facing term is how-to.
   `memory_unavailable`. Its first exchange therefore stays a pure authoring
   conversation instead of being mined as a task run. The flag is persisted on
   the thread (`assistant_getting_started`, with a migration for existing
-  databases), so it survives reloads and regroups.
+  databases), so it survives reloads and regroups. It is created **pinned**
+  (`ThreadManager.prepareCreateThread` owns that invariant, and a migration pins
+  the threads that predate it), so it is never an automatic-eviction candidate.
+- **The how-to thread is pinned for its whole life.** `ThreadManager.setPinned`
+  refuses to unpin it, and its task menu offers **Hide how-to thread** instead of
+  Pin/Unpin and carries no Delete item at all. Hiding is an archive:
+  `assistant:setHowToHidden` (with `RoutineManager.howToThread` and
+  `setHowToHidden`) writes `Thread.archived` while forcing `pinned: true`, the
+  sidebar drops the row, and `RoutineManager.listAssistantTasks` stops returning
+  archived rows so a hidden thread is also never scheduled. The how-to panel is
+  the way back: its **Show how-to thread** action reveals the thread through
+  `assistant:howToThread` (which finds the routine's thread even while hidden,
+  because archived rows never reach the hydrated thread list) and opens it.
 - The authoring contract asks for **two** fenced blocks once the user agrees:
   the how-to itself (tag `how-to`) and a machine-readable plan (tag `routine`)
   carrying `cadence`, `times`, `weekdays`, and `connections`. The user then sends

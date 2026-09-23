@@ -86,7 +86,14 @@ describe('assistant-view presentation helpers', () => {
 
   it('uses a custom task icon only when one is set', () => {
     expect(taskRowIconKey({ assistantIconType: 'code' })).toBe('custom')
-    expect(taskRowIconKey({})).toBe('bot')
+    expect(taskRowIconKey({})).toBe('task')
+  })
+
+  it('gives a routine how-to thread its own icon, custom still winning', () => {
+    expect(taskRowIconKey({ assistantGettingStarted: true })).toBe('how-to')
+    expect(taskRowIconKey({ assistantGettingStarted: true, assistantIconType: 'code' })).toBe(
+      'custom'
+    )
   })
 })
 

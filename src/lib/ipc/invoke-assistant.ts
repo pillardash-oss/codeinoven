@@ -35,6 +35,17 @@ export const invokeAssistantContract = {
   'routine:getIcon': {} as Contract<[routineId: string], string | null>,
   /** Group a task into a routine, or ungroup it with `null`. */
   'assistant:setTaskRoutine': {} as Contract<[threadId: string, routineId: string | null], Thread>,
+  /**
+   * A routine's how-to ("Getting started") thread, hidden or not, or null when
+   * the routine has none. Hidden threads never reach the renderer's hydrated
+   * thread list, so the how-to panel asks for its own routine's thread here.
+   */
+  'assistant:howToThread': {} as Contract<[routineId: string], Thread | null>,
+  /**
+   * Hide or reveal a routine's how-to thread. The thread stays pinned in both
+   * states; archiving is only what takes it out of the sidebar's lists.
+   */
+  'assistant:setHowToHidden': {} as Contract<[routineId: string, hidden: boolean], Thread>,
   /** Set or clear a task's per-task schedule override. */
   'assistant:setTaskSchedule': {} as Contract<
     [threadId: string, schedule: RoutineSchedule | null],
