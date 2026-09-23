@@ -130,6 +130,12 @@ export interface Thread {
   scheduleOverride?: RoutineSchedule | null
   /** Epoch ms of the last scheduled run fired on this task. */
   lastRunAt?: number
+  /**
+   * Epoch ms a run was last dispatched on this task, scheduled or manual. Kept
+   * apart from `lastRunAt` (the scheduler's slot claim, which a missed slot also
+   * writes) so the panel's "last run" never reports a slot that never ran.
+   */
+  lastDispatchedAt?: number
   /** Epoch ms of the last run that finished successfully (a `completed` turn). */
   lastSuccessAt?: number
   /**

@@ -112,6 +112,7 @@ export class RoutineSchedulerService {
     try {
       await this.deps.dispatch(task, routine)
       this.recordLastRun(task.id, run.dueAt)
+      this.recordDispatch(task.id)
       this.missed.markRun(id)
     } catch (error) {
       this.endRun(task.id)
@@ -141,6 +142,7 @@ export class RoutineSchedulerService {
       throw error
     }
     this.recordLastRun(task.id, this.now())
+    this.recordDispatch(task.id)
     this.notifyChange()
   }
 
@@ -255,6 +257,7 @@ export class RoutineSchedulerService {
   private fire(task: Thread, dueAt: number): void {
     // Claim the slot before the async dispatch so the next tick cannot double-fire.
     this.recordLastRun(task.id, dueAt)
+    this.recordDispatch(task.id)
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
     this.beginRun(task.id)
     void Promise.resolve(this.deps.dispatch(task, routine)).catch((error) => {
@@ -272,9 +275,16 @@ export class RoutineSchedulerService {
     this.inFlightRuns.delete(threadId)
   }
 
+  /** Claim a schedule slot (fired or recorded as missed). */
   private recordLastRun(threadId: string, at: number): void {
     const updated = this.deps.routines.setTaskLastRun(threadId, at)
     this.deps.onTaskChanged?.(updated)
+  }
+
+  /** Record that a run was actually dispatched, so the panel can show it. */
+  private recordDispatch(threadId: string): void {
+    const updated = this.deps.routines.markTaskRunDispatched(threadId, this.now())
+    if (updated) this.deps.onTaskChanged?.(updated)
   }
 
   private notifyChange(): void {

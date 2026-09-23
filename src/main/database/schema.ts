@@ -125,6 +125,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   assistant_icon       TEXT,
   schedule_override    TEXT,
   last_run_at          INTEGER,
+  last_dispatched_at   INTEGER,
   last_success_at      INTEGER,
   assistant_getting_started INTEGER NOT NULL DEFAULT 0,
   drafting             INTEGER NOT NULL DEFAULT 0,

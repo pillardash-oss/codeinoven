@@ -294,10 +294,12 @@ read-only where the app must own the value and editable where the user must.
   now**, which dispatches the routine's tasks immediately regardless of its
   schedule and pause state, so a routine can be tested before its next fire;
   beneath it are **Last run** and **Last success**. Last run is the last
-  dispatch, and last success is stamped when a run's turn actually settles
-  (`RoutineSchedulerService.settleRun` records `lastSuccessAt` only for a task
-  the scheduler dispatched a run on, so a user's own chat never counts as a
-  run), with both timestamps read across the routine's tasks.
+  dispatch (`lastDispatchedAt`), kept apart from the scheduler's internal slot
+  claim (`lastRunAt`, which a missed slot also writes) so a slot that never ran
+  cannot read as a run; last success is stamped when a run's turn actually
+  settles (`RoutineSchedulerService.settleRun` records `lastSuccessAt` only for a
+  task the scheduler dispatched a run on, so a user's own chat never counts as a
+  run). Both timestamps are read across the routine's tasks.
 - **Routine** — the saved how-to, parsed into foldable sections by
   `parseHowToSections`. It recognises markdown headings and the ALL-CAPS title
   style the agent actually writes (`DRAIN PROCEDURE (0600 and 1800)` is a title;

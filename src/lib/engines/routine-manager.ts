@@ -220,6 +220,20 @@ export class RoutineManager {
     return updated
   }
 
+  /**
+   * Record that a run was actually dispatched on a task, scheduled or manual.
+   * Kept apart from `setTaskLastRun`, which the scheduler also writes when it
+   * only claims a slot as missed, so the panel's "last run" never reports a
+   * slot that never ran. Best-effort on a task removed mid-dispatch.
+   */
+  markTaskRunDispatched(threadId: string, at: number): Thread | null {
+    const existing = this.threadRepo.get(threadId)
+    if (!existing) return null
+    const updated: Thread = { ...existing, lastDispatchedAt: at, updatedAt: Date.now() }
+    this.threadRepo.upsert(updated)
+    return updated
+  }
+
   /** The schedule a task runs on: its override when set, else its routine's. */
   resolveTaskSchedule(task: Thread): RoutineSchedule | null {
     if (task.scheduleOverride) return task.scheduleOverride

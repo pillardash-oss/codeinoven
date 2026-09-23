@@ -1116,6 +1116,9 @@ export class Database {
     if (!columns.has('last_run_at')) {
       connection.exec('ALTER TABLE threads ADD COLUMN last_run_at INTEGER')
     }
+    if (!columns.has('last_dispatched_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_dispatched_at INTEGER')
+    }
     if (!columns.has('last_success_at')) {
       connection.exec('ALTER TABLE threads ADD COLUMN last_success_at INTEGER')
     }
