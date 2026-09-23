@@ -244,6 +244,14 @@ prompt"; the user-facing term is how-to.
   a panel. The first task's head start asks _how the routine should happen_ and
   the user describes it; the agent works out what it needs, asks about anything
   missing, and drafts the how-to with them.
+- The routine's seed task is its **Getting started** thread. It carries a fixed
+  title (`ASSISTANT_SETUP_TITLE`) and is never auto-titled, and it runs no
+  auxiliary work: `isAssistantSetupThread` gates the engine so prompt-derived
+  titles and memory extraction are skipped, and a `propose_memory` call answers
+  `memory_unavailable`. Its first exchange therefore stays a pure authoring
+  conversation instead of being mined as a task run. The flag is persisted on
+  the thread (`assistant_getting_started`, with a migration for existing
+  databases), so it survives reloads and regroups.
 - The authoring contract asks for **two** fenced blocks once the user agrees:
   the how-to itself (tag `how-to`) and a machine-readable plan (tag `routine`)
   carrying `cadence`, `times`, `weekdays`, and `connections`. The user then sends
@@ -282,7 +290,14 @@ read-only where the app must own the value and editable where the user must.
 
 - **All** — pause or resume the routine, plus one summary row per section with
   the state in one line and a **More** button that opens that tab. An amber icon
-  marks each section that still needs setup.
+  marks each section that still needs setup. Under the pause toggle sits **Run
+  now**, which dispatches the routine's tasks immediately regardless of its
+  schedule and pause state, so a routine can be tested before its next fire;
+  beneath it are **Last run** and **Last success**. Last run is the last
+  dispatch, and last success is stamped when a run's turn actually settles
+  (`RoutineSchedulerService.settleRun` records `lastSuccessAt` only for a task
+  the scheduler dispatched a run on, so a user's own chat never counts as a
+  run), with both timestamps read across the routine's tasks.
 - **Routine** — the saved how-to, parsed into foldable sections by
   `parseHowToSections`. It recognises markdown headings and the ALL-CAPS title
   style the agent actually writes (`DRAIN PROCEDURE (0600 and 1800)` is a title;
@@ -302,7 +317,11 @@ read-only where the app must own the value and editable where the user must.
 - **Agents** — one primary model and any number of fallbacks, each picked with
   the app's `ModelPicker` so thinking level and account stay visible
   (`RoutineAgentPicker.svelte`). Creating a routine prompts for a primary and two
-  fallbacks; more can be added here.
+  fallbacks; more can be added here. The primary is prefilled with the model the
+  user is already working on (`currentAssistantModelSelection` in the
+  workspace), and `withDefaultRoutinePrimary` (`src/lib/routine-agents.ts`)
+  applies the same fallback when the dialog is skipped, so a routine never blocks
+  on an empty model set.
 
 ### How the model set is used at run time
 
