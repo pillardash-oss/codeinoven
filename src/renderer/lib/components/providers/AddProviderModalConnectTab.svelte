@@ -10,6 +10,7 @@
     ProviderConnectionInfo
   } from '$shared/types'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
+  import Switch from '../ui/Switch.svelte'
   import type { AddProviderModalOAuthController } from './add-provider-modal-oauth.svelte'
   import { shellCommand, stateLabel, type ConnectStep } from './add-provider-modal-helpers'
 
@@ -34,6 +35,11 @@
     apiKey: string
     apiKeyEntry: boolean
     pickerLogin: boolean
+    /** Provider ids the harness currently hides from its own model picker. */
+    hiddenIds: string[]
+    /** Whether this harness exposes a config-file mechanism to hide providers. */
+    supportsHide: boolean
+    togglingHide: boolean
     oauth: AddProviderModalOAuthController
     accountForConnected: (connected: ProviderAccountAuthEntry) => HarnessAccount | undefined
     onCheckAuth: () => void
@@ -42,6 +48,7 @@
     onConnectWithKey: () => void
     onLoginExit: (exitCode: number) => void
     onRequestDisconnect: (account: HarnessAccount | null) => void
+    onToggleHidden: (providerId: string, hidden: boolean) => void
   }
 
   let {
@@ -65,6 +72,9 @@
     apiKey = $bindable(),
     apiKeyEntry,
     pickerLogin,
+    hiddenIds,
+    supportsHide,
+    togglingHide,
     oauth,
     accountForConnected,
     onCheckAuth,
@@ -72,10 +82,26 @@
     onBackToList,
     onConnectWithKey,
     onLoginExit,
-    onRequestDisconnect
+    onRequestDisconnect,
+    onToggleHidden
   }: Props = $props()
 
   const selectedProviderIsOauth = $derived(selectedProvider?.oauth === true)
+
+  /**
+   * Hiding is a provider-level action, so the toggle renders once per provider
+   * even when V2 holds several connections (accounts) for it.
+   */
+  let hideableAccountIds = $derived.by(() => {
+    const seen: Record<string, true> = {}
+    const firstForProvider: string[] = []
+    for (const account of authStatus?.accounts ?? []) {
+      if (account.active === false || seen[account.providerId]) continue
+      seen[account.providerId] = true
+      firstForProvider.push(account.id)
+    }
+    return firstForProvider
+  })
 </script>
 
 <div class="space-y-4">
@@ -110,12 +136,33 @@
           <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
             <CheckCircle2 size={14} class="shrink-0 text-success" />
             <div class="min-w-0 flex-1">
-              <p class="truncate text-xs font-medium text-foreground">{connected.label}</p>
+              <p class="flex items-center gap-1.5 truncate text-xs font-medium text-foreground">
+                <span class="truncate">{connected.label}</span>
+                {#if hiddenIds.includes(connected.providerId)}
+                  <span
+                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
+                    title="Hidden from the {harness.name} model picker by its own config"
+                  >
+                    Hidden
+                  </span>
+                {/if}
+              </p>
               <p class="truncate font-mono text-[0.625rem] text-dimmed">
                 {connected.providerId}{#if connected.method}
                   · {connected.method}{/if}
               </p>
             </div>
+            {#if supportsHide && hideableAccountIds.includes(connected.id)}
+              <Switch
+                checked={hiddenIds.includes(connected.providerId)}
+                disabled={togglingHide}
+                label="Hide"
+                title="Hide {connected.providerId} from the {harness.name} model picker using its own config"
+                aria-label="Hide {connected.providerId} from the {harness.name} model picker"
+                onchange={() =>
+                  onToggleHidden(connected.providerId, !hiddenIds.includes(connected.providerId))}
+              />
+            {/if}
             {#if accountForConnected(connected)}
               <button
                 type="button"

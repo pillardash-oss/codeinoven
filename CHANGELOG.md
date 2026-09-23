@@ -56,6 +56,39 @@ All notable changes to CodeInOven are documented here. This project follows
   streams and mirrors its history. It reports as skipped wherever no OpenCode
   binary is present, so CI stays green.
 
+- **OpenCode's own multi-account and provider hiding are first-class again.**
+  The harness manifest now declares a `multipleAccounts` behavior, and the auth
+  capabilities are derived from that declaration instead of a hardcoded default:
+  OpenCode reports native multi-account support, and account activation is
+  enabled only when the installed line actually has a switch command
+  (`opencode auth switch <integration> <credential>`, V2 only; V1's `auth` has
+  only `list`, `login`, and `logout`). Selecting an account that lives in
+  OpenCode's own default store makes it the active credential, so a turn uses
+  the account the user picked rather than whichever one OpenCode last had
+  active. Accounts the user creates inside OpenCode itself are read by
+  `opencode auth list`, one row per stored connection, and stay separately
+  actionable on the connect screen: a provider with two keys gets two rows with
+  their own disconnect, matched by the credential id each row mirrors. Because
+  that list never reports which connection is active, the flag is read from
+  OpenCode's store and the account list's default badge follows it, so the app
+  shows the account a turn will really use even after a switch made inside
+  OpenCode.
+
+- Provider hiding works at both OpenCode lines again, with the toggle restored on
+  the provider connect screen (it was dropped when the account and model pickers
+  were unified). V1 keeps writing `disabled_providers`. V2 writes the documented
+  replacement from [the V2 policies guide](https://opencode.ai/v2/docs/policies/),
+  an `experimental.policies` statement
+  `{action:'provider.use', resource:<id>, effect:'deny'}`, which removes the
+  provider from the catalog and from model selection even with valid
+  credentials; denies are appended last, where the last matching statement wins.
+  A V2 read is the union of that list and `disabled_providers`, because a V2
+  install still translates a V1 list it finds, and a V2 write mirrors the same
+  set back into `disabled_providers` so the user's hiding survives a switch to a
+  V1 install. Unrelated policy statements and the rest of the config file
+  round-trip untouched, and the cached provider catalog is invalidated so the
+  model picker updates immediately.
+
 - The agent can now collect secrets without ever seeing them. A new
   `cio_ask_secret` **gateway** tool (the utility gateway every harness already
   reaches, not a per-harness tool) asks for one or more values by title and

@@ -374,12 +374,18 @@
   function chooseAccount(account: HarnessAccount): void {
     onSelect(providerId, modelId, harnessId, account.id)
     onSelectAccount?.(account)
+    // A harness that keeps several credentials in its own store (OpenCode) has
+    // to be told which one is active, or the turn would use a stale one.
+    void harnessAccountCache
+      .activate(account)
+      .catch((error) => reportError(error, 'The active account was not switched.'))
   }
 
   /** Mark an account as its harness's default for this provider. */
   async function setDefaultAccount(account: HarnessAccount): Promise<void> {
     try {
       await harnessAccountCache.setDefault(account)
+      await harnessAccountCache.activate(account)
     } catch (setDefaultError) {
       reportError(setDefaultError, 'The default account was not saved.')
     }

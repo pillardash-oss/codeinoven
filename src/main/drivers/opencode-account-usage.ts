@@ -83,6 +83,7 @@ export function openCodeApiKeyFromCredentialValue(value: unknown): string | unde
 }
 
 interface CredentialRow {
+  id: string
   integrationId: string
   value: string
   active: number
@@ -122,13 +123,34 @@ async function openCredentialStore(databasePath: string): Promise<CredentialStor
   }
 }
 
+/**
+ * Credential ids OpenCode V2 currently has marked active, per its own store.
+ *
+ * `opencode auth list --format json` reports every stored connection but never
+ * which one is active (verified live: `Connection.CredentialInfo` has no such
+ * field), so the store's `active` column is the only source. The app needs it
+ * to show which account a turn will actually use, and to keep its own default
+ * in step with a switch the user made inside OpenCode.
+ */
+export async function readOpenCodeV2ActiveCredentialIds(
+  environment: NodeJS.ProcessEnv
+): Promise<Set<string>> {
+  const active = new Set<string>()
+  for (const databasePath of await openCodeCredentialDatabasePaths(environment)) {
+    for (const row of await readV2CredentialRows(databasePath)) {
+      if (row.active > 0 && row.id) active.add(row.id)
+    }
+  }
+  return active
+}
+
 async function readV2CredentialRows(databasePath: string): Promise<CredentialRow[]> {
   const database = await openCredentialStore(databasePath)
   if (!database) return []
   try {
     const rows = database
       .prepare(
-        'SELECT integration_id AS integrationId, value, active, time_updated AS updatedAt FROM credential'
+        'SELECT id, integration_id AS integrationId, value, active, time_updated AS updatedAt FROM credential'
       )
       .all()
     return Array.isArray(rows) ? (rows as CredentialRow[]) : []

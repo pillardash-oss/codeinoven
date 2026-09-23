@@ -294,6 +294,7 @@
         ...accounts.filter((candidate) => candidate.harnessId !== account.harnessId),
         ...updated
       ])
+      await harnessAccountCache.activate(account)
     } catch (setDefaultError) {
       error =
         setDefaultError instanceof Error

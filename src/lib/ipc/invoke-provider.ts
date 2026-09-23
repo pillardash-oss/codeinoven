@@ -118,6 +118,7 @@ export const invokeProviderContract = {
   /** Mark an account as its harness's default for the account's provider.
    *  Returns the harness's full account list so callers can refresh caches. */
   'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
+  'providerAccounts:activate': {} as Contract<[accountId: string], void>,
   'providerAccounts:remove': {} as Contract<[accountId: string], boolean>,
   'providerAccounts:beginLogin': {} as Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],

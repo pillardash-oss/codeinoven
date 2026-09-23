@@ -24,7 +24,7 @@ export function registerProviderAccountIpc(
       if (rawHarnessId === undefined) return accounts.list()
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const refresh = rawRefresh === undefined ? false : boolean(rawRefresh, 'Refresh')
-      const capabilities = auth.capabilities(harnessId)
+      const capabilities = await auth.capabilities(harnessId)
       const shouldSync = refresh || Date.now() - (lastAccountSync.get(harnessId) ?? 0) >= 30_000
       if (capabilities && shouldSync) {
         const status = await auth.getStatus(harnessId)
@@ -66,7 +66,7 @@ export function registerProviderAccountIpc(
     const pending = accounts.pendingAccountById(
       validateEntityId(rawPendingAccountId, 'Pending account ID', 256)
     )
-    const capabilities = auth.capabilities(pending.harnessId)
+    const capabilities = await auth.capabilities(pending.harnessId)
     return {
       capabilities,
       ...(await auth.getStatus(pending.harnessId, undefined, accounts.environment(pending)))
@@ -109,6 +109,23 @@ export function registerProviderAccountIpc(
   ipcMain.handle('providerAccounts:setDefault', async (_, rawAccountId: unknown) => {
     const account = await accounts.setDefault(validateEntityId(rawAccountId, 'Account ID', 256))
     return accounts.list(account.harnessId)
+  })
+  ipcMain.handle('providerAccounts:activate', async (_, rawAccountId: unknown) => {
+    const accountId = validateEntityId(rawAccountId, 'Account ID', 256)
+    const account = (await accounts.list()).find((candidate) => candidate.id === accountId)
+    if (!account) throw new Error('The selected account no longer exists.')
+    // Only the harness's own default store holds several credentials that a
+    // switch can pick between; a managed container is already isolated, and a
+    // harness without a switch command has nothing to activate.
+    if (account.containerKind !== 'legacy-default' || !account.sourceId) return
+    const capabilities = await auth.capabilities(account.harnessId)
+    if (!capabilities?.accountActivation) return
+    await auth.activateAccount(
+      account.harnessId,
+      account.providerId,
+      account.sourceId,
+      accounts.environment(account)
+    )
   })
   ipcMain.handle('providerAccounts:remove', (_, rawAccountId: unknown) =>
     (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
@@ -165,7 +182,7 @@ export function registerProviderAccountIpc(
     async (_, rawHarnessId: unknown, rawProjectPath?: unknown) => {
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const projectPath = parseOptionalAbsolutePath(rawProjectPath)
-      const capabilities = auth.capabilities(harnessId)
+      const capabilities = await auth.capabilities(harnessId)
       if (!capabilities) {
         return {
           capabilities: null,
@@ -373,9 +390,7 @@ async function resolveCredentialAccount(
   // longer implies the account is still in-memory pending. Resolve persisted
   // accounts first, then fall back to the in-memory pending store for accounts
   // that have not been finalized yet (e.g. mid add-provider login flow).
-  const persisted = (await accounts.list(harnessId)).find(
-    (account) => account.id === accountId
-  )
+  const persisted = (await accounts.list(harnessId)).find((account) => account.id === accountId)
   if (persisted) return persisted
   return accounts.pendingAccount(harnessId, accountId)
 }

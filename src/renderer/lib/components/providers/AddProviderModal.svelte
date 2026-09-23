@@ -70,6 +70,7 @@
   let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
   let terminalId = $state('')
   let hiddenIds = $state<string[]>([])
+  let togglingHide = $state(false)
   let notice = $state('')
   let actionWarning = $state('')
   let actionError = $state('')
@@ -116,7 +117,8 @@
 
   let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
 
-  /** Only OpenCode exposes a config-file mechanism (disabled_providers) to hide providers. */
+  /** Only OpenCode exposes a config-file mechanism to hide providers:
+   *  V1's `disabled_providers`, V2's `experimental.policies` provider.use deny. */
   let supportsHide = $derived(harness.id === 'opencode')
 
   let filteredOffered = $derived(
@@ -271,6 +273,24 @@
     }
   }
 
+  async function toggleHidden(providerId: string, hidden: boolean): Promise<void> {
+    if (!supportsHide) return
+    togglingHide = true
+    actionError = ''
+    actionWarning = ''
+    try {
+      hiddenIds = await invoke('providerAccounts:setHidden', harness.id, providerId, hidden)
+      // The harness's own catalog now includes (or excludes) this provider, so
+      // drop the cached one or the model picker keeps showing the old set.
+      providerCatalog.invalidateAll()
+    } catch (hideError) {
+      actionError =
+        hideError instanceof Error ? hideError.message : 'The provider could not be hidden.'
+    } finally {
+      togglingHide = false
+    }
+  }
+
   function openPicker(): void {
     actionError = ''
     actionWarning = ''
@@ -387,9 +407,13 @@
 
   /** Resolve the registered account behind one connected-provider row. Every
    * row is a dedicated account: container rows carry their account id as a
-   * suffix (`<entryId>.<accountId>`), legacy rows match exactly. */
+   * suffix (`<entryId>.<accountId>`), legacy rows match exactly, and a harness
+   * whose own store holds several credentials per provider (OpenCode) is
+   * matched by the credential id the row mirrors (`sourceId`), so two
+   * connections on one provider stay separately actionable. */
   function accountForConnected(connected: ProviderAccountAuthEntry): HarnessAccount | undefined {
     return (
+      knownAccounts.find((account) => account.sourceId === connected.id) ??
       knownAccounts.find((account) => account.id === connected.id) ??
       knownAccounts.find((account) => connected.id.endsWith(`.${account.id}`)) ??
       knownAccounts.find((account) => account.providerId === connected.providerId)
@@ -514,6 +538,9 @@
       bind:apiKey
       {apiKeyEntry}
       {pickerLogin}
+      {hiddenIds}
+      {supportsHide}
+      {togglingHide}
       {oauth}
       {accountForConnected}
       onCheckAuth={() => void checkAuth()}
@@ -522,6 +549,7 @@
       onConnectWithKey={() => void connectWithKey()}
       onLoginExit={(exitCode) => void handleLoginExit(exitCode)}
       onRequestDisconnect={(account) => (disconnectTarget = account)}
+      onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
     />
   {:else}
     <AddProviderModalCustomTab {harness} {customProviders} {customCount} {onEditCustom} />

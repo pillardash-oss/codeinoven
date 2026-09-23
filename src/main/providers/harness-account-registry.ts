@@ -6,6 +6,7 @@ import type {
   ProviderAccountAuthEntry
 } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const REGISTRY_PATH = 'provider-accounts/accounts.json'
@@ -60,6 +61,13 @@ export class HarnessAccountRegistry {
           (account) => account.active !== false && !isCodeInOvenCustomProviderId(account.providerId)
         )
         .sort((left, right) => left.providerId.localeCompare(right.providerId))
+      // A harness that keeps several credentials in its own store decides which
+      // one is active (OpenCode V2's `auth switch`). Mirroring that onto the
+      // default badge keeps the app showing the account a turn will actually
+      // use, including after the user switched inside OpenCode itself.
+      const harnessActiveSourceIds = harnessSupportsMultipleAccounts(harnessId)
+        ? new Set(active.filter((entry) => entry.active === true).map((entry) => entry.id))
+        : new Set<string>()
       const managed = registry.accounts.filter(
         (account) => account.harnessId === harnessId && account.containerKind === 'managed'
       )
@@ -128,6 +136,7 @@ export class HarnessAccountRegistry {
           label,
           containerKind: 'legacy-default',
           ...(sourceId ? { sourceId } : {}),
+          ...(sourceId && harnessActiveSourceIds.has(sourceId) ? { isDefault: true } : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })

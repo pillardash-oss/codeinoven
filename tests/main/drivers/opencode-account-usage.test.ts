@@ -6,7 +6,8 @@ import { OPENCODE_ACCOUNT_USAGE_ENDPOINT } from '../../../src/main/drivers/openc
 import {
   openCodeApiKeyFromCredentialValue,
   openCodeCredentialDatabasePaths,
-  readOpenCodeAccountUsage
+  readOpenCodeAccountUsage,
+  readOpenCodeV2ActiveCredentialIds
 } from '../../../src/main/drivers/opencode-account-usage'
 
 /**
@@ -114,6 +115,30 @@ describe('openCodeCredentialDatabasePaths', () => {
       join(directory, 'opencode-next.db'),
       join(directory, 'opencode.db')
     ])
+  })
+})
+
+describe('readOpenCodeV2ActiveCredentialIds', () => {
+  it('reports exactly the credentials the store marks active', async () => {
+    const dataHome = join(sandbox.home, 'active-ids')
+    const directory = join(dataHome, 'opencode')
+    await mkdir(directory, { recursive: true })
+    createCredentialStore(join(directory, 'opencode.db'), [
+      { integrationId: 'opencode-go', value: '{"type":"key","key":"a"}', active: 1 },
+      { integrationId: 'opencode-go', value: '{"type":"key","key":"b"}', active: 0 },
+      { integrationId: 'opencode', value: '{"type":"key","key":"c"}', active: 1 }
+    ])
+
+    // `auth list --format json` never says which connection is active, so the
+    // store is the only source; the flag is what the account list shows.
+    const active = await readOpenCodeV2ActiveCredentialIds({ XDG_DATA_HOME: dataHome })
+    expect([...active].sort()).toEqual(['cred_0', 'cred_2'])
+  })
+
+  it('returns nothing when no store exists', async () => {
+    await expect(
+      readOpenCodeV2ActiveCredentialIds({ XDG_DATA_HOME: join(sandbox.home, 'no-store') })
+    ).resolves.toEqual(new Set())
   })
 })
 
