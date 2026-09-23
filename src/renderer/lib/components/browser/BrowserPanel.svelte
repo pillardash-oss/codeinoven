@@ -264,16 +264,24 @@
     }
     window.addEventListener('resize', onWindowResize)
 
-    // The sidebar enters with a short transform. Follow its rectangle until the
-    // transition settles so native content remains aligned with the Svelte frame.
-    const startedAt = performance.now()
+    // The sidebar enters with a short transform, so its rectangle keeps moving
+    // for the length of that transition and the native content has to follow it
+    // until it settles. The full screen panel has no such transform: it is fixed
+    // to the window and its frame is already final by the first layout, so the
+    // attachment's `tick` and the observer below own every change it can have.
+    // Running the loop there was a `browser:show` per animation frame for a
+    // rectangle that never moved, which is the switch cost the entry animation
+    // was paying for on a surface that never animates.
     let animationFrame = 0
-    const followTransition = (now: number): void => {
-      if (destroyed) return
-      void showAtCurrentBounds().catch(() => {})
-      if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
+    if (surface === 'sidebar') {
+      const startedAt = performance.now()
+      const followTransition = (now: number): void => {
+        if (destroyed) return
+        void showAtCurrentBounds().catch(() => {})
+        if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
+      }
+      animationFrame = requestAnimationFrame(followTransition)
     }
-    animationFrame = requestAnimationFrame(followTransition)
     return () => {
       destroyed = true
       cancelAnimationFrame(animationFrame)
