@@ -290,6 +290,11 @@
 
   // ─── Issues ───────────────────────────────────────────────────────────────
 
+  /**
+   * Every thread this panel reports on. A run inherits its task's `routineId`,
+   * so the routine's runs are in here too: the execution status of a run
+   * (working, failed, interrupted) lives on the run thread, not the task.
+   */
   const routineTasks = $derived.by((): Thread[] => {
     if (!routine) return task ? [task] : []
     return scopeState.allScopeThreads.filter((thread) => thread.routineId === routine.id)
@@ -301,7 +306,8 @@
       : assistantRoutines.missedForTask(threadId)
   )
 
-  /** Task-level run problems: rate limits, failures, and interrupted runs. */
+  /** Run problems: rate limits, failures, and interrupted runs. Each entry is a
+   *  thread   usually one run, since that is where the execution status lives. */
   const runIssues = $derived.by(() => {
     const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
     for (const entry of routineTasks) {
@@ -426,14 +432,17 @@
 
   /**
    * Run the routine immediately, ignoring its schedule and pause state, so the
-   * user can test what they built without waiting for the next fire.
+   * user can test what they built without waiting for the next fire. Every task
+   * runs on a fresh thread, so the first run is opened to show it happening.
    */
   async function runRoutineNow(): Promise<void> {
     if (!routine || running) return
     running = true
     try {
-      const count = await assistantRoutines.runRoutineNow(routine.id)
-      toast.success(count === 1 ? 'Run started' : `${count} runs started`)
+      const runs = await assistantRoutines.runRoutineNow(routine.id)
+      toast.success(runs.length === 1 ? 'Run started' : `${runs.length} runs started`)
+      const first = runs[0]
+      if (first) onOpenTask(first)
     } catch (error) {
       reportError(error, 'Could not run the routine')
     } finally {
@@ -451,7 +460,9 @@
 
   async function runNow(run: MissedRun): Promise<void> {
     try {
-      await assistantRoutines.runMissedRunNow(run.id)
+      const created = await assistantRoutines.runMissedRunNow(run.id)
+      // A run happens on its own thread, so open the run itself.
+      if (created) onOpenTask(created)
     } catch (error) {
       reportError(error, 'Could not run the missed task')
     }
@@ -965,7 +976,7 @@
   onConfirm={confirmRemoveConnection}
 >
   <p>
-    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this
-    routine? The agent will no longer use it when this routine runs.
+    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this routine?
+    The agent will no longer use it when this routine runs.
   </p>
 </ConfirmDialog>

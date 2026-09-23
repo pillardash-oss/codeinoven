@@ -108,6 +108,55 @@ describe('RoutineManager', () => {
     expect(routines.resolveTaskSchedule(grouped!)).toEqual({ cadence: 'hourly', times: [] })
   })
 
+  it('lists a task runs and never counts a run as a task', async () => {
+    const routine = routines.createRoutine({
+      name: 'Triage',
+      schedule: { cadence: 'daily', times: ['09:00'] }
+    })
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Triage'
+    })
+    routines.setTaskRoutine(task.id, routine.id)
+    const run = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Run · 09:00',
+      routineId: routine.id,
+      assistantTaskId: task.id
+    })
+    // A run is an execution of a task, never a task: it is not listed, not
+    // schedulable, and not counted in the routine's task count.
+    expect(routines.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
+    expect(routines.listRoutineTasks(routine.id).map((entry) => entry.id)).toEqual([task.id])
+    expect(routines.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
+    expect(routines.taskIdForRun(run.id)).toBe(task.id)
+    expect(routines.taskIdForRun(task.id)).toBeNull()
+  })
+
+  it('deletes a task with its runs, so no orphan run row survives', async () => {
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Triage'
+    })
+    const run = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Run · 09:00',
+      assistantTaskId: task.id
+    })
+    const sibling = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Unrelated task'
+    })
+    await threads.deleteThread(ASSISTANT_SPACE_ID, task.id)
+    expect(await threads.getThread(ASSISTANT_SPACE_ID, run.id)).toBeNull()
+    expect(await threads.getThread(ASSISTANT_SPACE_ID, sibling.id)).not.toBeNull()
+  })
+
   it('deletes every thread of a routine when it is removed, the hidden how-to thread included', async () => {
     routines.attachThreadDeleter((threadId) => threads.deleteThread(ASSISTANT_SPACE_ID, threadId))
     const routine = routines.createRoutine({ name: 'Temp' })

@@ -328,8 +328,9 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('assistant:runMissedRunNow', async (_, id: unknown) => {
     const scheduler = requireScheduler()
-    await scheduler.runMissedRunNow(requireString(id, 'Missed run ID').slice(0, 300))
+    const run = await scheduler.runMissedRunNow(requireString(id, 'Missed run ID').slice(0, 300))
     broadcastMissedRunsChanged(scheduler.listMissedRuns())
+    return run
   })
 
   ipcMain.handle('assistant:runRoutineNow', async (_, routineId: unknown) => {

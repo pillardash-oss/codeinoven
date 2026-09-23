@@ -22,7 +22,7 @@ describe('RoutineSchedulerService', () => {
   let routines: RoutineManager
   let threads: ThreadManager
   let clock = 0
-  const dispatched: Array<{ task: Thread; routine: Routine | null }> = []
+  const dispatched: Array<{ run: Thread; task: Thread; routine: Routine | null }> = []
 
   beforeEach(async () => {
     db = await createTestDb()
@@ -52,31 +52,93 @@ describe('RoutineSchedulerService', () => {
       providerId: 'pi',
       title
     })
-    routines.setTaskRoutine(task.id, routine.id)
-    return { task, routine }
+    // Return the regrouped row: the scheduler reads a task's routine from the
+    // thread it is handed, exactly as the app hands it a fresh row.
+    const grouped = routines.setTaskRoutine(task.id, routine.id)
+    return { task: grouped, routine }
   }
 
   function service(): RoutineSchedulerService {
     return new RoutineSchedulerService(storage, {
       routines,
       now: () => clock,
-      dispatch: (task, routine) => {
-        dispatched.push({ task, routine })
+      // Every run gets its own thread, exactly as the app does it: the run is a
+      // real row linked to its task through `assistantTaskId`.
+      createRunThread: async (task) =>
+        threads.createThread({
+          projectId: ASSISTANT_SPACE_ID,
+          providerId: 'pi',
+          title: `Run · ${dispatched.length + 1}`,
+          routineId: task.routineId,
+          assistantTaskId: task.id
+        }),
+      dispatch: (run, task, routine) => {
+        dispatched.push({ run, task, routine })
       }
     })
   }
 
   it('dispatches exactly one run when a schedule comes due while open', async () => {
-    const { routine } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    const { routine, task } = await makeScheduledTask({ cadence: 'hourly', times: [] })
     const scheduler = service()
     await scheduler.start() // startedAt === clock; does not fire during detection
     scheduler.evaluate()
+    await scheduler.flush()
     expect(dispatched).toHaveLength(1)
     expect(dispatched[0].routine?.id).toBe(routine.id)
+    // The run executes on a fresh thread linked to its task, never on the task.
+    expect(dispatched[0].run.id).not.toBe(task.id)
+    expect(dispatched[0].run.assistantTaskId).toBe(task.id)
+    expect(dispatched[0].run.routineId).toBe(routine.id)
     // A second tick in the same slot must not fire again.
     scheduler.evaluate()
+    await scheduler.flush()
     expect(dispatched).toHaveLength(1)
     expect(scheduler.listMissedRuns()).toHaveLength(0)
+    scheduler.dispose()
+  })
+
+  it('never schedules a run thread as a task of its own', async () => {
+    const { task, routine } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    const scheduler = service()
+    await scheduler.start()
+    scheduler.evaluate()
+    await scheduler.flush()
+    const run = dispatched[0].run
+    expect(run.assistantTaskId).toBe(task.id)
+    // The run thread carries a schedule through its routine, yet only its task
+    // is evaluated: a run can never have a run.
+    expect(routines.listAssistantTasks().map((entry) => entry.id)).toEqual([task.id])
+    expect(routines.listTaskRuns(task.id).map((entry) => entry.id)).toEqual([run.id])
+    scheduler.evaluate()
+    await scheduler.flush()
+    expect(dispatched).toHaveLength(1)
+    expect(routine.id).toBeTruthy()
+    scheduler.dispose()
+  })
+
+  it('stamps the task, not the run thread, when a run settles', async () => {
+    const { task } = await makeScheduledTask({ cadence: 'hourly', times: [] })
+    const scheduler = service()
+    await scheduler.start()
+    scheduler.evaluate()
+    await scheduler.flush()
+    const run = dispatched[0].run
+    scheduler.settleRun(run.id, 'completed')
+    const updated = routines.listAssistantTasks().find((entry) => entry.id === task.id)
+    expect(updated?.lastSuccessAt).toBe(clock)
+    scheduler.dispose()
+  })
+
+  it('gives every manual run its own thread', async () => {
+    const { task, routine } = await makeScheduledTask({ cadence: 'daily', times: ['09:00'] })
+    routines.updateRoutine(routine.id, { howTo: 'Check the inbox, then report.' })
+    const scheduler = service()
+    await scheduler.start()
+    const first = await scheduler.runTaskNow(task)
+    const second = await scheduler.runTaskNow(task)
+    expect(first.id).not.toBe(second.id)
+    expect(dispatched.map((entry) => entry.run.id)).toEqual([first.id, second.id])
     scheduler.dispose()
   })
 
@@ -86,6 +148,7 @@ describe('RoutineSchedulerService', () => {
     const scheduler = service()
     await scheduler.start()
     scheduler.evaluate()
+    await scheduler.flush()
     expect(dispatched[0].routine?.howTo).toBe('Check the inbox, then report.')
     scheduler.dispose()
   })
@@ -127,13 +190,15 @@ describe('RoutineSchedulerService', () => {
     scheduler.dispose()
   })
 
-  it('Run Now dispatches the missed run and settles its record', async () => {
-    await makeScheduledTask({ cadence: 'daily', times: ['09:00'] })
+  it('Run Now dispatches the missed run on a fresh thread and settles its record', async () => {
+    const { task } = await makeScheduledTask({ cadence: 'daily', times: ['09:00'] })
     const scheduler = service()
     await scheduler.start()
     const [missed] = scheduler.listMissedRuns()
-    await scheduler.runMissedRunNow(missed.id)
+    const run = await scheduler.runMissedRunNow(missed.id)
     expect(dispatched).toHaveLength(1)
+    expect(run?.assistantTaskId).toBe(task.id)
+    scheduler.settleRun(run?.id ?? '', 'completed')
     expect(scheduler.listMissedRuns()).toHaveLength(0)
     scheduler.dispose()
   })

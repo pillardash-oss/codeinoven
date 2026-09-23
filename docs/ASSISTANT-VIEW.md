@@ -11,6 +11,9 @@ the missed-run surfaces, the how-to authoring flow, and fork hand-off.
 flowchart LR
   R["Routine (name, colour, icon, how-to, default schedule, connections)"] --> T1["Task A (own thread)"]
   R --> T2["Task B (own thread)"]
+  T1 --> RA["Run (fresh thread)"]
+  T1 --> RB["Run (fresh thread)"]
+  T2 --> RC["Run (fresh thread)"]
   F["Routine-less task (own thread)"] -.->|"grouped later"| R
 ```
 
@@ -21,10 +24,21 @@ flowchart LR
   `src/lib/engines/routine-manager.ts`.
 - **Task** is a thread in the hidden assistant space container
   (`ASSISTANT_SPACE_ID`, `src/lib/types/project.ts`) with an optional
-  `routineId`. One continuous thread per task; a task may exist without a
-  routine. Assistant threads are excluded from Projects and Chats because the
-  container is a hidden project, exactly like the inbox.
-- **Hierarchy is always Routine -> Task -> one continuous thread per task.**
+  `routineId`. It is the user's own conversation about the task; a task may
+  exist without a routine. Assistant threads are excluded from Projects and
+  Chats because the container is a hidden project, exactly like the inbox.
+- **Run** is one execution of a task, on its **own fresh thread**. Every
+  scheduled fire, missed-run **Run now**, and routine **Run now** creates one,
+  so a run never lands in the task's conversation and a run's transcript carries
+  only that execution. A run thread is a thread like any other (it can be
+  renamed, pinned, forked, noted, handed off, and deleted), it inherits its
+  task's `routineId` so the engine keeps composing the routine's how-to and run
+  contract into its system prompt, and it links back through
+  `Thread.assistantTaskId` (`isAssistantRunThread`). **Only a routine's Getting
+  started thread hosts the getting-started run** the authoring conversation
+  and no task's scheduled run ever executes on a task's own thread.
+- **Hierarchy is always Routine -> Task -> runs.** A run is never a task: it is
+  never scheduled, never counted in a routine's task count, and never grouped.
   Each task may override its routine's schedule (`scheduleOverride`), and shows a
   custom icon (`assistantIconType`) on its row.
 
@@ -39,10 +53,11 @@ flowchart LR
 
 ### Explicitly deferred
 
-Thread-per-run, automatic catch-up of missed schedules, a standalone Task
-entity, a new `threadKind` flag, hand-off by move (not fork), and a permanent
-general assistant chat. The header's **New task** action creates a routine-less
-task instead, and creates it with no extra naming step.
+Thread-per-run is implemented, not deferred: every run executes on a fresh
+thread (see **Model**). Still deferred: automatic catch-up of missed schedules,
+a standalone Task entity, a new `threadKind` flag, hand-off by move (not fork),
+and a permanent general assistant chat. The header's **New task** action creates
+a routine-less task instead, and creates it with no extra naming step.
 
 ### Workspace
 
@@ -56,6 +71,10 @@ workspace instead of a shared scratch directory:
 - `resolveThreadPath` then scopes every assistant thread to
   `assistant-cwd/<routineId>/`, so work in one routine can never touch another's
   files. A routine-less task gets `assistant-cwd/<threadId>/`.
+- A **run thread inherits its task's `routineId`**, so every run of a routine
+  works in that same routine directory and its artifacts land with the routine's
+  other work; the file tree mounted in the rail therefore reads the same root
+  whether the user opens the task or one of its runs.
 - That routine directory is the session's working directory and its permission
   project root, so artifacts, generated images, and any files the agent writes
   land under the routine. Assistant threads get no `chats-artifacts` scratch
@@ -91,9 +110,12 @@ workspace instead of a shared scratch directory:
 the app's clock for Assistant View.
 
 - **App-open-only firing.** A bounded 30s tick evaluates each scheduled task.
-  A slot that comes due while the app is open dispatches one run on the task's
-  continuous thread, using the task's bound settings and the routine how-to as
-  prompt context (`sendPrompt` with `origin: 'internal'`).
+  A slot that comes due while the app is open creates a **fresh run thread**
+  linked to its task (`ChatEngine.createAssistantRunThread`) and dispatches one
+  run on it, using the task's bound settings with the routine's primary model
+  overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
+  task's `routineId`, so the engine composes the routine how-to and the run
+  contract into its system prompt exactly as it does for the task.
 - **Paused routines never fire.** `Routine.paused` is checked before the
   schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
   stops every task in it while keeping the tasks, their how-to, and their
@@ -109,8 +131,9 @@ the app's clock for Assistant View.
   idempotent by `(threadId, dueAt)`, so repeated relaunches cannot
   double-count or double-badge one miss.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
-  without running it; `assistant:runMissedRunNow` dispatches the run on the task
-  thread and settles the record on success. Neither is automatic.
+  without running it; `assistant:runMissedRunNow` creates a fresh run thread,
+  dispatches the run on it, settles the record on success, and returns the run so
+  the caller can open it. Neither is automatic.
 
 ## Missed colour token
 
@@ -150,11 +173,12 @@ The renderer state lives in `assistantRoutines`
 
 ## Assistant sidebar
 
-The left sidebar shows only routines and their tasks, with no title header and
-no composer. Everything the view offers lives on the app header, registered by
-the workspace through `viewActions`:
+The left sidebar shows only routines, their tasks, and each task's runs, with no
+title header and no composer. Everything the view offers lives on the app header,
+registered by the workspace through `viewActions`:
 
-- **Search** (`AssistantSearchControl.svelte`) filters routines and tasks.
+- **Search** (`AssistantSearchControl.svelte`) filters routines, tasks, and runs.
+  Runs get their own result section, since a run is a row on the sidebar too.
 - **New routine** (`RoutineCreateControl.svelte`) asks only for a title and an
   optional **description** (a note for the user; it is never sent to the agent),
   then immediately seeds the **Getting started** thread, exactly as adding a
@@ -212,6 +236,20 @@ suppressed via `hideProject`). A new task is created already inside its routine
 (`routineId` travels through `thread:create`), so the creation broadcast can
 never leave it stranded outside the routine.
 
+**A task's runs render nested under it.** `Workspace.svelte` groups every run
+thread by its `assistantTaskId` (`groupRunsByTask`) and passes it to the sidebar,
+which renders the runs indented under the task row with the same
+`AssistantTaskRow` in its `run` variant (a run mark instead of the task clock,
+and its own last-activity line instead of the task's schedule). The list is
+bounded: only the newest `TASK_RUN_PREVIEW` runs show until the user picks
+**Show all N runs** (`previewRuns`), so a routine that has run for months cannot
+turn the sidebar into a log. The toggle is a plain row under the runs, never a
+control nested inside a row's button. A task row also pulses while any of its
+runs is working (`runWorking`), because the run, not the task, is what is
+executing, and the routine row aggregates the same signal. Missed badges stay on
+the task (and its routine): a miss is a property of the schedule, not of one
+execution.
+
 Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
 The section is the thread sidebar's, not a copy of it: `PinnedSection` takes an
@@ -230,7 +268,8 @@ Assistant View, never a Projects row.
 
 Task rows carry no generic assistant robot. The icon slot resolves a custom
 `assistantIconType` image first, then the **Hammer** for a routine's how-to
-("Getting started") thread, then the plain task clock (`Clock1`). The task row's
+("Getting started") thread, then the **RotateCcw** run mark for one execution of
+a task (`assistantTaskId`), then the plain task clock (`Clock1`). The task row's
 fallback is the same `Clock1` the header's **New task** action and the search
 results use, and the Hammer is the single how-to mark everywhere it appears: the
 row, the rail's **How to** item, the routine row's **How to** menu item, the
@@ -487,8 +526,8 @@ value and editable where the user must.
   whose declared `{env:NAME}` secret was never supplied all read as needing setup
   instead of as working. **Add a connection** is a searchable, full-width library
   picker (`UtilityPicker.svelte`), never a plain select. Removing one is
-destructive, so the row's X only stages it and the shared `ConfirmDialog`
-commits the removal.
+  destructive, so the row's X only stages it and the shared `ConfirmDialog`
+  commits the removal.
 
   A row that still needs setup carries a **Set up** button that opens the
   **Add capability** modal the Utilities page uses, so the user can wire the
@@ -542,18 +581,21 @@ The model set is not decoration; it decides which model a run executes on.
   its runs use. A routine with no model set keeps the task's own settings.
 - A task created inside a routine is seeded on the routine's primary, so the
   composer shows the model the routine actually runs on.
-- When a run hits a **provider failure**, the chat engine moves the task onto the
-  routine's next model and re-runs at once, instead of parking the thread for the
-  failed provider's reset window (`tryAssistantModelFallback` in
-  `src/main/chat/chat-engine.ts`, fed by `RoutineManager.resolveTaskAgents`). The
-  order comes from `routineModelCandidates`, so the primary is tried first and the
+- When a run hits a **provider failure**, the chat engine moves the run's
+  thread onto the routine's next model and re-runs at once, instead of parking
+  the thread for the failed provider's reset window (`tryAssistantModelFallback`
+  in `src/main/chat/chat-engine.ts`, fed by `RoutineManager.resolveTaskAgents`,
+  which reads the routine off the run thread's inherited `routineId`). The order
+  comes from `routineModelCandidates`, so the primary is tried first and the
   fallbacks after it, in the order they are listed.
 - Fallover stops at the end of the list: once every model has failed, the normal
   reset wait and the **Issues** tab take over. A model the user picked by hand,
   which is not part of the routine's set, is never overridden.
-- **Issues** — missed runs with **Dismiss** and **Run now**, plus task-level run
-  problems: a rate limit with its retry time, a failed run, and an interrupted
-  run. Every entry opens its task.
+- **Issues** — missed runs with **Dismiss** and **Run now**, plus run problems:
+  a rate limit with its retry time, a failed run, and an interrupted run. The
+  panel scans every thread that carries the routine's id, so a run's own thread
+  is what reports a failed or interrupted execution. Every entry opens its
+  thread: the run that had the problem, or the task for a schedule-level miss.
 
 ## Fork hand-off
 

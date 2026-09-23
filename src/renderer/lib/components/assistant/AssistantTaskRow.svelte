@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, Pin } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, Pin, RotateCcw } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { tick } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
@@ -24,11 +24,23 @@
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { isAssistantSetupThread, isThreadWorking, type Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import { taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
+  import { runRowLine, taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
 
   interface Props {
     task: Thread
     active: boolean
+    /**
+     * `task` renders a task row; `run` renders one execution of a task, nested
+     * under the task's own row. A run's line 2 is its last activity, not its
+     * task's schedule.
+     */
+    variant?: 'task' | 'run'
+    /**
+     * True while one of this task's runs is working. A run executes on its own
+     * thread, so the task row has to reflect its children or the user sees an
+     * idle task while a run is actually in flight.
+     */
+    runWorking?: boolean
     /** Routine accent colour, used for the icon fallback tint. */
     color?: string
     /** Pending missed fires on this task. */
@@ -53,6 +65,8 @@
   let {
     task,
     active,
+    variant = 'task',
+    runWorking = false,
     color,
     missed,
     nextRunAt,
@@ -66,6 +80,8 @@
     onHandedOff,
     onHideHowTo
   }: Props = $props()
+
+  const isRun = $derived(variant === 'run')
 
   const TASK_DRAG_TYPE = 'application/x-assistant-task'
 
@@ -85,26 +101,32 @@
   const iconKey = $derived(taskRowIconKey(task))
   const howToThread = $derived(isAssistantSetupThread(task))
 
-  /** Line 2: next-run time for scheduled tasks, last-run time for unscheduled. */
+  /** Line 2: next-run time for scheduled tasks, last-run time for unscheduled
+   *  tasks, and the run's own last activity for a run row. */
   const runLine = $derived.by(() => {
     subscribeMinute()
+    if (isRun) return runRowLine(task, Date.now())
     return taskRunLine(task, nextRunAt, Date.now())
   })
 
   const statusTone = $derived(threadStatusPolicy(task.status).tone)
-  const title = $derived(`Open task: ${task.title}`)
+  const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
 
   /** Live-work flags, settled by the same run state the thread rows use so a
-   *  stale persisted status cannot keep a spinner alive after the turn ended. */
+   *  stale persisted status cannot keep a spinner alive after the turn ended.
+   *  A task row also lights while any of its runs is in flight. */
   const isWorking = $derived(
-    agentRuns.hasSettled(task.projectId, task.id)
-      ? agentRuns.isBusy(task.projectId, task.id)
-      : Boolean(task.sessionId) && isThreadWorking(task)
+    runWorking ||
+      (agentRuns.hasSettled(task.projectId, task.id)
+        ? agentRuns.isBusy(task.projectId, task.id)
+        : Boolean(task.sessionId) && isThreadWorking(task))
   )
   const isRetryPaused = $derived(task.status === 'working-paused')
   const isForeignRun = $derived(foreignRuns.isForeign(task.projectId, task.id))
   const stageLabel = $derived(threadStatusPolicy(task.status).label)
 
+  /** A task's own menu only; a run keeps the identical thread menu (rename, pin,
+   *  fork, notes, copy id, delete), since a run is a thread too. */
   const handoff = createAssistantHandoff({
     getTask: () => task,
     onHandedOff: (forked) => onHandedOff(forked)
@@ -249,6 +271,13 @@
           style="color: {color ?? 'var(--color-muted)'}"
           aria-hidden="true"
         />
+      {:else if iconKey === 'run'}
+        <RotateCcw
+          size={13}
+          strokeWidth={1.8}
+          style="color: {color ?? 'var(--color-muted)'}"
+          aria-hidden="true"
+        />
       {:else}
         <Clock1
           size={14}
@@ -299,28 +328,30 @@
         </span>
       </span>
     </span>
-
-    <!-- Hover actions float over the row (opaque surface matching the row's
-         hover background) instead of reserving width, so the title truncates at
-         the full row width and is only covered while the actions are visible. -->
-    <span
-      class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center rounded-md px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
-        ? 'bg-selected'
-        : 'bg-elevated'}"
-    >
-      <ThreadDropdown
-        bind:open={showMenu}
-        items={actionsMenu.items}
-        vertical
-        title="Task actions"
-        ariaLabel="Actions for {task.title}"
-        onOpen={() => {
-          showPopover = false
-          clearTimeout(popoverTimer)
-        }}
-      />
-    </span>
   </button>
+
+  <!-- Hover actions float over the row (opaque surface matching the row's
+       hover background) instead of reserving width, so the title truncates at
+       the full row width and is only covered while the actions are visible.
+       They sit beside the row button, never inside it: a menu trigger nested in
+       a button is not a valid control tree. -->
+  <span
+    class="pointer-events-none absolute inset-y-1 right-1 z-10 flex items-center rounded-md px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 {active
+      ? 'bg-selected'
+      : 'bg-elevated'}"
+  >
+    <ThreadDropdown
+      bind:open={showMenu}
+      items={actionsMenu.items}
+      vertical
+      title="Task actions"
+      ariaLabel="Actions for {task.title}"
+      onOpen={() => {
+        showPopover = false
+        clearTimeout(popoverTimer)
+      }}
+    />
+  </span>
 </div>
 
 {#if showPopover}

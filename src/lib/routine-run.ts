@@ -1,4 +1,5 @@
 import { CIO_ASK_USER_TOOL_NAME } from './core-tools'
+import { formatDateTime } from './date-time-format'
 import {
   ASK_SECRET_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
@@ -6,6 +7,15 @@ import {
   UTILITY_SEARCH_TOOL_NAME
 } from './gateway-tools'
 import type { Routine } from './types'
+
+/**
+ * The row title of one run thread: the time it started. A run is listed under
+ * its task, so its own title only has to name the execution, never repeat the
+ * task's name.
+ */
+export function assistantRunTitle(at: number): string {
+  return `Run · ${formatDateTime(at)}`
+}
 
 /**
  * The one system-prompt layer for a task that runs a routine: the routine's

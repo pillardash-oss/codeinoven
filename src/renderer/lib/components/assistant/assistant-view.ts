@@ -97,14 +97,54 @@ export function taskRunLine(
 }
 
 /**
+ * Line 2 of a run row: when that execution last did anything. A run is listed
+ * under its task, so the task's schedule would be redundant here.
+ */
+export function runRowLine(run: Pick<Thread, 'lastActivity'>, now: number): string {
+  return `Ran ${describeRelativeTime(run.lastActivity, now)}`
+}
+
+/**
+ * Runs grouped by the task they run, newest first inside each group. A run
+ * carries `assistantTaskId`; a task does not, so a task can never group itself.
+ */
+export function groupRunsByTask<T extends Pick<Thread, 'assistantTaskId' | 'createdAt'>>(
+  threads: readonly T[]
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>()
+  for (const thread of threads) {
+    if (!thread.assistantTaskId) continue
+    const runs = grouped.get(thread.assistantTaskId)
+    if (runs) runs.push(thread)
+    else grouped.set(thread.assistantTaskId, [thread])
+  }
+  for (const runs of grouped.values()) runs.sort((a, b) => b.createdAt - a.createdAt)
+  return grouped
+}
+
+/**
+ * How many of a task's runs the sidebar shows before offering "Show all". A
+ * routine that fires every day for a year would otherwise turn the sidebar into
+ * a log, and the sidebar is a navigation surface, not a run history reader.
+ */
+export const TASK_RUN_PREVIEW = 3
+
+/** The runs a task row renders: the newest slice, or the whole list expanded. */
+export function previewRuns<T>(runs: readonly T[], expanded: boolean): T[] {
+  return expanded ? [...runs] : runs.slice(0, TASK_RUN_PREVIEW)
+}
+
+/**
  * The task row icon key: a custom icon when the task carries one, otherwise the
- * Hammer for a routine's how-to ("Getting started") thread, otherwise the plain
- * task clock. The generic assistant robot is deliberately gone.
+ * Hammer for a routine's how-to ("Getting started") thread, otherwise a run
+ * mark for one execution of a task, otherwise the plain task clock. The
+ * generic assistant robot is deliberately gone.
  */
 export function taskRowIconKey(
-  task: Pick<Thread, 'assistantIconType' | 'assistantGettingStarted'>
-): 'custom' | 'how-to' | 'task' {
+  task: Pick<Thread, 'assistantIconType' | 'assistantGettingStarted' | 'assistantTaskId'>
+): 'custom' | 'how-to' | 'run' | 'task' {
   if (task.assistantIconType) return 'custom'
+  if (task.assistantTaskId) return 'run'
   return task.assistantGettingStarted === true ? 'how-to' : 'task'
 }
 

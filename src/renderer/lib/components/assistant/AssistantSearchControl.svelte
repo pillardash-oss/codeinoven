@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, Search, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, RotateCcw, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
@@ -9,14 +9,17 @@
 
   interface Props {
     routines: Routine[]
+    /** Assistant tasks. */
     tasks: Thread[]
-    /** Open a task result. */
+    /** One run per execution of a task, each its own thread. */
+    runs: Thread[]
+    /** Open a task or run result. */
     onOpenTask: (task: Thread) => void
     /** Open a routine result (its how-to panel / first task). */
     onOpenRoutine: (routine: Routine) => void
   }
 
-  let { routines, tasks, onOpenTask, onOpenRoutine }: Props = $props()
+  let { routines, tasks, runs, onOpenTask, onOpenRoutine }: Props = $props()
 
   let open = $state(false)
   let query = $state('')
@@ -37,8 +40,14 @@
   const taskResults = $derived(
     trimmed.length === 0 ? [] : tasks.filter((task) => task.title.toLowerCase().includes(trimmed))
   )
+  const runResults = $derived(
+    trimmed.length === 0 ? [] : runs.filter((run) => run.title.toLowerCase().includes(trimmed))
+  )
   const empty = $derived(
-    trimmed.length > 0 && routineResults.length === 0 && taskResults.length === 0
+    trimmed.length > 0 &&
+      routineResults.length === 0 &&
+      taskResults.length === 0 &&
+      runResults.length === 0
   )
 
   function selectTask(task: Thread): void {
@@ -65,8 +74,8 @@
 <Popover.Root bind:open>
   <Popover.Trigger
     class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-    aria-label="Search routines and tasks"
-    title="Search routines and tasks"
+    aria-label="Search routines, tasks and runs"
+    title="Search routines, tasks and runs"
   >
     <Search size={15} strokeWidth={1.8} />
   </Popover.Trigger>
@@ -78,7 +87,7 @@
       sideOffset={6}
       collisionPadding={8}
       class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1.5 shadow-lg"
-      aria-label="Search routines and tasks"
+      aria-label="Search routines, tasks and runs"
     >
       <div class="flex items-center gap-1.5">
         <Search size={14} class="shrink-0 text-dimmed" />
@@ -86,7 +95,7 @@
           {@attach focusInput}
           type="text"
           class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search routines and tasks…"
+          placeholder="Search routines, tasks and runs…"
           bind:value={query}
         />
         {#if query}
@@ -107,7 +116,7 @@
 
       {#if empty}
         <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">
-          No matching routines or tasks
+          No matching routines, tasks or runs
         </p>
       {:else if trimmed.length > 0}
         <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
@@ -166,6 +175,23 @@
                 {/if}
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
                   >{task.title}</span
+                >
+              </button>
+            {/each}
+          {/if}
+          {#if runResults.length > 0}
+            <div class="px-2 py-1 text-[0.5625rem] font-medium uppercase tracking-wide text-dimmed">
+              Runs
+            </div>
+            {#each runResults as run (run.id)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                onclick={() => selectTask(run)}
+              >
+                <RotateCcw size={13} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
+                  >{run.title}</span
                 >
               </button>
             {/each}

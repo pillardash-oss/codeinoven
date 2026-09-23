@@ -165,7 +165,7 @@
     notificationPanelState.dismiss(n.id)
   }
 
-  /** Open the assistant task thread a missed run belongs to. */
+  /** Open an assistant thread by id: a task, or one of its run threads. */
   async function openMissedRun(threadId: string): Promise<void> {
     busyId = threadId
     try {
@@ -199,7 +199,9 @@
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
-      await assistantRoutines.runMissedRunNow(id)
+      const run = await assistantRoutines.runMissedRunNow(id)
+      // Every run executes on its own fresh thread, so open that thread.
+      if (run) await openMissedRun(run.id)
     } finally {
       busyId = null
     }

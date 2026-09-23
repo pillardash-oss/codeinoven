@@ -21,11 +21,23 @@ const TICK_MS = 30_000
  */
 const MISS_GRACE_MS = 2 * 60_000
 
-/** Dispatch one scheduled run on the task's continuous thread. */
-export type RoutineDispatch = (task: Thread, routine: Routine | null) => Promise<unknown> | void
+/**
+ * Create the fresh thread a run executes on. Every run gets its own thread, so
+ * a run never lands in the task's own conversation; only a routine's Getting
+ * started thread hosts its authoring conversation.
+ */
+export type RoutineRunThreadFactory = (task: Thread, routine: Routine | null) => Promise<Thread>
+
+/** Dispatch one run onto the thread created for it. */
+export type RoutineDispatch = (
+  run: Thread,
+  task: Thread,
+  routine: Routine | null
+) => Promise<unknown> | void
 
 export interface RoutineSchedulerDeps {
   routines: RoutineManager
+  createRunThread: RoutineRunThreadFactory
   dispatch: RoutineDispatch
   /** Injectable clock so evaluation windows are testable. Defaults to Date.now. */
   now?: () => number
@@ -40,12 +52,14 @@ export interface RoutineSchedulerDeps {
 /**
  * RoutineSchedulerService   the main-process clock for Assistant View.
  *
- * Fires scheduled agent runs on each task's continuous thread while the app is
- * open. A slot the app was not open to run is recorded as a missed run (never
- * auto-run), so relaunching after an outage surfaces the miss instead of
- * dumping a burst of catch-up runs. Evaluation is bounded per tick (a plain
- * loop over the assistant tasks) and dispatch is fire-and-forget, so the main
- * process is never blocked waiting on a run.
+ * Fires scheduled agent runs while the app is open. Each run is dispatched
+ * onto a brand-new thread linked to its task (`Thread.assistantTaskId`), so the
+ * task's own conversation stays the user's and a run's transcript holds only
+ * that execution. A slot the app was not open to run is recorded as a missed
+ * run (never auto-run), so relaunching after an outage surfaces the miss
+ * instead of dumping a burst of catch-up runs. Evaluation is bounded per tick (a
+ * plain loop over the assistant tasks) and dispatch is fire-and-forget, so the
+ * main process is never blocked waiting on a run.
  */
 export class RoutineSchedulerService {
   private readonly missed: MissedRunStore
@@ -55,12 +69,19 @@ export class RoutineSchedulerService {
   private changeListener: (() => void) | null = null
   private tickChain: Promise<void> = Promise.resolve()
   /**
-   * Task ids whose dispatched run has not settled yet. Dispatch returns once
-   * the prompt is accepted, so success is only known when the session idles;
-   * the engine reports that back through `settleRun`. A task the scheduler
-   * never dispatched a run on is never stamped as a run.
+   * Serialized chain of scheduled run dispatches. Ticks never overlap, and the
+   * chain is what `flush` awaits, so a shutdown (and a test) can be sure every
+   * dispatched run was handed to the engine before the process tears down.
    */
-  private readonly inFlightRuns = new Set<string>()
+  private dispatchChain: Promise<void> = Promise.resolve()
+  /**
+   * Run-thread id -> task id for every dispatched run whose turn has not
+   * settled yet. Dispatch returns once the prompt is accepted, so success is
+   * only known when the session idles; the engine reports the settled run
+   * thread back through `settleRun`. A run the scheduler never dispatched is
+   * never stamped, so a user's own chat on a task never counts as a run.
+   */
+  private readonly inFlightRuns = new Map<string, string>()
 
   constructor(
     storage: StorageEngine,
@@ -96,83 +117,83 @@ export class RoutineSchedulerService {
     this.notifyChange()
   }
 
-  /** Run a missed schedule immediately and clear its record on success. */
-  async runMissedRunNow(id: string): Promise<void> {
-    const run = this.missed.listAll().find((entry) => entry.id === id)
-    if (!run) throw new Error(`Missed run not found: ${id}`)
-    const task = this.deps.routines.listAssistantTasks().find((entry) => entry.id === run.threadId)
+  /**
+   * Run a missed schedule immediately on a fresh run thread and clear its
+   * record on success. Returns the created run, or null when the task it
+   * belonged to is gone (the orphan is settled so it stops badging).
+   */
+  async runMissedRunNow(id: string): Promise<Thread | null> {
+    const missed = this.missed.listAll().find((entry) => entry.id === id)
+    if (!missed) throw new Error(`Missed run not found: ${id}`)
+    const task = this.deps.routines
+      .listAssistantTasks()
+      .find((entry) => entry.id === missed.threadId)
     if (!task) {
       // The task is gone; settle the orphan so it stops badging.
       this.missed.dismiss(id)
       this.notifyChange()
-      return
+      return null
     }
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
-    this.beginRun(task.id)
     try {
-      await this.deps.dispatch(task, routine)
-      this.recordLastRun(task.id, run.dueAt)
+      const run = await this.startRun(task, routine)
+      this.recordLastRun(task.id, missed.dueAt)
       this.recordDispatch(task.id)
       this.missed.markRun(id)
-    } catch (error) {
-      this.endRun(task.id)
-      Logger.error('Missed run dispatch failed', error)
-      throw error
+      return run
     } finally {
       this.notifyChange()
     }
   }
 
   /**
-   * Run one task immediately, ignoring its schedule and its routine's pause
-   * state   the manual "test this routine" action. Fails when the routine has
-   * no how-to yet: a run with no instructions would do nothing useful, and the
-   * user is still in the authoring conversation.
+   * Run one task immediately on a fresh run thread, ignoring its schedule and
+   * its routine's pause state   the manual "test this routine" action. Fails
+   * when the routine has no how-to yet: a run with no instructions would do
+   * nothing useful, and the user is still in the authoring conversation.
    */
-  async runTaskNow(task: Thread): Promise<void> {
+  async runTaskNow(task: Thread): Promise<Thread> {
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
     if (!routine?.howTo.trim()) {
       throw new Error('This routine has no how-to yet. Describe it to the agent first.')
     }
-    this.beginRun(task.id)
-    try {
-      await this.deps.dispatch(task, routine)
-    } catch (error) {
-      this.endRun(task.id)
-      throw error
-    }
+    const run = await this.startRun(task, routine)
     this.recordLastRun(task.id, this.now())
     this.recordDispatch(task.id)
     this.notifyChange()
+    return run
   }
 
   /**
-   * Report that a dispatched run's turn settled on a task with a final status.
-   * A `completed` turn records the last successful run and releases the task;
-   * a `failed` or `interrupted` turn releases it without a success stamp; an
-   * `awaiting_approval` or `working-paused` turn is left tracked, because the
-   * run is still in progress (waiting on the user or a provider reset) and its
-   * eventual completion must still count. A task the scheduler never dispatched
-   * a run on is ignored, so a user's own chat never counts as a run.
+   * Report that a dispatched run's turn settled on its run thread with a final
+   * status. A `completed` turn records the last successful run on the run's task
+   * and releases the run; a `failed` or `interrupted` turn releases it without a
+   * success stamp; an `awaiting_approval` or `working-paused` turn is left
+   * tracked, because the run is still in progress (waiting on the user or a
+   * provider reset) and its eventual completion must still count. A run thread
+   * the scheduler never dispatched is ignored, so a user's own chat never counts
+   * as a run.
    */
-  settleRun(threadId: string, status: ThreadStatus): void {
-    if (!this.inFlightRuns.has(threadId)) return
+  settleRun(runThreadId: string, status: ThreadStatus): void {
+    const taskId = this.inFlightRuns.get(runThreadId)
+    if (taskId === undefined) return
     if (status === 'completed') {
-      this.inFlightRuns.delete(threadId)
-      const updated = this.deps.routines.markTaskRunSuccess(threadId, this.now())
+      this.inFlightRuns.delete(runThreadId)
+      const updated = this.deps.routines.markTaskRunSuccess(taskId, this.now())
       if (updated) this.deps.onTaskChanged?.(updated)
       return
     }
     if (status === 'failed' || status === 'interrupted') {
-      this.inFlightRuns.delete(threadId)
+      this.inFlightRuns.delete(runThreadId)
     }
   }
 
   /**
-   * Run every runnable task of a routine now and return how many were
-   * dispatched, so the panel can confirm the manual run.
+   * Run every runnable task of a routine now, each on its own fresh thread, and
+   * return the created runs in dispatch order so the panel can open the first
+   * one and the sidebar can show them nested under their tasks.
    */
-  async runRoutineNow(routineId: string): Promise<number> {
+  async runRoutineNow(routineId: string): Promise<Thread[]> {
     const routine = this.deps.routines.getRoutine(routineId)
     if (!routine) throw new Error(`Routine not found: ${routineId}`)
     if (!routine.howTo.trim()) {
@@ -180,8 +201,7 @@ export class RoutineSchedulerService {
     }
     const tasks = this.deps.routines.listRoutineTasks(routineId)
     if (tasks.length === 0) throw new Error('This routine has no task to run.')
-    await Promise.all(tasks.map((task) => this.runTaskNow(task)))
-    return tasks.length
+    return Promise.all(tasks.map((task) => this.runTaskNow(task)))
   }
 
   /** Evaluate every scheduled task once (used by start and by tests). */
@@ -196,9 +216,10 @@ export class RoutineSchedulerService {
     }
   }
 
-  /** Await pending missed-run writes (used by shutdown and tests). */
+  /** Await pending missed-run writes and dispatched runs (used by shutdown and tests). */
   async flush(): Promise<void> {
     await this.missed.flush()
+    await this.dispatchChain
   }
 
   stop(): void {
@@ -254,25 +275,45 @@ export class RoutineSchedulerService {
     this.fire(task, due)
   }
 
+  /**
+   * Dispatch one scheduled run onto a fresh thread. The slot is claimed before
+   * the async run-thread creation so the next tick cannot double-fire, and the
+   * work runs on a serialized chain: a slow create never blocks the ticker, and
+   * a failure only logs.
+   */
   private fire(task: Thread, dueAt: number): void {
-    // Claim the slot before the async dispatch so the next tick cannot double-fire.
     this.recordLastRun(task.id, dueAt)
-    this.recordDispatch(task.id)
-    const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
-    this.beginRun(task.id)
-    void Promise.resolve(this.deps.dispatch(task, routine)).catch((error) => {
-      this.endRun(task.id)
-      Logger.error('Routine scheduled run failed', error)
-    })
-    this.notifyChange()
+    this.dispatchChain = this.dispatchChain
+      .then(() => this.startRun(task))
+      .then(() => {
+        this.recordDispatch(task.id)
+        this.notifyChange()
+      })
+      .catch((error) => {
+        Logger.error('Routine scheduled run failed', error)
+      })
   }
 
-  private beginRun(threadId: string): void {
-    this.inFlightRuns.add(threadId)
-  }
-
-  private endRun(threadId: string): void {
-    this.inFlightRuns.delete(threadId)
+  /**
+   * Create the run's thread and hand the run to the dispatcher. The run is
+   * tracked against its task so a settled turn stamps the task, not the run.
+   */
+  private async startRun(task: Thread, knownRoutine?: Routine | null): Promise<Thread> {
+    const routine =
+      knownRoutine !== undefined
+        ? knownRoutine
+        : task.routineId
+          ? this.deps.routines.getRoutine(task.routineId)
+          : null
+    const run = await this.deps.createRunThread(task, routine)
+    this.inFlightRuns.set(run.id, task.id)
+    try {
+      await this.deps.dispatch(run, task, routine)
+    } catch (error) {
+      this.inFlightRuns.delete(run.id)
+      throw error
+    }
+    return run
   }
 
   /** Claim a schedule slot (fired or recorded as missed). */

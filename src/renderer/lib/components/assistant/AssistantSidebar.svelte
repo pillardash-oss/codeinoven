@@ -8,15 +8,22 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
+  import { isAssistantSetupThread, isThreadWorking, type Routine, type Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import { isAssistantSetupThread, type Routine, type Thread } from '$shared/types'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
+  import { TASK_RUN_PREVIEW, previewRuns } from './assistant-view'
 
   interface Props {
     routines: Routine[]
+    /** Assistant tasks only: a run is never a task. */
     tasks: Thread[]
+    /**
+     * Every task's runs, newest first, keyed by task id. A run executes on its
+     * own thread and renders nested under the task it ran.
+     */
+    runsByTask: ReadonlyMap<string, Thread[]>
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
@@ -46,6 +53,7 @@
   let {
     routines,
     tasks,
+    runsByTask,
     selectedThreadId,
     scroller = $bindable(null),
     navigate,
@@ -67,12 +75,16 @@
   }: Props = $props()
 
   const expanded = new SvelteSet<string>()
+  /** Tasks whose full run history the user asked to see. */
+  const expandedRuns = new SvelteSet<string>()
   const routineSearchOpen = new SvelteSet<string>()
   const routineSearchQueries = new SvelteMap<string, string>()
 
   let editTarget = $state<Routine | null>(null)
   let deleteTarget = $state<Routine | null>(null)
   let deleteBusy = $state(false)
+
+  const EMPTY_RUNS: readonly Thread[] = []
 
   /** Pinned routines first, then manual sort order, then most recently updated. */
   const orderedRoutines = $derived(
@@ -124,6 +136,30 @@
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }
 
+  /** One task's runs, newest first (empty while it has never run). */
+  function runsFor(taskId: string): readonly Thread[] {
+    return runsByTask.get(taskId) ?? EMPTY_RUNS
+  }
+
+  /** True while any of a task's runs is actually working. */
+  function taskRunWorking(taskId: string): boolean {
+    return runsFor(taskId).some((run) => isThreadWorking(run))
+  }
+
+  /**
+   * The runs a task row shows: the newest slice while folded, the whole history
+   * once the user asks for it. Bounded by default so a routine that has run for
+   * months cannot turn the sidebar into a log.
+   */
+  function visibleRuns(taskId: string): Thread[] {
+    return previewRuns(runsFor(taskId), expandedRuns.has(taskId))
+  }
+
+  function toggleRuns(taskId: string): void {
+    if (expandedRuns.has(taskId)) expandedRuns.delete(taskId)
+    else expandedRuns.add(taskId)
+  }
+
   /**
    * The routine's tasks that render nested under it. A user-pinned task leaves
    * for the Pinned section above, but a pinned how-to thread stays here: its pin
@@ -141,7 +177,7 @@
 
   function routineWorking(routineId: string): boolean {
     return routineTasks(routineId).some(
-      (task) => threadStatusPolicy(task.status).tone === 'working'
+      (task) => threadStatusPolicy(task.status).tone === 'working' || taskRunWorking(task.id)
     )
   }
 
@@ -193,6 +229,63 @@
   }
 </script>
 
+{#snippet taskWithRuns(task: Thread, color: string | undefined, select: (task: Thread) => void)}
+  <AssistantTaskRow
+    {task}
+    {color}
+    active={task.id === selectedThreadId}
+    missed={assistantRoutines.missedForTask(task.id).length > 0}
+    nextRunAt={assistantRoutines.nextRunForTask(task)}
+    runWorking={taskRunWorking(task.id)}
+    onSelect={select}
+    onRename={onRenameTask}
+    onTogglePin={onTogglePinTask}
+    onDelete={onDeleteTask}
+    onFork={onForkTask}
+    onOpenNotes={onOpenTaskNotes}
+    onHandedOff={onHandedOffTask}
+    {onHideHowTo}
+  />
+  {#if runsFor(task.id).length > 0}
+    <div
+      class="mb-1 ml-3 border-l border-border/70 pl-1.5"
+      role="group"
+      aria-label="Runs of {task.title}"
+    >
+      {#each visibleRuns(task.id) as run (run.id)}
+        <AssistantTaskRow
+          task={run}
+          variant="run"
+          {color}
+          active={run.id === selectedThreadId}
+          missed={false}
+          nextRunAt={null}
+          onSelect={onOpenTask}
+          onRename={onRenameTask}
+          onTogglePin={onTogglePinTask}
+          onDelete={onDeleteTask}
+          onFork={onForkTask}
+          onOpenNotes={onOpenTaskNotes}
+          onHandedOff={onHandedOffTask}
+          {onHideHowTo}
+        />
+      {/each}
+      {#if runsFor(task.id).length > TASK_RUN_PREVIEW}
+        <button
+          type="button"
+          class="flex w-full items-center rounded-md px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-expanded={expandedRuns.has(task.id)}
+          onclick={() => toggleRuns(task.id)}
+        >
+          {expandedRuns.has(task.id)
+            ? 'Show fewer runs'
+            : `Show all ${runsFor(task.id).length} runs`}
+        </button>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   {#snippet footer()}
     <SidebarFooterControls {navigate} />
@@ -227,21 +320,7 @@
           onFork={onForkTask}
         >
           {#snippet row(task: Thread)}
-            <AssistantTaskRow
-              {task}
-              active={task.id === selectedThreadId}
-              color={routineColorFor(task)}
-              missed={assistantRoutines.missedForTask(task.id).length > 0}
-              nextRunAt={assistantRoutines.nextRunForTask(task)}
-              onSelect={openPinnedTask}
-              onRename={onRenameTask}
-              onTogglePin={onTogglePinTask}
-              onDelete={onDeleteTask}
-              onFork={onForkTask}
-              onOpenNotes={onOpenTaskNotes}
-              onHandedOff={onHandedOffTask}
-              {onHideHowTo}
-            />
+            {@render taskWithRuns(task, routineColorFor(task), openPinnedTask)}
           {/snippet}
         </PinnedSection>
 
@@ -251,7 +330,9 @@
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
           {@const holdsSelected = nestedRoutineTasks(routine.id).some(
-            (task) => task.id === selectedThreadId
+            (task) =>
+              task.id === selectedThreadId ||
+              runsFor(task.id).some((run) => run.id === selectedThreadId)
           )}
           <AssistantRoutineRow
             {routine}
@@ -280,25 +361,11 @@
                 <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
               {:else}
                 {#each visibleTasks as task (task.id)}
-                  <AssistantTaskRow
-                    {task}
-                    active={task.id === selectedThreadId}
-                    color={routine.color}
-                    missed={assistantRoutines.missedForTask(task.id).length > 0}
-                    nextRunAt={assistantRoutines.nextRunForTask(task)}
-                    onSelect={(selected) => {
-                      expanded.add(routine.id)
-                      onOpenTask(selected)
-                      onOpenRoutineHowTo(routine)
-                    }}
-                    onRename={onRenameTask}
-                    onTogglePin={onTogglePinTask}
-                    onDelete={onDeleteTask}
-                    onFork={onForkTask}
-                    onOpenNotes={onOpenTaskNotes}
-                    onHandedOff={onHandedOffTask}
-                    {onHideHowTo}
-                  />
+                  {@render taskWithRuns(task, routine.color, (selected) => {
+                    expanded.add(routine.id)
+                    onOpenTask(selected)
+                    onOpenRoutineHowTo(routine)
+                  })}
                 {:else}
                   <p class="px-2 py-1 text-[0.625rem] text-dimmed">
                     {routineTaskList.length > 0
@@ -318,23 +385,10 @@
             Tasks
           </div>
           {#each standaloneTasks as task (task.id)}
-            <AssistantTaskRow
-              {task}
-              active={task.id === selectedThreadId}
-              missed={assistantRoutines.missedForTask(task.id).length > 0}
-              nextRunAt={assistantRoutines.nextRunForTask(task)}
-              onSelect={(selected) => {
-                onOpenTask(selected)
-                onOpenTaskHowTo(selected)
-              }}
-              onRename={onRenameTask}
-              onTogglePin={onTogglePinTask}
-              onDelete={onDeleteTask}
-              onFork={onForkTask}
-              onOpenNotes={onOpenTaskNotes}
-              onHandedOff={onHandedOffTask}
-              {onHideHowTo}
-            />
+            {@render taskWithRuns(task, undefined, (selected) => {
+              onOpenTask(selected)
+              onOpenTaskHowTo(selected)
+            })}
           {/each}
         {/if}
       {/if}
@@ -353,7 +407,7 @@
   onConfirm={submitDelete}
 >
   <p>
-    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Every task in it and
-    its getting-started thread are deleted with their conversations. This cannot be undone.
+    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Its tasks survive as
+    routine-less tasks.
   </p>
 </ConfirmDialog>

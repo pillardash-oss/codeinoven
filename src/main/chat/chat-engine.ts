@@ -21662,6 +21662,50 @@ export class ChatEngine {
     this.assistantRunSettled = recorder
   }
 
+  /**
+   * Create the fresh thread one assistant run executes on.
+   *
+   * Every scheduled fire and every manual "Run now" gets its own thread: a run
+   * never lands in the task's own conversation, so the task's history stays the
+   * user's and a run's transcript carries only that execution. The run thread
+   * inherits the task's routine (so the engine keeps composing the routine's
+   * how-to and the run contract into its system prompt) and links back to the
+   * task through `assistantTaskId`. It is created with the settings the run
+   * will actually use, so opening the run shows the model it ran on.
+   */
+  async createAssistantRunThread(input: {
+    task: Thread
+    title: string
+    settings?: ThreadSettings
+  }): Promise<Thread> {
+    const { thread, finalize } = this.threadManager.prepareCreateThread(
+      {
+        projectId: ASSISTANT_SPACE_ID,
+        providerId: input.task.providerId,
+        title: input.title,
+        // A run's title is its time, never a prompt-derived label: it is the
+        // row's identity under the task, not a conversation title.
+        titleSource: 'manual',
+        workingDirectory: input.task.workingDirectory,
+        settings: input.settings ?? input.task.settings,
+        routineId: input.task.routineId,
+        assistantTaskId: input.task.id
+      },
+      {
+        onEvictionError: (error) =>
+          Logger.error('Assistant run thread eviction failed', {
+            taskId: input.task.id,
+            error: String(error)
+          })
+      }
+    )
+    await finalize()
+    // The sidebar nests a run under its task from this broadcast, so it must
+    // reach every renderer the moment the row exists.
+    broadcastThreadUpdate(thread)
+    return thread
+  }
+
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     scheduler.attachPing((config) => this.sendHeartbeatPing(config))

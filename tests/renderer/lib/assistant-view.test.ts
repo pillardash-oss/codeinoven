@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  TASK_RUN_PREVIEW,
   UNGROUPED_MISSED_RUNS,
   connectionsFromPlan,
   extractHowToDraft,
   extractRoutinePlanDraft,
   groupMissedRunsByRoutine,
+  groupRunsByTask,
   handoffSummary,
   isRoutineConfirmation,
   routineGap,
@@ -14,7 +16,9 @@ import {
   parseHowToSections,
   parsePlanTime,
   parseRoutinePlan,
+  previewRuns,
   resolveConnections,
+  runRowLine,
   serializeHowToSections,
   taskHasMissed,
   taskRowIconKey,
@@ -105,6 +109,38 @@ describe('assistant-view presentation helpers', () => {
     expect(taskRowIconKey({ assistantGettingStarted: true, assistantIconType: 'code' })).toBe(
       'custom'
     )
+  })
+
+  it('marks a run thread as a run, never as a task or a how-to thread', () => {
+    expect(taskRowIconKey({ assistantTaskId: 'task-1' })).toBe('run')
+    // A run is never a custom-icon row, but a custom icon still wins if one is set.
+    expect(taskRowIconKey({ assistantTaskId: 'task-1', assistantIconType: 'code' })).toBe('custom')
+    expect(taskRowIconKey({ assistantTaskId: 'task-1', assistantGettingStarted: true })).toBe('run')
+  })
+
+  it('renders a run row line 2 as how long ago that run last did anything', () => {
+    const now = new Date(2026, 2, 10, 10, 0).getTime()
+    expect(runRowLine({ lastActivity: now - 5 * 60_000 }, now)).toBe('Ran 5m ago')
+    expect(runRowLine({ lastActivity: now }, now)).toBe('Ran now')
+  })
+
+  it('groups runs under their task, newest first, and leaves tasks out', () => {
+    const grouped = groupRunsByTask([
+      { id: 'task-1', createdAt: 1 },
+      { id: 'run-old', assistantTaskId: 'task-1', createdAt: 10 },
+      { id: 'run-new', assistantTaskId: 'task-1', createdAt: 30 },
+      { id: 'other-run', assistantTaskId: 'task-2', createdAt: 20 }
+    ])
+    expect([...grouped.keys()]).toEqual(['task-1', 'task-2'])
+    expect(grouped.get('task-1')?.map((run) => run.id)).toEqual(['run-new', 'run-old'])
+    expect(grouped.get('task-2')?.map((run) => run.id)).toEqual(['other-run'])
+  })
+
+  it('bounds a task row to the newest runs until the user asks for all', () => {
+    const runs = [1, 2, 3, 4, 5].map((n) => ({ id: `run-${n}` }))
+    expect(previewRuns(runs, false)).toHaveLength(TASK_RUN_PREVIEW)
+    expect(previewRuns(runs, false).map((run) => run.id)).toEqual(['run-1', 'run-2', 'run-3'])
+    expect(previewRuns(runs, true)).toHaveLength(5)
   })
 })
 

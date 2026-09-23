@@ -6,7 +6,7 @@ import {
   removeIconFile,
   storeIconFile
 } from '../icon-file'
-import { ASSISTANT_SPACE_ID, isAssistantSetupThread } from '../types'
+import { ASSISTANT_SPACE_ID, isAssistantSetupThread, isAssistantRunThread } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import type { Database } from '../../main/database/database'
 import { RoutineRepo } from '../../main/database/repositories/routine-repo'
@@ -183,13 +183,34 @@ export class RoutineManager {
     return result
   }
 
-  /** Every assistant task thread, newest activity first. */
+  /**
+   * Every assistant task thread, newest activity first. Run threads are not
+   * tasks: a run is one execution of a task, so it is never listed here, never
+   * scheduled, and never counted as a task in a routine.
+   */
   listAssistantTasks(): Thread[] {
     // Archived tasks are hidden tasks: they keep their thread and their
     // history but are never listed, scheduled, or counted again.
-    return [...this.threadRepo.listByProject(ASSISTANT_SPACE_ID, { includeArchived: false })].sort(
-      (a, b) => b.lastActivity - a.lastActivity
-    )
+    return [...this.threadRepo.listByProject(ASSISTANT_SPACE_ID, { includeArchived: false })]
+      .filter((thread) => !isAssistantRunThread(thread))
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  }
+
+  /**
+   * Every run of one task, newest first. A run is a fresh thread per execution
+   * (`Thread.assistantTaskId`), so it never lands in the task's own
+   * conversation and the two never blur together.
+   */
+  listTaskRuns(taskId: string): Thread[] {
+    return this.threadRepo
+      .listByProject(ASSISTANT_SPACE_ID, { includeArchived: false })
+      .filter((thread) => thread.assistantTaskId === taskId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  /** The task a run thread belongs to, or null when it is not a run. */
+  taskIdForRun(runThreadId: string): string | null {
+    return this.threadRepo.get(runThreadId)?.assistantTaskId ?? null
   }
 
   /** Tasks grouped under one routine, ordered by activity. */

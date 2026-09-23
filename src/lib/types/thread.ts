@@ -145,6 +145,14 @@ export interface Thread {
    * planning chat rather than a task run.
    */
   assistantGettingStarted?: boolean
+  /**
+   * The assistant task this thread is a run of. Every scheduled fire and every
+   * manual "Run now" executes on a fresh thread that carries this link, so a
+   * run never piles into the task's own conversation. Absent on a task; a
+   * thread with this set is a run, is never scheduled itself, and is listed
+   * under its task (see `isAssistantRunThread`).
+   */
+  assistantTaskId?: string
 
   createdAt: number
   updatedAt: number
@@ -175,10 +183,17 @@ export function isAssistantThread(thread: Thread): boolean {
  * Whether a thread is a routine's "Getting started" authoring thread. Auxiliary
  * work   prompt-derived titles and memory extraction   is suppressed on it.
  */
-export function isAssistantSetupThread(
-  thread: Pick<Thread, 'assistantGettingStarted'>
-): boolean {
+export function isAssistantSetupThread(thread: Pick<Thread, 'assistantGettingStarted'>): boolean {
   return thread.assistantGettingStarted === true
+}
+
+/**
+ * Whether a thread is one run of an assistant task rather than a task itself.
+ * A run hangs off its task through `assistantTaskId`, is never scheduled, and
+ * is listed under that task instead of in the task list.
+ */
+export function isAssistantRunThread(thread: Pick<Thread, 'assistantTaskId'>): boolean {
+  return thread.assistantTaskId !== undefined
 }
 
 /**
@@ -328,6 +343,8 @@ export interface CreateThreadInput {
   assistantIcon?: string
   scheduleOverride?: RoutineSchedule | null
   assistantGettingStarted?: boolean
+  /** Set when creating a run thread: the assistant task it runs. */
+  assistantTaskId?: string
 }
 
 /** Where a thread search match was found. */

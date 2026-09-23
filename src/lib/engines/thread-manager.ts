@@ -47,7 +47,7 @@ import {
   type ThreadListOptions
 } from './thread-manager-capacity'
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
-import { orchestrationDescendants } from './thread-manager-lineage'
+import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
 import { ThreadSearchService } from './thread-manager-search'
 import { ThreadTranscriptStore } from './thread-manager-transcripts'
@@ -276,6 +276,9 @@ export class ThreadManager {
       // Kept out of the row when absent: the repository stores only the true
       // case, so the in-memory shape must match what a read returns.
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
+      // A run thread carries the task it runs from creation: the creation
+      // broadcast is what the sidebar nests rows from.
+      ...(input.assistantTaskId ? { assistantTaskId: input.assistantTaskId } : {}),
       // The repository stores an absent override as NULL and reads it back as
       // `undefined`, so the in-memory row must use the same shape.
       scheduleOverride: input.scheduleOverride ?? undefined,
@@ -664,7 +667,13 @@ export class ThreadManager {
     if (!thread) {
       throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
     }
-    const deletionOrder = [...orchestrationDescendants(projectThreads, threadId), thread]
+    // A task owns the runs it produced, exactly as a coordinator owns its
+    // workers: both are swept with the thread so no orphan row survives.
+    const deletionOrder = [
+      ...assistantRunDescendants(projectThreads, threadId),
+      ...orchestrationDescendants(projectThreads, threadId),
+      thread
+    ]
     const assignmentIds = await this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)

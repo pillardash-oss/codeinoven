@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { assistantRunTitle } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -187,34 +188,49 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.routineScheduler = new RoutineSchedulerService(storage, {
     routines: routineManager,
     onTaskChanged: (task) => broadcastThreadUpdate(task),
-    dispatch: (task, routine) => {
+    // Every run executes on a fresh thread: a scheduled fire and a manual
+    // "Run now" both create one, so a run never lands in the task's own
+    // conversation. Only a routine's Getting started thread hosts authoring.
+    createRunThread: (task, routine) => {
       const chatEngine = state.chatEngine
-      const settings = task.settings
+      if (!chatEngine) throw new Error('The chat engine is not available')
       // A scheduled run needs a bound model; a task that was never configured
       // is skipped rather than fired with guessed settings.
-      if (!chatEngine || !settings) {
-        Logger.dev('Scheduled routine run skipped   task has no bound settings', {
-          threadId: task.id
-        })
-        return
-      }
+      if (!task.settings) throw new Error('This task has no model configured yet.')
       // The routine's primary model wins over whatever the thread was last set
       // to, so the models the user picked for the routine are the models its
       // runs actually use. A routine without a model set keeps the thread's own.
       const primary = routinePrimaryModel(routine?.agents)
-      const runSettings = primary ? settingsWithRoutineModel(settings, primary) : settings
+      const runSettings = primary ? settingsWithRoutineModel(task.settings, primary) : task.settings
+      return chatEngine.createAssistantRunThread({
+        task,
+        settings: runSettings,
+        title: assistantRunTitle(Date.now())
+      })
+    },
+    dispatch: (run, task) => {
+      const chatEngine = state.chatEngine
+      if (!chatEngine) {
+        Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
+        return
+      }
       const prompt =
         task.title.trim().length > 0
           ? `Run this scheduled task now: ${task.title}`
           : 'Run this scheduled task now.'
+      const runSettings = run.settings ?? task.settings
+      if (!runSettings) {
+        Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })
+        return
+      }
       // The routine's how-to is NOT passed as prompt context: the engine composes
       // it into the run's system prompt from the routine itself
-      // (`routineHowToInstruction`), so it is restated every turn instead of
-      // being appended to this message and kept in the harness transcript for the
-      // life of the thread.
+      // (`routineHowToInstruction`), which the run thread carries through its
+      // inherited `routineId`, so it is restated every turn instead of being
+      // appended to this message and kept in the harness transcript.
       return chatEngine.sendPrompt(
-        task.projectId,
-        task.id,
+        run.projectId,
+        run.id,
         runSettings,
         prompt,
         [],

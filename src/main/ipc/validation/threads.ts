@@ -103,7 +103,8 @@ const CREATE_THREAD_FIELDS = new Set([
   'titleSource',
   'scopeBucketId',
   'routineId',
-  'assistantGettingStarted'
+  'assistantGettingStarted',
+  'assistantTaskId'
 ])
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
@@ -341,6 +342,9 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   }
   if (input.routineId !== undefined) {
     sanitized.routineId = validateEntityId(input.routineId, 'Routine ID')
+  }
+  if (input.assistantTaskId !== undefined) {
+    sanitized.assistantTaskId = validateEntityId(input.assistantTaskId, 'Assistant task ID')
   }
   if (input.assistantGettingStarted !== undefined) {
     if (typeof input.assistantGettingStarted !== 'boolean') {

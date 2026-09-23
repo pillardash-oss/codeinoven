@@ -55,6 +55,7 @@ interface ThreadRow {
   last_dispatched_at: number | null
   last_success_at: number | null
   assistant_getting_started: number
+  assistant_task_id: string | null
   drafting: number
   draft_json: string | null
   created_at: number
@@ -190,6 +191,7 @@ function rowToThread(row: ThreadRow): Thread {
     lastDispatchedAt: row.last_dispatched_at ?? undefined,
     lastSuccessAt: row.last_success_at ?? undefined,
     ...(row.assistant_getting_started === 1 ? { assistantGettingStarted: true } : {}),
+    ...(row.assistant_task_id !== null ? { assistantTaskId: row.assistant_task_id } : {}),
     ...(row.drafting === 1 ? { drafting: true } : {}),
     ...(row.draft_json !== null ? { draftJson: row.draft_json } : {}),
     createdAt: row.created_at,
@@ -324,9 +326,10 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   independent_audit, independent_audit_initialized,
   routine_id, assistant_icon_type, assistant_icon, schedule_override, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
+  assistant_task_id,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -369,6 +372,7 @@ ON CONFLICT(id) DO UPDATE SET
   last_dispatched_at=excluded.last_dispatched_at,
   last_success_at=excluded.last_success_at,
   assistant_getting_started=excluded.assistant_getting_started,
+  assistant_task_id=excluded.assistant_task_id,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -419,6 +423,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.lastDispatchedAt ?? null,
     thread.lastSuccessAt ?? null,
     thread.assistantGettingStarted ? 1 : 0,
+    thread.assistantTaskId ?? null,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,

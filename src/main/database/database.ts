@@ -1144,6 +1144,11 @@ export class Database {
         'ALTER TABLE threads ADD COLUMN assistant_getting_started INTEGER NOT NULL DEFAULT 0'
       )
     }
+    // Each run of a task executes on its own thread; this column links a run
+    // back to the task it belongs to. Tasks predating it read back as tasks.
+    if (!columns.has('assistant_task_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_task_id TEXT')
+    }
     // A routine's how-to ("Getting started") thread is pinned for its whole
     // life: pinning is what keeps it out of automatic eviction. It still renders
     // nested inside its routine (AssistantSidebar keeps a pinned how-to thread

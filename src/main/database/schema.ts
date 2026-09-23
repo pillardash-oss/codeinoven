@@ -128,6 +128,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   last_dispatched_at   INTEGER,
   last_success_at      INTEGER,
   assistant_getting_started INTEGER NOT NULL DEFAULT 0,
+  assistant_task_id    TEXT,
   drafting             INTEGER NOT NULL DEFAULT 0,
   draft_json           TEXT,
   created_at           INTEGER NOT NULL,

@@ -214,12 +214,12 @@ class AssistantRoutinesState {
     await invoke('assistant:dismissMissedRun', id)
   }
 
-  async runMissedRunNow(id: string): Promise<void> {
-    await invoke('assistant:runMissedRunNow', id)
+  async runMissedRunNow(id: string): Promise<Thread | null> {
+    return invoke('assistant:runMissedRunNow', id)
   }
 
-  /** Run a routine now, returning how many tasks were dispatched. */
-  runRoutineNow(routineId: string): Promise<number> {
+  /** Run a routine now, returning the fresh run threads it created. */
+  runRoutineNow(routineId: string): Promise<Thread[]> {
     return invoke('assistant:runRoutineNow', routineId)
   }
 }

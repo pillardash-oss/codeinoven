@@ -50,6 +50,7 @@
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
   import AssistantSidebar from '../assistant/AssistantSidebar.svelte'
+  import { groupRunsByTask } from '../assistant/assistant-view'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
@@ -1370,12 +1371,21 @@
   let assistantProject = $derived(
     projects.find((project) => project.id === ASSISTANT_SPACE_ID) ?? null
   )
-  /** Assistant tasks, active (non-archived) only, most recent activity first. */
+  /** Every assistant-space thread (tasks and runs), active only. */
+  let assistantThreads = $derived(
+    allThreads.filter((thread) => thread.projectId === ASSISTANT_SPACE_ID && !thread.archived)
+  )
+  /** Assistant tasks, most recent activity first. A run is not a task, so the
+   *  sidebar, the shortcuts, and the panel never treat one as a task. */
   let assistantTasks = $derived(
-    allThreads
-      .filter((thread) => thread.projectId === ASSISTANT_SPACE_ID && !thread.archived)
+    assistantThreads
+      .filter((thread) => !thread.assistantTaskId)
       .sort((a, b) => b.lastActivity - a.lastActivity)
   )
+  /** Every task's runs, newest first, for the sidebar's nested rows. */
+  let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every run thread, for the header search's Runs results. */
+  let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
   let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
@@ -1910,6 +1920,7 @@
           props: {
             routines: assistantRoutineList,
             tasks: assistantTasks,
+            runs: assistantRuns,
             onOpenTask: openAssistantTask,
             onOpenRoutine: (routine: Routine) => void openAssistantHowToForRoutine(routine)
           }
@@ -3074,7 +3085,7 @@
   function activeAssistantRoutine(): Routine | null {
     const selectedId = selectedThread?.id
     const fromSelection = selectedId
-      ? assistantTasks.find((task) => task.id === selectedId)?.routineId
+      ? assistantThreads.find((task) => task.id === selectedId)?.routineId
       : undefined
     const tab = contextSidebarState.sidebarActiveTab
     const fromPanel = tab?.kind === 'assistant-how-to' ? (tab.routineId ?? undefined) : undefined
@@ -3217,15 +3228,22 @@
   function openAssistantHowToForTask(task: Thread): void {
     // One panel per routine: the title follows the routine, so opening the
     // how-to from any of its tasks focuses the same panel with the same name
-    // instead of re-titling it with whichever task was clicked.
-    const routine = task.routineId
-      ? assistantRoutineList.find((entry) => entry.id === task.routineId)
+    // instead of re-titling it with whichever task was clicked. A run is one
+    // execution, not the task the panel belongs to, so it anchors on its task
+    // (falling back to the run only when that task is gone): a routine must
+    // never grow a second how-to tab just because it ran.
+    const anchor = task.assistantTaskId
+      ? (assistantThreads.find((entry) => entry.id === task.assistantTaskId) ?? task)
+      : task
+    const routineId = anchor.routineId ?? task.routineId
+    const routine = routineId
+      ? assistantRoutineList.find((entry) => entry.id === routineId)
       : undefined
     contextSidebarState.openAssistantHowTo(
       ASSISTANT_SPACE_ID,
-      task.id,
-      task.routineId ?? null,
-      routine?.name ?? task.title
+      anchor.id,
+      routineId ?? null,
+      routine?.name ?? anchor.title
     )
   }
 
@@ -3478,6 +3496,7 @@
       bind:scroller={sidebarScroller}
       routines={assistantRoutineList}
       tasks={assistantTasks}
+      runsByTask={assistantRunsByTask}
       selectedThreadId={activeThreadRowId(selectedThread)}
       {navigate}
       onOpenTask={openAssistantTask}
