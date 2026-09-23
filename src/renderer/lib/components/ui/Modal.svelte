@@ -120,7 +120,8 @@
     size?: ModalSize
     /** An exact panel width class, for a surface whose width does not come from
      *  the `size` ladder. Overrides it rather than stacking on top of it, so
-     *  only one `max-w-*` is ever on the panel. */
+     *  only one `max-w-*` is ever on the panel. Ignored by `fullscreen`, which
+     *  is never width-capped. */
     panelWidth?: string
     /** Draw the canonical header (title and close) and footer slot. Off for a
      *  surface that owns its own layout, such as a full screen editor or a
