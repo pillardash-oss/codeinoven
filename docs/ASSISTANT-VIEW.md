@@ -404,17 +404,24 @@ prompt"; the user-facing term is how-to.
   the contract on an internal origin was a real bug: a follow-up got only the
   reuse contract, which reserves installing, and the assistant dead-ended on
   "connect it yourself" instead of supplying the connection.
-- Both routine contracts ride the SYSTEM PROMPT, not the user message.
-  `sendPrompt` composes them into the turn prompt as `routineInstruction`
-  (`composeTurnSystemPrompt` / `composeBrainstormSystemPrompt` in
-  `src/main/chat/chat-engine/chat-engine-prompts.ts`), alongside
-  `utilityInstructions`. Every harness rewrites that prompt on each turn (codex
-  replaces `developer_instructions` on `thread/resume`, Pi rewrites its
-  `system-prompt.txt` handoff file), so the contract is restated every turn and
-  costs one copy. Text appended to a user message instead stays in the harness
-  transcript, so the thread would replay one more copy on every later turn. That
-  placement is pinned by `tests/main/send-composition.test.ts`, which asserts the
-  contract lands in the system prompt and the user message stays the user's own
+- The routine's instruction set and its contract ride the SYSTEM PROMPT, not
+  the user message. `sendPrompt` composes one `routineInstruction` layer from
+  `composeRoutineInstruction(howTo, contract)` (`src/lib/routine-run.ts`) and
+  passes it to `composeTurnSystemPrompt` / `composeBrainstormSystemPrompt` in
+  `src/main/chat/chat-engine/chat-engine-prompts.ts`, alongside
+  `utilityInstructions`. The how-to comes first because the contract opens by
+  calling it the instruction set. The scheduler no longer hands the how-to to
+  `sendPrompt` as prompt context, and a scheduled run's message is now just
+  `Run this scheduled task now: <title>`. Every harness rewrites the system
+  prompt on each turn (codex replaces `developer_instructions` on
+  `thread/resume`, Pi rewrites its `system-prompt.txt` handoff file), so the
+  instruction set is restated every turn and costs one copy. Text appended to a
+  user message instead stays in the harness transcript, so the thread would
+  replay one more copy on every later turn, and a session rotation would drop it
+  from the native transcript while the contract that refers to it survived. That
+  placement is pinned by `tests/main/send-composition.test.ts` and
+  `tests/lib/routine-run.test.ts`, which assert the contract lands in the system
+  prompt, the how-to precedes it, and the user message stays the user's own
   words. A steer needs no re-statement either: it runs under the prompt the turn
   already started with, and `rearmSteerUtilities` republishes only the gateway
   endpoint, never the prompt.

@@ -88,7 +88,7 @@ import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { RoutineRepo } from '../database/repositories/routine-repo'
 import { routineAuthoringContext } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
-import { routineRunContext } from '../../lib/routine-run'
+import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
@@ -6401,6 +6401,23 @@ export class ChatEngine {
   }
 
   /**
+   * The routine's saved how-to for the turn prompt of a task that runs it. The
+   * how-to is the routine's instruction set and changes only when the user edits
+   * the routine, so it belongs in the system prompt beside the contract rather
+   * than on each scheduled run's message, where every run appended another copy
+   * to the harness transcript. Putting it here also means a follow-up turn still
+   * carries the instruction set the contract refers to, even after a session
+   * rotation dropped the run messages from the native transcript.
+   */
+  private routineHowToInstruction(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || !routineHowToComplete(routine)) return undefined
+    const howTo = routine.howTo.trim()
+    return howTo.length > 0 ? howTo : undefined
+  }
+
+  /**
    * The reporting contract every worker prompt carries. A reporting thread gets
    * the Assignment API contract and the report-task instruction; a thread whose
    * reporting the user switched off gets the explicit instruction to finish in
@@ -7507,7 +7524,7 @@ export class ChatEngine {
     // kept in the harness transcript and replayed once more on every later turn,
     // which would accumulate one copy per turn for the life of the thread.
     const routineInstruction = assistantTaskTurn
-      ? routineRun
+      ? composeRoutineInstruction(this.routineHowToInstruction(targetThread), routineRun)
       : origin === 'user'
         ? this.routineAuthoringHiddenContext(targetThread)
         : undefined

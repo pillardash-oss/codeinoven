@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ROUTINE_NEXT_STEPS_PROMPT, isRoutineNextStepsPrompt } from '$shared/assistant-next-steps'
-import { routineRunContext } from '$shared/routine-run'
+import { composeRoutineInstruction, routineRunContext } from '$shared/routine-run'
 import type { RoutineConnection } from '$shared/types'
 
 function connection(overrides: Partial<RoutineConnection> = {}): RoutineConnection {
@@ -77,6 +77,33 @@ describe('routineRunContext', () => {
       connections: [connection({ utilityId: 'x', label: '   ', required: false })]
     })
     expect(context).not.toContain('Connections this routine records')
+  })
+})
+
+describe('composeRoutineInstruction', () => {
+  it('puts the how-to before the contract that calls it the instruction set', () => {
+    const composed = composeRoutineInstruction(
+      '1. Check every Slack channel.',
+      routineRunContext({ name: 'Slack digest', connections: [] })
+    )
+    expect(composed).toBeDefined()
+    expect(composed?.indexOf('1. Check every Slack channel.')).toBe(0)
+    expect(composed?.indexOf('Its how-to is your instruction set')).toBeGreaterThan(0)
+  })
+
+  it('keeps the contract when the routine has no how-to text yet', () => {
+    const contract = routineRunContext({ name: 'Slack digest', connections: [] })
+    expect(composeRoutineInstruction(undefined, contract)).toBe(contract)
+    expect(composeRoutineInstruction('   ', contract)).toBe(contract)
+  })
+
+  it('keeps the how-to when no contract applies', () => {
+    expect(composeRoutineInstruction('1. Check Slack.', undefined)).toBe('1. Check Slack.')
+  })
+
+  it('returns undefined when neither piece exists, so no empty layer is added', () => {
+    expect(composeRoutineInstruction(undefined, undefined)).toBeUndefined()
+    expect(composeRoutineInstruction('  ', '  ')).toBeUndefined()
   })
 })
 

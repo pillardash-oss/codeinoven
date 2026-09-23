@@ -207,7 +207,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         task.title.trim().length > 0
           ? `Run this scheduled task now: ${task.title}`
           : 'Run this scheduled task now.'
-      const howTo = routine?.howTo?.trim()
+      // The routine's how-to is NOT passed as prompt context: the engine composes
+      // it into the run's system prompt from the routine itself
+      // (`routineHowToInstruction`), so it is restated every turn instead of
+      // being appended to this message and kept in the harness transcript for the
+      // life of the thread.
       return chatEngine.sendPrompt(
         task.projectId,
         task.id,
@@ -216,7 +220,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         [],
         undefined,
         undefined,
-        howTo && howTo.length > 0 ? howTo : undefined,
+        undefined,
         undefined,
         undefined,
         'internal',

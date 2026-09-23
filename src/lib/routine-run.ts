@@ -8,6 +8,23 @@ import {
 import type { Routine } from './types'
 
 /**
+ * The one system-prompt layer for a task that runs a routine: the routine's
+ * how-to first, then the self-provisioning contract that refers to it.
+ *
+ * The order matters. The contract opens by calling the how-to its instruction
+ * set, so the how-to has to precede it in the prompt.
+ */
+export function composeRoutineInstruction(
+  howTo: string | undefined,
+  contract: string | undefined
+): string | undefined {
+  const parts = [howTo?.trim(), contract?.trim()].filter(
+    (part): part is string => part !== undefined && part.length > 0
+  )
+  return parts.length > 0 ? parts.join('\n\n') : undefined
+}
+
+/**
  * The self-provisioning contract for a turn on an assistant task whose routine
  * already has its how-to   a real run (scheduled or "Run now"), or a follow-up
  * on that same task thread.
