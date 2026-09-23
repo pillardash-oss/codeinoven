@@ -2212,12 +2212,7 @@ export class ChatEngine {
         )
       )
     } catch (error) {
-      if (error instanceof InactiveQuestionTurnError) {
-        await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
-        return
-      }
-      if (error instanceof QuestionRequestGoneError) {
-        this.finalizePendingQuestion(requestId, 'answered', safeAnswers)
+      if (await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error)) {
         return
       }
       throw error
@@ -2494,16 +2489,38 @@ export class ChatEngine {
         driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
       )
     } catch (error) {
-      if (error instanceof InactiveQuestionTurnError) {
-        await this.resumeAfterInactiveQuestion(pending, 'dismissed')
-        return
-      }
-      if (error instanceof QuestionRequestGoneError) {
-        this.finalizePendingQuestion(requestId, 'dismissed')
+      if (await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error)) {
         return
       }
       throw error
     }
+  }
+
+  /**
+   * Settle a question the harness can no longer accept. Both outcomes mean the
+   * card on screen is stale, so neither may reach the renderer as a failure:
+   * `QuestionRequestGoneError` (the harness already dropped the request, for
+   * example because the process holding it exited) closes it in place, and
+   * `InactiveQuestionTurnError` (the owning turn process exited) resumes the
+   * session with the user's decision instead of losing it.
+   *
+   * Returns false for an unrelated error, which the caller keeps propagating.
+   */
+  private async reconcileUnanswerableQuestion(
+    pending: PendingQuestionInfo,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers: string[][] | undefined,
+    error: unknown
+  ): Promise<boolean> {
+    if (error instanceof InactiveQuestionTurnError) {
+      await this.resumeAfterInactiveQuestion(pending, resolution, answers)
+      return true
+    }
+    if (error instanceof QuestionRequestGoneError) {
+      this.finalizePendingQuestion(pending.request.requestId, resolution, answers)
+      return true
+    }
+    return false
   }
 
   /** Resume a persisted session when its provider process exited while waiting for a question. */
@@ -2592,9 +2609,18 @@ export class ChatEngine {
       )
       if ((await this.achievementOwnsDecisions(thread)) && !pending.resolving) {
         const answers = request.questions.map((question) => [recommendedQuestionAnswer(question)])
-        await this.resolvePendingQuestion(pending, 'answered', answers, () =>
-          driver.replyToQuestion(projectPath, request.sessionId, request.requestId, answers)
-        )
+        try {
+          await this.resolvePendingQuestion(pending, 'answered', answers, () =>
+            driver.replyToQuestion(projectPath, request.sessionId, request.requestId, answers)
+          )
+        } catch (error) {
+          // One question the harness can no longer accept must never fail the
+          // whole pending-question list: settle it when it is simply gone, and
+          // otherwise keep the card and let the next poll retry.
+          if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+            Logger.error('Provider question auto-answer failed:', error)
+          }
+        }
       }
     }
     return [...this.pendingQuestions.values()]
@@ -19626,9 +19652,15 @@ export class ChatEngine {
       const driver = this.driverForRuntime(driverId, session.accountId)
       if (!driver) return
       const answers = event.questions.map((question) => [recommendedQuestionAnswer(question)])
-      await this.resolvePendingQuestion(pending, 'answered', answers, () =>
-        driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
-      )
+      try {
+        await this.resolvePendingQuestion(pending, 'answered', answers, () =>
+          driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
+        )
+      } catch (error) {
+        if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+          throw error
+        }
+      }
       return
     }
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs

@@ -80,3 +80,33 @@ export async function errorFromResponse(res: Response, fallback: string): Promis
   const detail = body ? `: ${body.slice(0, 500)}` : ''
   return new Error(`${fallback} (${res.status})${detail}`)
 }
+
+/** Outcome of a failed question reply/reject, with the response body already read. */
+export type QuestionReplyFailure = { gone: true; detail: string } | { gone: false; error: Error }
+
+/**
+ * Read a failed question reply/reject exactly once, because a response body can
+ * only be consumed a single time.
+ *
+ * OpenCode keeps pending questions in the memory of the `opencode serve`
+ * process that ran the turn. Once that process is gone   the per-turn server
+ * exited, or the pooled project server was replaced or restarted   the reply
+ * can never land, and the server answers
+ * `404 {"_tag":"QuestionNotFoundError","requestID":"...","message":"Question request not found: ..."}`.
+ * Callers translate that into the harness-agnostic `QuestionRequestGoneError`
+ * so the chat engine settles the stale card instead of failing the IPC call.
+ * Every other failure, including a 404 for an unknown route, stays a real error
+ * so a version mismatch can never silently swallow the user's answer.
+ */
+export async function questionReplyFailure(
+  res: Response,
+  fallback: string
+): Promise<QuestionReplyFailure> {
+  const body = await res.text().catch(() => '')
+  const detail = body ? body.slice(0, 500) : `HTTP ${res.status}`
+  if (res.status === 404 && /QuestionNotFoundError|question request not found/iu.test(body)) {
+    return { gone: true, detail }
+  }
+  const suffix = body ? `: ${body.slice(0, 500)}` : ''
+  return { gone: false, error: new Error(`${fallback} (${res.status})${suffix}`) }
+}
