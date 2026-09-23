@@ -382,6 +382,18 @@ prompt"; the user-facing term is how-to.
   how-to is saved. Credentials are collected with `cio_ask_secret`, never pasted
   into chat, and nothing is installed without the user's agreement; the only
   acceptable blockers are network and a closed app.
+- A saved routine's run provisions itself the same way. The how-to is the
+  instruction set, and a turn on an assistant task whose routine already has its
+  how-to carries the run contract (`routineRunContext` in
+  `src/lib/routine-run.ts`): when something the routine needs is not set up, the
+  agent supplies it itself with `cio_util_find`/`cio_util_manage`, collects
+  credentials with `cio_ask_secret`, and asks the user for anything else with
+  `cio_ask_user`. Pointing the user at the Connections tab is the last resort,
+  not the answer. `sendPrompt` grants the run contract (`CIO_UTILITY_RUN_PROMPT`)
+  instead of the reuse contract, so installing is in scope for the run, and
+  `rearmSteerUtilities` keeps the grant for a steer landing mid-run. The app's own
+  next-steps message sent right after a save is excluded
+  (`isRoutineNextStepsPrompt`), so it stays a no-tool informational turn.
 - The `install_bundle` argument is documented in the tool schema *and* accepted
   tolerantly. The canonical shape is
   `{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}`:

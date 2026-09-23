@@ -87,6 +87,8 @@ import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { RoutineRepo } from '../database/repositories/routine-repo'
 import { routineAuthoringContext } from '../../lib/routine-authoring'
+import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
+import { routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
@@ -137,6 +139,7 @@ import {
 } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
@@ -3090,7 +3093,14 @@ export class ChatEngine {
     skipRuntime = false,
     allowManagement = false,
     brainstormInterview = false,
-    explicitUtilityInvocation = false
+    explicitUtilityInvocation = false,
+    /**
+     * A run of a saved routine. It carries the run grant (management is in
+     * scope) rather than the reuse contract, which reserves installing for an
+     * explicit request. Mutually exclusive with `explicitUtilityInvocation`,
+     * which wins when the user typed @cio-utility on the same turn.
+     */
+    assistantRunTurn = false
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3166,9 +3176,11 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : explicitUtilityInvocation
-          ? CIO_UTILITY_SETUP_PROMPT
-          : CIO_UTILITY_REUSE_PROMPT
+        : assistantRunTurn
+          ? CIO_UTILITY_RUN_PROMPT
+          : explicitUtilityInvocation
+            ? CIO_UTILITY_SETUP_PROMPT
+            : CIO_UTILITY_REUSE_PROMPT
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3349,9 +3361,12 @@ export class ChatEngine {
     const steeringThread = await this.threadManager.getThread(projectId, threadId)
     // A routine's how-to authoring thread keeps management for the whole
     // authoring conversation, exactly like a turn where the user typed
-    // @cio-utility; a steer landing mid-conversation must not drop it.
+    // @cio-utility; a steer landing mid-conversation must not drop it. A run of
+    // a saved routine keeps it for the same reason: a steer must not drop the
+    // ability to supply a connection the run needs.
     const allowManagement =
       this.routineAuthoringHiddenContext(steeringThread) !== undefined ||
+      this.routineRunHiddenContext(steeringThread) !== undefined ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
@@ -6366,6 +6381,25 @@ export class ChatEngine {
   }
 
   /**
+   * The self-provisioning contract for a turn on an assistant task whose routine
+   * already has its how-to   a real run (scheduled or "Run now"), or a follow-up
+   * on that task. The how-to is the instruction set; this contract covers a
+   * connection the routine needs that is not set up in this session: the agent
+   * supplies it itself and asks the user for what only the user can give,
+   * instead of ending the turn by pointing at the Connections tab.
+   *
+   * Derived from the thread every turn and never memoized, so it is the same
+   * whether the run is dispatched by the scheduler, a missed-run "Run now", or a
+   * user message on the task.
+   */
+  private routineRunHiddenContext(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || !routineHowToComplete(routine)) return undefined
+    return routineRunContext(routine)
+  }
+
+  /**
    * The reporting contract every worker prompt carries. A reporting thread gets
    * the Assignment API contract and the report-task instruction; a thread whose
    * reporting the user switched off gets the explicit instruction to finish in
@@ -6966,6 +7000,12 @@ export class ChatEngine {
     if (steerAuthoringContext) {
       hiddenContext = [hiddenContext, steerAuthoringContext].filter(Boolean).join('\n\n')
     }
+    // A steer landing during a run of a saved routine keeps the same
+    // self-provisioning contract as the run's first turn.
+    const steerRunContext = this.routineRunHiddenContext(thread)
+    if (steerRunContext) {
+      hiddenContext = [hiddenContext, steerRunContext].filter(Boolean).join('\n\n')
+    }
     const steerInputBudget = this.selectedModelInputBudget(
       thread.settings?.providerId,
       thread.settings?.modelId,
@@ -7451,6 +7491,18 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    // A run of a routine that already has its how-to: the how-to is the
+    // instruction set, and this contract tells the agent to supply any
+    // connection the run needs that is not set up, asking the user for what
+    // only the user can give. The app's own next-steps message is not a run, so
+    // it carries neither the contract nor management.
+    const routineRun = this.routineRunHiddenContext(targetThread)
+    const assistantTaskTurn =
+      routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
+    const assistantRunTurn = assistantTaskTurn && origin === 'internal'
+    if (assistantRunTurn && routineRun) {
+      hiddenContext = [hiddenContext, routineRun].filter(Boolean).join('\n\n')
+    }
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
       if (workerDirective) {
@@ -7979,9 +8031,13 @@ export class ChatEngine {
     // turns keep the setup + diagnostics contract reusable without repeating
     // the invocation. Other utilities were already freely invocable whenever
     // the gateway runs.
+    // An assistant task whose routine is saved keeps management too: a run (or a
+    // follow-up on the task) has to be able to supply a connection the routine
+    // needs instead of dead-ending on "connect it yourself".
     const utilitySetupAllowed =
       utilitySetupRequested ||
       assistantAuthoringTurn ||
+      assistantTaskTurn ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
@@ -8008,7 +8064,8 @@ export class ChatEngine {
         (driverHasNativeWebSearch || !driverCanPublishGateway),
       utilitySetupAllowed,
       activeBrainstormSession,
-      utilitySetupRequested || assistantAuthoringTurn
+      utilitySetupRequested || assistantAuthoringTurn,
+      assistantRunTurn
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)

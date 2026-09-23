@@ -120,7 +120,7 @@ export const ROUTINE_CONNECTION_JSON_SCHEMA: Record<string, unknown> = {
       type: 'string',
       minLength: 1,
       description:
-        'Include ONLY when you could not install this connection yourself. A ready-to-run prompt for the utility setup agent: what the capability is, its source (official MCP URL, npm package, or skill), and what the user must supply. The user sends it verbatim.'
+        'Include ONLY when you could not install this connection yourself. A run of the routine also attempts setup itself, so this is the fallback for what a run still cannot supply. A ready-to-run prompt for the utility setup agent: what the capability is, its source (official MCP URL, npm package, or skill), and what the user must supply. The user sends it verbatim.'
     }
   },
   required: ['name']

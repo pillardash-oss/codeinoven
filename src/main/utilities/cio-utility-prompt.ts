@@ -4,7 +4,8 @@ import {
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME
+  UTILITY_MANAGE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
 } from '../../lib/gateway-tools'
 
 /** Stable built-in tag that grants the utility setup contract for one explicit turn. */
@@ -199,6 +200,20 @@ The user invoked @cio-utility earlier in this thread; the contract stays active 
 - Utilities activated earlier in this thread are registered in the thread utilities bank: invoke them directly with ${UTILITY_INVOKE_TOOL_NAME} by id (no re-activation), and re-list capability docs after compaction with ${UTILITY_DOCS_TOOL_NAME} (accepts only the utility id).
 - Install defaults stay as briefed: global scope and the single all-harness binding for both kinds (omit harnessBindings), and an MCP server always "on_demand" behind the utility gateway (never a native harness entry).
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`
+
+/**
+ * The compact management grant for a run of a saved routine. Unlike the reuse
+ * contract, installing is explicitly in scope: a run that discovers a missing
+ * connection is expected to supply it itself rather than send the user to the
+ * panel. The run contract in `routine-run.ts` carries the detail.
+ */
+export const CIO_UTILITY_RUN_PROMPT = `CodeInOven utility contract (run)
+
+This turn is a run of a saved routine, and the tools it needs may still be missing. You may supply them on this turn:
+- Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.
+- Install a compatible one with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after you explain it and the user agrees. Definitions must stay secret-free.
+- Collect any credential with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
+- Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API.`
 
 export function isCioUtilityRequest(text: string): boolean {
   for (const match of text.matchAll(CIO_UTILITY_TAG_PATTERN)) {
