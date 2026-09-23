@@ -106,6 +106,7 @@ export type IpcChatEngine = Pick<
   | 'hasActiveProcessesInScope'
   | 'abort'
   | 'recordUserFileSave'
+  | 'sendPrompt'
 > &
   Partial<
     Pick<

@@ -32,6 +32,7 @@
     if (text.length === 0) return 'No how-to written yet.'
     return text.length > 180 ? `${text.slice(0, 180)}…` : text
   })
+  const description = $derived(routine.description?.trim() ?? '')
 
   const statusLabel = $derived(
     routine.paused
@@ -60,6 +61,9 @@
 </script>
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{routine.name}</p>
+{#if description}
+  <p class="mb-2 break-words text-[0.6875rem] leading-relaxed text-muted">{description}</p>
+{/if}
 <dl class="space-y-1.5 text-[0.6875rem]">
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Status</dt>

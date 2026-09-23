@@ -152,9 +152,11 @@ no composer. Everything the view offers lives on the app header, registered by
 the workspace through `viewActions`:
 
 - **Search** (`AssistantSearchControl.svelte`) filters routines and tasks.
-- **New routine** (`RoutineCreateControl.svelte`) names a routine and
-  immediately seeds its first task, exactly as adding a project opens a first
-  thread; the how-to panel opens next.
+- **New routine** (`RoutineCreateControl.svelte`) asks only for a title and an
+  optional **description** (a note for the user; it is never sent to the agent),
+  then immediately seeds the **Getting started** thread, exactly as adding a
+  project opens a first thread, and opens the routine panel. No model is
+  requested: the primary is the model the user is already working on.
 - **New task** creates a task, and is routine-aware: when the user is inside a
   routine (the selected task belongs to one, or its how-to panel is docked) the
   task is created inside that routine; otherwise it is routine-less.
@@ -311,7 +313,7 @@ prompt"; the user-facing term is how-to.
   `src/lib/routine-authoring.ts`). The composer does not assemble it. A turn
   that arrives from the message editor's resend, a steer, or a queued delivery
   therefore reaches the agent with the same contract as a fresh composer send.
-- The agent then asks the user to confirm   it never saves the routine itself
+- The agent then asks the user to confirm it never saves the routine itself
   and never tells the user to run a command. Confirming is one click on the
   **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
   with the schedule, the connections, and the instruction section count; a plain
@@ -321,6 +323,16 @@ prompt"; the user-facing term is how-to.
   connections. `/save-how-to` remains only as a fallback: it is offered only
   while a complete draft is waiting to be committed, and it disappears for good
   once the routine is saved.
+- Once the routine is saved the app posts one hidden internal turn into the
+  Getting started thread (`assistant:postSetup`, prompt in
+  `src/lib/assistant-next-steps.ts`), so the agent lists a short prose
+  **next-steps** message for the user. Adding fallback models on the Agents tab
+  leads it, followed by connecting anything still needing setup and a first test
+  run. The turn forbids tools, so it can never start a run, and it is persisted
+  hidden (`origin: 'orchestrator'`, `visibility: 'hidden'`), so the user sees
+  only the agent's prose and never a user bubble. Both the recap card's Save
+  button and a typed confirmation route through `confirmRoutineSave`
+  (`ThreadView.svelte`), which saves first and then posts the turn.
 - The user never hand-builds a schedule. The plan is JSON matching the schemas,
   so a schedule or connection the schema rejects contributes nothing instead of
   silently changing the cadence. The tolerant `key: value` text parser
@@ -403,15 +415,20 @@ value and editable where the user must.
   A discovered capability has no registry config to inspect, so it resolves as
   ready once it is switched on and carries a transport; an MCP with no command or
   URL still reads as incomplete.
+
 - **Agents** — one primary model and any number of fallbacks, each picked with
   the app's `ModelPicker` so thinking level and account stay visible
-  (`RoutineAgentPicker.svelte`). Creating a routine prompts for a primary and two
-  fallbacks; more can be added here, and any row can be removed again, so a set
-  can shrink back to the primary alone. The primary is prefilled with the model the
-  user is already working on (`currentAssistantModelSelection` in the
-  workspace), and `withDefaultRoutinePrimary` (`src/lib/routine-agents.ts`)
-  applies the same fallback when the dialog is skipped, so a routine never blocks
-  on an empty model set.
+  (`RoutineAgentPicker.svelte`). Creating a routine never asks for a model: the
+  primary is the model the user was already working on
+  (`currentAssistantModelSelection` in the workspace, applied through
+  `withDefaultRoutinePrimary` in `src/lib/routine-agents.ts`), and while the
+  how-to is still being written the composer's model is written back to the
+  primary on each turn (`syncRoutinePrimaryToCurrentModel` in
+  `ThreadView.svelte`), so a model switched before the first turn still becomes
+  the model the routine runs on. The picker
+  seeds two empty fallback rows; more can be added and any row removed, so the
+  set can shrink back to the primary alone. The agent points the user here in its
+  post-save next-steps list.
 
 ### How the model set is used at run time
 

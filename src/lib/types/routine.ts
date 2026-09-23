@@ -12,6 +12,12 @@ import type { RoutineSchedule } from './schedule'
 export interface Routine {
   id: string
   name: string
+  /**
+   * The routine's own description, written by the user for their own reference
+   * (what the routine is for). It is never sent to the agent and never becomes
+   * part of the how-to.
+   */
+  description?: string
   /** Accent colour from the project palette; rendered as the row's left border. */
   color?: string
   /** Filename of the routine's stored icon image, relative to its storage dir. */
@@ -68,8 +74,9 @@ export interface RoutineConnection {
 
 /**
  * The model set a routine runs on: one primary and any number of fallbacks the
- * runner falls back to when the primary fails. The assistant panel prompts for
- * one primary and two fallbacks on creation; more can be added there later.
+ * runner falls back to when the primary fails. The primary is the model the
+ * user was already working on when they created the routine; fallbacks are
+ * added later from the panel's Agents tab (the agent points the user at it).
  */
 export interface RoutineAgents {
   primary?: AgentModelSelection
@@ -87,6 +94,7 @@ export const ASSISTANT_SETUP_TITLE = 'Getting started'
 
 export interface CreateRoutineInput {
   name: string
+  description?: string
   color?: string
   iconType?: string
   schedule?: RoutineSchedule | null
@@ -98,6 +106,8 @@ export interface CreateRoutineInput {
 
 export interface UpdateRoutineInput {
   name?: string
+  /** `null` clears the description. */
+  description?: string | null
   /** `null` clears the accent colour, restoring the neutral border. */
   color?: string | null
   icon?: string | null

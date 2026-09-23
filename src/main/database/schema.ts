@@ -872,6 +872,7 @@ export const ROUTINES_SQL = `
 CREATE TABLE IF NOT EXISTS routines (
   id                  TEXT PRIMARY KEY NOT NULL,
   name                TEXT NOT NULL,
+  description         TEXT,
   color               TEXT,
   icon                TEXT,
   icon_type           TEXT,

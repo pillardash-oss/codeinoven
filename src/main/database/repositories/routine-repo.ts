@@ -4,6 +4,7 @@ import type { Routine, RoutineAgents, RoutineConnection, RoutineSchedule } from 
 interface RoutineRow {
   id: string
   name: string
+  description: string | null
   color: string | null
   icon: string | null
   icon_type: string | null
@@ -24,7 +25,9 @@ function parseSchedule(raw: string | null): RoutineSchedule | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as RoutineSchedule
-    return parsed && typeof parsed === 'object' && typeof parsed.cadence === 'string' ? parsed : null
+    return parsed && typeof parsed === 'object' && typeof parsed.cadence === 'string'
+      ? parsed
+      : null
   } catch {
     return null
   }
@@ -80,6 +83,7 @@ function rowToRoutine(row: RoutineRow): Routine {
   return {
     id: row.id,
     name: row.name,
+    description: row.description ?? undefined,
     color: row.color ?? undefined,
     icon: row.icon ?? undefined,
     iconType: row.icon_type ?? undefined,
@@ -103,11 +107,12 @@ export class RoutineRepo {
   upsert(routine: Routine): void {
     this.db.run(
       `INSERT INTO routines(
-        id, name, color, icon, icon_type, schedule, how_to, how_to_updated_at,
+        id, name, description, color, icon, icon_type, schedule, how_to, how_to_updated_at,
         connections, agents, paused, pinned, pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
+        description = excluded.description,
         color = excluded.color,
         icon = excluded.icon,
         icon_type = excluded.icon_type,
@@ -124,6 +129,7 @@ export class RoutineRepo {
         updated_at = excluded.updated_at`,
       routine.id,
       routine.name,
+      routine.description ?? null,
       routine.color ?? null,
       routine.icon ?? null,
       routine.iconType ?? null,

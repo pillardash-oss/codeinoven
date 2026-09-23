@@ -49,6 +49,7 @@ export class RoutineManager {
     const routine: Routine = {
       id: generateId(),
       name: input.name.trim() || 'New Routine',
+      description: input.description?.trim() || undefined,
       color: input.color ?? pickColorForSeed(input.name),
       iconType: input.iconType,
       schedule: input.schedule ?? null,
@@ -72,6 +73,8 @@ export class RoutineManager {
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
+      description:
+        'description' in input ? input.description?.trim() || undefined : existing.description,
       color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,

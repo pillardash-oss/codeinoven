@@ -59,7 +59,11 @@
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings, chatEffectiveSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatEffectiveSettings,
+    chatSettings
+  } from '$lib/stores/thread-settings.svelte'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -67,7 +71,11 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { routinePrimaryModel, settingsWithRoutineModel, withDefaultRoutinePrimary } from '$shared/routine-agents'
+  import {
+    routinePrimaryModel,
+    settingsWithRoutineModel,
+    withDefaultRoutinePrimary
+  } from '$shared/routine-agents'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -119,7 +127,6 @@
     Project,
     PromptAttachment,
     Routine,
-    RoutineAgents,
     Thread
   } from '$shared/types'
 
@@ -1912,9 +1919,6 @@
           component: RoutineCreateControl as unknown as ViewActionItem['component'],
           props: {
             onCreate: createAssistantRoutine,
-            providers: providerCatalog.allCached(),
-            projectId: rendererRecovery.selectedProjectId,
-            getDefaultPrimary: currentAssistantModelSelection,
             trigger: routineCreateTrigger
           }
         },
@@ -3087,13 +3091,14 @@
     else await createAssistantTask()
   }
 
-  /** Create a routine and seed its first task, then open the how-to panel. */
-  async function createAssistantRoutine(name: string, agents: RoutineAgents): Promise<void> {
+  /** Create a routine and seed its "Getting started" task, then open its panel. */
+  async function createAssistantRoutine(name: string, description: string): Promise<void> {
     if (!assistantProject) return
-    // The model the user starts with becomes the routine's primary when they
-    // did not pick one explicitly: a routine never blocks on an empty model set.
-    const resolvedAgents = withDefaultRoutinePrimary(agents, currentAssistantModelSelection())
-    const routine = await assistantRoutines.createRoutine({ name, agents: resolvedAgents })
+    // No model prompt: the primary is the model the user is already working on,
+    // so creating a routine never blocks on a pick. Fallbacks are added later
+    // from the panel's Agents tab, which the agent points the user at.
+    const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const routine = await assistantRoutines.createRoutine({ name, description, agents })
     // The seed task is created already inside the routine: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, {

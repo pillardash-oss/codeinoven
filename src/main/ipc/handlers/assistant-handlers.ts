@@ -1,6 +1,8 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
+import { ROUTINE_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
+import { routinePrimaryModel, settingsWithRoutineModel } from '../../../lib/routine-agents'
 import {
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
@@ -17,6 +19,7 @@ import type {
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const MAX_ROUTINE_NAME = 200
+const MAX_ROUTINE_DESCRIPTION = 2000
 const MAX_HOW_TO = 100_000
 const MAX_CONNECTIONS = 64
 const MAX_TIMES = 24
@@ -96,7 +99,12 @@ function sanitizeModelSelection(value: unknown): RoutineAgents['fallbacks'][numb
     modelId: record.modelId.slice(0, 200),
     ...(typeof record.accountId === 'string' ? { accountId: record.accountId.slice(0, 200) } : {}),
     ...(typeof record.thinkingLevel === 'string'
-      ? { thinkingLevel: record.thinkingLevel.slice(0, 16) as RoutineAgents['fallbacks'][number]['thinkingLevel'] }
+      ? {
+          thinkingLevel: record.thinkingLevel.slice(
+            0,
+            16
+          ) as RoutineAgents['fallbacks'][number]['thinkingLevel']
+        }
       : {})
   }
 }
@@ -121,6 +129,9 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
   const record = value as Record<string, unknown>
   return {
     name: requireString(record.name, 'Routine name').slice(0, MAX_ROUTINE_NAME),
+    ...(typeof record.description === 'string'
+      ? { description: record.description.slice(0, MAX_ROUTINE_DESCRIPTION) }
+      : {}),
     ...(typeof record.color === 'string' ? { color: record.color.slice(0, 32) } : {}),
     ...(typeof record.iconType === 'string' ? { iconType: record.iconType.slice(0, 64) } : {}),
     schedule: sanitizeSchedule(record.schedule),
@@ -139,6 +150,15 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
   const patch: UpdateRoutineInput = {}
   if (record.name !== undefined) {
     patch.name = requireString(record.name, 'Routine name').slice(0, MAX_ROUTINE_NAME)
+  }
+  if (record.description !== undefined) {
+    patch.description =
+      record.description === null
+        ? null
+        : requireString(record.description, 'Routine description', true).slice(
+            0,
+            MAX_ROUTINE_DESCRIPTION
+          )
   }
   if (record.color !== undefined) {
     patch.color =
@@ -264,6 +284,35 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
+
+  /**
+   * Post the saved-how-to next-steps turn into the routine's Getting started
+   * thread. Hidden internal turn: the user sees the agent's prose list, never a
+   * user bubble. A routine with no Getting started thread, a hidden one, or a
+   * thread with no bound settings makes this a no-op.
+   */
+  ipcMain.handle('assistant:postSetup', async (_, routineId: unknown) => {
+    const id = validateEntityId(routineId, 'Routine ID')
+    const routine = routineManager.getRoutine(id)
+    const thread = routineManager.howToThread(id)
+    const chatEngine = ctx.chatEngine
+    if (!routine || !thread || thread.archived || !thread.settings || !chatEngine) return
+    const primary = routinePrimaryModel(routine.agents)
+    const settings = primary ? settingsWithRoutineModel(thread.settings, primary) : thread.settings
+    await chatEngine.sendPrompt(
+      thread.projectId,
+      thread.id,
+      settings,
+      ROUTINE_NEXT_STEPS_PROMPT,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
+  })
 
   ipcMain.handle('assistant:dismissMissedRun', (_, id: unknown) => {
     const scheduler = requireScheduler()

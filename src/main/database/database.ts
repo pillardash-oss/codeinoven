@@ -742,6 +742,7 @@ export class Database {
       this.migrateThreadPinnedAt(connection)
       this.migrateRoutinePinned(connection)
       this.migrateRoutineAgentsAndPause(connection)
+      this.migrateRoutineDescription(connection)
     })()
   }
 
@@ -812,6 +813,22 @@ export class Database {
     }
     if (!columns.has('paused')) {
       connection.exec('ALTER TABLE routines ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
+    }
+  }
+
+  /**
+   * Add the routine description column to databases created before a routine
+   * could carry the user's own note about what it is for. Fresh databases
+   * already carry it, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineDescription(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('description')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN description TEXT')
     }
   }
 

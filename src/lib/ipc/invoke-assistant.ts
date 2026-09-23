@@ -51,6 +51,13 @@ export const invokeAssistantContract = {
     [threadId: string, schedule: RoutineSchedule | null],
     Thread
   >,
+  /**
+   * Post the routine's saved-how-to next-steps message into its Getting started
+   * thread. Sent as a hidden internal turn, so the user sees only the agent's
+   * prose list and never a user bubble. Best-effort: a hidden or missing
+   * Getting started thread makes this a no-op.
+   */
+  'assistant:postSetup': {} as Contract<[routineId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   'assistant:dismissMissedRun': {} as Contract<[id: string], void>,
   /** Dispatch the missed run on its task thread and settle the record. */

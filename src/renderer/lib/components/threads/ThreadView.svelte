@@ -2137,11 +2137,18 @@
     startAfterThreads: StartAfterThreadReference[] = []
   ): void {
     // The user answered the agent's "shall I save it?" with a plain yes. The app
-    // owns the commit, so save the pending draft before the turn goes out; the
-    // recap card's Save button is the other way to give the same go-ahead.
+    // owns the commit: save the pending draft, then have the agent post its
+    // next-steps list. The yes is consumed as the confirmation and never sent,
+    // so it cannot become a user bubble or re-open the recap.
     if (assistantRoutineDraft && isRoutineConfirmation(text)) {
-      void saveRoutineHowTo(assistantRoutineDraft)
+      void confirmRoutineSave()
+      return
     }
+    // The primary is, by definition, the model the user triggers the how-to with.
+    // While the how-to is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the routine's
+    // primary   a fresh install has no last-used model to default from.
+    syncRoutinePrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -5977,6 +5984,57 @@
       assistantTexts.push(messageText(message))
     }
     return latestRoutinePlanDraftIn(assistantTexts)
+  }
+
+  /**
+   * Keep the routine's primary in step with the model the user is working on
+   * while the how-to is still being written. The primary is the model that
+   * triggers the how-to, so a model switched in the composer before the first
+   * turn must become the model the routine runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the how-to
+   * is saved, and no-op while the composer already matches the primary.
+   */
+  function syncRoutinePrimaryToCurrentModel(): void {
+    const routineId = assistantRoutineId
+    if (!routineId || assistantHowToComplete) return
+    const current = settings
+    if (!current.modelId) return
+    const primary = assistantRoutine?.agents?.primary
+    if (
+      primary &&
+      primary.harnessId === current.harnessId &&
+      primary.providerId === current.providerId &&
+      primary.modelId === current.modelId
+    ) {
+      return
+    }
+    void assistantRoutines
+      .updateRoutine(routineId, {
+        agents: {
+          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          primary: {
+            harnessId: current.harnessId,
+            providerId: current.providerId,
+            modelId: current.modelId,
+            ...(current.accountId ? { accountId: current.accountId } : {}),
+            ...(current.thinkingLevel ? { thinkingLevel: current.thinkingLevel } : {})
+          }
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  /**
+   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * have the agent post a short next-steps list in the Getting started thread.
+   * Both the recap card's Save button and a typed confirmation route here, so
+   * the follow-up turn happens whichever way the user agreed.
+   */
+  async function confirmRoutineSave(): Promise<void> {
+    const routineId = assistantRoutineId
+    if (!routineId) return
+    const saved = await saveRoutineHowTo()
+    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
   }
 
   /**
@@ -11968,7 +12026,7 @@
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
                     saving={routineSaving}
-                    onSave={() => void saveRoutineHowTo()}
+                    onSave={() => void confirmRoutineSave()}
                     onKeepEditing={keepEditingRoutine}
                   />
                 </div>

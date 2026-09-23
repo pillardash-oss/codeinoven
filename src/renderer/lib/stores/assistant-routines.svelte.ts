@@ -117,6 +117,7 @@ class AssistantRoutinesState {
 
   async createRoutine(input: {
     name: string
+    description?: string
     color?: string
     iconType?: string
     schedule?: RoutineSchedule | null
@@ -133,6 +134,7 @@ class AssistantRoutinesState {
     routineId: string,
     input: {
       name?: string
+      description?: string | null
       color?: string | null
       icon?: string | null
       iconType?: string | null
@@ -194,6 +196,14 @@ class AssistantRoutinesState {
   /** Hide or reveal a routine's how-to thread. It stays pinned either way. */
   setHowToHidden(routineId: string, hidden: boolean): Promise<Thread> {
     return invoke('assistant:setHowToHidden', routineId, hidden)
+  }
+
+  /**
+   * Post the saved-how-to next-steps turn into a routine's Getting started
+   * thread. Hidden internal turn; a no-op when that thread is hidden or gone.
+   */
+  postSetup(routineId: string): Promise<void> {
+    return invoke('assistant:postSetup', routineId)
   }
 
   async setTaskSchedule(threadId: string, schedule: RoutineSchedule | null): Promise<Thread> {

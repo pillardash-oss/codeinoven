@@ -18,6 +18,7 @@
   let { routine, onClose, onSaved }: Props = $props()
 
   let name = $state('')
+  let description = $state('')
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
   /** Newly picked image, previewed locally until Save persists it. */
@@ -29,6 +30,7 @@
   $effect(() => {
     if (!routine) return
     name = routine.name
+    description = routine.description ?? ''
     color = routine.color
     iconType = routine.iconType
     pendingIcon = undefined
@@ -77,6 +79,7 @@
         }
         saved = await assistantRoutines.updateRoutine(target.id, {
           name: name.trim(),
+          description: description.trim() || null,
           color: color ?? null,
           iconType: iconType ?? null
         })
@@ -132,6 +135,21 @@
         placeholder="Routine name"
         bind:value={name}
       />
+    </div>
+
+    <div>
+      <label class="mb-1 block text-xs font-medium text-muted" for="edit-routine-description">
+        Description <span class="font-normal text-dimmed">(optional)</span>
+      </label>
+      <textarea
+        id="edit-routine-description"
+        rows="2"
+        class="w-full resize-none rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        placeholder="A note for yourself about what this routine is for"
+        bind:value={description}></textarea>
+      <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
+        For you only, it is never sent to the agent.
+      </p>
     </div>
 
     {#if error}

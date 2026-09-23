@@ -592,7 +592,7 @@
             title: 'Agents',
             detail: agentsComplete
               ? `${1 + (routine.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
-              : 'No model picked yet. Choose a primary and two fallbacks.',
+              : 'No model set. Add a primary and fallbacks on the Agents tab.',
             target: 'agents',
             warn: !agentsComplete
           })}
@@ -617,6 +617,14 @@
         {@render routineEmptyState()}
       {:else}
         <div class="flex flex-col gap-1.5 p-3">
+          {#if routine.description?.trim()}
+            <p
+              class="mb-1 rounded-lg bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
+              title="Your own note about this routine, never sent to the agent"
+            >
+              {routine.description}
+            </p>
+          {/if}
           <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
             Schedule: {describeSchedule(routine.schedule)}
           </p>
