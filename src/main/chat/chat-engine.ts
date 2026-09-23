@@ -244,6 +244,7 @@ import type {
   PromptProjectReference,
   PromptReference,
   ProviderCatalog,
+  ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
   SessionAgentEvent,
   SpecGenerationRequest,
@@ -1612,16 +1613,28 @@ export class ChatEngine {
     ipcMain.handle('agent:listProviderSnapshot', (_, projectId: string) =>
       this.listProviderSnapshot(projectId)
     )
-    ipcMain.handle('agent:refreshProviderCatalog', async (_, projectId: string, force = true) => {
-      // A forced picker refresh also re-probes every custom provider's model
-      // endpoint so newly added/removed upstream models reach the catalog.
-      if (force === true) {
-        await refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
-          // Per-provider failures already preserve their old model lists.
-        })
+    ipcMain.handle(
+      'agent:refreshProviderCatalog',
+      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) => {
+        const force = options.force ?? true
+        if (force) {
+          // A forced picker refresh also re-probes every custom provider's model
+          // endpoint so newly added/removed upstream models reach the catalog.
+          // An explicit user refresh additionally forces each harness to
+          // re-fetch its own model catalog from upstream first; the two are
+          // independent network passes, so they run together.
+          await Promise.all([
+            refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+              // Per-provider failures already preserve their old model lists.
+            }),
+            options.refreshModelCatalogs === true
+              ? this.refreshHarnessModelCatalogs()
+              : Promise.resolve()
+          ])
+        }
+        return this.listProviders(projectId, force)
       }
-      return this.listProviders(projectId, force === true)
-    })
+    )
     ipcMain.handle('agent:refreshAccountUsage', (_, overrides?: AgentAccountUsageOverrides) =>
       this.refreshAccountUsage(overrides)
     )
@@ -3674,9 +3687,13 @@ export class ChatEngine {
     return status.state === 'authenticated'
   }
 
-  /** One app-wide discovery pass; all projects share installed harness models. */
-  private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
-    const projectPath = await this.resolveProjectPath(projectId)
+  /**
+   * The drivers that take part in app-wide provider discovery: every installed
+   * default driver, plus one driver per managed account container. Discovery
+   * and the explicit model-catalog refresh must cover the same set, so both
+   * read it from here instead of keeping their own copy of the rule.
+   */
+  private async catalogDrivers(): Promise<HarnessDriver[]> {
     const harnessEnv = buildProcessEnvironment()
     const defaultDrivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
@@ -3691,7 +3708,47 @@ export class ChatEngine {
     const managedDrivers = await Promise.all(
       managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
     )
-    const drivers = [...defaultDrivers, ...managedDrivers]
+    return [...defaultDrivers, ...managedDrivers]
+  }
+
+  /**
+   * Force every harness that keeps its own model catalog to re-fetch it from
+   * upstream before the next discovery. Only an explicit user-triggered
+   * refresh pays for this   it is a network round trip per provider   so the
+   * TTL sweeps, retries and picker opens never call it.
+   */
+  private async refreshHarnessModelCatalogs(): Promise<void> {
+    let drivers: HarnessDriver[]
+    try {
+      drivers = (await this.catalogDrivers()).filter(
+        (driver) => driver.refreshModelCatalog !== undefined
+      )
+    } catch (error) {
+      Logger.info('Harness model catalog refresh skipped', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return
+    }
+    await Promise.allSettled(
+      drivers.map(async (driver) => {
+        try {
+          await driver.refreshModelCatalog?.()
+        } catch (error) {
+          // A failed upstream pass leaves the harness's stored catalog in
+          // place, so discovery still returns the best list available.
+          Logger.info('Harness model catalog refresh failed', {
+            driverId: driver.id,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      })
+    )
+  }
+
+  /** One app-wide discovery pass; all projects share installed harness models. */
+  private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
+    const projectPath = await this.resolveProjectPath(projectId)
+    const drivers = await this.catalogDrivers()
     const results: DriverDiscovery[] = []
     for (let offset = 0; offset < drivers.length; offset += 4) {
       const batch = await Promise.all(

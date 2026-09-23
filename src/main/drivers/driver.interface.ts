@@ -584,6 +584,16 @@ export interface HarnessDriver {
    */
   providerCatalogFingerprint?(): Promise<string | null>
 
+  /**
+   * Force the harness to re-fetch its own model catalog from upstream, so the
+   * discovery that follows sees catalogs that are fresh at the source rather
+   * than whatever the harness has cached locally. Called only for an explicit
+   * user-triggered catalog refresh   never by a background or TTL-driven sweep  
+   because it costs a network round trip per provider. Drivers that keep no
+   * upstream catalog omit it.
+   */
+  refreshModelCatalog?(): Promise<void>
+
   /** List slash commands the harness exposes. */
   listCommands(projectPath: string): Promise<HarnessCommand[]>
 

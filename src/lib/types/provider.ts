@@ -206,6 +206,21 @@ export interface HarnessUpdateHandoff {
 /** How a harness CLI was (or can be) installed on this machine. */
 export type HarnessInstallMethod = 'npm' | 'brew' | 'winget' | 'native' | 'bundled'
 
+/**
+ * Controls one provider-catalog refresh.
+ */
+export interface ProviderCatalogRefreshOptions {
+  /** Bypass every cache and re-discover from the drivers. Defaults to true. */
+  force?: boolean
+  /**
+   * Also force each harness's own model catalog to re-fetch from upstream
+   * before discovery. Costs a network round trip per provider, so only an
+   * explicit user-triggered refresh (the model picker's refresh button) sets
+   * it; background revalidations leave it unset.
+   */
+  refreshModelCatalogs?: boolean
+}
+
 /** OS-specific install/download page for a harness, resolved for the current platform. */
 export interface HarnessInstallInfo {
   harnessId: string

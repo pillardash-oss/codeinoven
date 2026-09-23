@@ -291,10 +291,14 @@
     }
   }
 
-  /** Force a fresh catalog from the harness drivers, bypassing the TTL cache. */
+  /**
+   * Force every harness's own model catalog to re-fetch from upstream, then
+   * re-probe the drivers. This is the explicit user refresh, not a cache
+   * revalidation, so it is the only path that pays for the network pass.
+   */
   function refreshCatalog(): void {
     if (!projectId) return
-    void providerCatalog.refresh(projectId, true)
+    void providerCatalog.refreshFromUpstream(projectId)
   }
 
   /**
