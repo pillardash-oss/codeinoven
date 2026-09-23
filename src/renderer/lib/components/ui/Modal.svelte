@@ -68,6 +68,17 @@
     full: 'max-w-none'
   }
 
+  /**
+   * Placements whose panel spans the window's width.
+   *
+   * The width ladder is for a panel that chooses how wide it is (`center`,
+   * `palette`, `right`). A full-window surface and a bottom sheet are told to
+   * span, so the ladder must not apply at all: otherwise the default `size`
+   * silently clamps a `w-full` panel to `max-w-md`, which is exactly the bug
+   * that made full screen surfaces render as a narrow column.
+   */
+  const FULL_WIDTH_PLACEMENTS: ReadonlySet<ModalPlacement> = new Set(['fullscreen', 'bottom'])
+
   const PANEL_BASE =
     'pointer-events-auto relative flex min-h-0 flex-col overflow-hidden shadow-xl outline-none'
 
@@ -160,7 +171,9 @@
 
   let alignment = $derived(ALIGNMENTS[placement])
   let layout = $derived(panelLayout(placement, fill))
-  let widthClass = $derived(panelWidth ?? WIDTHS[size])
+  let widthClass = $derived(
+    FULL_WIDTH_PLACEMENTS.has(placement) ? '' : (panelWidth ?? WIDTHS[size])
+  )
 
   // The browser's native view floats above every DOM surface (see
   // browserVisibility.hideWhile), so this shared modal must
