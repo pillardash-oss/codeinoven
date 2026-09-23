@@ -15,6 +15,7 @@ import {
   validatePrNumber
 } from './ipc-validation'
 import { ProjectManager } from '../../lib/engines/project-manager'
+import { RoutineManager } from '../../lib/engines/routine-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
@@ -31,6 +32,7 @@ import { AssignmentEngine } from '../../lib/engines/assignment-engine'
 import { SpecContextService } from '../chat/spec-context-service'
 import { EditorService } from '../editor/editor-service'
 import { ProjectFilesService } from '../editor/project-files-service'
+import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
@@ -72,11 +74,13 @@ import { registerHistoryHandlers } from './handlers/history-handlers'
 import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
+import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { GitProvider } from '../git/git-provider.interface'
 import type { AttachmentStorageScope, OpenedPath } from '../../lib/types'
+import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type {
   IpcChatEngine,
   IpcHandlerContext,
@@ -94,6 +98,7 @@ export function registerIpcHandlers(
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
+  const routineManager = options.routineManager ?? new RoutineManager(database)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
@@ -123,7 +128,12 @@ export function registerIpcHandlers(
   // Constructed after the scope resolver so interactive file surfaces can
   // resolve managed worktree roots instead of always reading the project root.
   const projectFilesService =
-    options.projectFilesService ?? new ProjectFilesService(projectManager, scopeRoots)
+    options.projectFilesService ??
+    new ProjectFilesService(
+      projectManager,
+      scopeRoots,
+      createThreadWorkspaceRoots(storage, database)
+    )
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
@@ -141,6 +151,11 @@ export function registerIpcHandlers(
       }
     },
     scopeRoots
+  )
+  // A routine's threads (its hidden how-to thread included) are deleted through
+  // this same canonical path when the routine is removed.
+  routineManager.attachThreadDeleter((threadId) =>
+    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId)
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,
@@ -271,6 +286,8 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'chats'),
           join(getConfigRoot(), 'chat-artifacts'),
           join(getConfigRoot(), 'chats-artifacts'),
+          // The assistant workspace, one directory per routine.
+          join(getConfigRoot(), 'assistant-cwd'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
@@ -406,6 +423,8 @@ export function registerIpcHandlers(
     modelRankingRepo,
     rankingSnapshotRepo,
     noteRepo,
+    routineManager,
+    routineScheduler: options.routineScheduler,
     privilegedIpc,
     privileged,
     attachmentStorageDirectory,
@@ -434,4 +453,5 @@ export function registerIpcHandlers(
   registerSearchHandlers(ctx)
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
+  registerAssistantHandlers(ctx)
 }

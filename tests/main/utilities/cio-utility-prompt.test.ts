@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
 } from '../../../src/main/utilities/cio-utility-prompt'
 import {
   GATEWAY_TOOLS,
+  UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME
+  UTILITY_MANAGE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
 } from '../../../src/lib/gateway-tools'
 
 describe('cio-utility contract', () => {
@@ -54,5 +57,14 @@ describe('cio-utility contract', () => {
     expect(diagnostics?.inputSchema).toMatchObject({ required: ['action'] })
     const manage = GATEWAY_TOOLS.find((tool) => tool.name === UTILITY_MANAGE_TOOL_NAME)
     expect(manage?.route).toBe('/manage')
+  })
+
+  it('puts installing, online research, and the secret path in scope for a routine run', () => {
+    expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_SEARCH_TOOL_NAME)
+    expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_ACTIVATE_TOOL_NAME)
+    expect(CIO_UTILITY_RUN_PROMPT).toContain(UTILITY_MANAGE_TOOL_NAME)
+    expect(CIO_UTILITY_RUN_PROMPT).toContain('install_bundle')
+    expect(CIO_UTILITY_RUN_PROMPT).toContain('go online')
+    expect(CIO_UTILITY_RUN_PROMPT).toContain('cio_ask_secret')
   })
 })

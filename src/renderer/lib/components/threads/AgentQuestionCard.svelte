@@ -12,11 +12,12 @@
   } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteSet, createSubscriber } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -96,7 +97,6 @@
   )
   let working = $state(false)
   let actionError = $state('')
-  let now = $state(Date.now())
   let folded = $state(false)
   // svelte-ignore state_referenced_locally
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
@@ -118,9 +118,17 @@
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
   let allAnswered = $derived(answers.every((answer) => answer.length > 0))
   let timerPaused = $derived(interactedIndexes.has(currentIndex) || request.expiresAt === undefined)
-  let remainingMs = $derived(
-    timerPaused || request.expiresAt === undefined ? null : Math.max(0, request.expiresAt - now)
-  )
+  // Time is an external system, so the countdown subscribes to it instead of
+  // tracking it in an effect; the interval only runs while the timer is live.
+  const subscribeToClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, 1_000)
+    return () => window.clearInterval(timer)
+  })
+  let remainingMs = $derived.by(() => {
+    if (timerPaused || request.expiresAt === undefined) return null
+    subscribeToClock()
+    return Math.max(0, request.expiresAt - Date.now())
+  })
   let remainingLabel = $derived(remainingMs === null ? 'Paused' : formatRemaining(remainingMs))
 
   // Plain-markdown rendition of the question and its options that the agent
@@ -153,14 +161,6 @@
   }
 
   $effect(() => {
-    if (request.expiresAt === undefined) return
-    const timer = window.setInterval(() => {
-      now = Date.now()
-    }, 1_000)
-    return () => window.clearInterval(timer)
-  })
-
-  $effect(() => {
     const serverAnswers = request.answers
     const serverIndex = request.activeQuestionIndex
     const serverInteracted = request.interactedQuestionIndexes
@@ -180,13 +180,6 @@
     currentIndex = serverIndex
     for (const index of serverInteracted) interactedIndexes.add(index)
   })
-
-  function formatRemaining(milliseconds: number): string {
-    const seconds = Math.ceil(milliseconds / 1_000)
-    const minutes = Math.floor(seconds / 60)
-    const remainder = seconds % 60
-    return minutes > 0 ? `${minutes}:${String(remainder).padStart(2, '0')}` : `${seconds}s`
-  }
 
   function goPrev(): void {
     if (currentIndex > 0) navigateTo(currentIndex - 1)
@@ -396,7 +389,10 @@
 <section
   out:slide={dismissSlide()}
   data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
-  class={['relative overflow-hidden rounded-xl border bg-surface shadow-sm', draggingFiles && 'border-primary']}
+  class={[
+    'relative overflow-hidden rounded-xl border bg-surface shadow-sm',
+    draggingFiles && 'border-primary'
+  ]}
   aria-label="Agent question"
   ondragover={handleCardDragOver}
   ondragleave={handleCardDragLeave}

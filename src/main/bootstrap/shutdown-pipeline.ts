@@ -75,6 +75,12 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.routineScheduler?.dispose()
+  } catch (error) {
+    Logger.error('Routine scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.modelPricingService?.stop()
   } catch (error) {
     Logger.error('Model pricing cleanup failed during shutdown:', error)

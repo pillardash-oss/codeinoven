@@ -76,7 +76,7 @@ export interface ActionStatusBadge {
   /** Human-readable status text shown next to the colored dot. */
   label: string
   stage?: 'pinned' | 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done'
-  tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
+  tone?: import('$shared/thread-status-policy').ThreadStatusTone
   kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
   variant?: 'dot' | 'spinner'
   animated?: boolean

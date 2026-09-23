@@ -24,9 +24,11 @@ import {
 } from './project-files/project-files-paths'
 import { ProjectFilesRootResolver } from './project-files/project-files-roots'
 import type {
+  ProjectFilesAssistantRootLookup,
   ProjectFilesChatArtifactRootLookup,
   ProjectFilesProjectLookup,
-  ProjectFilesScopeRootLookup
+  ProjectFilesScopeRootLookup,
+  ProjectFilesThreadWorkspaceRoots
 } from './project-files/project-files-roots'
 import { ProjectFilesTransfer } from './project-files/project-files-transfer'
 import {
@@ -37,7 +39,8 @@ import {
 export type {
   ProjectFilesProjectLookup,
   ProjectFilesScopeRootLookup,
-  ProjectFilesChatArtifactRootLookup
+  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesAssistantRootLookup
 }
 
 export class ProjectFilesService {
@@ -53,10 +56,10 @@ export class ProjectFilesService {
   constructor(
     projects: ProjectFilesProjectLookup,
     scopeRoots?: ProjectFilesScopeRootLookup,
-    chatArtifactRoots?: ProjectFilesChatArtifactRootLookup
+    threadWorkspaces: ProjectFilesThreadWorkspaceRoots = {}
   ) {
     this.projects = projects
-    this.roots = new ProjectFilesRootResolver(projects, scopeRoots, chatArtifactRoots)
+    this.roots = new ProjectFilesRootResolver(projects, scopeRoots, threadWorkspaces)
     this.transfer = new ProjectFilesTransfer({
       roots: this.roots,
       runExclusive: (operation) => this.runMutationExclusive(operation),

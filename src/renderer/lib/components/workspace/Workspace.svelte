@@ -10,11 +10,13 @@
     Bot,
     BrainCircuit,
     Bug,
+    Clock1,
     Cloud,
     FileDiff,
     MonitorCog,
     FolderTree,
     Globe2,
+    Hammer,
     History,
     Info,
     MessageCircleDashed,
@@ -47,13 +49,22 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
+  import AssistantSidebar from '../assistant/AssistantSidebar.svelte'
+  import { groupRunsByTask } from '../assistant/assistant-view'
+  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
+  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings, chatEffectiveSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatEffectiveSettings,
+    chatSettings
+  } from '$lib/stores/thread-settings.svelte'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -61,6 +72,11 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    routinePrimaryModel,
+    settingsWithRoutineModel,
+    withDefaultRoutinePrimary
+  } from '$shared/routine-agents'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -95,24 +111,29 @@
     coordinatorHasActiveDelegates,
     activeThreadRowId,
     INBOX_PROJECT_ID,
+    ASSISTANT_SPACE_ID,
+    ASSISTANT_SETUP_TITLE,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isOrchestrationChildThread,
-    threadTracksReadStatus
+    threadTracksReadStatus,
+    usesThreadWorkspaceMount
   } from '$shared/types'
   import type {
+    AgentModelSelection,
     AgentPart,
     AppConfig,
     AppConfigPatch,
     Project,
     PromptAttachment,
+    Routine,
     Thread
   } from '$shared/types'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
     /** True while the Scope page is on screen   thread switches must keep the
@@ -253,7 +274,10 @@
   // Keep each mode's scroll position and restore it when the mode comes back,
   // and briefly suppress the focus-follow reveal so it doesn't yank the
   // restored scroll back to the selected thread's row.
-  const sidebarScrollByMode = new SvelteMap<'projects' | 'chats' | 'threads', number>()
+  const sidebarScrollByMode = new SvelteMap<
+    'projects' | 'chats' | 'threads' | 'assistant',
+    number
+  >()
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
@@ -322,8 +346,12 @@
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
+  let prevAssistantTaskCount = 0
+  let prevAssistantRoutineCount = 0
   let prevProjectFileOpenCount = 0
   let prevToggleContextSidebarCount = 0
+  /** Bumped to open the new-routine dialog from a keyboard shortcut. */
+  let routineCreateTrigger = $state(0)
   let creatingThread = false
 
   // This view hosts the terminal panel   advertise it to the header.
@@ -407,6 +435,25 @@
     }
   })
 
+  /** React to Cmd/Ctrl+N on the Assistant view → new task, inside the routine
+   *  the user is currently in when there is one, routine-less otherwise. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantTaskCount
+    if (current !== prevAssistantTaskCount && workspaceState.consumeAssistantTaskRequest()) {
+      prevAssistantTaskCount = current
+      void createAssistantTaskFromShortcut()
+    }
+  })
+
+  /** React to Cmd/Ctrl+Shift+N on the Assistant view → new routine. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantRoutineCount
+    if (current !== prevAssistantRoutineCount && workspaceState.consumeAssistantRoutineRequest()) {
+      prevAssistantRoutineCount = current
+      routineCreateTrigger++
+    }
+  })
+
   /** React to Cmd/Ctrl+Shift+S → toggle the right (context) sidebar. */
   $effect(() => {
     const current = workspaceState.requestToggleContextSidebarCount
@@ -465,11 +512,12 @@
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
-    // Inbox chats browse the thread's own artifact directory instead of a
-    // project root; the mount must be registered before the root listing.
-    if (selectedThread.projectId === INBOX_PROJECT_ID) {
+    // Conversations browse their own app-owned workspace directory instead of a
+    // project root (a chat's artifact directory, an assistant task's working
+    // directory); the mount must be registered before the root listing.
+    if (usesThreadWorkspaceMount(selectedThread.projectId)) {
       projectFilesWorkspace.ensureState(selectedThread.projectId)
-      projectFilesWorkspace.setChatThread(selectedThread.projectId, selectedThread.id)
+      projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
       await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
       return
@@ -603,7 +651,12 @@
 
   function openMemoryTab(): void {
     if (!selectedThread) return
-    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+    contextSidebarState.openMemory(
+      selectedThread.projectId,
+      selectedThread.id,
+      undefined,
+      selectedThread.routineId
+    )
   }
 
   /** The coordinator published by the thread on screen, if it coordinates work.
@@ -747,10 +800,13 @@
   )
 
   /** Whether the file tree can be opened for the thread on screen: a local
-   *  project with a real path, or an inbox chat's own artifact directory. */
+   *  project with a real path, or a conversation that owns its own workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory). */
   let fileTreeAvailable = $derived(
     Boolean(
-      selectedThread && (selectedThread.projectId === INBOX_PROJECT_ID || projectToolsAvailable)
+      selectedThread &&
+      (usesThreadWorkspaceMount(selectedThread.projectId) || projectToolsAvailable)
     )
   )
 
@@ -775,6 +831,11 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev)   never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+    // Assistant tasks are conversations too: their rail adds the how-to panel
+    // and mounts the file tree on the task's own working directory, but it still
+    // carries no terminal, actions or cloud tools.
+    const isAssistantThread = selectedThread.projectId === ASSISTANT_SPACE_ID
+    const isConversation = isChatThread || isAssistantThread
 
     // The message-history counter leads the rail so it reads first, like a
     // running tally of the conversation   click to jump to any past message.
@@ -795,18 +856,35 @@
       }
     ]
 
+    // The how-to panel is an assistant task's own authoring surface: it sits
+    // right under history, above the workspace tools.
+    const assistantTools: ContextDockItem[] = isAssistantThread
+      ? [
+          {
+            id: 'assistant-how-to',
+            label: 'How to',
+            icon: Hammer,
+            active: dockKindActive('assistant-how-to'),
+            onSelect: () =>
+              toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
+          }
+        ]
+      : []
+
     const workspaceTools: ContextDockItem[] = []
-    // Chats surface their own per-thread artifact directory as the file tree.
-    if (isChatThread) {
+    // Conversations surface their own app-owned workspace directory as the file
+    // tree: a chat's artifact directory, or an assistant task's working
+    // directory (the routine's root).
+    if (isConversation) {
       workspaceTools.push({
         id: 'files',
-        label: 'Artifacts',
+        label: isChatThread ? 'Artifacts' : 'Workspace files',
         icon: FolderTree,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
     }
-    if (!isChatThread && projectToolsAvailable) {
+    if (!isConversation && projectToolsAvailable) {
       workspaceTools.push(
         {
           id: 'files',
@@ -824,7 +902,7 @@
         }
       )
     }
-    if (!isChatThread && workspaceState.terminalAvailable) {
+    if (!isConversation && workspaceState.terminalAvailable) {
       workspaceTools.push({
         id: 'terminal',
         label: terminalOpen ? 'Hide terminal' : 'Show terminal',
@@ -869,7 +947,7 @@
         onSelect: () => toggleDockPanel('memory', openMemoryTab)
       }
     ]
-    if (!isChatThread) {
+    if (!isConversation) {
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
@@ -986,6 +1064,7 @@
 
     return [
       history,
+      assistantTools,
       workspaceTools,
       sessionTools,
       temporaryChats,
@@ -1259,7 +1338,16 @@
 
   let pinnedThreads = $derived(
     allThreads
-      .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
+      .filter(
+        (t) =>
+          t.pinned &&
+          !t.archived &&
+          t.projectId !== INBOX_PROJECT_ID &&
+          // Assistant tasks live only in Assistant View: a pinned assistant
+          // thread (every routine's how-to thread is pinned) must never surface
+          // in the Projects sidebar's pinned section.
+          t.projectId !== ASSISTANT_SPACE_ID
+      )
       .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
@@ -1277,6 +1365,28 @@
 
   let pinnedProjects = $derived(visibleProjects.filter((p) => p.pinned))
   let regularProjects = $derived(visibleProjects.filter((p) => !p.pinned))
+
+  // ─── Assistant space ──────────────────────────────────────────────────────
+  /** The hidden assistant container (assistant tasks live here). */
+  let assistantProject = $derived(
+    projects.find((project) => project.id === ASSISTANT_SPACE_ID) ?? null
+  )
+  /** Every assistant-space thread (tasks and runs), active only. */
+  let assistantThreads = $derived(
+    allThreads.filter((thread) => thread.projectId === ASSISTANT_SPACE_ID && !thread.archived)
+  )
+  /** Assistant tasks, most recent activity first. A run is not a task, so the
+   *  sidebar, the shortcuts, and the panel never treat one as a task. */
+  let assistantTasks = $derived(
+    assistantThreads
+      .filter((thread) => !thread.assistantTaskId)
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  )
+  /** Every task's runs, newest first, for the sidebar's nested rows. */
+  let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every run thread, for the header search's Runs results. */
+  let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
+  let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
@@ -1316,6 +1426,9 @@
       (t) =>
         !t.archived &&
         t.projectId !== INBOX_PROJECT_ID &&
+        // Assistant tasks are Assistant View's own rows, never the Threads
+        // timeline's, so a pinned how-to thread cannot appear among them.
+        t.projectId !== ASSISTANT_SPACE_ID &&
         threadProjectFilterState.matches(t.projectId)
     )
     // Pinned threads keep one shared pin-time order; the default status sort
@@ -1404,7 +1517,8 @@
       existing.status === thread.status &&
       existing.title === thread.title &&
       existing.pinned === thread.pinned &&
-      existing.read === thread.read
+      existing.read === thread.read &&
+      existing.routineId === thread.routineId
     ) {
       return
     }
@@ -1798,6 +1912,37 @@
         }
       ]
       viewActions.set('scoped-threads', scopedActions)
+    } else if (mode === 'assistant') {
+      const assistantActions: ViewActionItem[] = [
+        {
+          id: 'search',
+          component: AssistantSearchControl as unknown as ViewActionItem['component'],
+          props: {
+            routines: assistantRoutineList,
+            tasks: assistantTasks,
+            runs: assistantRuns,
+            onOpenTask: openAssistantTask,
+            onOpenRoutine: (routine: Routine) => void openAssistantHowToForRoutine(routine)
+          }
+        },
+        {
+          id: 'new-routine',
+          component: RoutineCreateControl as unknown as ViewActionItem['component'],
+          props: {
+            onCreate: createAssistantRoutine,
+            trigger: routineCreateTrigger
+          }
+        },
+        {
+          id: 'new-task',
+          icon: Clock1,
+          ariaLabel: 'New task',
+          title: 'New task',
+          shortcut: keymapKeys('assistant-new-task'),
+          run: () => void createAssistantTaskFromShortcut()
+        }
+      ]
+      viewActions.set('assistant', assistantActions)
     } else {
       const projectActions: ViewActionItem[] = [
         {
@@ -1999,6 +2144,10 @@
 
   async function loadData(): Promise<void> {
     try {
+      assistantRoutines.initialize()
+      // Ensure the assistant container exists before the thread list is read so
+      // assistant tasks are present on the first load.
+      await assistantRoutines.ensureSpace().catch(() => undefined)
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
         invoke('thread:listRecentPerProject')
@@ -2570,8 +2719,13 @@
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
-    requestedBucketId?: string
+    requestedBucketId?: string,
+    /** Assistant-space grouping: the routine the new task belongs to, and whether
+     *  this is a routine's seed "Getting started" thread. */
+    assistant: { routineId?: string; gettingStarted?: boolean } = {}
   ): Promise<void> {
+    const routineId = assistant.routineId
+    const gettingStarted = assistant.gettingStarted === true
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -2584,6 +2738,55 @@
     const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
+      // A routine-scoped create always lands inside its routine, even when it
+      // reuses a blank thread: the reused row predates this call, so its
+      // grouping and setup label are applied here rather than at creation time.
+      const regroup = routineId !== undefined && existing.routineId !== routineId
+      const needsSetupPatch = gettingStarted && existing.assistantGettingStarted !== true
+      if (regroup || needsSetupPatch) {
+        const optimistic: Thread = {
+          ...existing,
+          // A routine's how-to ("Getting started") thread is pinned for life, and
+          // a reused blank row must join the Pinned section too.
+          ...(gettingStarted ? { pinned: true } : {}),
+          ...(regroup ? { routineId } : {}),
+          ...(gettingStarted
+            ? {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual' as const,
+                assistantGettingStarted: true
+              }
+            : {})
+        }
+        upsertThreadInList(optimistic)
+        if (workspaceState.selectedThread?.id === existing.id) {
+          workspaceState.updateThread(optimistic)
+        }
+        const persist = async (): Promise<void> => {
+          if (regroup && routineId) {
+            upsertThreadInList(await assistantRoutines.setTaskRoutine(existing.id, routineId))
+          }
+          if (needsSetupPatch) {
+            upsertThreadInList(
+              await invoke('thread:update', existing.projectId, existing.id, {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual',
+                assistantGettingStarted: true
+              })
+            )
+            // `thread:update` cannot carry the pin, and the how-to thread is
+            // pinned for life, so a reused blank row is pinned in its own write.
+            upsertThreadInList(
+              await invoke('thread:setPinned', existing.projectId, existing.id, true)
+            )
+          }
+          const current = allThreads.find((candidate) => candidate.id === existing.id)
+          if (current && workspaceState.selectedThread?.id === existing.id) {
+            workspaceState.updateThread(current)
+          }
+        }
+        void persist().catch(() => undefined)
+      }
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
@@ -2625,10 +2828,12 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi' as const,
-      title: DEFAULT_THREAD_TITLE,
-      titleSource: 'default' as const,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
+      titleSource: gettingStarted ? ('manual' as const) : ('default' as const),
       status: 'created' as const,
-      pinned: false,
+      // The how-to thread is pinned from the instant it exists, so it never
+      // appears outside the Pinned section and is never an eviction candidate.
+      pinned: gettingStarted,
       archived: false,
       read: true,
       settings: inheritedSettings,
@@ -2636,6 +2841,8 @@
       updatedAt: Date.now(),
       lastActivity: Date.now(),
       workingDirectory: project.path,
+      ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { assistantGettingStarted: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
@@ -2664,10 +2871,12 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi',
-      title: DEFAULT_THREAD_TITLE,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
-      ...(scopeBucketId ? { scopeBucketId } : {})
+      ...(scopeBucketId ? { scopeBucketId } : {}),
+      ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
@@ -2824,6 +3033,242 @@
     if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread.id)
+  }
+
+  // ─── Assistant actions ────────────────────────────────────────────────────
+  function openAssistantTask(task: Thread): void {
+    upsertThreadInList(task)
+    workspaceState.openThread(task, assistantProject)
+  }
+
+  /** Open the task and dock its note panel in the context sidebar. */
+  function openAssistantTaskNotes(task: Thread): void {
+    openAssistantTask(task)
+    contextSidebarState.openThreadNote(task.projectId, task.id, task.title, {
+      edit: true,
+      focusEditor: true
+    })
+  }
+
+  /** Create a routine-less task and open it (header New Task). */
+  async function createAssistantTask(): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject)
+  }
+
+  /**
+   * The model the composer would start a new assistant task on: the selected
+   * assistant task's model, else the Chats last-used selection (assistant
+   * threads run on chat-style settings). A routine defaults its primary to it.
+   */
+  function currentAssistantModelSelection(): AgentModelSelection | undefined {
+    const selected = workspaceState.selectedThread
+    const settings =
+      selected && selected.projectId === ASSISTANT_SPACE_ID
+        ? selected.settings
+        : chatSettings.lastUsed
+    if (!settings?.modelId) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
+    }
+  }
+
+  /**
+   * The routine the user is currently "inside": the routine of the selected
+   * task, else the routine whose how-to panel is docked (so a shortcut still
+   * lands in the routine while its panel is open on another task).
+   */
+  function activeAssistantRoutine(): Routine | null {
+    const selectedId = selectedThread?.id
+    const fromSelection = selectedId
+      ? assistantThreads.find((task) => task.id === selectedId)?.routineId
+      : undefined
+    const tab = contextSidebarState.sidebarActiveTab
+    const fromPanel = tab?.kind === 'assistant-how-to' ? (tab.routineId ?? undefined) : undefined
+    const routineId = fromSelection ?? fromPanel
+    if (!routineId) return null
+    return assistantRoutineList.find((routine) => routine.id === routineId) ?? null
+  }
+
+  /** Cmd/Ctrl+N on the Assistant view: new task in the active routine when the
+   *  user is inside one, otherwise a routine-less task. */
+  async function createAssistantTaskFromShortcut(): Promise<void> {
+    const routine = activeAssistantRoutine()
+    if (routine) await createAssistantTaskInRoutine(routine)
+    else await createAssistantTask()
+  }
+
+  /** Create a routine and seed its "Getting started" task, then open its panel. */
+  async function createAssistantRoutine(name: string, description: string): Promise<void> {
+    if (!assistantProject) return
+    // No model prompt: the primary is the model the user is already working on,
+    // so creating a routine never blocks on a pick. Fallbacks are added later
+    // from the panel's Agents tab, which the agent points the user at.
+    const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const routine = await assistantRoutines.createRoutine({ name, description, agents })
+    // The seed task is created already inside the routine: a follow-up regroup
+    // would race the creation broadcast and leave the task outside it.
+    await createThreadInProject(assistantProject, undefined, {
+      routineId: routine.id,
+      gettingStarted: true
+    })
+    await applyRoutineModelToTask(workspaceState.selectedThread, routine)
+    await openAssistantHowToForRoutine(routine)
+  }
+
+  /** Create a task inside a routine and open the routine's how-to panel. */
+  async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
+    const created = workspaceState.selectedThread
+    await applyRoutineModelToTask(created, routine)
+    if (created && created.projectId === ASSISTANT_SPACE_ID) {
+      upsertThreadInList(created)
+      // Anchor on the routine id we already hold: a reused blank thread carries
+      // no grouping until its async regroup lands, and the panel must not open
+      // against the wrong routine in that window.
+      contextSidebarState.openAssistantHowTo(
+        ASSISTANT_SPACE_ID,
+        created.id,
+        routine.id,
+        routine.name
+      )
+    } else {
+      await openAssistantHowToForRoutine(routine)
+    }
+  }
+
+  /**
+   * A task created inside a routine starts on the routine's primary model, so
+   * the composer shows the model the routine actually runs on. Best-effort: the
+   * scheduled run applies the routine's primary regardless, so a failed write
+   * only leaves the composer showing the inherited model.
+   */
+  async function applyRoutineModelToTask(
+    thread: Thread | null | undefined,
+    routine: Routine
+  ): Promise<void> {
+    const primary = routinePrimaryModel(routine.agents)
+    if (!thread || !primary || !thread.settings) return
+    try {
+      const updated = await persistInheritedThreadSettings(
+        thread,
+        settingsWithRoutineModel(thread.settings, primary)
+      )
+      upsertThreadInList(updated)
+      if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
+    } catch {
+      // Cosmetic only: the run itself uses the routine's primary either way.
+    }
+  }
+
+  /** Remove a routine and every thread it owns, its hidden how-to thread included. */
+  async function deleteAssistantRoutine(routineId: string): Promise<void> {
+    const affected = allThreads.filter((thread) => thread.routineId === routineId)
+    await assistantRoutines.deleteRoutine(routineId)
+    // `thread:deleted` prunes the rows; drop them here too so the sidebar is
+    // correct immediately, the same way a plain thread delete behaves.
+    for (const thread of affected) {
+      allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
+      scopeState.removeThread(thread.id)
+      if (selectedThread?.id === thread.id) workspaceState.clearThread()
+    }
+    // The routine is gone, so its how-to panel has nothing left to configure.
+    contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
+  }
+
+  async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
+    await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
+  }
+
+  /**
+   * Hide a routine's how-to thread. Hiding is the only state the thread can
+   * change: it stays pinned, so archiving it is what takes it out of the
+   * sidebar until the how-to panel reveals it again.
+   */
+  async function hideAssistantHowTo(task: Thread): Promise<void> {
+    if (!task.routineId) return
+    try {
+      const updated = await assistantRoutines.setHowToHidden(task.routineId, true)
+      upsertThreadInList(updated)
+      scopeState.updateThread(updated)
+    } catch (error) {
+      reportError(error, 'Could not hide the how-to thread')
+    }
+  }
+
+  /** Reorder routines by drag: move the dragged routine around its drop target. */
+  async function moveAssistantRoutine(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    if (draggedId === targetId) return
+    const list = [...assistantRoutines.routines]
+    const from = list.findIndex((routine) => routine.id === draggedId)
+    if (from < 0) return
+    const [moved] = list.splice(from, 1)
+    const targetIndex = list.findIndex((routine) => routine.id === targetId)
+    if (targetIndex < 0) return
+    list.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, moved)
+    await assistantRoutines.reorderRoutines(list.map((routine) => routine.id))
+  }
+
+  /** Group a dragged task into a routine. */
+  async function assignAssistantTask(taskId: string, routineId: string): Promise<void> {
+    const updated = await assistantRoutines.setTaskRoutine(taskId, routineId)
+    upsertThreadInList(updated)
+    workspaceState.updateThread(updated)
+  }
+
+  function openAssistantHowToForTask(task: Thread): void {
+    // One panel per routine: the title follows the routine, so opening the
+    // how-to from any of its tasks focuses the same panel with the same name
+    // instead of re-titling it with whichever task was clicked. A run is one
+    // execution, not the task the panel belongs to, so it anchors on its task
+    // (falling back to the run only when that task is gone): a routine must
+    // never grow a second how-to tab just because it ran.
+    const anchor = task.assistantTaskId
+      ? (assistantThreads.find((entry) => entry.id === task.assistantTaskId) ?? task)
+      : task
+    const routineId = anchor.routineId ?? task.routineId
+    const routine = routineId
+      ? assistantRoutineList.find((entry) => entry.id === routineId)
+      : undefined
+    contextSidebarState.openAssistantHowTo(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      routineId ?? null,
+      routine?.name ?? anchor.title
+    )
+  }
+
+  /** Open the how-to panel for a routine, creating a first task if it has none. */
+  async function openAssistantHowToForRoutine(routine: Routine): Promise<void> {
+    let anchor =
+      assistantTasks.find((task) => task.routineId === routine.id) ??
+      (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
+        ? workspaceState.selectedThread
+        : undefined)
+    if (!anchor) {
+      // A routine whose only task is a hidden how-to thread still has an anchor:
+      // ask the main process for it, because hidden rows never reach the
+      // hydrated thread list the sidebar renders from.
+      anchor = (await invoke('assistant:howToThread', routine.id)) ?? undefined
+    }
+    if (!anchor) {
+      if (!assistantProject) return
+      await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
+      const created = workspaceState.selectedThread
+      if (!created) return
+      upsertThreadInList(created)
+      anchor = created
+    }
+    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
   }
 
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
@@ -2998,6 +3443,14 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** An assistant task was forked to a project: open it in the projects view. */
+  function handleAssistantHandoff(forked: Thread): void {
+    upsertThreadInList(forked)
+    scopeState.updateThread(forked)
+    navigate('projects')
+    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
   /** Register a freshly added project without landing in a new thread   used by
    *  the continue-chat-in-project flow which creates its own thread. */
   async function handleChatProjectCreated(project: Project): Promise<void> {
@@ -3037,47 +3490,75 @@
 <svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
-  <!-- Shared sidebar   shows Projects or Chats depending on the shell mode -->
-  <WorkspaceSidebar
-    bind:scroller={sidebarScroller}
-    {mode}
-    {navigate}
-    {projects}
-    {visibleProjects}
-    {projectIcons}
-    {loading}
-    activeThreadId={activeThreadRowId(selectedThread)}
-    {threadsByProject}
-    {pinnedThreads}
-    {pinnedProjects}
-    {regularProjects}
-    {pinnedInboxThreads}
-    {standaloneThreads}
-    {pinnedTimelineThreads}
-    {unpinnedTimelineThreads}
-    {hasMoreHistory}
-    {historyLoading}
-    {projectPageLoading}
-    {sidebar}
-    {projectDialogs}
-    {scopeActions}
-    {projectHasMoreInDb}
-    onLoadProjectThreadsPage={loadProjectThreadsPage}
-    onLoadHistoryPage={loadHistoryPage}
-    onSetProjects={(next) => (projects = next)}
-    onOpenThread={openThread}
-    onRename={handleRename}
-    onTogglePin={togglePin}
-    onDelete={handleDelete}
-    onFork={forkThread}
-    onThreadMove={handleThreadMove}
-    onPinnedThreadMove={handlePinnedThreadMove}
-    onTimelinePinnedMove={handleTimelinePinnedMove}
-    onProjectMove={handleProjectMove}
-    onCreateThread={createThreadInProject}
-    onOpenScopedThread={openScopedThread}
-    onSwitchScopedProject={switchScopedProject}
-  />
+  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
+  {#if mode === 'assistant'}
+    <AssistantSidebar
+      bind:scroller={sidebarScroller}
+      routines={assistantRoutineList}
+      tasks={assistantTasks}
+      runsByTask={assistantRunsByTask}
+      selectedThreadId={activeThreadRowId(selectedThread)}
+      {navigate}
+      onOpenTask={openAssistantTask}
+      onOpenTaskHowTo={openAssistantHowToForTask}
+      onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
+      onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+      onRenameTask={handleRename}
+      onTogglePinTask={(task) => void togglePin(task)}
+      onDeleteTask={handleDelete}
+      onForkTask={(task) => void forkThread(task)}
+      onOpenTaskNotes={openAssistantTaskNotes}
+      onHandedOffTask={handleAssistantHandoff}
+      onHideHowTo={(task) => void hideAssistantHowTo(task)}
+      onDeleteRoutine={deleteAssistantRoutine}
+      onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
+      onMoveRoutine={(draggedId, targetId, position) =>
+        void moveAssistantRoutine(draggedId, targetId, position)}
+      onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
+    />
+  {:else}
+    <WorkspaceSidebar
+      bind:scroller={sidebarScroller}
+      {mode}
+      {active}
+      {navigate}
+      {projects}
+      {visibleProjects}
+      {projectIcons}
+      {loading}
+      activeThreadId={activeThreadRowId(selectedThread)}
+      {threadsByProject}
+      {pinnedThreads}
+      {pinnedProjects}
+      {regularProjects}
+      {pinnedInboxThreads}
+      {standaloneThreads}
+      {pinnedTimelineThreads}
+      {unpinnedTimelineThreads}
+      {hasMoreHistory}
+      {historyLoading}
+      {projectPageLoading}
+      {sidebar}
+      {projectDialogs}
+      {scopeActions}
+      {projectHasMoreInDb}
+      onLoadProjectThreadsPage={loadProjectThreadsPage}
+      onLoadHistoryPage={loadHistoryPage}
+      onSetProjects={(next) => (projects = next)}
+      onOpenThread={openThread}
+      onRename={handleRename}
+      onTogglePin={togglePin}
+      onDelete={handleDelete}
+      onFork={forkThread}
+      onThreadMove={handleThreadMove}
+      onPinnedThreadMove={handlePinnedThreadMove}
+      onTimelinePinnedMove={handleTimelinePinnedMove}
+      onProjectMove={handleProjectMove}
+      onCreateThread={createThreadInProject}
+      onOpenScopedThread={openScopedThread}
+      onSwitchScopedProject={switchScopedProject}
+    />
+  {/if}
 
   <!-- Main Content -->
   <section class="flex min-w-0 flex-1 overflow-hidden">
@@ -3125,6 +3606,8 @@
             }}
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
+            {navigate}
+            onOpenAssistantTask={openAssistantTask}
           />
         {/snippet}
         <div

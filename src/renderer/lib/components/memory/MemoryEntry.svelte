@@ -1,12 +1,8 @@
 <script lang="ts">
-  import type {
-    MemoryCategory,
-    MemoryEntry,
-    MemoryPriority,
-    MemoryScope,
-    Thread
-  } from '$shared/types'
+  import type { MemoryCategory, MemoryEntry, MemoryPriority, Thread } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import { locationScopeOf } from '$shared/memory/memory-scopes'
+  import { formatDate } from '$shared/date-time-format'
   import { parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
@@ -15,6 +11,7 @@
   import ProjectSelect from '../shared/ProjectSelect.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
   import MemoryToggle from './MemoryToggle.svelte'
+  import MemoryScopeSelect from './MemoryScopeSelect.svelte'
   import type { MemoryScopeOption } from './memory-routing'
   import { Trash2, ChevronDown, ChevronUp, Zap, Clock } from '@lucide/svelte'
 
@@ -57,18 +54,19 @@
     (entry.modelKeys ?? []).map((key) => parseModelKey(key)).find((model) => model !== null)
   )
 
-  /** The option currently selected on this entry, which decides its pickers. */
-  let currentScopeOption = $derived(scopeOptions.find((option) => option.value === entry.scope))
+  /** The option this entry's scope set lands on, which decides its pickers.
+   *  A located entry names exactly one place; an audience-level entry matches
+   *  whichever audience option its set contains. */
+  let currentScopeOption = $derived.by(() => {
+    const location = locationScopeOf(entry.scopes)
+    if (location) return scopeOptions.find((option) => option.value === location)
+    return scopeOptions.find((option) => entry.scopes.includes(option.value))
+  })
   let showProjectPicker = $derived(currentScopeOption?.needsProject ?? false)
   let showThreadPicker = $derived(currentScopeOption?.needsThread ?? false)
   let selectedScopeProject = $derived(
     projects.find((project) => project.id === entry.projectId) ?? null
   )
-
-  function changeScope(scope: MemoryScope): void {
-    if (scope === entry.scope) return
-    onUpdate(index, 'scope', scope)
-  }
 
   const categoryOptions: { value: MemoryCategory; label: string }[] = [
     { value: 'behavioral', label: 'Behavioral' },
@@ -254,22 +252,14 @@
         </div>
 
         <div>
-          <label class="mb-1 block text-xs font-medium text-muted" for="memory-scope-{entry.id}">
-            Scope
-          </label>
-          <select
-            id="memory-scope-{entry.id}"
-            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-            value={entry.scope}
-            onchange={(e: Event) => {
-              const target = e.currentTarget as HTMLSelectElement
-              changeScope(target.value as MemoryScope)
-            }}
-          >
-            {#each scopeOptions as opt (opt.value)}
-              <option value={opt.value}>{opt.label}</option>
-            {/each}
-          </select>
+          <span class="mb-1 block text-xs font-medium text-muted">Scope</span>
+          <MemoryScopeSelect
+            scopes={entry.scopes}
+            options={scopeOptions}
+            onScopesChange={(nextScopes) => onUpdate(index, 'scopes', nextScopes)}
+            ariaLabel="Select which audiences or places this memory applies to"
+            title="Select which audiences or places this memory applies to"
+          />
         </div>
       </div>
 
@@ -355,7 +345,7 @@
       <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
         <span class="flex items-center gap-1">
           <Clock size={10} />
-          Updated {new Date(entry.updatedAt).toLocaleDateString()}
+          Updated {formatDate(entry.updatedAt)}
         </span>
         {#if entry.lastReinforced}
           <span class="flex items-center gap-1">

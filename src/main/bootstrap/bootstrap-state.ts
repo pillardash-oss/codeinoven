@@ -20,6 +20,8 @@ import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
+import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
+import type { RoutineManager } from '../../lib/engines/routine-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import type { HarnessUpdateService } from '../agents/harness-update-service'
@@ -73,6 +75,9 @@ export interface BootstrapState {
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
+  routineManager: RoutineManager | null
+  routineScheduler: RoutineSchedulerService | null
+  
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
@@ -128,6 +133,8 @@ export function createBootstrapState(): BootstrapState {
     powerWakeService: null,
     retryScheduler: null,
     heartbeatScheduler: null,
+    routineManager: null,
+    routineScheduler: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,

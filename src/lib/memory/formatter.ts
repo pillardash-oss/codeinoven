@@ -1,4 +1,5 @@
 import type { MemoryConfig, MemoryEntry, MemoryPriority } from '../types'
+import { memoryScopesMatchContext, memoryAudienceForContainer } from './memory-scopes'
 
 /**
  * Format memory entries for system prompt injection.
@@ -8,8 +9,10 @@ export function formatMemoryForPrompt(config: MemoryConfig, projectId?: string):
   if (!config.enabled) return ''
   const entries = config.entries.filter((entry) => {
     if (!entry.enabled) return false
-    if (entry.scope === 'project' && entry.projectId && entry.projectId !== projectId) return false
-    return true
+    return memoryScopesMatchContext(entry, {
+      audience: memoryAudienceForContainer(projectId),
+      projectId
+    })
   })
   if (entries.length === 0) return ''
 
@@ -42,10 +45,7 @@ export function formatEntries(entries: MemoryEntry[]): string {
     )
   }
   if (grouped.low.length > 0) {
-    sections.push(
-      'NOTES:',
-      ...grouped.low.map((e) => `- ${e.label.trim()}: ${e.content.trim()}`)
-    )
+    sections.push('NOTES:', ...grouped.low.map((e) => `- ${e.label.trim()}: ${e.content.trim()}`))
   }
 
   return [

@@ -13,6 +13,7 @@ import type {
   ResolvedUtility,
   UtilityKind
 } from '../../lib/types'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
@@ -128,6 +129,13 @@ export interface UtilityRuntimePreparationRequest {
   /** Selected provider for this turn, when the harness exposes provider selection. */
   providerId?: string
   resolvedUtilities: ResolvedUtility[]
+  /**
+   * How long the harness transport must wait for one app-owned gateway call.
+   * A transport with its own request timeout (OpenCode's MCP client defaults to
+   * 60 seconds) must raise it to this, or a human-paced call such as
+   * `cio_ask_secret` is abandoned while its card is still on screen.
+   */
+  gatewayRequestTimeoutMs?: number
 }
 
 /** One ephemeral configuration file requested by a harness adapter. */
@@ -623,7 +631,7 @@ export interface HarnessDriver {
   publishUtilityGatewayEndpoint?(
     projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
   ): Promise<void>
 
   /**

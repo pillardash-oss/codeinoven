@@ -139,6 +139,15 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import {
+    connectionsFromPlan,
+    isRoutineConfirmation,
+    latestHowToDraft as latestHowToDraftIn,
+    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
+    type RoutinePlanDraft
+  } from '$lib/components/assistant/assistant-view'
+  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -314,6 +323,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
+    /** True in Assistant View   the thread authors a routine's how-to. */
+    assistantMode?: boolean
+    /** Routine the assistant task belongs to, when any. */
+    assistantRoutineId?: string | null
+    /** Routine name, shown in the authoring head start. */
+    assistantRoutineName?: string | null
+    /** Whether the routine already has a saved how-to. */
+    assistantHowToComplete?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -354,6 +371,10 @@
   let {
     thread: threadProp,
     chatMode = false,
+    assistantMode = false,
+    assistantRoutineId = null,
+    assistantRoutineName = null,
+    assistantHowToComplete = false,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -1415,6 +1436,24 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // and asks the user to confirm the recap. The recap card commits the agreed
+    // draft in one click; this command is only the fallback for when that path
+    // cannot run, so it appears only while a draft is waiting to be committed
+    // and disappears for good once the routine is saved.
+    if (assistantRoutineDraft) {
+      actions.push({
+        id: 'command:save-how-to',
+        title: '/save-how-to',
+        description: 'Fallback: save the how-to the agent drafted for this routine',
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
+        slashCommand: true,
+        ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
+
     // Skills the thread's harness can see but does not expose as native slash
     // commands: global-layer skills and CodeInOven-registered skills. Harness-
     // reported skills are skipped   they are already listed above.
@@ -2097,6 +2136,19 @@
     taskReferences: PromptAssignmentTaskReference[] = [],
     startAfterThreads: StartAfterThreadReference[] = []
   ): void {
+    // The user answered the agent's "shall I save it?" with a plain yes. The app
+    // owns the commit: save the pending draft, then have the agent post its
+    // next-steps list. The yes is consumed as the confirmation and never sent,
+    // so it cannot become a user bubble or re-open the recap.
+    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
+      void confirmRoutineSave()
+      return
+    }
+    // The primary is, by definition, the model the user triggers the how-to with.
+    // While the how-to is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the routine's
+    // primary   a fresh install has no last-used model to default from.
+    syncRoutinePrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -2118,6 +2170,10 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
+    // The assistant how-to authoring contract is not assembled here: the chat
+    // engine attaches it to every user turn in a routine that still has no
+    // how-to, so a resend from the message editor or a queued delivery can
+    // never drop it.
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
@@ -5852,8 +5908,184 @@
     requestSkillUse(skill.name, args)
   }
 
+  /** The routine this assistant thread is authoring, when it is one. */
+  const assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
+      : null
+  )
+
+  /**
+   * The complete draft the agent has presented for this routine: the how-to it
+   * wrote plus the machine-readable plan (schedule and connections). A draft is
+   * what makes the routine committable, so the recap card and the fallback
+   * command both key off it. It is computed only while the agent is idle: a
+   * running turn streams the draft token by token, and re-parsing fences on
+   * every delta would be wasted work for a card that cannot show yet anyway.
+   * The authoring conversation is short and lives only until the routine is
+   * saved, so scanning it once per settled turn is bounded work.
+   */
+  const assistantRoutineDraft = $derived.by(
+    (): {
+      howTo: string
+      plan: RoutinePlanDraft | null
+    } | null => {
+      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
+      const howTo = latestHowToDraft()
+      if (!howTo) return null
+      return { howTo, plan: latestRoutinePlanDraft() }
+    }
+  )
+
+  /**
+   * Identity of the current draft. Dismissing the recap card hides it only for
+   * this revision, so a revised draft brings the card back.
+   */
+  const assistantRoutineDraftSignature = $derived(
+    assistantRoutineDraft
+      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+      : ''
+  )
+
+  /** The draft revision the user chose to keep editing; empty means none. */
+  let routineRecapDismissed = $state('')
+  let routineSaving = $state(false)
+
+  const routineRecapVisible = $derived(
+    assistantRoutineDraft !== null &&
+      !routineSaving &&
+      routineRecapDismissed !== assistantRoutineDraftSignature
+  )
+
+  function keepEditingRoutine(): void {
+    routineRecapDismissed = assistantRoutineDraftSignature
+  }
+
+  /**
+   * The how-to the agent last drafted for this routine, taken from the newest
+   * how-to fenced block in an assistant message. The authoring contract asks
+   * for a `how-to` fence, but a bare fence whose body starts with a
+   * `how-to: <title>` line is accepted too.
+   */
+  function latestHowToDraft(): string | null {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestHowToDraftIn(assistantTexts)
+  }
+
+  /** The machine-readable routine plan the agent last emitted, if any. */
+  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestRoutinePlanDraftIn(assistantTexts)
+  }
+
+  /**
+   * Keep the routine's primary in step with the model the user is working on
+   * while the how-to is still being written. The primary is the model that
+   * triggers the how-to, so a model switched in the composer before the first
+   * turn must become the model the routine runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the how-to
+   * is saved, and no-op while the composer already matches the primary.
+   */
+  function syncRoutinePrimaryToCurrentModel(): void {
+    const routineId = assistantRoutineId
+    if (!routineId || assistantHowToComplete) return
+    const current = settings
+    if (!current.modelId) return
+    const primary = assistantRoutine?.agents?.primary
+    if (
+      primary &&
+      primary.harnessId === current.harnessId &&
+      primary.providerId === current.providerId &&
+      primary.modelId === current.modelId
+    ) {
+      return
+    }
+    void assistantRoutines
+      .updateRoutine(routineId, {
+        agents: {
+          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          primary: {
+            harnessId: current.harnessId,
+            providerId: current.providerId,
+            modelId: current.modelId,
+            ...(current.accountId ? { accountId: current.accountId } : {}),
+            ...(current.thinkingLevel ? { thinkingLevel: current.thinkingLevel } : {})
+          }
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  /**
+   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * have the agent post a short next-steps list in the Getting started thread.
+   * Both the recap card's Save button and a typed confirmation route here, so
+   * the follow-up turn happens whichever way the user agreed.
+   */
+  async function confirmRoutineSave(): Promise<void> {
+    const routineId = assistantRoutineId
+    if (!routineId) return
+    const saved = await saveRoutineHowTo()
+    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+  }
+
+  /**
+   * Commit the agent-drafted how-to, schedule, and connections to the routine
+   * once the user agrees. Called by the recap card and by the `/save-how-to`
+   * fallback. The plan block is optional: without it the how-to is saved on its
+   * own and the existing schedule is left untouched.
+   */
+  async function saveRoutineHowTo(draftOverride?: {
+    howTo: string
+    plan: RoutinePlanDraft | null
+  }): Promise<boolean> {
+    const routineId = assistantRoutineId
+    if (!routineId || routineSaving) return false
+    const draft = draftOverride ?? assistantRoutineDraft
+    if (!draft) {
+      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      return false
+    }
+    routineSaving = true
+    try {
+      const plan = draft.plan
+      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
+      if (plan?.schedule) patch.schedule = plan.schedule
+      if (plan && plan.connections.length > 0) {
+        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+        const catalog = await invoke('utilities:list').catch(() => null)
+        patch.connections = connectionsFromPlan(
+          plan.connections,
+          routine?.connections ?? [],
+          catalog?.utilities ?? []
+        )
+      }
+      await assistantRoutines.updateRoutine(routineId, patch)
+      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      routineRecapDismissed = ''
+      return true
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      return false
+    } finally {
+      routineSaving = false
+    }
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:save-how-to') {
+      await saveRoutineHowTo()
+      return
+    }
     if (commandId === 'command:cio-utility') {
       triggerCioUtilityTurn(args)
       return
@@ -11659,26 +11891,49 @@
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
-              <div class="mb-5 text-center">
-                <h1
-                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
-                >
-                  {#if centeredProjectIconUrl}
-                    <img
-                      src={centeredProjectIconUrl}
-                      alt=""
-                      aria-hidden="true"
-                      class="size-7 rounded-[0.375rem] object-cover"
-                    />
-                  {/if}
-                  {project?.name ?? 'New thread'}
-                </h1>
-                <p class="mt-1 text-[0.875rem] text-muted">
-                  {centeredModelName
-                    ? `What should ${centeredModelName} work on?`
-                    : 'How can CIO serve you today?'}
-                </p>
-              </div>
+              {#if assistantMode}
+                <div class="mb-5 text-center">
+                  <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
+                    {assistantRoutineName ?? thread.title}
+                  </h1>
+                  <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
+                    {#if assistantRoutineName && !assistantHowToComplete}
+                      How should this routine happen? Describe it properly for the agent. Say what
+                      it should do, how often, and where the information comes from. The agent works
+                      out what it needs, asks about anything missing, and drafts the how-to with you
+                      until you agree. It then shows a recap for you to save.
+                    {:else if assistantRoutineName}
+                      This task follows the <span class="text-foreground"
+                        >{assistantRoutineName}</span
+                      >
+                      how-to. Send a message to run it now, or adjust anything in How to.
+                    {:else}
+                      Describe what this task should do and the agent will take it from there.
+                    {/if}
+                  </p>
+                </div>
+              {:else}
+                <div class="mb-5 text-center">
+                  <h1
+                    class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                  >
+                    {#if centeredProjectIconUrl}
+                      <img
+                        src={centeredProjectIconUrl}
+                        alt=""
+                        aria-hidden="true"
+                        class="size-7 rounded-[0.375rem] object-cover"
+                      />
+                    {/if}
+                    {project?.name ?? 'New thread'}
+                  </h1>
+                  <p class="mt-1 text-[0.875rem] text-muted">
+                    {centeredModelName
+                      ? `What should ${centeredModelName} work on?`
+                      : 'How can CIO serve you today?'}
+                  </p>
+                </div>
+              {/if}
             {/if}
             {#if aiAccountPromptVisible}
               <div class="mb-2">
@@ -11762,6 +12017,20 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {/if}
+            {#if routineRecapVisible && assistantRoutineDraft}
+              <div class="conversation-gutter shrink-0 px-6 pb-2">
+                <div class="mx-auto max-w-3xl">
+                  <RoutineRecapCard
+                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
+                    howTo={assistantRoutineDraft.howTo}
+                    plan={assistantRoutineDraft.plan}
+                    saving={routineSaving}
+                    onSave={() => void confirmRoutineSave()}
+                    onKeepEditing={keepEditingRoutine}
+                  />
+                </div>
+              </div>
             {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
@@ -12128,19 +12397,21 @@
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}
-                      placeholder={activePlanningEntry === 'brainstorm'
-                        ? 'Add details to the Brainstorm discussion…'
-                        : activePlanningEntry === 'spec'
-                          ? 'Sr. Engineer is preparing the specification…'
-                          : assignmentFormulating
-                            ? 'Sr. Engineer is preparing the Assignment…'
-                            : specFormulating
-                              ? 'Formulating specification…'
-                              : delegatedWorkBusy
-                                ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                : busy
-                                  ? `${APP_NAME} is working   type to queue a message`
-                                  : 'Send a message...'}
+                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
+                        ? 'Describe how this routine should run…'
+                        : activePlanningEntry === 'brainstorm'
+                          ? 'Add details to the Brainstorm discussion…'
+                          : activePlanningEntry === 'spec'
+                            ? 'Sr. Engineer is preparing the specification…'
+                            : assignmentFormulating
+                              ? 'Sr. Engineer is preparing the Assignment…'
+                              : specFormulating
+                                ? 'Formulating specification…'
+                                : delegatedWorkBusy
+                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                  : busy
+                                    ? `${APP_NAME} is working   type to queue a message`
+                                    : 'Send a message...'}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}
@@ -12311,7 +12582,7 @@
                       onImageDescriptorDefaultChange={setImageDescriptorDefault}
                       onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                     />
-                    {#if centeredComposer}
+                    {#if centeredComposer && !assistantMode}
                       <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
                         {#each suggestedPrompts as prompt (prompt)}
                           <button

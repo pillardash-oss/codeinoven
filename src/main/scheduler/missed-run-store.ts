@@ -1,0 +1,150 @@
+import { Logger } from '../system/logger'
+import type { StorageEngine } from '../storage/storage-engine'
+import { missedRunId, type MissedRun } from '../../lib/types'
+
+/** Persisted shape: one versioned array so the file stays inspectable. */
+interface MissedRunStoreFile {
+  version: 1
+  runs: MissedRun[]
+}
+
+const STORE_PATH = 'scheduler/missed-runs.json'
+
+function isValidRun(value: unknown): value is MissedRun {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.threadId === 'string' &&
+    typeof record.dueAt === 'number' &&
+    typeof record.detectedAt === 'number' &&
+    typeof record.title === 'string' &&
+    (record.status === 'pending' ||
+      record.status === 'dismissed' ||
+      record.status === 'run')
+  )
+}
+
+/**
+ * MissedRunStore   persists scheduled fires the app was not open to run.
+ *
+ * Records are idempotent by `(threadId, dueAt)`: relaunching the app repeatedly
+ * after one missed fire can never double-count or double-badge it. Writes are
+ * serialized through a single chain so concurrent scheduler ticks cannot
+ * interleave and corrupt the file.
+ */
+export class MissedRunStore {
+  private runs = new Map<string, MissedRun>()
+  private loaded = false
+  private persistChain: Promise<void> = Promise.resolve()
+
+  constructor(private storage: StorageEngine) {}
+
+  async load(): Promise<void> {
+    const raw = await this.storage.read<MissedRunStoreFile>(STORE_PATH)
+    this.runs.clear()
+    if (raw && Array.isArray(raw.runs)) {
+      for (const entry of raw.runs) {
+        if (isValidRun(entry)) this.runs.set(entry.id, entry)
+      }
+    }
+    this.loaded = true
+  }
+
+  isLoaded(): boolean {
+    return this.loaded
+  }
+
+  /** Every pending missed run, oldest first. */
+  list(): MissedRun[] {
+    return [...this.runs.values()]
+      .filter((run) => run.status === 'pending')
+      .sort((a, b) => a.dueAt - b.dueAt)
+  }
+
+  /** Every record (any status), used by the task-scoped surfaces. */
+  listAll(): MissedRun[] {
+    return [...this.runs.values()].sort((a, b) => a.dueAt - b.dueAt)
+  }
+
+  /** Pending missed runs for one task. */
+  listForTask(threadId: string): MissedRun[] {
+    return this.list().filter((run) => run.threadId === threadId)
+  }
+
+  /** Pending missed runs for every task in a routine. */
+  listForRoutine(routineId: string): MissedRun[] {
+    return this.list().filter((run) => run.routineId === routineId)
+  }
+
+  hasAnyPending(): boolean {
+    return this.list().length > 0
+  }
+
+  /**
+   * Record one missed fire. Idempotent: a repeated detection of the same
+   * `(threadId, dueAt)` refreshes the snapshot fields but never adds a second
+   * record, and a run/dismissed record is left untouched.
+   */
+  record(input: {
+    threadId: string
+    routineId?: string
+    dueAt: number
+    title: string
+    detectedAt?: number
+  }): MissedRun {
+    const id = missedRunId(input.threadId, input.dueAt)
+    const existing = this.runs.get(id)
+    if (existing && existing.status !== 'pending') return existing
+    const run: MissedRun = {
+      id,
+      threadId: input.threadId,
+      routineId: input.routineId,
+      dueAt: input.dueAt,
+      detectedAt: input.detectedAt ?? Date.now(),
+      title: input.title,
+      status: 'pending'
+    }
+    this.runs.set(id, run)
+    this.persist()
+    return run
+  }
+
+  /** Acknowledge a missed run without running it: the badge and tab clear. */
+  dismiss(id: string): void {
+    const existing = this.runs.get(id)
+    if (!existing) return
+    this.runs.set(id, { ...existing, status: 'dismissed' })
+    this.persist()
+  }
+
+  /** Mark a missed run as run (Run Now dispatched it successfully). */
+  markRun(id: string): void {
+    const existing = this.runs.get(id)
+    if (!existing) return
+    this.runs.set(id, { ...existing, status: 'run' })
+    this.persist()
+  }
+
+  /** Drop every dismissed/run record so the file cannot grow without bound. */
+  pruneSettled(): void {
+    for (const [id, run] of this.runs) {
+      if (run.status !== 'pending') this.runs.delete(id)
+    }
+    this.persist()
+  }
+
+  /** Await the pending write chain (used by tests and shutdown). */
+  async flush(): Promise<void> {
+    await this.persistChain
+  }
+
+  private persist(): void {
+    const snapshot: MissedRunStoreFile = { version: 1, runs: [...this.runs.values()] }
+    this.persistChain = this.persistChain
+      .then(() => this.storage.write(STORE_PATH, snapshot))
+      .catch((error) => {
+        Logger.error('Missed-run store could not be written:', error)
+      })
+  }
+}

@@ -2,6 +2,7 @@
   import { RefreshCw, Trash2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
+  import { formatDateTime } from '$shared/date-time-format'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'
@@ -70,7 +71,7 @@
         <div class="flex items-start gap-3">
           <div class="min-w-0 flex-1">
             <p class="text-xs font-medium">
-              {new Date(attempt.createdAt).toLocaleString()} · {attempt.stage}
+              {formatDateTime(attempt.createdAt)} · {attempt.stage}
             </p>
             <p class="mt-0.5 line-clamp-2 text-[0.6875rem] text-dimmed">
               {attempt.finalTranscript ??
@@ -114,7 +115,7 @@
               onRequestDelete({
                 action: 'history-item',
                 targetId: attempt.id,
-                label: new Date(attempt.createdAt).toLocaleString()
+                label: formatDateTime(attempt.createdAt)
               })}><Trash2 size={13} aria-hidden="true" /></button
           >
         </div>
@@ -122,7 +123,7 @@
           <div class="mt-2">
             <HistoryAudioPlayer
               attemptId={attempt.id}
-              label="Recording {new Date(attempt.createdAt).toLocaleString()}"
+              label="Recording {formatDateTime(attempt.createdAt)}"
             />
           </div>
         {/if}

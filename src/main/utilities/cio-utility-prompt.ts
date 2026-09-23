@@ -1,10 +1,12 @@
 import { isQuotedMentionPosition } from '../../lib/mention-context'
 import {
   ASK_SECRET_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME
+  UTILITY_MANAGE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
 } from '../../lib/gateway-tools'
 
 /** Stable built-in tag that grants the utility setup contract for one explicit turn. */
@@ -16,7 +18,7 @@ const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
  * Versioned application-owned setup knowledge. This is deliberately source code rather
  * than a discoverable skill so its API contract cannot drift independently of the app.
  */
-export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 7)
+export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 8)
 
 The user explicitly invoked @cio-utility. You work in two roles, resolved from
 the user's request:
@@ -121,6 +123,32 @@ Setup role - bundle shape:
   }
 }
 
+The nesting is exact and is the most common mistake: "utilities" is the array, each entry is an
+object whose only required key is "definition", and "kind" lives inside that definition, never on
+the entry. A complete, valid remote-MCP call looks exactly like this:
+{
+  "action": "install_bundle",
+  "bundle": {
+    "name": "Slack MCP",
+    "utilities": [
+      {
+        "definition": {
+          "kind": "mcp",
+          "name": "Slack MCP",
+          "description": "Read and search Slack conversations.",
+          "activation": "on_demand",
+          "scope": { "level": "global" },
+          "credentials": [],
+          "config": { "transport": "http", "url": "https://mcp.slack.com/mcp" }
+        }
+      }
+    ]
+  }
+}
+Do not send an "id" (the app generates it), do not put "kind" or "config" directly on the entry,
+and do not put "transport" or "url" outside "config". If the call is rejected, read the error: it
+names the exact field and shape to send, so fix that field rather than trying a different layout.
+
 Every definition contains:
 - kind: "skill" or "mcp" (a plugin is a bundle with multiple definitions)
 - name, description, enabled
@@ -173,6 +201,23 @@ The user invoked @cio-utility earlier in this thread; the contract stays active 
 - Utilities activated earlier in this thread are registered in the thread utilities bank: invoke them directly with ${UTILITY_INVOKE_TOOL_NAME} by id (no re-activation), and re-list capability docs after compaction with ${UTILITY_DOCS_TOOL_NAME} (accepts only the utility id).
 - Install defaults stay as briefed: global scope and the single all-harness binding for both kinds (omit harnessBindings), and an MCP server always "on_demand" behind the utility gateway (never a native harness entry).
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API. Report evidence with thread ids and log lines.`
+
+/**
+ * The compact management grant for a turn on a saved routine's task   a run or
+ * a follow-up on the same thread. Unlike the reuse contract, installing is
+ * explicitly in scope: the assistant that discovers a missing connection is
+ * expected to supply it itself, going online to find the official source when
+ * the library has nothing, rather than send the user to the panel. The full
+ * step-by-step contract in `routine-run.ts` carries the detail.
+ */
+export const CIO_UTILITY_RUN_PROMPT = `CodeInOven utility contract (run)
+
+This turn runs a saved routine, and the tools it needs may still be missing. You may supply them on this turn:
+- Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.
+- When the library has nothing, go online to find the official source: use your own web tools, or activate a web/search capability from the library with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME}. Look up the official MCP endpoint, package, or install instructions and cite the source.
+- Install a compatible one with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after you explain it and the user agrees. Definitions must stay secret-free.
+- Collect any credential with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
+- Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API.`
 
 export function isCioUtilityRequest(text: string): boolean {
   for (const match of text.matchAll(CIO_UTILITY_TAG_PATTERN)) {

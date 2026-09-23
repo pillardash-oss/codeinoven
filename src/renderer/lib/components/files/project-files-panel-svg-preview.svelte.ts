@@ -8,7 +8,8 @@ export interface SvgPreviewInput {
   /** Reads the current reload token, so a superseded read can drop its blob. */
   currentReloadToken: () => number
   scopeBucketId: string
-  chatThreadId: string | null
+  /** Optional trailing thread-mount argument for `projectFiles:*` invokes. */
+  mountThreadId: string | null
 }
 
 /**
@@ -37,7 +38,7 @@ export class ProjectFilesPanelSvgPreview {
       input.projectId,
       path,
       input.scopeBucketId,
-      input.chatThreadId ?? undefined
+      input.mountThreadId ?? undefined
     )
       .then((source: ProjectTextFile | null) => {
         if (cancelled || !source) return

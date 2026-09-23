@@ -1,4 +1,5 @@
 import type { MemoryCategory, MemoryPriority, MemoryScope } from '../types'
+import { memoryScopeSummary } from './memory-scopes'
 
 export interface ConfirmationRequest {
   id: string
@@ -7,7 +8,7 @@ export interface ConfirmationRequest {
   content: string
   category: MemoryCategory
   priority: MemoryPriority
-  scope: MemoryScope
+  scopes: MemoryScope[]
   source: 'manual' | 'auto-detected'
   createdAt: number
 }
@@ -37,7 +38,7 @@ export function formatConfirmationRequest(request: ConfirmationRequest): string 
     `**Content:** ${request.content}`,
     `**Category:** ${request.category}`,
     `**Priority:** ${request.priority}`,
-    `**Scope:** ${request.scope}`,
+    `**Applies to:** ${memoryScopeSummary(request.scopes)}`,
     `**Source:** ${request.source}`,
     '',
     'Reply with "yes" to confirm, "no" to cancel, or provide modified content.'

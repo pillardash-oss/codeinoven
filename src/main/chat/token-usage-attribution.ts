@@ -15,6 +15,7 @@ import { layerDevHash, layerSize } from './prompt-assembler'
 export type AttributionMode =
   | 'inbox-chat'
   | 'file-system-chat'
+  | 'assistant'
   | 'ephemeral'
   | 'image-description'
   | 'pr-compose'
@@ -54,10 +55,7 @@ export interface TurnUsageTotals {
 }
 
 /** Compute the content-free layer report for a piece of prompt content. */
-export function attributionLayer(
-  title: string,
-  content: string
-): AttributionLayerReport {
+export function attributionLayer(title: string, content: string): AttributionLayerReport {
   const report = layerSize(content)
   return {
     title,

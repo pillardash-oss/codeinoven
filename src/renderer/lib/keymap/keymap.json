@@ -69,6 +69,20 @@
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
+          "id": "assistant-new-task",
+          "keys": ["mod", "n"],
+          "label": "New task",
+          "description": "Creates an assistant task: inside a routine it lands in that routine, otherwise it is a routine-less task.",
+          "scenario": "Assistant view."
+        },
+        {
+          "id": "assistant-new-routine",
+          "keys": ["mod", "shift", "n"],
+          "label": "New routine",
+          "description": "Starts the new-routine flow, which seeds a first task and opens its how-to.",
+          "scenario": "Assistant view."
+        },
+        {
           "id": "nav-close-surface",
           "keys": ["mod", "w"],
           "label": "Close active surface",

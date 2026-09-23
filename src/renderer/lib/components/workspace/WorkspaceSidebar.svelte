@@ -51,7 +51,8 @@
   import { filterThreadsByQuery, threadHasVisibleWork } from './workspace-thread-helpers'
 
   interface Props {
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
+    active: boolean
     navigate: (view: MainView) => void
     scroller?: HTMLElement | null
     projects: Project[]

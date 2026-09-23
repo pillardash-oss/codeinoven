@@ -47,6 +47,15 @@ interface ThreadRow {
   user_input_locked: number
   independent_audit: number
   independent_audit_initialized: number
+  routine_id: string | null
+  assistant_icon_type: string | null
+  assistant_icon: string | null
+  schedule_override: string | null
+  last_run_at: number | null
+  last_dispatched_at: number | null
+  last_success_at: number | null
+  assistant_getting_started: number
+  assistant_task_id: string | null
   drafting: number
   draft_json: string | null
   created_at: number
@@ -172,6 +181,17 @@ function rowToThread(row: ThreadRow): Thread {
     userInputLocked: row.user_input_locked === 1,
     independentAudit: row.independent_audit === 1,
     independentAuditInitialized: row.independent_audit_initialized === 1,
+    routineId: row.routine_id ?? undefined,
+    assistantIconType: row.assistant_icon_type ?? undefined,
+    assistantIcon: row.assistant_icon ?? undefined,
+    scheduleOverride: row.schedule_override
+      ? ((parseStoredJson(row.schedule_override) as Thread['scheduleOverride']) ?? undefined)
+      : undefined,
+    lastRunAt: row.last_run_at ?? undefined,
+    lastDispatchedAt: row.last_dispatched_at ?? undefined,
+    lastSuccessAt: row.last_success_at ?? undefined,
+    ...(row.assistant_getting_started === 1 ? { assistantGettingStarted: true } : {}),
+    ...(row.assistant_task_id !== null ? { assistantTaskId: row.assistant_task_id } : {}),
     ...(row.drafting === 1 ? { drafting: true } : {}),
     ...(row.draft_json !== null ? { draftJson: row.draft_json } : {}),
     createdAt: row.created_at,
@@ -304,9 +324,12 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
   independent_audit, independent_audit_initialized,
+  routine_id, assistant_icon_type, assistant_icon, schedule_override, last_run_at, last_dispatched_at, last_success_at,
+  assistant_getting_started,
+  assistant_task_id,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -341,6 +364,15 @@ ON CONFLICT(id) DO UPDATE SET
   user_input_locked=excluded.user_input_locked,
   independent_audit=excluded.independent_audit,
   independent_audit_initialized=excluded.independent_audit_initialized,
+  routine_id=excluded.routine_id,
+  assistant_icon_type=excluded.assistant_icon_type,
+  assistant_icon=excluded.assistant_icon,
+  schedule_override=excluded.schedule_override,
+  last_run_at=excluded.last_run_at,
+  last_dispatched_at=excluded.last_dispatched_at,
+  last_success_at=excluded.last_success_at,
+  assistant_getting_started=excluded.assistant_getting_started,
+  assistant_task_id=excluded.assistant_task_id,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -383,6 +415,15 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.userInputLocked ? 1 : 0,
     thread.independentAudit ? 1 : 0,
     thread.independentAuditInitialized ? 1 : 0,
+    thread.routineId ?? null,
+    thread.assistantIconType ?? null,
+    thread.assistantIcon ?? null,
+    thread.scheduleOverride ? JSON.stringify(thread.scheduleOverride) : null,
+    thread.lastRunAt ?? null,
+    thread.lastDispatchedAt ?? null,
+    thread.lastSuccessAt ?? null,
+    thread.assistantGettingStarted ? 1 : 0,
+    thread.assistantTaskId ?? null,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,

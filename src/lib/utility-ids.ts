@@ -7,6 +7,14 @@
  * Node-only import   renderer bundles must stay clear of `fs`/`path`/`crypto`.
  */
 
+/**
+ * Prefix of the synthetic, turn-scoped utility that exposes the app-owned
+ * gateway to a harness. The full id carries the thread id, so a transport can
+ * recognise the gateway (and treat its calls as human-paced) without matching a
+ * name a user could also choose.
+ */
+export const GATEWAY_UTILITY_ID_PREFIX = 'cio:utility-gateway:'
+
 /** Stable id of the browser control utility backed by the in-app browser. */
 export const APP_BROWSER_UTILITY_ID = 'cio:browser'
 

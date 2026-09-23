@@ -19,6 +19,19 @@ import {
 const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
   'inbox-chat': ['webfetch', 'websearch', 'question'],
   'file-system-chat': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
+  assistant: [
+    'read',
+    'edit',
+    'glob',
+    'grep',
+    'list',
+    'bash',
+    'todowrite',
+    'webfetch',
+    'websearch',
+    'skill',
+    'question'
+  ],
   ephemeral: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   'image-description': ['read'],
   'pr-compose': [],
@@ -61,7 +74,8 @@ describe('lean agent definitions', () => {
       'cio-img-desc',
       'cio-pr-compose',
       'cio-utility-setup',
-      'cio-brainstorm'
+      'cio-brainstorm',
+      'cio-assistant'
     ])
     expect(new Set(LEAN_AGENT_NAMES).size).toBe(LEAN_AGENTS.length)
     for (const agent of LEAN_AGENTS) {
@@ -105,6 +119,10 @@ describe('lean agent definitions', () => {
         const mapping = configured as Record<string, 'allow' | 'deny'>
         expect(mapping['*']).toBe('deny')
         expect(mapping['curl *']).toBe('allow')
+      } else if (mode === 'assistant') {
+        // A routine run owns its whole job, so it keeps a shell inside its own
+        // workspace; the app's permission policy governs the risk of any call.
+        expect(agent.permission['bash']).toBe('allow')
       } else {
         expect(agent.permission['bash']).toBe('deny')
       }
@@ -118,6 +136,7 @@ describe('lean agent definitions', () => {
     const expected: Record<LeanAgentMode, string> = {
       'inbox-chat': 'cio-chat',
       'file-system-chat': 'cio-chat-fs',
+      assistant: 'cio-assistant',
       ephemeral: 'cio-eph',
       'image-description': 'cio-img-desc',
       'pr-compose': 'cio-pr-compose',

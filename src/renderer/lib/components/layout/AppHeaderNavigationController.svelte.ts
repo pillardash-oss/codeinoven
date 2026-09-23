@@ -7,9 +7,15 @@ import { type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import { FolderKanban, Kanban, MessageSquare, SquareDashedKanban, Timeline } from '@lucide/svelte'
+import { BotMessageSquare, FolderKanban, Kanban, MessageSquare, SquareDashedKanban, Timeline } from '@lucide/svelte'
 
-export type HeaderViewOptionId = 'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats'
+export type HeaderViewOptionId =
+  | 'projects'
+  | 'threads'
+  | 'scoped-threads'
+  | 'scope-board'
+  | 'chats'
+  | 'assistant'
 
 export interface HeaderViewOption {
   id: HeaderViewOptionId
@@ -19,7 +25,7 @@ export interface HeaderViewOption {
   select: () => void
 }
 
-type PrimaryView = 'projects' | 'chats' | 'threads'
+type PrimaryView = 'projects' | 'chats' | 'threads' | 'assistant'
 
 export interface AppHeaderNavigationOptions {
   /** The view the shell currently shows; read per call so the controller follows navigation. */
@@ -65,7 +71,8 @@ export class AppHeaderNavigationController {
         activeView === 'projects' ||
         activeView === 'projects-scope' ||
         activeView === 'threads' ||
-        activeView === 'chats'
+        activeView === 'chats' ||
+        activeView === 'assistant'
       ) {
         this.lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
       }
@@ -121,11 +128,13 @@ export class AppHeaderNavigationController {
 
   /** Navigate to a primary view without any sidebar toggling   used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
-  async navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
+  async navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'): Promise<void> {
     const activeView = this.getActiveView()
     if (view === 'chats') this.preloadNavigationThreads('chats')
-    else this.preloadNavigationThreads('projects')
+    else if (view === 'projects') this.preloadNavigationThreads('projects')
     if (view === 'threads') {
+      scopeState.clearSidebarContext()
+    } else if (view === 'assistant') {
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
       // Remember the current project thread before switching to chats
@@ -158,7 +167,7 @@ export class AppHeaderNavigationController {
     }
   }
 
-  async onPrimaryNavClick(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
+  async onPrimaryNavClick(view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'): Promise<void> {
     const activeView = this.getActiveView()
     // Scope Board keeps its toggle behaviour: already open → last view.
     if (view === 'scope' && view === activeView) {
@@ -227,6 +236,13 @@ export class AppHeaderNavigationController {
         icon: MessageSquare,
         keys: ['mod', '0'],
         select: () => void this.onPrimaryNavClick('chats')
+      },
+      {
+        id: 'assistant',
+        label: 'Assistant',
+        icon: BotMessageSquare,
+        keys: ['mod', '5'],
+        select: () => void this.onPrimaryNavClick('assistant')
       }
     ]
   }
@@ -243,6 +259,7 @@ export class AppHeaderNavigationController {
     }
     if (activeView === 'threads') return 'threads'
     if (activeView === 'chats') return 'chats'
+    if (activeView === 'assistant') return 'assistant'
     return 'projects'
   })
 
@@ -255,6 +272,7 @@ export class AppHeaderNavigationController {
       activeView === 'projects-scope' ||
       activeView === 'threads' ||
       activeView === 'chats' ||
+      activeView === 'assistant' ||
       activeView === 'scope'
     )
   })

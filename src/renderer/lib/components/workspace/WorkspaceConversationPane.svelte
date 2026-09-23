@@ -19,6 +19,8 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { chatEffectiveSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { routineHowToComplete } from '$shared/types'
   import {
     INBOX_PROJECT_ID,
     type AgentHarnessUsage,
@@ -28,7 +30,7 @@
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
 
   interface Props {
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
     active: boolean
     selectedThread: Thread | null
     visibleProjects: Project[]
@@ -67,6 +69,15 @@
   }: Props = $props()
 
   let chatsComposer: ChatComposer | undefined = $state(undefined)
+
+  /** Assistant mode reuses the chat thread renderer, but a routine's task
+   *  authors its how-to conversationally, so the view needs the routine. */
+  let assistantRoutineId = $derived(mode === 'assistant' ? (selectedThread?.routineId ?? null) : null)
+  let assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((routine) => routine.id === assistantRoutineId) ?? null)
+      : null
+  )
 
   const chatSuggestedPrompts = [
     'Research a question using my device',
@@ -169,7 +180,13 @@
           <ThreadView
             thread={selectedThread}
             {active}
-            chatMode={mode === 'chats'}
+            chatMode={mode === 'chats' || mode === 'assistant'}
+            assistantMode={mode === 'assistant'}
+            {assistantRoutineId}
+            assistantRoutineName={assistantRoutine?.name ?? null}
+            assistantHowToComplete={assistantRoutine
+              ? routineHowToComplete(assistantRoutine)
+              : false}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
@@ -305,6 +322,14 @@
           </div>
         {/key}
       </div>
+    </div>
+  {:else if mode === 'assistant'}
+    <!-- Assistant empty state   routines and tasks are created from the header -->
+    <div class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+      <p class="text-sm font-semibold text-foreground">No task selected</p>
+      <p class="max-w-sm text-[0.8125rem] text-muted">
+        Create a routine or a task from the header, then give the agent its how-to.
+      </p>
     </div>
   {:else}
     <WelcomeStart

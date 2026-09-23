@@ -1,4 +1,5 @@
 import type { AgentCapabilityEntry, AgentCapabilityOrigin, MemoryEntry } from '$shared/types'
+import { memoryScopeSummary } from '$shared/memory/memory-scopes'
 import type { AgentSource, FileAgentSource, FileCitationAgentSource } from '$lib/agent-sources'
 
 export type SourcesSection = 'sources' | 'processes' | 'artifacts' | 'contexts'
@@ -58,11 +59,7 @@ export function processStartedAt(startedAt: number): string {
 }
 
 export function memoryScopeLabel(entry: MemoryEntry): string {
-  if (entry.scope === 'global') return 'Global'
-  if (entry.scope === 'thread') return 'Thread'
-  if (entry.scope === 'chat') return 'Chat'
-  if (entry.scope === 'project') return 'Project'
-  return 'Projects'
+  return memoryScopeSummary(entry.scopes)
 }
 
 export function originLabel(entry: AgentCapabilityEntry): string {

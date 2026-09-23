@@ -31,6 +31,7 @@
   const exportKinds: Array<{ value: MemoryExportKind; label: string }> = [
     { value: 'projects', label: 'Projects' },
     { value: 'chats', label: 'Chats' },
+    { value: 'assistant', label: 'Assistant' },
     { value: 'both', label: 'Both' }
   ]
 
@@ -100,6 +101,8 @@
         return 'projects'
       case 'chats':
         return 'chats'
+      case 'assistant':
+        return 'assistant'
       case 'both':
         return 'both'
       case 'project':
@@ -132,8 +135,7 @@
     >
       <div class="space-y-3">
         <p class="text-xs text-dimmed">
-          Export memory to a JSON backup, or import one. Merges on import   duplicates are
-          skipped.
+          Export memory to a JSON backup, or import one. Merges on import: duplicates are skipped.
         </p>
         <div
           class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
@@ -186,7 +188,10 @@
           <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
         {/if}
         {#if message}
-          <p class="break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary" role="status">
+          <p
+            class="break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary"
+            role="status"
+          >
             {message}
           </p>
         {/if}

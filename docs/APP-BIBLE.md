@@ -310,6 +310,7 @@ Motion is subtle and functional:
 - Concrete nouns over abstractions.
 - Empty states say what is missing and what to do next.
 - No generic marketing copy inside the app.
+- Absolute dates and times read the same on every machine: `src/lib/date-time-format.ts` renders `Sep 23, 2026, 8:05 AM`. Never hand a date to a bare `toLocaleString()`, which falls back to the operating system's locale and its numeric, seconds-bearing `9/23/2026, 8:05:00 AM` shape.
 
 ### 3.11 Accessibility
 

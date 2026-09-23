@@ -13,7 +13,7 @@ import { validateEntityId } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
 import { validateMemoryEntries, optionalMemoryEntityId } from './spec-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { MemoryEntry } from '../../../lib/types'
+import type { MemoryEntry, MemoryScope } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
@@ -82,7 +82,9 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
       thread?.settings?.providerId && thread.settings.modelId
         ? modelKey(harnessId, thread.settings.providerId, thread.settings.modelId)
         : undefined,
-      safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread'
+      safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread',
+      'full',
+      thread?.routineId
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -136,12 +138,13 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
           typeof opts.priority === 'string'
             ? (opts.priority as MemoryEntry['priority'])
             : undefined,
-        scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
+        scopes: Array.isArray(opts.scopes) ? (opts.scopes as MemoryScope[]) : undefined,
         source:
           typeof opts.source === 'string' ? (opts.source as MemoryEntry['source']) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
-        threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
+        threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
+        routineId: optionalMemoryEntityId(opts.routineId, 'Routine ID')
       })
     }
   )
@@ -195,10 +198,11 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
           typeof opts.priority === 'string'
             ? (opts.priority as MemoryEntry['priority'])
             : undefined,
-        scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
+        scopes: Array.isArray(opts.scopes) ? (opts.scopes as MemoryScope[]) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
-        threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
+        threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
+        routineId: optionalMemoryEntityId(opts.routineId, 'Routine ID')
       })
     }
   )

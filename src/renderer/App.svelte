@@ -59,6 +59,7 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
+    ASSISTANT_SPACE_ID,
     INBOX_PROJECT_ID,
     isThreadWorking,
     threadTracksReadStatus,
@@ -230,6 +231,8 @@
       scopeState.stashSidebarContext()
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
+    } else if (view === 'assistant') {
+      scopeState.clearSidebarContext()
     } else if (view === 'projects') {
       // Leaving the registered scoped view (or any scoped state) for the plain
       // projects view: the sidebar is what defines the scoped state, so close
@@ -257,7 +260,21 @@
         (candidate) => threadVisitKey(candidate) === key
       )
       if (!thread || thread.archived) continue
+      const isAssistant = thread.projectId === ASSISTANT_SPACE_ID
+      if (isAssistant) continue
       if ((thread.projectId === INBOX_PROJECT_ID) === isChat) return thread
+    }
+    return null
+  }
+
+  /** The most recently opened assistant task that still exists. */
+  function lastAssistantTask(): Thread | null {
+    for (const key of workspaceState.recentThreadVisits) {
+      const thread = scopeState.allScopeThreads.find(
+        (candidate) => threadVisitKey(candidate) === key
+      )
+      if (!thread || thread.archived) continue
+      if (thread.projectId === ASSISTANT_SPACE_ID) return thread
     }
     return null
   }
@@ -272,9 +289,52 @@
    */
   function reconcileThreadForContentView(
     view: View,
-    previousContentView: 'projects' | 'chats' | 'threads'
+    previousContentView: 'projects' | 'chats' | 'threads' | 'assistant'
   ): void {
+    // Assistant tasks are their own family: entering the view opens the last
+    // assistant task (or the empty state), and leaving it never keeps a task
+    // selected in a project/chat view.
+    if (view === 'assistant') {
+      const selected = workspaceState.selectedThread
+      if (selected?.projectId === ASSISTANT_SPACE_ID) return
+      const last = lastAssistantTask()
+      if (last) {
+        const project =
+          scopeState.projectRecords.find((candidate) => candidate.id === last.projectId) ?? null
+        workspaceState.openThread(last, project)
+      } else {
+        workspaceState.clearThread()
+      }
+      return
+    }
     if (view !== 'chats' && view !== 'projects' && view !== 'threads') return
+    const current = workspaceState.selectedThread
+    if (current?.projectId === ASSISTANT_SPACE_ID) {
+      // Leaving the assistant view: restore the last thread of the target kind.
+      if (view === 'chats') {
+        const lastChat = lastThreadOfKind(true)
+        if (lastChat) {
+          const project =
+            scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ??
+            null
+          workspaceState.openThread(lastChat, project)
+        } else {
+          workspaceState.clearThread()
+        }
+        return
+      }
+      const lastProjectThread = lastThreadOfKind(false)
+      if (lastProjectThread) {
+        const project =
+          scopeState.projectRecords.find(
+            (candidate) => candidate.id === lastProjectThread.projectId
+          ) ?? null
+        workspaceState.openThread(lastProjectThread, project)
+      } else {
+        workspaceState.clearThread()
+      }
+      return
+    }
     if (view === previousContentView) return
     const goingToChats = view === 'chats'
     const leavingChats = previousContentView === 'chats'
@@ -467,7 +527,7 @@
         ) {
           contextSidebarState.hide()
         } else {
-          contextSidebarState.openMemory(thread.projectId, thread.id)
+          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.routineId)
         }
         return
       }
@@ -860,7 +920,10 @@
     }
     // An open thread: deselect it back to the thread list.
     if (
-      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      (activeView === 'projects' ||
+        activeView === 'chats' ||
+        activeView === 'threads' ||
+        activeView === 'assistant') &&
       workspaceState.selectedThread
     ) {
       workspaceState.clearThread()
@@ -924,7 +987,10 @@
       return
     }
     if (
-      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      (activeView === 'projects' ||
+        activeView === 'chats' ||
+        activeView === 'threads' ||
+        activeView === 'assistant') &&
       document.querySelector('[data-region="conversation"]')
     ) {
       findNavState.openConversationFind()
@@ -975,7 +1041,7 @@
       // decided inside Workspace, which owns what the on-screen thread actually
       // offers (file tree, git, terminal, sources...), so the chord only
       // forwards the request. Only the workspace views own that sidebar.
-      const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads']
+      const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
       if (!rightSidebarViews.includes(activeView)) return
       e.preventDefault()
       if (e.repeat) return
@@ -994,7 +1060,7 @@
       // above, which used to fall through to this branch and fold the left
       // sidebar instead.
       if (e.repeat) return
-      const leftSidebarViews = ['projects', 'chats', 'threads']
+      const leftSidebarViews = ['projects', 'chats', 'threads', 'assistant']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
       // The conflict editor holds resolved progress that its Save draft owns, so
       // the chord belongs to it even while no plain file tab is dirty.
@@ -1035,6 +1101,12 @@
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
+      // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
+      if (activeView === 'assistant') {
+        if (commandPaletteOpen) commandPaletteOpen = false
+        workspaceState.requestAssistantRoutine()
+        return
+      }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
       if (activeView === 'chats') return
       if (commandPaletteOpen) commandPaletteOpen = false
@@ -1049,6 +1121,13 @@
       // instead of starting a new thread. The tree's own handler manages it.
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
+
+      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the routine
+      // the user is currently in when there is one, routine-less otherwise.
+      if (activeView === 'assistant') {
+        workspaceState.requestAssistantTask()
+        return
+      }
 
       requestThreadForCurrentView()
     }
@@ -1150,7 +1229,8 @@
       class={activeView === 'projects' ||
       activeView === 'projects-scope' ||
       activeView === 'chats' ||
-      activeView === 'threads'
+      activeView === 'threads' ||
+      activeView === 'assistant'
         ? 'h-full'
         : 'hidden'}
     >
@@ -1159,7 +1239,8 @@
         active={activeView === 'projects' ||
           activeView === 'projects-scope' ||
           activeView === 'chats' ||
-          activeView === 'threads'}
+          activeView === 'threads' ||
+          activeView === 'assistant'}
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
@@ -1186,7 +1267,7 @@
           onBack={() => navigate(lastViewBeforeSettings)}
         />
       {/await}
-    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
+    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
       <div class="flex h-full items-center justify-center">
         <p class="text-sm text-dimmed">Coming soon</p>
       </div>

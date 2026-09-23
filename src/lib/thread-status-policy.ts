@@ -2,7 +2,14 @@ import type { ScopeSlice, ThreadStatus } from './types'
 import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
 export type ThreadStatusTone =
-  'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
+  | 'todo'
+  | 'working'
+  | 'working-paused'
+  | 'attention'
+  | 'spec'
+  | 'done'
+  | 'error'
+  | 'missed'
 
 export type ThreadStatusNotificationKind = 'completed' | 'attention' | 'spec' | 'error'
 

@@ -10,15 +10,21 @@
   import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
   import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
   import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
+  import HowToPanel from '$lib/components/assistant/AssistantPanel.svelte'
+  import type { Thread } from '$shared/types'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { INBOX_PROJECT_ID, type AgentPart, type Project } from '$shared/types'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
@@ -36,6 +42,10 @@
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Navigate to another top-level view (e.g. the Utilities page). */
+    navigate: (view: MainView) => void
+    /** Open an assistant task, so the workspace owns the selection. */
+    onOpenAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -49,13 +59,64 @@
     coordinator,
     onDismissCoordinator,
     onContinueInThread,
-    onOpenSubagent
+    onOpenSubagent,
+    navigate,
+    onOpenAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
   let gitPanelThreadId = $derived(
     activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''
   )
+
+  /** The thread whose own workspace the file tree mounts. Only a chat or an
+   *  assistant task has one; a real project always reads the project root. */
+  let filesThreadId = $derived(
+    activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : null
+  )
+
+  /**
+   * Identity of the file tree's root: its name, the label shown beside its icon,
+   * its icon, and its accent colour. A routine behaves like a project, and an
+   * assistant task's tree mounts on the routine's own workspace, so the routine's
+   * edited icon and colour stand in for the hidden assistant space's everywhere
+   * the root is drawn. A routine's name is often a whole sentence, so a routine
+   * root shows no label at all: the icon carries it, and the name is the icon's
+   * tooltip.
+   */
+  let filesRootIdentity = $derived.by(() => {
+    const routine = assistantRoutines.routineForTask(
+      filesThreadId === null
+        ? null
+        : (scopeState.allScopeThreads.find((candidate) => candidate.id === filesThreadId) ?? null)
+    )
+    if (routine) {
+      return {
+        name: routine.name,
+        label: '',
+        routine: true,
+        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
+        accentColor: routineAccentColor(routine)
+      }
+    }
+    // The notifications tab carries no project, so the fallback name reads the
+    // project id only from a tab that has one.
+    const tabProjectId =
+      activeContextTab && 'projectId' in activeContextTab ? activeContextTab.projectId : null
+    const name =
+      tabProjectId === INBOX_PROJECT_ID
+        ? 'Chat artifacts'
+        : (activeProject?.name ?? 'Project files')
+    return {
+      name,
+      label: name,
+      routine: false,
+      iconUrl: activeProject
+        ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
+        : null,
+      accentColor: null
+    }
+  })
 </script>
 
 {#if gitPanelProjectId}
@@ -76,12 +137,11 @@
     {#if activeContextTab.kind === 'files'}
       <ProjectFilesPanel
         projectId={activeContextTab.projectId}
-        projectName={activeContextTab.projectId === INBOX_PROJECT_ID
-          ? 'Chat artifacts'
-          : (activeProject?.name ?? 'Project files')}
-        projectIconUrl={activeProject
-          ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
-          : null}
+        projectName={filesRootIdentity.name}
+        projectLabel={filesRootIdentity.label}
+        routineRoot={filesRootIdentity.routine}
+        projectIconUrl={filesRootIdentity.iconUrl}
+        projectAccentColor={filesRootIdentity.accentColor}
       />
     {:else if activeContextTab.kind === 'diff'}
       <DiffSidebarPanel
@@ -147,6 +207,15 @@
       {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
         <NotificationPanel />
       {/await}
+    {:else if activeContextTab.kind === 'assistant-how-to'}
+      <HowToPanel
+        projectId={activeContextTab.projectId}
+        threadId={activeContextTab.threadId}
+        routineId={activeContextTab.routineId}
+        bind:panelTab={activeContextTab.panelTab}
+        {navigate}
+        onOpenTask={onOpenAssistantTask}
+      />
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}
         {#if coordinator.panel.component === 'assignment'}
@@ -179,6 +248,7 @@
           variant="sidebar"
           projectId={activeContextTab.projectId}
           threadId={activeContextTab.threadId}
+          routineId={activeContextTab.routineId}
           bind:activeSection={activeContextTab.memorySection}
         />
       {/await}

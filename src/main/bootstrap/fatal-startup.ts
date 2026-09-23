@@ -66,6 +66,10 @@ export async function handleFatalStartup(
         close: () => state.heartbeatScheduler?.dispose()
       },
       {
+        name: 'routineScheduler',
+        close: () => state.routineScheduler?.dispose()
+      },
+      {
         name: 'speechService',
         close: () => void state.speechService?.dispose()
       }

@@ -1,9 +1,15 @@
 import { join, extname, relative } from 'path'
-import { copyFile, mkdir, readFile, readdir, realpath, rm } from 'fs/promises'
+import { readdir, realpath } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { generateId, getConfigRoot } from '../utils'
+import {
+  isSupportedIconExtension,
+  readIconDataUrl,
+  removeIconFile,
+  storeIconFile
+} from '../icon-file'
 import type { Project, CreateProjectInput } from '../types'
-import { INBOX_PROJECT_ID } from '../types'
+import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../types'
 import { pickColorForSeed } from '../project-colors'
 import { ensureProjectScratchSpace } from '../project-artifacts'
 import { toPosixPath } from '../paths'
@@ -138,15 +144,6 @@ const ICON_CANDIDATE_RANK = new Map(
 // have arbitrary names, so any PNG there ranks below a named icon anywhere.
 const ICON_APPICONSET_PNG_RANK = 60
 
-const ICON_MIME: Record<string, string> = {
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp'
-}
-
 export class ProjectManager {
   private projectRepo: ProjectRepo
   private threadRepo: ThreadRepo
@@ -188,11 +185,8 @@ export class ProjectManager {
       await this.scaffoldProjectScratchSpace(project.path)
       const detected = await this.detectIcon(project.path)
       if (detected) {
-        const iconFile = `icon${extname(detected) || '.png'}`
         try {
-          const iconDir = join(getConfigRoot(), 'projects', id)
-          await mkdir(iconDir, { recursive: true })
-          await copyFile(detected, join(iconDir, iconFile))
+          const iconFile = await storeIconFile(join(getConfigRoot(), 'projects', id), detected)
           project.icon = iconFile
         } catch {
           // best-effort
@@ -265,6 +259,36 @@ export class ProjectManager {
       threadLimit: 200,
       hidden: true,
       color: pickColorForSeed(INBOX_PROJECT_ID),
+      changeTrackingMode: 'manual',
+      createdAt: now,
+      updatedAt: now
+    }
+
+    this.projectRepo.upsert(project)
+
+    return project
+  }
+
+  /**
+   * Ensure the hidden assistant-space container exists. Assistant tasks are
+   * threads in this container, so they never leak into the Projects or Chats
+   * lists (it is hidden) while still reusing every thread surface.
+   */
+  async ensureAssistantSpace(): Promise<Project> {
+    const existing = this.projectRepo.get(ASSISTANT_SPACE_ID)
+    if (existing) return existing
+
+    const now = Date.now()
+    const project: Project = {
+      id: ASSISTANT_SPACE_ID,
+      name: 'Assistant',
+      path: '',
+      source: 'local',
+      providerId: '',
+      workflowId: 'default',
+      threadLimit: 500,
+      hidden: true,
+      color: pickColorForSeed(ASSISTANT_SPACE_ID),
       changeTrackingMode: 'manual',
       createdAt: now,
       updatedAt: now
@@ -586,23 +610,15 @@ export class ProjectManager {
     }
 
     const ext = extname(sourcePath).toLowerCase() || '.png'
-    if (!(ext in ICON_MIME)) {
+    if (!isSupportedIconExtension(ext)) {
       throw new Error(`Unsupported icon format: ${ext}`)
     }
 
-    const iconDir = join(getConfigRoot(), 'projects', projectId)
-
-    if (existing.icon) {
-      try {
-        await rm(join(iconDir, existing.icon))
-      } catch {
-        // best-effort
-      }
-    }
-
-    const iconFile = `icon${ext}`
-    await mkdir(iconDir, { recursive: true })
-    await copyFile(sourcePath, join(iconDir, iconFile))
+    const iconFile = await storeIconFile(
+      join(getConfigRoot(), 'projects', projectId),
+      sourcePath,
+      existing.icon
+    )
 
     const updated: Project = {
       ...existing,
@@ -620,11 +636,7 @@ export class ProjectManager {
     }
 
     if (existing.icon) {
-      try {
-        await rm(join(getConfigRoot(), 'projects', projectId, existing.icon))
-      } catch {
-        // best-effort
-      }
+      await removeIconFile(join(getConfigRoot(), 'projects', projectId), existing.icon)
     }
 
     const updated: Project = {
@@ -644,12 +656,6 @@ export class ProjectManager {
     const project = this.projectRepo.get(projectId)
     if (!project?.icon) return null
 
-    try {
-      const buffer = await readFile(join(getConfigRoot(), 'projects', projectId, project.icon))
-      const mime = ICON_MIME[extname(project.icon).toLowerCase()] ?? 'image/png'
-      return `data:${mime};base64,${buffer.toString('base64')}`
-    } catch {
-      return null
-    }
+    return readIconDataUrl(join(getConfigRoot(), 'projects', projectId), project.icon)
   }
 }
