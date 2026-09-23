@@ -74,9 +74,12 @@ workspace instead of a shared scratch directory:
   routine's identity instead of the hidden assistant space's:
   `WorkspaceContextPanelContent.svelte` resolves the mounted thread's routine
   and passes its name, its `getRoutineIcon` icon, and its accent colour to
-  `ProjectFilesPanel.svelte`. The explorer header shows that icon (the folder
-  fallback is tinted with the routine colour) with the colour as an inset left
-  edge, and the editor's breadcrumb root button shows the same icon. A
+  `ProjectFilesPanel.svelte`. The explorer header draws the routine's icon (its
+  own, else the routine default mark) with the colour as an inset left edge, and
+  the editor's breadcrumb root button draws the same icon. A routine root shows
+  no name label: a routine's name is often a whole sentence, so the icon and
+  accent carry the identity and the full name is the root icon's tooltip (and
+  its image `alt`). A project and a chat root keep their name label, and a
   routine-less task keeps the assistant space's own identity.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
@@ -188,10 +191,12 @@ shared `src/lib/icon-file.ts` helpers (the same ones project icons use), served
 back by `routine:getIcon`, and cached on `assistantRoutines.iconUrls`. One
 resolver, `getRoutineIcon` (`src/renderer/lib/routine-icons.ts`), is the single
 rule every surface reads: custom image, then SVG icon type tinted with the
-routine's accent colour (`routineAccentColor`), then the surface's own generic
-routine icon. So an edited routine icon and colour read identically in the
-sidebar row, the routine search results, and the file tree mounted on the
-routine's workspace; the accent colour stays as the row's left border.
+routine's accent colour (`routineAccentColor`), then `RoutineDefaultIcon`, the
+routine default mark that same module owns, so a routine always has an icon and
+never falls back to a name. An edited routine icon and colour therefore read
+identically in the sidebar row, the routine search results, and the file tree
+mounted on the routine's workspace; the accent colour stays as the row's left
+border.
 
 Task rows (`AssistantTaskRow.svelte`) behave exactly like thread rows. Hovering
 reveals an ellipsis (overlaid, so the title truncates at the full row width)

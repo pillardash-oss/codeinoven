@@ -76,11 +76,13 @@
   )
 
   /**
-   * Identity of the file tree's root: its name, its icon, and its accent
-   * colour. A routine behaves like a project, and an assistant task's tree
-   * mounts on the routine's own workspace, so the routine's edited name, icon,
-   * and colour stand in for the hidden assistant space's everywhere the root
-   * is named.
+   * Identity of the file tree's root: its name, the label shown beside its icon,
+   * its icon, and its accent colour. A routine behaves like a project, and an
+   * assistant task's tree mounts on the routine's own workspace, so the routine's
+   * edited icon and colour stand in for the hidden assistant space's everywhere
+   * the root is drawn. A routine's name is often a whole sentence, so a routine
+   * root shows no label at all: the icon carries it, and the name is the icon's
+   * tooltip.
    */
   let filesRootIdentity = $derived.by(() => {
     const routine = assistantRoutines.routineForTask(
@@ -91,6 +93,8 @@
     if (routine) {
       return {
         name: routine.name,
+        label: '',
+        routine: true,
         iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
         accentColor: routineAccentColor(routine)
       }
@@ -99,11 +103,14 @@
     // project id only from a tab that has one.
     const tabProjectId =
       activeContextTab && 'projectId' in activeContextTab ? activeContextTab.projectId : null
+    const name =
+      tabProjectId === INBOX_PROJECT_ID
+        ? 'Chat artifacts'
+        : (activeProject?.name ?? 'Project files')
     return {
-      name:
-        tabProjectId === INBOX_PROJECT_ID
-          ? 'Chat artifacts'
-          : (activeProject?.name ?? 'Project files'),
+      name,
+      label: name,
+      routine: false,
       iconUrl: activeProject
         ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
         : null,
@@ -131,6 +138,8 @@
       <ProjectFilesPanel
         projectId={activeContextTab.projectId}
         projectName={filesRootIdentity.name}
+        projectLabel={filesRootIdentity.label}
+        routineRoot={filesRootIdentity.routine}
         projectIconUrl={filesRootIdentity.iconUrl}
         projectAccentColor={filesRootIdentity.accentColor}
       />

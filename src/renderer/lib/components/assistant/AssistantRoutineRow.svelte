@@ -9,12 +9,11 @@
     Pin,
     PinOff,
     Plus,
-    Trash2,
-    Workflow
+    Trash2
   } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
-  import { getRoutineIcon } from '$lib/routine-icons'
+  import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import type { Routine } from '$shared/types'
   import { routineGap } from './assistant-view'
   import {
@@ -81,7 +80,7 @@
 
   const color = $derived(routine.color ?? 'var(--color-muted)')
   // Custom image wins, then the SVG icon type tinted with the routine colour;
-  // without either the row falls back to the generic routine (Workflow) icon.
+  // without either the row draws the routine default mark.
   const routineIcon = $derived(getRoutineIcon(routine, iconUrl))
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
@@ -246,7 +245,7 @@
         {#if routineIcon}
           <img src={routineIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
         {:else}
-          <Workflow size={14} strokeWidth={1.8} style="color: {color}" />
+          <RoutineDefaultIcon size={14} strokeWidth={1.8} style="color: {color}" />
         {/if}
       </span>
       <span

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, Search, Workflow, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
-  import { getRoutineIcon } from '$lib/routine-icons'
+  import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { Routine, Thread } from '$shared/types'
   import { routineGap } from './assistant-view'
@@ -55,7 +55,8 @@
 
   /** The routine's own icon, so a routine edited in the sidebar reads the same
    *  in the search results: custom image first, then the SVG icon type tinted
-   *  with its accent colour. */
+   *  with its accent colour. Without either the result draws the routine
+   *  default mark. */
   function routineIcon(routine: Routine): string | null {
     return getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
   }
@@ -125,7 +126,10 @@
                   {#if icon}
                     <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
                   {:else}
-                    <Workflow size={14} style="color: {routine.color ?? 'var(--color-muted)'}" />
+                    <RoutineDefaultIcon
+                      size={14}
+                      style="color: {routine.color ?? 'var(--color-muted)'}"
+                    />
                   {/if}
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"

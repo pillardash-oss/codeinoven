@@ -41,9 +41,15 @@
   interface Props {
     projectId: string
     projectName: string
+    /** Label beside the root icon; empty when the root names itself with the
+     *  icon alone (a routine root). */
+    projectLabel?: string
     /** Root icon image for the tree header (a routine's own icon), or null for
-     *  the generic folder. */
+     *  the generic mark. */
     projectIconUrl?: string | null
+    /** True when the tree's root is a routine, which draws the routine default
+     *  mark when the routine has no icon of its own. */
+    routineRoot?: boolean
     /** Accent colour of the tree's root identity, or null for the default
      *  accent. */
     projectAccentColor?: string | null
@@ -69,7 +75,9 @@
   let {
     projectId,
     projectName,
+    projectLabel = projectName,
     projectIconUrl = null,
+    routineRoot = false,
     projectAccentColor = null,
     projectState,
     onWidthChange,
@@ -1079,7 +1087,9 @@
 >
   <ProjectFileExplorerHeader
     {projectName}
+    {projectLabel}
     {projectIconUrl}
+    {routineRoot}
     {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}
