@@ -268,7 +268,8 @@ import type {
   ModelRankingSnapshotRow,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
-  RankingJudgeConfig
+  RankingJudgeConfig,
+  RoutineAgents
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -287,6 +288,7 @@ import { foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
+import { nextRoutineModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import {
   MEMORY_AUDIENCE_SCOPES,
   memoryAudienceForContainer,
@@ -1088,6 +1090,13 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+
+  /**
+   * Resolves the model set an assistant task's routine runs on. Attached by the
+   * bootstrap, which owns the routine manager; absent means assistant tasks get
+   * no model fallback.
+   */
+  private assistantAgentsResolver: ((task: Thread) => RoutineAgents | undefined) | null = null
 
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
@@ -21463,6 +21472,15 @@ export class ChatEngine {
     void scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 
+  /**
+   * Register the resolver that supplies an assistant task's routine model set.
+   * A scheduled assistant run that hits a provider failure falls over to the
+   * routine's next model instead of waiting out the failed provider's reset.
+   */
+  attachAssistantAgentsResolver(resolver: (task: Thread) => RoutineAgents | undefined): void {
+    this.assistantAgentsResolver = resolver
+  }
+
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     scheduler.attachPing((config) => this.sendHeartbeatPing(config))
@@ -21654,6 +21672,12 @@ export class ChatEngine {
   ): Promise<boolean> {
     const scheduler = this.retryScheduler
     if (!scheduler) return false
+    const info = this.sessionRegistry.get(sessionId)
+    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
+    // An assistant task whose routine carries fallback models moves onto the
+    // next model and re-runs at once. The fallback exists so a failed model
+    // never stops the routine, so it is applied before any reset wait.
+    if (await this.tryAssistantModelFallback(info, sessionId, issue)) return true
     // A provider with an explicit retry deadline has declared that the issue
     // is safe to retry later. Known reset-based issues may also derive their
     // deadline from account telemetry; everything else stays manual unless it
@@ -21663,8 +21687,6 @@ export class ChatEngine {
     if (!canDeriveReset && !(issue.retryable && issue.retryAt !== undefined)) {
       return false
     }
-    const info = this.sessionRegistry.get(sessionId)
-    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
     const driver = this.driverForRuntime(info.driverId, info.accountId)
     if (!driver) return false
     let retryAt = issue.retryAt
@@ -21726,6 +21748,74 @@ export class ChatEngine {
       })
       return false
     }
+    return true
+  }
+
+  /**
+   * Move an assistant task whose routine carries fallback models onto the next
+   * one and re-run it immediately, instead of parking the thread for the failed
+   * provider's reset window.
+   *
+   * The model is persisted onto the thread before the resume, so the re-run
+   * reads it from the thread's own settings like any other turn. A current
+   * model that is not part of the routine's set is left untouched: that is the
+   * user's own pick, and a routine's fallbacks never override it. Returns true
+   * when a fallback was armed.
+   */
+  private async tryAssistantModelFallback(
+    info: SessionInfo,
+    sessionId: string,
+    issue: AgentProviderIssue
+  ): Promise<boolean> {
+    const resolver = this.assistantAgentsResolver
+    if (!resolver) return false
+    let thread: Thread | null
+    try {
+      thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    } catch (error) {
+      Logger.error('Assistant model fallback could not read the thread:', error)
+      return false
+    }
+    if (!thread || thread.archived) return false
+    // Only the thread's own live session may fall over. A provider failure is
+    // broadcast for every session ever bound to the thread, and advancing once
+    // per bound session would skip straight past the first fallback.
+    if (thread.sessionId !== sessionId) return false
+    const settings = thread.settings
+    if (!settings) return false
+    const next = nextRoutineModel(settings, resolver(thread))
+    if (!next) return false
+    try {
+      await this.threadManager.updateSettings(
+        info.projectId,
+        info.threadId,
+        settingsWithRoutineModel(settings, next)
+      )
+    } catch (error) {
+      Logger.error('Assistant model fallback could not be persisted:', error)
+      return false
+    }
+    Logger.info('Assistant task falling back to the next routine model', {
+      projectId: info.projectId,
+      threadId: info.threadId,
+      harnessId: next.harnessId,
+      providerId: next.providerId,
+      modelId: next.modelId,
+      issueKind: issue.kind
+    })
+    // Fire-and-forget: the resume re-enters this engine's own send pipeline,
+    // and its first statement awaits, so the failing turn unwinds first.
+    void this.continueScheduledThread({
+      sessionId,
+      projectId: info.projectId,
+      threadId: info.threadId,
+      harnessId: next.harnessId,
+      issueKind: issue.kind,
+      issueMessage: issue.message,
+      ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
+    }).catch((error) => {
+      Logger.error('Assistant model fallback resume failed:', error)
+    })
     return true
   }
 

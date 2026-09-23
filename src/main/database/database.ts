@@ -741,6 +741,7 @@ export class Database {
       this.migrateAssignmentSpecNullable(connection)
       this.migrateThreadPinnedAt(connection)
       this.migrateRoutinePinned(connection)
+      this.migrateRoutineAgentsAndPause(connection)
     })()
   }
 
@@ -793,6 +794,25 @@ export class Database {
           WHERE pinned = 1 AND pinned_at IS NULL`
       )
       .run()
+  }
+
+  /**
+   * Add the routine model-set and pause columns to databases created before a
+   * routine could carry a primary/fallback model set or be paused. Fresh
+   * databases already carry both, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineAgentsAndPause(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('agents')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN agents TEXT')
+    }
+    if (!columns.has('paused')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   /**

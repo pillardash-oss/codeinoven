@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   UNGROUPED_MISSED_RUNS,
+  connectionsFromPlan,
   extractHowToDraft,
+  extractRoutinePlanDraft,
   groupMissedRunsByRoutine,
+  handoffSummary,
+  routineGap,
   latestHowToDraft,
+  latestRoutinePlanDraft,
   missedTabVisible,
+  parseHowToSections,
+  parsePlanTime,
+  parseRoutinePlan,
+  resolveConnections,
+  serializeHowToSections,
   taskHasMissed,
   taskRowIconKey,
   taskRunLine
@@ -12,7 +22,7 @@ import {
 import { STATUS_TONE_COLORS } from '$lib/stores/scope-board'
 import { STATUS_TONE_COLORS as STATUS_TONE_COLORS_VIA_SCOPE } from '$lib/stores/scope.svelte'
 import { THREAD_STATUS_POLICY } from '$shared/thread-status-policy'
-import type { MissedRun } from '$shared/types'
+import type { MissedRun, RoutineConnection, UtilityCatalog, UtilityDefinitionFor } from '$shared/types'
 
 function missedRun(overrides: Partial<MissedRun> = {}): MissedRun {
   return {
@@ -205,5 +215,305 @@ describe('how-to draft extraction', () => {
     ]
     expect(latestHowToDraft(texts)).toBe('Newer draft.')
     expect(latestHowToDraft(['No draft yet.', '```ts\nconst x = 1\n```'])).toBeNull()
+  })
+})
+
+/** A representative excerpt of an authored how-to: ALL-CAPS titles, an
+ *  indented report shape, and a numbered procedure. */
+const AUTHORED_HOW_TO = [
+  'GOAL',
+  'Sweep every Slack conversation twice a day and record what arrived.',
+  '',
+  'REQUIRED CAPABILITIES',
+  '- The Slack MCP server tools: conversations_history, conversations_replies.',
+  '  Never call conversations_add_message.',
+  '',
+  'LOCAL TIME',
+  '- All windows use the machine clock.',
+  '',
+  'DRAIN PROCEDURE (0600 and 1800)',
+  '1. Window: local today 06:00 up to now.',
+  '2. Enumerate conversations with channels_list.',
+  '',
+  'STYLE AND DISCLOSURE',
+  '- The report never contains tool names.'
+].join('\n')
+
+describe('how-to section parsing', () => {
+  it('splits ALL-CAPS titles, including a parenthesised one with lowercase inside', () => {
+    const sections = parseHowToSections(AUTHORED_HOW_TO)
+    expect(sections.map((section) => section.title)).toEqual([
+      'GOAL',
+      'REQUIRED CAPABILITIES',
+      'LOCAL TIME',
+      'DRAIN PROCEDURE (0600 and 1800)',
+      'STYLE AND DISCLOSURE'
+    ])
+    expect(sections[0]?.body).toBe(
+      'Sweep every Slack conversation twice a day and record what arrived.'
+    )
+    // The numbered procedure stays in its section instead of splitting on it.
+    expect(sections[3]?.body).toContain('1. Window: local today 06:00 up to now.')
+    expect(sections[3]?.body).toContain('2. Enumerate conversations with channels_list.')
+  })
+
+  it('round-trips an authored how-to through serialize', () => {
+    const sections = parseHowToSections(AUTHORED_HOW_TO)
+    expect(serializeHowToSections(sections)).toBe(AUTHORED_HOW_TO)
+  })
+
+  it('splits markdown headings and keeps fenced content intact', () => {
+    const markdown = [
+      '# Routine',
+      'Intro line.',
+      '',
+      '## Steps',
+      'Run this:',
+      '',
+      '```bash',
+      '## NOT A HEADING',
+      'ls',
+      '```',
+      '',
+      '## Notes',
+      'Done.'
+    ].join('\n')
+    const sections = parseHowToSections(markdown)
+    expect(sections.map((section) => section.title)).toEqual(['Routine', 'Steps', 'Notes'])
+    expect(sections[1]?.body).toContain('## NOT A HEADING')
+    expect(serializeHowToSections(sections)).toBe(markdown)
+  })
+
+  it('treats a heading-less how-to as one Instructions section', () => {
+    const sections = parseHowToSections('Just do the thing, twice.')
+    expect(sections).toHaveLength(1)
+    expect(sections[0]?.title).toBe('Instructions')
+    expect(sections[0]?.heading).toBe('')
+    expect(serializeHowToSections(sections)).toBe('Just do the thing, twice.')
+    expect(parseHowToSections('   ')).toEqual([])
+  })
+})
+
+describe('routine plan parsing', () => {
+  it('normalises every accepted time shape', () => {
+    expect(parsePlanTime('8')).toBe('08:00')
+    expect(parsePlanTime('8:30')).toBe('08:30')
+    expect(parsePlanTime('8am')).toBe('08:00')
+    expect(parsePlanTime('8:30 pm')).toBe('20:30')
+    expect(parsePlanTime('12am')).toBe('00:00')
+    expect(parsePlanTime('18:00')).toBe('18:00')
+    expect(parsePlanTime('1800')).toBeNull()
+    expect(parsePlanTime('25:00')).toBeNull()
+  })
+
+  it('reads cadence, times, weekdays, and connections', () => {
+    const plan = parseRoutinePlan(
+      ['cadence: weekdays', 'times: 08:30, 18:00', 'weekdays: mon,tue,wed,thu,fri', 'connections: Slack, Gmail'].join(
+        '\n'
+      )
+    )
+    expect(plan?.schedule).toEqual({
+      cadence: 'weekdays',
+      times: ['08:30', '18:00']
+    })
+    expect(plan?.connections).toEqual(['Slack', 'Gmail'])
+  })
+
+  it('reads a free-text schedule line and ignores a weekday phrase it cannot parse', () => {
+    const plan = parseRoutinePlan(
+      ['schedule: every day at 8:05am', 'days: Monday to Friday'].join('\n')
+    )
+    // "Monday to Friday" is a phrase, not a weekday name, so it contributes no
+    // weekday set and must not turn the daily cadence into a weekly one.
+    expect(plan?.schedule?.cadence).toBe('daily')
+    expect(plan?.schedule?.times).toEqual(['08:05'])
+  })
+
+  it('treats a mon-fri weekday set with no cadence as weekdays', () => {
+    const plan = parseRoutinePlan(['times: 09:00', 'weekdays: mon,tue,wed,thu,fri'].join('\n'))
+    expect(plan?.schedule).toEqual({
+      cadence: 'weekdays',
+      times: ['09:00']
+    })
+  })
+
+  it('accepts full weekday names', () => {
+    const plan = parseRoutinePlan(
+      ['times: 09:00', 'weekdays: monday,tuesday,wednesday,thursday,friday'].join('\n')
+    )
+    expect(plan?.schedule).toEqual({ cadence: 'weekdays', times: ['09:00'] })
+  })
+
+  it('ignores unknown keys and returns null when nothing is usable', () => {
+    expect(parseRoutinePlan('notes: the user prefers short reports')).toBeNull()
+    expect(parseRoutinePlan('')).toBeNull()
+  })
+
+  it('extracts a tagged fence and a bare fence with a marker line', () => {
+    const tagged = ['```routine', 'cadence: daily', 'times: 08:30', '```'].join('\n')
+    expect(extractRoutinePlanDraft(tagged)?.schedule).toEqual({
+      cadence: 'daily',
+      times: ['08:30']
+    })
+    const bare = ['```', 'routine: Slack digest', 'cadence: hourly', '```'].join('\n')
+    expect(extractRoutinePlanDraft(bare)?.schedule).toEqual({ cadence: 'hourly', times: [] })
+    expect(extractRoutinePlanDraft('```how-to\nGOAL\n```')).toBeNull()
+  })
+
+  it('takes the newest plan across messages', () => {
+    const texts = [
+      '```routine\ncadence: daily\ntimes: 08:30\n```',
+      '```routine\ncadence: weekly\ntimes: 17:00\nweekdays: mon,fri\n```'
+    ]
+    expect(latestRoutinePlanDraft(texts)?.schedule).toEqual({
+      cadence: 'weekly',
+      times: ['17:00'],
+      weekdays: [1, 5]
+    })
+  })
+})
+
+function mcpUtility(
+  overrides: Partial<UtilityDefinitionFor<'mcp'>> = {}
+): UtilityDefinitionFor<'mcp'> {
+  return {
+    id: 'slack-mcp',
+    kind: 'mcp',
+    name: 'Slack MCP',
+    description: '',
+    enabled: true,
+    activation: 'on_demand',
+    scope: { level: 'global' },
+    config: { transport: 'stdio', command: 'npx', args: [] },
+    credentials: [],
+    harnessBindings: [],
+    appOwned: false,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides
+  }
+}
+
+function catalog(utilities: UtilityDefinitionFor<'mcp'>[]): UtilityCatalog {
+  return { utilities, secureStorageAvailable: true }
+}
+
+function connection(overrides: Partial<RoutineConnection> = {}): RoutineConnection {
+  return { utilityId: 'slack-mcp', label: 'Slack MCP', ...overrides }
+}
+
+describe('routine connections', () => {
+  it('reports a linked, enabled, configured utility as ready', () => {
+    const views = resolveConnections([connection()], catalog([mcpUtility()]))
+    expect(views[0]?.status).toBe('ready')
+    expect(views[0]?.detail).toBe('Ready')
+  })
+
+  it('reports a connection the library does not carry as needing setup', () => {
+    const views = resolveConnections(
+      [connection({ utilityId: 'required:slack', label: 'Slack', required: true })],
+      catalog([])
+    )
+    expect(views[0]?.status).toBe('needs-setup')
+    expect(views[0]?.detail).toBe('Not in your utility library yet')
+  })
+
+  it('links a required connection to a utility by name', () => {
+    const views = resolveConnections(
+      [connection({ utilityId: 'required:slack', label: 'Slack', required: true })],
+      catalog([mcpUtility()])
+    )
+    expect(views[0]?.utility?.id).toBe('slack-mcp')
+    expect(views[0]?.status).toBe('ready')
+  })
+
+  it('reports a switched-off utility as disabled', () => {
+    const views = resolveConnections([connection()], catalog([mcpUtility({ enabled: false })]))
+    expect(views[0]?.status).toBe('disabled')
+  })
+
+  it('reports a half-configured utility as incomplete', () => {
+    const views = resolveConnections(
+      [connection()],
+      catalog([mcpUtility({ config: { transport: 'stdio' } })])
+    )
+    expect(views[0]?.status).toBe('incomplete')
+    expect(views[0]?.detail).toBe('No server command or URL')
+  })
+
+  it('reports an MCP whose declared secret was never supplied as incomplete', () => {
+    const views = resolveConnections(
+      [connection()],
+      catalog([
+        mcpUtility({
+          config: {
+            transport: 'stdio',
+            command: 'npx',
+            environment: { SLACK_MCP_XOXP_TOKEN: '{env:SLACK_MCP_XOXP_TOKEN}' }
+          }
+        })
+      ])
+    )
+    expect(views[0]?.status).toBe('incomplete')
+    expect(views[0]?.detail).toBe('Needs SLACK_MCP_XOXP_TOKEN')
+  })
+
+  it('links a plan name to a library utility and keeps an unknown name required', () => {
+    const merged = connectionsFromPlan(
+      ['Slack', 'Gmail'],
+      [],
+      [mcpUtility()]
+    )
+    expect(merged).toEqual([
+      { utilityId: 'slack-mcp', label: 'Slack MCP', kind: 'mcp' },
+      { utilityId: 'required:gmail', label: 'Gmail', required: true }
+    ])
+  })
+
+  it('never duplicates a connection a plan names twice', () => {
+    const merged = connectionsFromPlan(
+      ['Slack', 'Slack MCP'],
+      [{ utilityId: 'slack-mcp', label: 'Slack MCP', kind: 'mcp' }],
+      [mcpUtility()]
+    )
+    expect(merged).toHaveLength(1)
+  })})
+
+describe('routine readiness', () => {
+  it('names every gap a routine still has', () => {
+    expect(routineGap({ howTo: '', agents: undefined })).toBe('Needs a how-to and a model')
+    expect(routineGap({ howTo: 'Do it.', agents: undefined })).toBe('Needs a model')
+    expect(
+      routineGap({ howTo: '', agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] } })
+    ).toBe('Needs a how-to')
+  })
+
+  it('reports a routine with a how-to and a primary model as ready', () => {
+    expect(
+      routineGap({
+        howTo: 'Do it.',
+        agents: { primary: { harnessId: 'h', providerId: 'p', modelId: 'm' }, fallbacks: [] }
+      })
+    ).toBeNull()
+  })
+})
+
+describe('hand-off summary', () => {
+  it('carries the routine name and how-to into the fork seed', () => {
+    const summary = handoffSummary(
+      { title: 'Slack drain', lastRunAt: 1_700_000_000_000 },
+      { name: 'Slack checkup drain', howTo: 'GOAL\nSweep Slack.' }
+    )
+    expect(summary).toContain('Task: Slack drain')
+    expect(summary).toContain('Routine: Slack checkup drain')
+    expect(summary).toContain('How-to:\nGOAL\nSweep Slack.')
+    expect(summary).toContain('Last scheduled run:')
+  })
+
+  it('omits the routine and run lines for a routine-less task with no run', () => {
+    const summary = handoffSummary({ title: 'Ad hoc task' }, null)
+    expect(summary).toContain('Task: Ad hoc task')
+    expect(summary).not.toContain('Routine:')
+    expect(summary).not.toContain('Last scheduled run:')
   })
 })

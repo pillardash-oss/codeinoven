@@ -147,6 +147,8 @@ export class RoutineSchedulerService {
   }
 
   private evaluateTask(task: Thread, allowDispatch: boolean): void {
+    // A paused routine keeps its tasks and how-to but never fires.
+    if (this.deps.routines.isTaskPaused(task)) return
     const schedule = this.deps.routines.resolveTaskSchedule(task)
     if (!scheduleIsActive(schedule)) return
     const now = this.now()

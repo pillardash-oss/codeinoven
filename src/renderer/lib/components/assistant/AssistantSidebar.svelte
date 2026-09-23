@@ -30,6 +30,8 @@
     onDeleteTask: (task: Thread) => Promise<void>
     onForkTask: (task: Thread) => void
     onOpenTaskNotes: (task: Thread) => void
+    /** Hand a task off to a project, forking it and seeding a summary. */
+    onHandedOffTask: (forked: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
@@ -52,6 +54,7 @@
     onDeleteTask,
     onForkTask,
     onOpenTaskNotes,
+    onHandedOffTask,
     onDeleteRoutine,
     onTogglePinRoutine,
     onMoveRoutine,
@@ -213,6 +216,7 @@
                     onDelete={onDeleteTask}
                     onFork={onForkTask}
                     onOpenNotes={onOpenTaskNotes}
+                    onHandedOff={onHandedOffTask}
                   />
                 {:else}
                   <p class="px-2 py-1 text-[0.625rem] text-dimmed">No tasks in this routine yet.</p>
@@ -243,6 +247,7 @@
               onDelete={onDeleteTask}
               onFork={onForkTask}
               onOpenNotes={onOpenTaskNotes}
+              onHandedOff={onHandedOffTask}
             />
           {/each}
         {/if}

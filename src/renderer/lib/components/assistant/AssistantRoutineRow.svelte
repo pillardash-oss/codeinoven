@@ -4,6 +4,7 @@
     ChevronRight,
     Ellipsis,
     PanelRightOpen,
+    Pause,
     Pencil,
     Pin,
     PinOff,
@@ -14,7 +15,8 @@
   import { DropdownMenu, Portal } from 'bits-ui'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { routineHowToComplete, type Routine } from '$shared/types'
+  import type { Routine } from '$shared/types'
+  import { routineGap } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     calculateThreadHoverPopoverPosition,
@@ -84,7 +86,8 @@
     iconUrl ??
       (routine.iconType ? getIconSvgDataUrl(routine.iconType, routine.color ?? '#8b95a5') : null)
   )
-  const incomplete = $derived(!routineHowToComplete(routine))
+  const incomplete = $derived(routineGap(routine) !== null)
+  const gapLabel = $derived(routineGap(routine) ?? '')
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
 
   let menuOpen = $state(false)
@@ -269,13 +272,24 @@
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span class="truncate">{taskCount === 1 ? '1 task' : `${taskCount} tasks`}</span>
+        {#if routine.paused}
+          <span
+            class="flex shrink-0 items-center"
+            style="color: var(--color-warning)"
+            role="img"
+            aria-label="This routine is paused"
+            title="Paused: this routine does not run until you resume it"
+          >
+            <Pause size={11} />
+          </span>
+        {/if}
         {#if incomplete}
           <span
             class="flex shrink-0 items-center"
             style="color: var(--color-warning)"
             role="img"
-            aria-label="This routine has no how-to yet"
-            title="Incomplete: this routine has no how-to yet"
+            aria-label={gapLabel}
+            title={gapLabel}
           >
             <AlertTriangle size={11} />
           </span>

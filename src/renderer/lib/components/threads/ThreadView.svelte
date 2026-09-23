@@ -140,7 +140,11 @@
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { latestHowToDraft as latestHowToDraftIn } from '$lib/components/assistant/assistant-view'
+  import {
+    connectionsFromPlan,
+    latestHowToDraft as latestHowToDraftIn,
+    latestRoutinePlanDraft as latestRoutinePlanDraftIn
+  } from '$lib/components/assistant/assistant-view'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -2129,7 +2133,11 @@
     return [
       `You are authoring the how-to for the routine "${routineName}". Help the user turn their intent into a concrete, step-by-step how-to that every task in this routine will follow.`,
       'Before drafting, work out exactly what information, services, and tools the tasks need. Check the app utility library for a matching skill, MCP server, or plugin. If one is missing, research whether a compatible option exists and explain plainly what it is and how to set it up. Never install anything without the user consent; when a compatible utility can be installed, tell the user to send "@cio-utility proceed" to arm it. If nothing compatible exists, offer the fallbacks you have (browser or computer use) and ask which they prefer.',
-      'Go back and forth with the user until you agree. Only once they agree, present the final how-to inside one fenced code block whose opening fence says how-to, and tell them to send /save-how-to to commit it. The block must contain the exact instruction set the routine will run, not a summary of the conversation. Open the fence with the tag how-to alone on its line, with no title after it, and put no title line inside the block.',
+      'Work out when the routine should run as well. Confirm the cadence (once, hourly, daily, weekdays, or weekly) and the exact times of day with the user; never guess a time they did not agree to.',
+      'Go back and forth with the user until you agree on the instructions and the schedule. Only then present exactly two fenced code blocks and nothing else in them:',
+      'First, the how-to itself. Open the fence with the tag how-to alone on its line, with no title after it and no title line inside the block. It must contain the exact instruction set the routine will run, not a summary of the conversation.',
+      'Second, the machine-readable plan the app uses to build the schedule. Open the fence with the tag routine alone on its line, then write one key per line: cadence (once, hourly, daily, weekdays, or weekly), times (comma-separated 24-hour HH:mm values), weekdays (comma-separated day names, weekly only), and connections (comma-separated names of the services the routine needs).',
+      'After both blocks, tell the user to send /save-how-to to commit the instructions, the schedule, and the connections together.'
     ].join('\n')
   }
 
@@ -5913,17 +5921,42 @@
     return latestHowToDraftIn(assistantTexts)
   }
 
-  /** Commit the agent-drafted how-to to the routine after the user agrees. */
+  /** The machine-readable routine plan the agent last emitted, if any. */
+  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestRoutinePlanDraftIn(assistantTexts)
+  }
+
+  /** Commit the agent-drafted how-to, schedule, and connections to the routine
+   *  after the user agrees. The plan block is optional: without it the how-to is
+   *  saved on its own and the existing schedule is left untouched. */
   async function saveRoutineHowTo(): Promise<void> {
-    if (!assistantRoutineId) return
+    const routineId = assistantRoutineId
+    if (!routineId) return
     const draft = latestHowToDraft()
     if (!draft) {
       errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then send /save-how-to again.`
       return
     }
     try {
-      await assistantRoutines.updateRoutine(assistantRoutineId, { howTo: draft })
-      toast.success('How-to saved')
+      const plan = latestRoutinePlanDraft()
+      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft }
+      if (plan?.schedule) patch.schedule = plan.schedule
+      if (plan && plan.connections.length > 0) {
+        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+        const catalog = await invoke('utilities:list').catch(() => null)
+        patch.connections = connectionsFromPlan(
+          plan.connections,
+          routine?.connections ?? [],
+          catalog?.utilities ?? []
+        )
+      }
+      await assistantRoutines.updateRoutine(routineId, patch)
+      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
     }

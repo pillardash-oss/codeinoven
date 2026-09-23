@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AlertTriangle, Clock, Link2, ListChecks, Sparkles } from '@lucide/svelte'
-  import { describeSchedule, routineHowToComplete, type Routine } from '$shared/types'
+  import { describeSchedule, type Routine } from '$shared/types'
+  import { routineGap } from './assistant-view'
 
   interface Props {
     routine: Routine
@@ -15,7 +16,8 @@
 
   let { routine, taskCount, working, missed, nextRunAt }: Props = $props()
 
-  const incomplete = $derived(!routineHowToComplete(routine))
+  const incomplete = $derived(routineGap(routine) !== null)
+  const gapLabel = $derived(routineGap(routine) ?? '')
   const scheduleLabel = $derived(describeSchedule(routine.schedule ?? null))
   const scheduleAt = $derived(
     nextRunAt === null
@@ -32,16 +34,28 @@
   })
 
   const statusLabel = $derived(
-    incomplete ? 'Incomplete' : missed ? 'Missed run' : working ? 'Working' : nextRunAt ? 'Scheduled' : 'Ready'
+    routine.paused
+      ? 'Paused'
+      : incomplete
+        ? gapLabel
+        : missed
+          ? 'Missed run'
+          : working
+            ? 'Working'
+            : nextRunAt
+              ? 'Scheduled'
+              : 'Ready'
   )
   const statusColor = $derived(
-    incomplete
+    routine.paused
       ? 'var(--color-warning)'
-      : missed
-        ? 'var(--color-missed)'
-        : working
-          ? 'var(--color-thread-working)'
-          : 'var(--color-dimmed)'
+      : incomplete
+        ? 'var(--color-warning)'
+        : missed
+          ? 'var(--color-missed)'
+          : working
+            ? 'var(--color-thread-working)'
+            : 'var(--color-dimmed)'
   )
 </script>
 

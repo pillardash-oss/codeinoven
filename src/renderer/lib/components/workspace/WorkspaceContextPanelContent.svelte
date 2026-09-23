@@ -10,7 +10,7 @@
   import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
   import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
   import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
-  import HowToPanel from '$lib/components/assistant/HowToPanel.svelte'
+  import HowToPanel from '$lib/components/assistant/AssistantPanel.svelte'
   import type { Thread } from '$shared/types'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
@@ -20,6 +20,7 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { INBOX_PROJECT_ID, type AgentPart, type Project } from '$shared/types'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
@@ -38,8 +39,10 @@
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
-    /** Open a forked task thread in its project after an assistant hand-off. */
-    onHandedOffTask?: (forked: Thread) => void
+    /** Navigate to another top-level view (e.g. the Utilities page). */
+    navigate: (view: MainView) => void
+    /** Open an assistant task, so the workspace owns the selection. */
+    onOpenAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -54,7 +57,8 @@
     onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent,
-    onHandedOffTask
+    navigate,
+    onOpenAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
@@ -157,7 +161,8 @@
         projectId={activeContextTab.projectId}
         threadId={activeContextTab.threadId}
         routineId={activeContextTab.routineId}
-        onHandedOff={onHandedOffTask}
+        {navigate}
+        onOpenTask={onOpenAssistantTask}
       />
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}

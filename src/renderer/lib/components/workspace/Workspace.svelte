@@ -66,6 +66,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { routinePrimaryModel, settingsWithRoutineModel } from '$shared/routine-agents'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -115,6 +116,7 @@
     Project,
     PromptAttachment,
     Routine,
+    RoutineAgents,
     Thread
   } from '$shared/types'
 
@@ -1893,7 +1895,12 @@
         {
           id: 'new-routine',
           component: RoutineCreateControl as unknown as ViewActionItem['component'],
-          props: { onCreate: createAssistantRoutine, trigger: routineCreateTrigger }
+          props: {
+            onCreate: createAssistantRoutine,
+            providers: providerCatalog.allCached(),
+            projectId: rendererRecovery.selectedProjectId,
+            trigger: routineCreateTrigger
+          }
         },
         {
           id: 'new-task',
@@ -3005,12 +3012,13 @@
   }
 
   /** Create a routine and seed its first task, then open the how-to panel. */
-  async function createAssistantRoutine(name: string): Promise<void> {
+  async function createAssistantRoutine(name: string, agents: RoutineAgents): Promise<void> {
     if (!assistantProject) return
-    const routine = await assistantRoutines.createRoutine({ name })
+    const routine = await assistantRoutines.createRoutine({ name, agents })
     // The seed task is created already inside the routine: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, routine.id)
+    await applyRoutineModelToTask(workspaceState.selectedThread, routine)
     await openAssistantHowToForRoutine(routine)
   }
 
@@ -3019,6 +3027,7 @@
     if (!assistantProject) return
     await createThreadInProject(assistantProject, undefined, routine.id)
     const created = workspaceState.selectedThread
+    await applyRoutineModelToTask(created, routine)
     if (created && created.projectId === ASSISTANT_SPACE_ID) {
       upsertThreadInList(created)
       // Anchor on the routine id we already hold: a reused blank thread carries
@@ -3032,6 +3041,30 @@
       )
     } else {
       await openAssistantHowToForRoutine(routine)
+    }
+  }
+
+  /**
+   * A task created inside a routine starts on the routine's primary model, so
+   * the composer shows the model the routine actually runs on. Best-effort: the
+   * scheduled run applies the routine's primary regardless, so a failed write
+   * only leaves the composer showing the inherited model.
+   */
+  async function applyRoutineModelToTask(
+    thread: Thread | null | undefined,
+    routine: Routine
+  ): Promise<void> {
+    const primary = routinePrimaryModel(routine.agents)
+    if (!thread || !primary || !thread.settings) return
+    try {
+      const updated = await persistInheritedThreadSettings(
+        thread,
+        settingsWithRoutineModel(thread.settings, primary)
+      )
+      upsertThreadInList(updated)
+      if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
+    } catch {
+      // Cosmetic only: the run itself uses the routine's primary either way.
     }
   }
 
@@ -3335,6 +3368,7 @@
       onDeleteTask={handleDelete}
       onForkTask={(task) => void forkThread(task)}
       onOpenTaskNotes={openAssistantTaskNotes}
+      onHandedOffTask={handleAssistantHandoff}
       onDeleteRoutine={deleteAssistantRoutine}
       onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
       onMoveRoutine={(draggedId, targetId, position) =>
@@ -3431,7 +3465,8 @@
             }}
             onContinueInThread={handleContinueInThread}
             onOpenSubagent={openNestedSubagent}
-            onHandedOffTask={handleAssistantHandoff}
+            {navigate}
+            onOpenAssistantTask={openAssistantTask}
           />
         {/snippet}
         <div

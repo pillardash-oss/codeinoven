@@ -8,6 +8,7 @@ import {
 import type { IpcHandlerContext } from './context'
 import type {
   CreateRoutineInput,
+  RoutineAgents,
   RoutineConnection,
   RoutineSchedule,
   UpdateRoutineInput
@@ -18,6 +19,7 @@ const MAX_ROUTINE_NAME = 200
 const MAX_HOW_TO = 100_000
 const MAX_CONNECTIONS = 64
 const MAX_TIMES = 24
+const MAX_FALLBACKS = 12
 
 /** Parse one `HH:mm` value, returning null when malformed. */
 function parseTime(value: unknown): string | null {
@@ -69,10 +71,48 @@ function sanitizeConnections(value: unknown): RoutineConnection[] {
     result.push({
       utilityId: record.utilityId.slice(0, 200),
       label: record.label.slice(0, 200),
-      ...(typeof record.kind === 'string' ? { kind: record.kind.slice(0, 64) } : {})
+      ...(typeof record.kind === 'string' ? { kind: record.kind.slice(0, 64) } : {}),
+      ...(record.required === true ? { required: true } : {})
     })
   }
   return result
+}
+
+/** One model selection: harness, provider, and model are required. */
+function sanitizeModelSelection(value: unknown): RoutineAgents['fallbacks'][number] | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.harnessId !== 'string' ||
+    typeof record.providerId !== 'string' ||
+    typeof record.modelId !== 'string'
+  ) {
+    return null
+  }
+  return {
+    harnessId: record.harnessId.slice(0, 64),
+    providerId: record.providerId.slice(0, 128),
+    modelId: record.modelId.slice(0, 200),
+    ...(typeof record.accountId === 'string' ? { accountId: record.accountId.slice(0, 200) } : {}),
+    ...(typeof record.thinkingLevel === 'string'
+      ? { thinkingLevel: record.thinkingLevel.slice(0, 16) as RoutineAgents['fallbacks'][number]['thinkingLevel'] }
+      : {})
+  }
+}
+
+/** Validate an untrusted model set, or null to clear it. */
+function sanitizeAgents(value: unknown): RoutineAgents | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') throw new TypeError('Routine agents must be an object or null')
+  const record = value as Record<string, unknown>
+  const primary = record.primary === undefined ? null : sanitizeModelSelection(record.primary)
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+        .slice(0, MAX_FALLBACKS)
+        .map(sanitizeModelSelection)
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    : []
+  return { ...(primary ? { primary } : {}), fallbacks }
 }
 
 function validateCreateInput(value: unknown): CreateRoutineInput {
@@ -86,7 +126,9 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
     ...(typeof record.howTo === 'string' ? { howTo: record.howTo.slice(0, MAX_HOW_TO) } : {}),
     ...(record.connections !== undefined
       ? { connections: sanitizeConnections(record.connections) }
-      : {})
+      : {}),
+    ...(record.agents !== undefined ? { agents: sanitizeAgents(record.agents) ?? undefined } : {}),
+    ...(typeof record.paused === 'boolean' ? { paused: record.paused } : {})
   }
 }
 
@@ -117,6 +159,11 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
     patch.howTo = record.howTo.slice(0, MAX_HOW_TO)
   }
   if (record.connections !== undefined) patch.connections = sanitizeConnections(record.connections)
+  if (record.agents !== undefined) {
+    const agents = sanitizeAgents(record.agents)
+    if (agents) patch.agents = agents
+  }
+  if (typeof record.paused === 'boolean') patch.paused = record.paused
   return patch
 }
 

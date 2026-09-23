@@ -876,6 +876,8 @@ CREATE TABLE IF NOT EXISTS routines (
   how_to              TEXT NOT NULL DEFAULT '',
   how_to_updated_at   INTEGER,
   connections         TEXT NOT NULL DEFAULT '[]',
+  agents              TEXT,
+  paused              INTEGER NOT NULL DEFAULT 0,
   pinned              INTEGER NOT NULL DEFAULT 0,
   pinned_at           INTEGER,
   sort_order          INTEGER,

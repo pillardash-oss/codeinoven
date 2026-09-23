@@ -9,6 +9,8 @@
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import AssistantHandoffModals from './AssistantHandoffModals.svelte'
+  import { createAssistantHandoff } from './assistant-handoff.svelte'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     calculateThreadHoverPopoverPosition,
@@ -42,6 +44,8 @@
     onDelete: (task: Thread) => Promise<void>
     onFork: (task: Thread) => void
     onOpenNotes: (task: Thread) => void
+    /** Hand this task off to a project, forking it and seeding a summary. */
+    onHandedOff: (forked: Thread) => void
   }
 
   let {
@@ -56,7 +60,8 @@
     onTogglePin,
     onDelete,
     onFork,
-    onOpenNotes
+    onOpenNotes,
+    onHandedOff
   }: Props = $props()
 
   const TASK_DRAG_TYPE = 'application/x-assistant-task'
@@ -95,6 +100,11 @@
   const isForeignRun = $derived(foreignRuns.isForeign(task.projectId, task.id))
   const stageLabel = $derived(threadStatusPolicy(task.status).label)
 
+  const handoff = createAssistantHandoff({
+    getTask: () => task,
+    onHandedOff: (forked) => onHandedOff(forked)
+  })
+
   const actionsMenu = createThreadActionsMenu({
     getThread: () => task,
     onRename: (t, newName) => onRename(t, newName),
@@ -111,7 +121,10 @@
     // to change, but notes and copy-id are exactly as useful as on a thread.
     showChangeScope: () => false,
     showNotes: () => true,
-    showCopyId: () => true
+    showCopyId: () => true,
+    // Hand-off belongs to the task's own menu, never to the panel.
+    onHandoff: () => handoff.open(),
+    showHandoff: () => true
   })
 
   // ─── Hover popover ───────────────────────────────────────────────────────
@@ -348,3 +361,5 @@
   onClose={actionsMenu.cancelDelete}
   onConfirm={actionsMenu.confirmDelete}
 />
+
+<AssistantHandoffModals controller={handoff} />

@@ -14,6 +14,7 @@ import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import type {
   CreateRoutineInput,
   Routine,
+  RoutineAgents,
   RoutineSchedule,
   Thread,
   UpdateRoutineInput
@@ -54,6 +55,8 @@ export class RoutineManager {
       howTo: input.howTo ?? '',
       howToUpdatedAt: input.howTo ? now : undefined,
       connections: input.connections ?? [],
+      agents: input.agents,
+      paused: input.paused ?? false,
       createdAt: now,
       updatedAt: now
     }
@@ -76,6 +79,8 @@ export class RoutineManager {
       howTo: input.howTo ?? existing.howTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
+      agents: input.agents !== undefined ? input.agents : existing.agents,
+      paused: input.paused !== undefined ? input.paused : existing.paused,
       updatedAt: now
     }
     this.routineRepo.upsert(updated)
@@ -210,10 +215,29 @@ export class RoutineManager {
     return routine?.schedule ?? null
   }
 
+  /**
+   * Whether a task's routine is paused. A paused routine keeps its tasks and
+   * how-to but the scheduler never fires them; a routine-less task is never
+   * paused.
+   */
+  isTaskPaused(task: Thread): boolean {
+    if (!task.routineId) return false
+    return this.routineRepo.get(task.routineId)?.paused === true
+  }
+
   /** The how-to a task runs under, from its routine. */
   resolveTaskHowTo(task: Thread): string {
     if (!task.routineId) return ''
     const routine = this.routineRepo.get(task.routineId)
     return routine?.howTo ?? ''
+  }
+
+  /**
+   * The model set a task runs on, from its routine. A routine-less task has
+   * none: its own thread settings are authoritative.
+   */
+  resolveTaskAgents(task: Thread): RoutineAgents | undefined {
+    if (!task.routineId) return undefined
+    return this.routineRepo.get(task.routineId)?.agents
   }
 }

@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Search, Workflow, BotMessageSquare, X } from '@lucide/svelte'
+  import { AlertTriangle, Search, Workflow, BotMessageSquare, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { routineHowToComplete, type Routine, type Thread } from '$shared/types'
+  import type { Routine, Thread } from '$shared/types'
+  import { routineGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -128,8 +129,16 @@
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
                   >{routine.name}</span
                 >
-                {#if !routineHowToComplete(routine)}
-                  <span class="shrink-0 text-[0.5625rem] text-warning">Incomplete</span>
+                {#if routineGap(routine)}
+                  <span
+                    class="flex shrink-0 items-center"
+                    style="color: var(--color-warning)"
+                    role="img"
+                    aria-label={routineGap(routine) ?? ''}
+                    title={routineGap(routine) ?? ''}
+                  >
+                    <AlertTriangle size={11} />
+                  </span>
                 {/if}
               </button>
             {/each}

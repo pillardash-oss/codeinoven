@@ -4,6 +4,7 @@ import {
   nextRunAt,
   type MissedRun,
   type Routine,
+  type RoutineAgents,
   type RoutineConnection,
   type RoutineSchedule,
   type Thread
@@ -120,6 +121,8 @@ class AssistantRoutinesState {
     iconType?: string
     schedule?: RoutineSchedule | null
     howTo?: string
+    connections?: RoutineConnection[]
+    agents?: RoutineAgents
   }): Promise<Routine> {
     const routine = await invoke('routine:create', input)
     await this.refresh()
@@ -136,6 +139,8 @@ class AssistantRoutinesState {
       schedule?: RoutineSchedule | null
       howTo?: string
       connections?: RoutineConnection[]
+      agents?: RoutineAgents
+      paused?: boolean
     }
   ): Promise<Routine> {
     const routine = await invoke('routine:update', routineId, input)

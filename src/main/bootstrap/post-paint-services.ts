@@ -15,6 +15,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
+import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -192,6 +193,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         })
         return
       }
+      // The routine's primary model wins over whatever the thread was last set
+      // to, so the models the user picked for the routine are the models its
+      // runs actually use. A routine without a model set keeps the thread's own.
+      const primary = routinePrimaryModel(routine?.agents)
+      const runSettings = primary ? settingsWithRoutineModel(settings, primary) : settings
       const prompt =
         task.title.trim().length > 0
           ? `Run this scheduled task now: ${task.title}`
@@ -200,7 +206,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       return chatEngine.sendPrompt(
         task.projectId,
         task.id,
-        settings,
+        runSettings,
         prompt,
         [],
         undefined,
@@ -218,6 +224,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
   })
+  // Scheduled assistant runs fall over to the routine's next model when the
+  // current one fails, instead of waiting out the failed provider's reset.
+  state.chatEngine.attachAssistantAgentsResolver((task) =>
+    state.routineManager?.resolveTaskAgents(task)
+  )
   state.speechService = new SpeechService(
     {
       catalogPath: app.isPackaged

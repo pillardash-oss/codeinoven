@@ -1,20 +1,33 @@
 <script lang="ts">
   import { Workflow } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import type { ProviderCatalog, RoutineAgents } from '$shared/types'
+  import RoutineAgentPicker from './RoutineAgentPicker.svelte'
 
   interface Props {
-    /** Create a routine with the given name; the host also seeds a first task. */
-    onCreate: (name: string) => void | Promise<void>
+    /** Create a routine with the given name and model set; the host seeds a first task. */
+    onCreate: (name: string, agents: RoutineAgents) => void | Promise<void>
+    /** Harness catalogs the model pickers read. */
+    providers: ProviderCatalog[]
+    /** Project whose harness catalog the pickers display. */
+    projectId?: string | null
     title?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
     trigger?: number
   }
 
-  let { onCreate, title = 'New routine', trigger = 0 }: Props = $props()
+  let {
+    onCreate,
+    providers,
+    projectId = null,
+    title = 'New routine',
+    trigger = 0
+  }: Props = $props()
 
   let open = $state(false)
   let name = $state('')
+  let agents = $state<RoutineAgents>({ fallbacks: [] })
   let busy = $state(false)
 
   /** Highest trigger value already handled. The control unmounts when the view
@@ -30,14 +43,16 @@
     }
   })
 
+  const canSubmit = $derived(name.trim().length > 0 && Boolean(agents.primary?.modelId) && !busy)
+
   async function submit(): Promise<void> {
-    const trimmed = name.trim()
-    if (trimmed.length === 0 || busy) return
+    if (!canSubmit) return
     busy = true
     try {
-      await onCreate(trimmed)
+      await onCreate(name.trim(), agents)
       open = false
       name = ''
+      agents = { fallbacks: [] }
     } finally {
       busy = false
     }
@@ -54,27 +69,50 @@
   <Workflow size={15} strokeWidth={1.8} />
 </button>
 
-<Modal {open} {title} onClose={() => (open = false)}>
-  <p class="mb-3 text-[0.75rem] text-muted">
-    A routine groups tasks under one how-to. A first task is created automatically and you will
-    write the how-to with the agent next.
-  </p>
-  <input
-    class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-    placeholder="e.g. Triage CodeInOven PRs daily, 9am and 5pm"
-    aria-label="Routine name"
-    bind:value={name}
-    onkeydown={(event) => {
-      if (event.key === 'Enter' && !event.isComposing) {
-        event.preventDefault()
-        void submit()
-      }
-    }}
-  />
+<Modal {open} {title} size="lg" onClose={() => (open = false)}>
+  <div class="flex flex-col gap-4">
+    <div>
+      <label class="mb-1 block text-[0.6875rem] font-medium text-muted" for="new-routine-name">
+        Routine name
+      </label>
+      <input
+        id="new-routine-name"
+        class="w-full rounded-md border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
+        placeholder="e.g. Triage CodeInOven PRs daily, 9am and 5pm"
+        aria-label="Routine name"
+        bind:value={name}
+        onkeydown={(event) => {
+          if (event.key === 'Enter' && !event.isComposing) {
+            event.preventDefault()
+            void submit()
+          }
+        }}
+      />
+      <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
+        A routine groups tasks under one how-to and one schedule. A first task is created
+        automatically, and you write the how-to with the agent next.
+      </p>
+    </div>
+
+    <div class="border-t border-border pt-3">
+      <p class="mb-2 text-[0.625rem] leading-relaxed text-dimmed">
+        Pick the models this routine runs on. A primary and two fallbacks mean a model that fails or
+        hits its limit never stops the routine.
+      </p>
+      <RoutineAgentPicker
+        {agents}
+        {providers}
+        {projectId}
+        onChange={(next) => (agents = next)}
+      />
+    </div>
+  </div>
+
   {#snippet footer()}
     <div class="flex justify-end gap-2">
       <button
         type="button"
+        data-modal-dismiss
         class="rounded-md px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
         onclick={() => (open = false)}
       >
@@ -82,8 +120,9 @@
       </button>
       <button
         type="button"
+        data-modal-primary
         class="rounded-md bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={name.trim().length === 0 || busy}
+        disabled={!canSubmit}
         onclick={() => void submit()}
       >
         Create routine

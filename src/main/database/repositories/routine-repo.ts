@@ -1,5 +1,5 @@
 import type { Database } from '../database'
-import type { Routine, RoutineConnection, RoutineSchedule } from '../../../lib/types'
+import type { Routine, RoutineAgents, RoutineConnection, RoutineSchedule } from '../../../lib/types'
 
 interface RoutineRow {
   id: string
@@ -11,6 +11,8 @@ interface RoutineRow {
   how_to: string
   how_to_updated_at: number | null
   connections: string
+  agents: string | null
+  paused: number
   pinned: number
   pinned_at: number | null
   sort_order: number | null
@@ -32,16 +34,46 @@ function parseConnections(raw: string): RoutineConnection[] {
   try {
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(
-      (entry): entry is RoutineConnection =>
-        typeof entry === 'object' &&
-        entry !== null &&
-        typeof (entry as RoutineConnection).utilityId === 'string' &&
-        typeof (entry as RoutineConnection).label === 'string'
-    )
+    return parsed
+      .filter(
+        (entry): entry is RoutineConnection =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          typeof (entry as RoutineConnection).utilityId === 'string' &&
+          typeof (entry as RoutineConnection).label === 'string'
+      )
+      .map((entry) => (entry.required ? { ...entry, required: true } : { ...entry }))
   } catch {
     return []
   }
+}
+
+function parseAgents(raw: string | null): RoutineAgents | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const record = parsed as { primary?: unknown; fallbacks?: unknown }
+    const fallbacks = Array.isArray(record.fallbacks)
+      ? record.fallbacks.filter(isModelSelection)
+      : []
+    const primary = isModelSelection(record.primary) ? record.primary : undefined
+    if (!primary && fallbacks.length === 0) return undefined
+    return { ...(primary ? { primary } : {}), fallbacks }
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether a persisted value is a usable model selection. */
+function isModelSelection(value: unknown): value is RoutineAgents['fallbacks'][number] {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.harnessId === 'string' &&
+    typeof record.providerId === 'string' &&
+    typeof record.modelId === 'string'
+  )
 }
 
 function rowToRoutine(row: RoutineRow): Routine {
@@ -55,6 +87,8 @@ function rowToRoutine(row: RoutineRow): Routine {
     howTo: row.how_to ?? '',
     howToUpdatedAt: row.how_to_updated_at ?? undefined,
     connections: parseConnections(row.connections),
+    agents: parseAgents(row.agents ?? null),
+    paused: row.paused === 1,
     pinned: row.pinned === 1,
     pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
@@ -70,8 +104,8 @@ export class RoutineRepo {
     this.db.run(
       `INSERT INTO routines(
         id, name, color, icon, icon_type, schedule, how_to, how_to_updated_at,
-        connections, pinned, pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        connections, agents, paused, pinned, pinned_at, sort_order, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         color = excluded.color,
@@ -81,6 +115,8 @@ export class RoutineRepo {
         how_to = excluded.how_to,
         how_to_updated_at = excluded.how_to_updated_at,
         connections = excluded.connections,
+        agents = excluded.agents,
+        paused = excluded.paused,
         pinned = excluded.pinned,
         pinned_at = excluded.pinned_at,
         sort_order = excluded.sort_order,
@@ -95,6 +131,8 @@ export class RoutineRepo {
       routine.howTo ?? '',
       routine.howToUpdatedAt ?? null,
       JSON.stringify(routine.connections ?? []),
+      routine.agents ? JSON.stringify(routine.agents) : null,
+      routine.paused ? 1 : 0,
       routine.pinned ? 1 : 0,
       routine.pinnedAt ?? null,
       routine.sortOrder ?? null,

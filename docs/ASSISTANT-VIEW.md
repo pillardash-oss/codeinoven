@@ -34,7 +34,8 @@ flowchart LR
 2. Main-process scheduler with missed-run detection
    (`src/main/scheduler/routine-scheduler-service.ts`).
 3. Agent-authored how-to flow (in-thread authoring, `/save-how-to`).
-4. Fork hand-off to a project (`AssistantHandoffControl.svelte`).
+4. Fork hand-off to a project, from the task's own context menu
+   (`assistant-handoff.svelte.ts`, `AssistantHandoffModals.svelte`).
 
 ### Explicitly deferred
 
@@ -82,6 +83,11 @@ the app's clock for Assistant View.
   A slot that comes due while the app is open dispatches one run on the task's
   continuous thread, using the task's bound settings and the routine how-to as
   prompt context (`sendPrompt` with `origin: 'internal'`).
+- **Paused routines never fire.** `Routine.paused` is checked before the
+  schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
+  stops every task in it while keeping the tasks, their how-to, and their
+  history. Resume from the panel's **All** tab. A routine-less task is never
+  paused.
 - **No auto catch-up.** A slot that came due while the app was closed (or a
   machine slept through it) is recorded as a missed run, never run in a burst.
   The grace window is `MISS_GRACE_MS`; a fire before process start is always a
@@ -118,9 +124,8 @@ across its tasks, and a routine-less task lists only its own. Nothing appears
 until a run has actually been missed, so no tab or filter chrome exists by
 default:
 
-- the **Missed runs tab** in the how-to panel, present only when the panel's
-  routine (or task) has a miss (`missedTabVisible`); until then the panel is a
-  single read-only how-to view;
+- the **Issues** tab of the assistant panel, present only when the panel's
+  routine (or task) has a miss or a run problem;
 - the **missed badge** on the routine row (when any child task has a miss) and on
   the specific missed task row;
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
@@ -227,44 +232,109 @@ reaches an assistant task.
 Every routine has a required how-to. The UI **never** uses the term "system
 prompt"; the user-facing term is how-to.
 
-- A routine with an empty how-to shows an amber **Incomplete** icon
-  (`AlertTriangle`, `--color-warning`) whose meaning is revealed on hover
-  (`routineHowToComplete`); the missed state uses the same icon in
-  `--color-missed`. Routine rows never carry the state as text, and the badge
-  shares the second row with the task count.
+- A routine shows an amber **Incomplete** icon (`AlertTriangle`,
+  `--color-warning`) whenever it cannot run yet, with the exact gap on hover.
+  `routineGap` (`assistant-view.ts`) is the single source for that rule and names
+  what is missing ("Needs a how-to and a model"); the missed state uses the same
+  icon in `--color-missed`. Routine rows never carry the state as text, and the
+  badge shares the second row with the task count. The sidebar, the hover
+  popover, and the search results all read the same helper, so they cannot
+  disagree.
 - The how-to is authored conservatively in the routine's task thread, never in
   a panel. The first task's head start asks _how the routine should happen_ and
   the user describes it; the agent works out what it needs, asks about anything
-  missing, and drafts the how-to with them. Only once both agree does the agent
-  present the final how-to in a fenced `how-to` block and ask the user to send
-  `/save-how-to`, which commits it to the routine.
+  missing, and drafts the how-to with them.
+- The authoring contract asks for **two** fenced blocks once the user agrees:
+  the how-to itself (tag `how-to`) and a machine-readable plan (tag `routine`)
+  carrying `cadence`, `times`, `weekdays`, and `connections`. The user then sends
+  `/save-how-to`, which commits all three: the instructions, the schedule, and
+  the connections.
+- The user never hand-builds a schedule. `parseRoutinePlan` turns the plan block
+  into a `RoutineSchedule`, accepting `8`, `8:30`, `8am`, `8:30 pm` and `18:00`
+  as times, full or abbreviated weekday names, and a free-text
+  `schedule: every day at 8:05am` line. A phrase it cannot parse ("Monday to
+  Friday") contributes nothing rather than silently changing the cadence.
+  `connectionsFromPlan` links each named service to a library utility when one
+  matches, and otherwise records it as a required connection the panel shows as
+  needing setup.
 - Draft detection is deliberately tolerant, because the commit command has to
   work against how a model actually formats the block, not only the contract.
-  `extractHowToDraft` in `assistant-view.ts` accepts both a fence tagged
-  `how-to` (optionally with a `: <title>` suffix) and a bare fence whose first
-  line is a `how-to: <title>` marker, strips that marker line, and takes the
-  newest matching block in the newest assistant message. Every other fenced
-  block is ignored, and a block that is only a marker line is not a draft. The
-  block is matched by fence nesting rather than to its first closing fence, so a
-  how-to that carries its own command fence (a `bash` example inside the
-  instructions) is kept whole instead of being silently truncated, and prose
-  written after the block stays out of the saved how-to.
-- The how-to panel (`HowToPanel.svelte`) is **read-only**: it renders the saved
-  how-to, and only once a how-to exists the routine schedule, the task schedule,
-  and the connections. With no how-to it is a single empty state and nothing
-  else, so an unconfigured routine never shows schedule or hand-off chrome. Its
-  tab strip only appears once a scheduled run was actually missed, and the
-  Missed runs tab lists each miss of that routine with Dismiss and Run now.
+  `extractHowToDraft` and `extractRoutinePlanDraft` in `assistant-view.ts`
+  accept both a fence tagged with the block name (optionally with a
+  `: <title>` suffix) and a bare fence whose first line is a `how-to:` or
+  `routine:` marker, strip that marker line, and take the newest matching block
+  in the newest assistant message. Every other fenced block is ignored, and a
+  block that is only a marker line is not a draft. Blocks are matched by fence
+  nesting rather than to the first closing fence, so a how-to that carries its
+  own command fence (a `bash` example inside the instructions) is kept whole
+  instead of being silently truncated, and prose written after a block stays out
+  of the saved content.
 - When a routine lacks the utilities it needs, the agent checks the app utility
   library, researches compatible skills/MCPs/plugins, and asks the user to send
   `@cio-utility proceed` before anything is installed. No silent installs; the
   only acceptable blockers are network and a closed app.
 
+## Assistant panel
+
+`AssistantPanel.svelte` is the routine's whole surface, docked in the right
+context sidebar and openable full screen from its own header button. It is
+read-only where the app must own the value and editable where the user must.
+
+- **All** — pause or resume the routine, plus one summary row per section with
+  the state in one line and a **More** button that opens that tab. An amber icon
+  marks each section that still needs setup.
+- **Routine** — the saved how-to, parsed into foldable sections by
+  `parseHowToSections`. It recognises markdown headings and the ALL-CAPS title
+  style the agent actually writes (`DRAIN PROCEDURE (0600 and 1800)` is a title;
+  an indented numbered line is not), never splits inside a fenced code block, and
+  round-trips through `serializeHowToSections`. Each section is edited on its own
+  with `RichMarkdownEditor` and rendered with `MarkdownView`. The schedule appears
+  here as a read-only line: the agent sets it from the plan block, so no manual
+  schedule editor exists anywhere in the app.
+- **Connections** — the routine's utilities, resolved against the library by
+  `resolveConnections`. Each row carries its kind and a **Ready / Off /
+  Incomplete / Needs setup** state with the reason: a connection the library does
+  not carry, a switched-off utility, an MCP with no command or URL, and an MCP
+  whose declared `{env:NAME}` secret was never supplied all read as needing setup
+  instead of as working. **Add a connection** is a searchable utility picker
+  (`UtilityPicker.svelte`), never a plain select, and a half-configured row links
+  straight to the Utilities page.
+- **Agents** — one primary model and any number of fallbacks, each picked with
+  the app's `ModelPicker` so thinking level and account stay visible
+  (`RoutineAgentPicker.svelte`). Creating a routine prompts for a primary and two
+  fallbacks; more can be added here.
+
+### How the model set is used at run time
+
+The model set is not decoration; it decides which model a run executes on.
+
+- A scheduled dispatch overlays the routine's **primary** onto the task's thread
+  settings (`routinePrimaryModel` + `settingsWithRoutineModel` in
+  `src/lib/routine-agents.ts`), so the models picked for a routine are the models
+  its runs use. A routine with no model set keeps the task's own settings.
+- A task created inside a routine is seeded on the routine's primary, so the
+  composer shows the model the routine actually runs on.
+- When a run hits a **provider failure**, the chat engine moves the task onto the
+  routine's next model and re-runs at once, instead of parking the thread for the
+  failed provider's reset window (`tryAssistantModelFallback` in
+  `src/main/chat/chat-engine.ts`, fed by `RoutineManager.resolveTaskAgents`). The
+  order comes from `routineModelCandidates`, so the primary is tried first and the
+  fallbacks after it, in the order they are listed.
+- Fallover stops at the end of the list: once every model has failed, the normal
+  reset wait and the **Issues** tab take over. A model the user picked by hand,
+  which is not part of the routine's set, is never overridden.
+- **Issues** — missed runs with **Dismiss** and **Run now**, plus task-level run
+  problems: a rate limit with its retry time, a failed run, and an interrupted
+  run. Every entry opens its task.
+
 ## Fork hand-off
 
-`AssistantHandoffControl.svelte` forks a task thread into a chosen project via
-`thread:fork` (`src/lib/engines/thread-manager-fork.ts`), reusing the
-`ContinueInProjectModal` picker. The fork is seeded with a context summary
-(recorded with `history:append`), and the original task thread and its schedule
-stay intact. Handing off while the task is mid-run always passes a confirmation
-dialog first, so a concurrent write cannot corrupt the thread session.
+Hand-off lives on the **task's own context menu** ("Hand off to project"), never
+in the panel. `createAssistantHandoff` (`assistant-handoff.svelte.ts`) forks the
+thread into a chosen project via `thread:fork`
+(`src/lib/engines/thread-manager-fork.ts`), reusing the `ContinueInProjectModal`
+picker; `AssistantHandoffModals.svelte` renders that picker and the mid-run
+confirmation. The fork is seeded with `handoffSummary` (recorded with
+`history:append`), and the original task thread and its schedule stay intact.
+Handing off while the task is mid-run always passes a confirmation dialog first,
+so a concurrent write cannot corrupt the thread session.

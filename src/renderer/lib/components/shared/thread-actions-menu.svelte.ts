@@ -1,4 +1,14 @@
-import { Pencil, Pin, PinOff, GitFork, Kanban, StickyNote, Copy, Trash2 } from '@lucide/svelte'
+import {
+  Pencil,
+  Pin,
+  PinOff,
+  GitFork,
+  Kanban,
+  Send,
+  StickyNote,
+  Copy,
+  Trash2
+} from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -17,6 +27,9 @@ export interface ThreadActionsMenuConfig {
   showChangeScope?: () => boolean
   showNotes?: () => boolean
   showCopyId?: () => boolean
+  /** Hand a thread off to a project. Assistant tasks only. */
+  onHandoff?: (thread: Thread) => void
+  showHandoff?: () => boolean
 }
 
 /** One dropdown, one set of modals   shared by the app header and every thread row so the
@@ -104,6 +117,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showScope = config.showChangeScope?.() ?? true
     const showNotesItem = config.showNotes?.() ?? false
     const showCopyIdItem = config.showCopyId?.() ?? false
+    const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
     return [
       { label: 'Rename', icon: Pencil, onClick: startRename },
       {
@@ -112,6 +126,15 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
         onClick: () => void config.onTogglePin(thread)
       },
       { label: 'Fork', icon: GitFork, onClick: () => void config.onFork(thread) },
+      ...(showHandoffItem
+        ? [
+            {
+              label: 'Hand off to project',
+              icon: Send,
+              onClick: () => config.onHandoff?.(thread)
+            }
+          ]
+        : []),
       ...(showScope
         ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }]
         : []),
