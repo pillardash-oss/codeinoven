@@ -1604,15 +1604,48 @@ export class UtilityOrchestrationService {
     const environment = await this.credentialEnvironment(utility)
     if (utility.config.transport === 'stdio') {
       if (!utility.config.command) throw new Error('stdio MCP command is not configured')
-      return StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
-        ...utility.config.environment,
-        ...environment
-      })
+      try {
+        return await StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
+          ...utility.config.environment,
+          ...environment
+        })
+      } catch (error) {
+        throw this.mcpStartupFailure(utility, environment, error)
+      }
     }
     if (!utility.config.url) throw new Error('Remote MCP URL is not configured')
     return RemoteMcpClient.connect(
       utility.config.url,
       resolveEnvironmentReferences(utility.config.headers ?? {}, environment)
+    )
+  }
+
+  /**
+   * Turn a stdio MCP startup failure into something the agent can act on.
+   *
+   * A server that exits before it answers `initialize` usually died over missing setup, and
+   * the exit message alone does not say which utility or which credential. Naming both here
+   * is what stops a missing token from reading as a broken MCP server.
+   */
+  private mcpStartupFailure(
+    utility: UtilityDefinition,
+    environment: Record<string, string>,
+    error: unknown
+  ): Error {
+    const message = error instanceof Error ? error.message : String(error)
+    const missing = utility.credentials
+      .map((credential) => credential.environmentVariable)
+      .filter(
+        (name): name is string => typeof name === 'string' && name !== '' && !environment[name]
+      )
+    if (missing.length === 0) {
+      return new Error(`Utility \`${utility.name}\` could not start: ${message}`, { cause: error })
+    }
+    return new Error(
+      `Utility \`${utility.name}\` could not start: ${message}. Set its credential ${
+        missing.length > 1 ? 'variables' : 'variable'
+      } ${missing.map((name) => `\`${name}\``).join(', ')} in Utilities`,
+      { cause: error }
     )
   }
 

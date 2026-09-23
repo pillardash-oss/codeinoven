@@ -8,6 +8,20 @@ import type { McpTool } from '../../agents/mcp-stdio-client'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 
+/**
+ * Absolute cap on one gateway call, enforced by the bridge itself.
+ *
+ * The harness's own request timeout is the real lifetime bound, because it also sends
+ * `notifications/cancelled` when it gives up, and the bridge aborts the named call on that
+ * signal. This cap exists only so a client that never cancels cannot leave a call pending
+ * forever, so it sits far above the longest legitimate app-side operation (a secret card
+ * waiting on a human) and never cuts a live call short.
+ */
+export const GATEWAY_BRIDGE_CALL_CAP_MS = 15 * 60 * 1000
+
+/** Environment variable the bridge reads its call cap from. */
+export const GATEWAY_BRIDGE_CALL_CAP_ENV = 'CODEINOVEN_UTILITY_BRIDGE_CALL_CAP_MS'
+
 /** Turn identity the app-owned gateway utility needs; UtilityTurnRequest satisfies it. */
 export interface GatewayTurnContext {
   harnessId: string
@@ -129,7 +143,8 @@ export function gatewayUtility(
       environment: {
         ELECTRON_RUN_AS_NODE: '1',
         CODEINOVEN_UTILITY_BRIDGE_URL: bridgeUrl,
-        CODEINOVEN_UTILITY_BRIDGE_TOKEN: token
+        CODEINOVEN_UTILITY_BRIDGE_TOKEN: token,
+        [GATEWAY_BRIDGE_CALL_CAP_ENV]: String(GATEWAY_BRIDGE_CALL_CAP_MS)
       }
     },
     credentials: [],
@@ -146,7 +161,13 @@ export function gatewayUtility(
 
 /** Build the stdio MCP gateway script. The tool list and the tools/call route
  *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
- *  matches the catalog   no hand-synchronized copy to drift. */
+ *  matches the catalog   no hand-synchronized copy to drift.
+ *
+ *  Calls run concurrently. One bridge process serves every call the harness makes to
+ *  `cio_util_*`, across the sessions that share it, so a single slow call (a secret card
+ *  waiting on a human, a long browser or computer-use operation) must never queue the calls
+ *  behind it. Each call answers on its own by JSON-RPC id, and a client cancellation aborts
+ *  exactly the call it names. */
 export function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
   const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
     name,
@@ -155,27 +176,104 @@ export function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string 
   }))
   const routes: Record<string, string> = {}
   for (const tool of gatewayTools) routes[tool.name] = tool.route
+  const callCapMs = GATEWAY_BRIDGE_CALL_CAP_MS
+  const callCapEnv = GATEWAY_BRIDGE_CALL_CAP_ENV
   return String.raw`import readline from 'node:readline'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
 const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
+const configuredCapMs = Number(process.env.${callCapEnv})
+const callCapMs =
+  Number.isFinite(configuredCapMs) && configuredCapMs > 0 ? configuredCapMs : ${callCapMs}
 const tools = ${JSON.stringify(tools)}
 const routes = ${JSON.stringify(routes)}
 
-async function bridge(path, args) {
+// One live call per JSON-RPC id, so a cancellation aborts exactly the call it names.
+// Cancelled ids are remembered so the bridge never answers a call the client has
+// already stopped waiting for.
+const inFlight = new Map()
+const cancelled = new Set()
+
+function write(value) {
+  process.stdout.write(JSON.stringify(value) + '\n')
+}
+
+function failureMessage(error, controller) {
+  if (controller.signal.aborted) {
+    const reason = controller.signal.reason
+    if (reason instanceof Error) return reason.message
+    if (typeof reason === 'string' && reason) return reason
+    return 'Utility gateway call was cancelled'
+  }
+  return error instanceof Error ? error.message : 'Gateway failure'
+}
+
+/** A secret result can carry collected values out of band for an in-process gateway
+ *  transport. No MCP transport may forward them, so the reserved field is dropped here,
+ *  before the tool result reaches the harness. */
+function resultContent(result) {
+  if (result && typeof result === 'object' && 'environment' in result) {
+    delete result.environment
+  }
+  return Array.isArray(result?.content)
+    ? result.content
+    : [{ type: 'text', text: JSON.stringify(result) }]
+}
+
+async function callUtility(request, controller) {
   if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
+  const name = request.params?.name
+  const args = request.params?.arguments || {}
+  const path = routes[name]
+  if (!path) throw new Error('Unknown utility gateway tool')
   const response = await fetch(baseUrl + path, {
     method: 'POST',
     headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
-    body: JSON.stringify(args)
+    body: JSON.stringify(args),
+    signal: controller.signal
   })
   const body = await response.json()
   if (!response.ok) throw new Error(body.error || 'Utility bridge call failed')
   return body
 }
 
-function write(value) {
-  process.stdout.write(JSON.stringify(value) + '\n')
+async function respondToCall(request) {
+  const id = request.id
+  const key = String(id)
+  const controller = new AbortController()
+  const cap = setTimeout(() => {
+    controller.abort(new Error('Utility gateway call exceeded its ' + callCapMs + ' ms cap'))
+  }, callCapMs)
+  if (typeof cap.unref === 'function') cap.unref()
+  inFlight.set(key, controller)
+  try {
+    const result = await callUtility(request, controller)
+    if (cancelled.has(key)) return
+    write({ jsonrpc: '2.0', id: id, result: { content: resultContent(result) } })
+  } catch (error) {
+    if (cancelled.has(key)) return
+    write({
+      jsonrpc: '2.0',
+      id: id,
+      error: { code: -32000, message: failureMessage(error, controller) }
+    })
+  } finally {
+    clearTimeout(cap)
+    inFlight.delete(key)
+    cancelled.delete(key)
+  }
+}
+
+/** Abort one in-flight call. The response is suppressed, because the client that sent
+ *  the cancellation has already stopped waiting for it. */
+function cancelCall(params) {
+  const key = String(params?.requestId)
+  const controller = inFlight.get(key)
+  if (!controller) return
+  cancelled.add(key)
+  controller.abort(
+    new Error('Cancelled by the client: ' + (params?.reason || 'no reason given'))
+  )
 }
 
 const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
@@ -184,41 +282,41 @@ for await (const line of lines) {
   let request
   try {
     request = JSON.parse(line)
-    if (request.method === 'initialize') {
-      write({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: {
-          protocolVersion: '2025-03-26',
-          capabilities: { tools: {} },
-          serverInfo: { name: 'codeinoven-utilities', version: '1' }
-        }
-      })
-    } else if (request.method === 'tools/list') {
-      write({ jsonrpc: '2.0', id: request.id, result: { tools } })
-    } else if (request.method === 'tools/call') {
-      const name = request.params?.name
-      const args = request.params?.arguments || {}
-      const path = routes[name]
-      if (!path) throw new Error('Unknown utility gateway tool')
-      const result = await bridge(path, args)
-      // A secret result can carry collected values out of band for an in-process
-      // gateway transport. No MCP transport may forward them, so the reserved
-      // field is dropped here, before the tool result reaches the harness.
-      if (result && typeof result === 'object' && 'environment' in result) {
-        delete result.environment
+  } catch {
+    continue
+  }
+  if (request.method === 'initialize') {
+    write({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        protocolVersion: '2025-03-26',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'codeinoven-utilities', version: '1' }
       }
-      const content = Array.isArray(result?.content)
-        ? result.content
-        : [{ type: 'text', text: JSON.stringify(result) }]
-      write({ jsonrpc: '2.0', id: request.id, result: { content } })
-    } else if (request.id !== undefined) {
-      write({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } })
-    }
-  } catch (error) {
-    if (request?.id !== undefined) {
-      write({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: error instanceof Error ? error.message : 'Gateway failure' } })
-    }
+    })
+    continue
+  }
+  if (request.method === 'tools/list') {
+    write({ jsonrpc: '2.0', id: request.id, result: { tools: tools } })
+    continue
+  }
+  if (request.method === 'ping') {
+    write({ jsonrpc: '2.0', id: request.id, result: {} })
+    continue
+  }
+  if (request.method === 'notifications/cancelled') {
+    cancelCall(request.params)
+    continue
+  }
+  if (request.method === 'tools/call') {
+    // Deliberately not awaited: the loop must keep reading stdin so a slow call cannot
+    // delay the calls behind it. respondToCall writes its own result or error.
+    void respondToCall(request)
+    continue
+  }
+  if (request.id !== undefined) {
+    write({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } })
   }
 }
 `
