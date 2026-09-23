@@ -151,6 +151,12 @@ export interface CuaOperationEvent {
   pid: number | null
   /** Turn-scoped Cua cursor session, when the driver declared one. */
   sessionId?: string
+  /**
+   * The tier this turn runs at. The daemon's authorization mode is fixed when it
+   * starts, so the PiP monitor has to ask for the same one the run already owns
+   * rather than starting a second, differently-tiered daemon under it.
+   */
+  permissionLevel: PermissionLevel
 }
 
 export interface UtilityTurnGateway {
@@ -933,6 +939,9 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.delete(turn.token)
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
+    // Last, so the claim covers the clients it was taken for: an unrestricted
+    // daemon is stopped here once nothing needs it any more.
+    await this.cuaBridge.releaseDaemonClaim(turn.state.id)
     await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
@@ -1262,6 +1271,15 @@ export class UtilityOrchestrationService {
     }
     let client = state.clients.get(utilityId)
     if (!client) {
+      if (this.isComputerUseUtility(resolved)) {
+        // The Cua daemon's authorization mode is a start-time, daemon-wide
+        // property: whichever client starts the daemon fixes it for every later
+        // run until the daemon stops. Claiming the tier here, before the client
+        // connects, is what keeps a full_access run from leaving an
+        // approval-free daemon behind and an auto_review run from silently
+        // downgrading a full_access one.
+        await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+      }
       client = await this.mcpClient(resolved.utility)
       state.clients.set(utilityId, client)
     }
@@ -1361,7 +1379,8 @@ export class UtilityOrchestrationService {
           threadId: state.request.threadId,
           operation,
           pid: operationPid(routedInput),
-          sessionId: state.cuaSessionIds.get(utilityId)
+          sessionId: state.cuaSessionIds.get(utilityId),
+          permissionLevel: state.request.permissionLevel
         })
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {

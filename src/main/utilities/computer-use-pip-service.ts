@@ -3,7 +3,8 @@ import type {
   ComputerUseActivity,
   ComputerUsePipCursor,
   ComputerUsePipFrame,
-  ComputerUsePipState
+  ComputerUsePipState,
+  PermissionLevel
 } from '../../lib/types'
 import type { CuaOperationEvent } from './utility-orchestration-service'
 import { CuaBridgeService } from './cua-bridge-service'
@@ -72,6 +73,10 @@ interface CursorPosition {
 export class ComputerUsePipService {
   private readonly cuaBridge: CuaBridgeService
   private client: McpClient | null = null
+  /** The tier the cached client was spawned for; its launch environment fixes it. */
+  private clientPermissionLevel: PermissionLevel | null = null
+  /** The daemon claim this overlay holds, so a release never drops another's. */
+  private claimedDaemonKey: string | null = null
   private targetPid: number | null = null
   private appName = ''
   private windowId: number | null = null
@@ -79,8 +84,20 @@ export class ComputerUsePipService {
   private active = false
   private misses = 0
   private captureInFlight = false
+  /**
+   * Bumped by every teardown, so a capture that resumes after one never revives
+   * the run it was started for: its client and daemon hold were already released.
+   */
+  private runGeneration = 0
   private ownerThreadId: string | null = null
   private targetSessionId: string | null = null
+  /**
+   * The tier the tracked run runs at, taken from the operation that latched the
+   * overlay. The driver's authorization mode is a daemon-wide, start-time
+   * property, so the monitor has to ask for the same one the run already owns
+   * instead of pinning a mode of its own.
+   */
+  private targetPermissionLevel: PermissionLevel = 'auto_review'
   private cursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
   /** Device pixels of preview the renderer is about to paint, as reported by
@@ -104,7 +121,9 @@ export class ComputerUsePipService {
    */
   onActivity(event: CuaOperationEvent): void {
     this.recordActivity(event)
-    if (event.pid !== null) void this.track(event.pid, event.threadId, event.sessionId)
+    if (event.pid !== null) {
+      void this.track(event.pid, event.threadId, event.sessionId, event.permissionLevel)
+    }
   }
 
   /** Every thread whose agent is currently driving the computer. */
@@ -139,7 +158,12 @@ export class ComputerUsePipService {
   }
 
   /** Latch onto the app (pid) a thread's agent is currently driving. */
-  private async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
+  private async track(
+    pid: number,
+    threadId: string,
+    sessionId: string | undefined,
+    permissionLevel: PermissionLevel
+  ): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
     // The user closed the overlay this turn   keep it hidden for the rest of
@@ -149,6 +173,7 @@ export class ComputerUsePipService {
       this.targetPid !== pid || this.targetSessionId !== (sessionId ?? null) || !this.active
     this.ownerThreadId = threadId
     this.targetSessionId = sessionId ?? null
+    this.targetPermissionLevel = permissionLevel
     if (targetChanged) this.cursor = null
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
@@ -219,7 +244,7 @@ export class ComputerUsePipService {
   /** Stop tracking and hide the PiP (user-requested close). */
   async dismiss(): Promise<void> {
     this.dismissedThreadId = this.ownerThreadId
-    this.hide()
+    await this.hide()
   }
 
   /**
@@ -245,14 +270,21 @@ export class ComputerUsePipService {
     this.clearAutoDismiss()
     this.autoDismissTimer = setTimeout(() => {
       this.autoDismissTimer = null
-      this.hide()
+      void this.hide()
     }, AUTO_DISMISS_GRACE_MS)
   }
 
-  /** Tear down the overlay without touching the user's per-turn close marker. */
-  private hide(): void {
+  /**
+   * Tear down the overlay without touching the user's per-turn close marker.
+   *
+   * The driver client and the daemon claim go with it: the overlay is a live
+   * view of one run, so keeping one Cua MCP server for the whole app lifetime
+   * would hold a daemon open for as long as CodeInOven runs.
+   */
+  private async hide(): Promise<void> {
     const wasActive = this.active
     this.active = false
+    this.runGeneration += 1
     this.targetPid = null
     this.appName = ''
     this.windowId = null
@@ -262,6 +294,11 @@ export class ComputerUsePipService {
     this.cursor = null
     this.clearAutoDismiss()
     this.clearLoop()
+    const client = this.client
+    this.client = null
+    this.clientPermissionLevel = null
+    if (client) await client.close().catch(() => undefined)
+    await this.releaseDaemonClaim()
     if (wasActive) this.broadcastState()
   }
 
@@ -286,10 +323,13 @@ export class ComputerUsePipService {
   async dispose(): Promise<void> {
     this.clearAutoDismiss()
     this.active = false
+    this.runGeneration += 1
     this.clearLoop()
     const client = this.client
     this.client = null
+    this.clientPermissionLevel = null
     if (client) await client.close().catch(() => undefined)
+    await this.releaseDaemonClaim()
   }
 
   private ensureLoop(): void {
@@ -307,8 +347,19 @@ export class ComputerUsePipService {
   }
 
   private async ensureClient(): Promise<McpClient> {
-    if (this.client) return this.client
-    const resolved = await this.cuaBridge.resolveUtility('codeinoven-pip', 'auto_review')
+    const level = this.targetPermissionLevel
+    if (this.client && this.clientPermissionLevel === level) return this.client
+    const generation = this.runGeneration
+    if (this.client) {
+      // A client's tier is fixed by the environment it was spawned with, so a
+      // run at a different tier needs its own driver process.
+      const stale = this.client
+      this.client = null
+      this.clientPermissionLevel = null
+      await stale.close().catch(() => undefined)
+    }
+    await this.claimDaemon(level)
+    const resolved = await this.cuaBridge.resolveUtility('codeinoven-pip', level)
     if (!resolved) throw new Error('Cua Driver is not available for the PiP monitor')
     const utility = resolved.utility
     if (utility.kind !== 'mcp' || !utility.config.command) {
@@ -319,8 +370,42 @@ export class ComputerUsePipService {
       utility.config.args ?? [],
       utility.config.environment ?? {}
     )
+    if (this.runGeneration !== generation) {
+      // The overlay was dismissed (or the app is quitting) while this client was
+      // connecting. Releasing here keeps a client and a daemon hold from
+      // outliving the run they were created for.
+      await this.releaseDaemonClaim()
+      await client.close().catch(() => undefined)
+      throw new Error('The computer-use preview ended while connecting to Cua Driver')
+    }
     this.client = client
+    this.clientPermissionLevel = level
     return client
+  }
+
+  /**
+   * Hold the shared Cua daemon for as long as this overlay is up.
+   *
+   * The agent's turn releases its own claim when it ends, and an idle
+   * unrestricted daemon is stopped at that point   so the preview has to own a
+   * claim of its own or its frames would fail for the rest of the dismissal
+   * grace period.
+   */
+  private async claimDaemon(level: PermissionLevel): Promise<void> {
+    const key = `pip:${this.targetSessionId ?? this.ownerThreadId ?? 'unowned'}`
+    if (this.claimedDaemonKey === key) return
+    await this.releaseDaemonClaim()
+    await this.cuaBridge.claimDaemonMode(level, key)
+    this.claimedDaemonKey = key
+  }
+
+  private async releaseDaemonClaim(): Promise<void> {
+    const key = this.claimedDaemonKey
+    if (!key) return
+    this.claimedDaemonKey = null
+    await this.cuaBridge.releaseDaemonClaim(key).catch((error: unknown) => {
+      Logger.dev('Computer-use PiP daemon claim release failed:', error)
+    })
   }
 
   private async captureOnce(): Promise<void> {
@@ -397,9 +482,7 @@ export class ComputerUsePipService {
       if (!this.active || this.targetPid !== pid) return
       this.misses += 1
       if (this.misses >= MAX_MISSES) {
-        await this.client?.close().catch(() => undefined)
-        this.client = null
-        this.hide()
+        await this.hide()
       }
     } finally {
       this.captureInFlight = false
@@ -420,7 +503,7 @@ export class ComputerUsePipService {
       const detail = failure ? settledFailureText(failure) : null
       Logger.dev(`Computer-use PiP frame unavailable: ${reason}.${detail ? ` ${detail}` : ''}`)
     }
-    if (this.misses >= MAX_MISSES) this.hide()
+    if (this.misses >= MAX_MISSES) void this.hide()
   }
 
   /**
