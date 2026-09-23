@@ -7,8 +7,8 @@ import path from 'node:path'
 import {
   DOWNLOAD_MIRROR_URL,
   fetchMirrorManifestArtifacts,
+  findMirrorArtifact,
   mirrorArtifactUrl,
-  mirrorManifestHoldsArtifact,
   type ReleaseChannel
 } from '../../lib/download-mirror'
 import { Logger } from '../system/logger'
@@ -131,12 +131,14 @@ function pickEntry<T extends { name: string }>(
  * fallback.
  *
  * The mirror is offered only when it proves it holds the same bytes: its channel
- * manifest must list this exact file name with the sha512 (and size) the update
- * feed reports. A mirror that lags behind the feed, mirrors a different build,
- * is unreachable, or answers with something that is not a manifest therefore
- * never serves an update; the bytes come from GitHub instead. GitHub also stays
- * the last source behind every manifest-approved mirror, so a mirror that goes
- * bad mid-download cannot block an update either.
+ * manifest must list the release asset the update feed points at with the sha512
+ * (and size) the feed reports. The manifest names the versionless file the mirror
+ * serves, so the download URL comes from the manifest, not from the feed. A
+ * mirror that lags behind the feed, mirrors a different build, is unreachable, or
+ * answers with something that is not a manifest therefore never serves an update;
+ * the bytes come from GitHub instead. GitHub also stays the last source behind
+ * every manifest-approved mirror, so a mirror that goes bad mid-download cannot
+ * block an update either.
  */
 export async function updateDownloadSources(options: {
   version: string
@@ -164,14 +166,15 @@ export async function updateDownloadSources(options: {
     Logger.dev('Updater: could not read the download mirror manifest; downloading from GitHub')
     return [github]
   }
-  if (!mirrorManifestHoldsArtifact(manifest, artifact)) {
+  const match = findMirrorArtifact(manifest, artifact)
+  if (match === null) {
     Logger.dev(
       `Updater: the download mirror does not publish ${artifact.fileName} with the feed's hash; downloading from GitHub`
     )
     return [github]
   }
   return [
-    { label: 'download mirror', url: mirrorArtifactUrl(artifact.fileName, channel, mirrorBase) },
+    { label: 'download mirror', url: mirrorArtifactUrl(match.name, channel, mirrorBase) },
     github
   ]
 }
