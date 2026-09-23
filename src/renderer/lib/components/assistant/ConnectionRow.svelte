@@ -7,8 +7,8 @@
   interface Props {
     view: ConnectionView
     onRemove: (connection: RoutineConnection) => void
-    /** Open the Add capability modal, seeded with this connection's setup prompt. */
-    onSetup: (connection: RoutineConnection) => void
+    /** Open the capability modal for this row, seeded with its setup prompt. */
+    onSetup: (view: ConnectionView) => void
   }
 
   let { view, onRemove, onSetup }: Props = $props()
@@ -75,7 +75,7 @@
         class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Set up {view.connection.label}"
         aria-label="Set up {view.connection.label}"
-        onclick={() => onSetup(view.connection)}
+        onclick={() => onSetup(view)}
       >
         <Settings2 size={12} strokeWidth={1.8} />
       </button>

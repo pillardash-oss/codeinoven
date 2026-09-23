@@ -45,12 +45,15 @@
     parseHowToSections,
     resolveConnections,
     serializeHowToSections,
+    type ConnectionView,
     type HowToSection
   } from './assistant-view'
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
-  import UtilityEditorModal from '$lib/components/settings/UtilityEditorModal.svelte'
+  import UtilityEditorModal, {
+    type UtilityEditorTarget
+  } from '$lib/components/settings/UtilityEditorModal.svelte'
   import { buildConnectionLibrary, type ConnectionLibraryEntry } from './connection-library'
 
   interface Props {
@@ -241,15 +244,25 @@
   // ─── Connection setup ─────────────────────────────────────────────────────
 
   /**
-   * The Add capability modal, opened from a connection that needs setup. It
-   * starts on the create step, and the agent-assisted path is prefilled with
-   * the setup prompt the authoring agent recorded for that connection.
+   * The capability modal, opened from a connection that needs attention. A
+   * capability the library does not carry yet starts on the create step with
+   * the setup prompt the authoring agent recorded; one that exists but is
+   * switched off or half-configured opens its own editor instead, since asking
+   * the user to add what they already have would be nonsense.
    */
   let connectionSetupOpen = $state(false)
+  let connectionSetupTarget = $state<UtilityEditorTarget | null>(null)
   let connectionSetupSeed = $state('')
 
-  function openConnectionSetup(connection: RoutineConnection): void {
-    connectionSetupSeed = connection.setup ?? ''
+  function openConnectionSetup(view: ConnectionView): void {
+    connectionSetupSeed = view.connection.setup ?? ''
+    if (view.entry?.utility) {
+      connectionSetupTarget = { kind: 'registry', utility: view.entry.utility }
+    } else if (view.entry?.capability) {
+      connectionSetupTarget = { kind: 'native', entry: view.entry.capability }
+    } else {
+      connectionSetupTarget = null
+    }
     connectionSetupOpen = true
   }
 
@@ -913,7 +926,7 @@
   -->
   <UtilityEditorModal
     open
-    target={null}
+    target={connectionSetupTarget}
     agentRequestSeed={connectionSetupSeed}
     onClose={() => (connectionSetupOpen = false)}
     onChanged={() => void loadConnectionLibrary()}

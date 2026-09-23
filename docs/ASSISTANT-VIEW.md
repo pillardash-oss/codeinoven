@@ -438,16 +438,19 @@ value and editable where the user must.
   instead of as working. **Add a connection** is a searchable, full-width library
   picker (`UtilityPicker.svelte`), never a plain select.
 
-  A row that still needs setup carries a **Set up** button that opens the same
+  A row that still needs setup carries a **Set up** button that opens the
   **Add capability** modal the Utilities page uses, so the user can wire the
-  capability up without leaving the panel. The agent-assisted path is prefilled:
+  capability up without leaving the panel. A capability the library does not
+  carry yet lands on the create step, and the agent-assisted path is prefilled:
   when the authoring agent could not install a connection itself it records a
   `setup` prompt on that connection (in the plan's `connections` entry), and
   `ConnectionRow` hands it to `UtilityEditorModal` as `agentRequestSeed`. The user
-  only picks a model and runs it. Installing reloads both catalogs through
-  `loadConnectionLibrary`, so the row flips to ready in place; a required
-  connection relinks by label, so a later `Slack MCP` install satisfies a
-  connection the plan named `Slack`.
+  only picks a model and runs it. A capability the library already has but that
+  is switched off or half-configured opens its own editor instead, because asking
+  the user to add what they already have would be nonsense. Installing reloads
+  both catalogs through `loadConnectionLibrary`, so the row flips to ready in
+  place; a required connection relinks by label, so a later `Slack MCP` install
+  satisfies a connection the plan named `Slack`.
 
   The library is the same union the Utilities page renders, built by
   `buildConnectionLibrary` in `connection-library.ts`: the registry utilities the
