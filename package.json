@@ -29,7 +29,8 @@
     "@codemirror/view": "^6.43.10",
     "undici": "6.28.1",
     "hono": "^4.13.7",
-    "js-yaml": "^4.3.2"
+    "js-yaml": "^4.3.2",
+    "lodash-es": "^4.18.1"
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
@@ -130,7 +131,7 @@
     "svelte-check": "^4.7.6",
     "svelte-sonner": "^1.2.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "~7.0.2",
+    "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
