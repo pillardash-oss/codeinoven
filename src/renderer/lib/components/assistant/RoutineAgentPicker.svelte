@@ -37,39 +37,61 @@
 
   const DEFAULT_HARNESS = 'opencode'
 
+  /** One fallback row: a model, or an empty slot the user has not filled yet. */
+  type FallbackRow = AgentModelSelection | null
+
   /**
-   * The set this picker shows: its own last edit while the user is working, or
-   * the persisted set on first render. The parent keys the component on the
-   * routine id, so a slow persistence round-trip can never clobber a pick.
+   * What the picker shows while the user works: one primary and one entry per
+   * fallback row, empty slots included. Only the filled rows are ever saved.
    */
-  let edited = $state<RoutineAgents | null>(null)
-  const draft = $derived(
-    edited ?? {
+  interface PickerDraft {
+    primary?: AgentModelSelection
+    rows: FallbackRow[]
+  }
+
+  /**
+   * The picker's own last edit, or `null` on first render when the persisted set
+   * decides. The parent keys the component on the routine id, so a slow
+   * persistence round-trip can never clobber a pick.
+   */
+  let edited = $state<PickerDraft | null>(null)
+
+  /**
+   * Seed the rows from the persisted fallbacks: one row each, plus the
+   * `minFallbacks` prompt when fewer are set. Rows keep their position, so a
+   * model picked in row 3 stays in row 3 instead of collapsing into an earlier
+   * row the way a filtered list would.
+   */
+  function seedDraft(): PickerDraft {
+    const persisted = agents?.fallbacks ?? []
+    const rowCount = Math.max(persisted.length, Math.min(minFallbacks, maxFallbacks))
+    return {
       ...(agents?.primary ? { primary: { ...agents.primary } } : {}),
-      fallbacks: (agents?.fallbacks ?? []).map((fallback) => ({ ...fallback }))
+      rows: Array.from({ length: rowCount }, (_, index) =>
+        index < persisted.length ? { ...persisted[index] } : null
+      )
     }
+  }
+
+  const draft = $derived(edited ?? seedDraft())
+
+  const canAddFallback = $derived(draft.rows.length < maxFallbacks)
+  const filledFallbacks = $derived(
+    draft.rows.filter((row): row is AgentModelSelection => row !== null)
   )
 
   /**
-   * How many fallback rows the picker shows: the count the user last set, or
-   * `null` until they touch the list, in which case the `minFallbacks` prompt
-   * decides. It never drops below the fallbacks actually set. Empty rows are
-   * never persisted.
+   * Show the draft and hand the saved model set to the caller. The rows are the
+   * display grid, so the saved `fallbacks` drop the empty slots while keeping
+   * the order the user sees.
    */
-  let wantedSlots = $state<number | null>(null)
-  const fallbackSlots = $derived(
-    Math.max(wantedSlots ?? Math.min(minFallbacks, maxFallbacks), draft.fallbacks.length)
-  )
-  const canAddFallback = $derived(fallbackSlots < maxFallbacks)
-  const filledFallbacks = $derived(
-    draft.fallbacks.filter((fallback) => fallback.modelId.length > 0)
-  )
-
-  function commit(next: RoutineAgents): void {
+  function commit(next: PickerDraft): void {
     edited = next
     onChange({
       ...(next.primary ? { primary: { ...next.primary } } : {}),
-      fallbacks: next.fallbacks.map((fallback) => ({ ...fallback }))
+      fallbacks: next.rows
+        .filter((row): row is AgentModelSelection => row !== null)
+        .map((row) => ({ ...row }))
     })
   }
 
@@ -90,36 +112,29 @@
   }
 
   function setPrimary(selection: AgentModelSelection | undefined): void {
-    const next: RoutineAgents = { fallbacks: draft.fallbacks.map((entry) => ({ ...entry })) }
+    const next: PickerDraft = { rows: draft.rows }
     if (selection) next.primary = selection
     commit(next)
   }
 
   function setFallback(index: number, selection: AgentModelSelection): void {
-    const fallbacks = draft.fallbacks.map((entry) => ({ ...entry }))
-    fallbacks[index] = selection
     commit({
-      ...(draft.primary ? { primary: draft.primary } : {}),
-      fallbacks: fallbacks.filter((entry) => entry.modelId.length > 0)
+      ...draft,
+      rows: draft.rows.map((row, position) => (position === index ? selection : row))
     })
   }
 
   function removeFallback(index: number): void {
-    const fallbacks = draft.fallbacks
-      .filter((_, position) => position !== index)
-      .map((entry) => ({ ...entry }))
-    // The row count shrinks with the removal, so a removed row really goes away
-    // instead of leaving a permanent empty slot behind.
-    wantedSlots = Math.max(fallbacks.length, fallbackSlots - 1)
-    commit({
-      ...(draft.primary ? { primary: { ...draft.primary } } : {}),
-      fallbacks
-    })
+    const rows = draft.rows.filter((_, position) => position !== index)
+    // Dropping an empty row changes nothing the routine runs on, so it stays local.
+    if (draft.rows[index] === null) edited = { ...draft, rows }
+    else commit({ ...draft, rows })
   }
 
+  /** Add an empty row. Empty rows are never persisted, so this saves nothing. */
   function addFallback(): void {
     if (!canAddFallback) return
-    wantedSlots = fallbackSlots + 1
+    edited = { ...draft, rows: [...draft.rows, null] }
   }
 </script>
 
@@ -189,9 +204,8 @@
         Add {minFallbacks} fallbacks so a model that fails or hits its limit never stops this routine.
       </p>
     {/if}
-    {#each Array.from({ length: fallbackSlots }) as _slot, index (index)}
-      {@const fallback = draft.fallbacks[index]}
-      {@const removeLabel = fallback?.modelId
+    {#each draft.rows as row, index (index)}
+      {@const removeLabel = row
         ? `Remove fallback ${index + 1}`
         : `Remove empty fallback slot ${index + 1}`}
       <div class="flex items-center gap-1.5">
@@ -199,10 +213,10 @@
           <ModelPicker
             {providers}
             {projectId}
-            harnessId={fallback?.harnessId || DEFAULT_HARNESS}
-            providerId={fallback?.providerId ?? ''}
-            modelId={fallback?.modelId ?? ''}
-            accountId={fallback?.accountId}
+            harnessId={row?.harnessId || DEFAULT_HARNESS}
+            providerId={row?.providerId ?? ''}
+            modelId={row?.modelId ?? ''}
+            accountId={row?.accountId}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
@@ -210,15 +224,15 @@
             variant="field"
             fullWidth
             {disabled}
-            label={fallback?.modelId ? undefined : `Choose fallback ${index + 1}`}
+            label={row ? undefined : `Choose fallback ${index + 1}`}
             onSelect={(providerId, modelId, harnessId, accountId) =>
               setFallback(
                 index,
-                selectionOf(providerId, modelId, harnessId, accountId, fallback?.thinkingLevel)
+                selectionOf(providerId, modelId, harnessId, accountId, row?.thinkingLevel)
               )}
-            thinkingLevel={fallback?.thinkingLevel}
+            thinkingLevel={row?.thinkingLevel}
             onSelectThinking={(level) => {
-              const current = draft.fallbacks[index]
+              const current = draft.rows[index]
               if (!current) return
               setFallback(
                 index,
