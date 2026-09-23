@@ -36,6 +36,7 @@
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -45,8 +46,7 @@
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isThreadWorking,
-    isOrchestrationChildThread,
-    type ScopeBucket
+    isOrchestrationChildThread
   } from '$shared/types'
   import type { Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
@@ -491,11 +491,7 @@
     }
   })
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const bucketId = scopeState.bucketForThread(thread)
-    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return null
-    return scopeState.bucketFor(thread.projectId, bucketId)
-  })
+  let scopeBucket = $derived(threadScopeBucket(thread))
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 

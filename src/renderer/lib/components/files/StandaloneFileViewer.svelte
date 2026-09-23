@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { Dialog, AlertDialog } from 'bits-ui'
   import { X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
 
+  import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -71,123 +72,100 @@
   }
 </script>
 
-<Dialog.Root
+<Modal
   {open}
-  onOpenChange={(next: boolean) => {
-    if (!next && active) requestClose(active.path)
+  title={active?.name ?? 'File'}
+  description="File opened on its own, without a project or file tree. Text is editable and saves straight back to the file."
+  onClose={() => {
+    if (active) requestClose(active.path)
   }}
+  placement="fullscreen"
+  chrome={false}
+  panelClass="bg-app"
 >
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-    <Dialog.Content
-      class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
+  <div
+    class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+    style={trafficLightInsetStyle()}
+  >
+    <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+      {active?.name ?? 'File'}
+    </span>
+    <button
+      type="button"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={active ? `Close ${active.name}` : 'Close the file viewer'}
+      title="Close the file viewer"
+      onclick={() => {
+        if (active) requestClose(active.path)
+      }}
     >
-      <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-        style={trafficLightInsetStyle()}
-      >
-        <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-          {active?.name ?? 'File'}
-        </Dialog.Title>
-        <Dialog.Description class="sr-only">
-          File opened on its own, without a project or file tree. Text is editable and saves
-          straight back to the file.
-        </Dialog.Description>
-        <Dialog.Close
-          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={active ? `Close ${active.name}` : 'Close the file viewer'}
-          title="Close the file viewer"
-        >
-          <X size={14} />
-        </Dialog.Close>
-      </div>
+      <X size={14} />
+    </button>
+  </div>
 
-      {#if standaloneFiles.files.length > 1}
-        <!-- One file is the common case (and needs no strip); several files
+  {#if standaloneFiles.files.length > 1}
+    <!-- One file is the common case (and needs no strip); several files
              arriving at once stay reachable without leaving the viewer. -->
-        <div
-          class="flex h-7 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2"
-          role="tablist"
-          aria-label="Open files"
-        >
-          {#each standaloneFiles.files as file (file.path)}
-            <button
-              type="button"
-              role="tab"
-              class={[
-                'flex h-5 max-w-52 shrink-0 items-center gap-1.5 rounded px-2 text-[0.625rem] transition-colors',
-                file.path === standaloneFiles.activePath
-                  ? 'bg-overlay text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'
-              ]}
-              aria-selected={file.path === standaloneFiles.activePath}
-              title={file.path}
-              onclick={() => standaloneFiles.activate(file.path)}
-            >
-              {#if standaloneFiles.isDirty(file.path)}
-                <span
-                  class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                  role="status"
-                  aria-label="Unsaved changes"
-                  title="Unsaved changes"
-                ></span>
-              {/if}
-              <span class="truncate">{file.name}</span>
-            </button>
-            <button
-              type="button"
-              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={`Close ${file.name}`}
-              title={`Close ${file.name}`}
-              onclick={() => requestClose(file.path)}
-            >
-              <X size={11} />
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-      {#if active}
-        {#key active.path}
-          <StandaloneFilePane path={active.path} name={active.name} />
-        {/key}
-      {/if}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
-
-<AlertDialog.Root bind:open={() => pendingClose !== null, (open) => !open && (pendingClose = null)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    <div
+      class="flex h-7 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2"
+      role="tablist"
+      aria-label="Open files"
     >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Unsaved changes
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        {pendingClose?.name} has edits that are not saved to disk yet.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
+      {#each standaloneFiles.files as file (file.path)}
         <button
           type="button"
-          class="h-8 rounded-lg border border-danger/40 px-3 text-xs font-medium text-danger hover:bg-danger/10"
-          onclick={discardPending}
+          role="tab"
+          class={[
+            'flex h-5 max-w-52 shrink-0 items-center gap-1.5 rounded px-2 text-[0.625rem] transition-colors',
+            file.path === standaloneFiles.activePath
+              ? 'bg-overlay text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-selected={file.path === standaloneFiles.activePath}
+          title={file.path}
+          onclick={() => standaloneFiles.activate(file.path)}
         >
-          Discard
+          {#if standaloneFiles.isDirty(file.path)}
+            <span
+              class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+              role="status"
+              aria-label="Unsaved changes"
+              title="Unsaved changes"
+            ></span>
+          {/if}
+          <span class="truncate">{file.name}</span>
         </button>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          onclick={() => void saveAndClosePending()}
+        <button
+          type="button"
+          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Close ${file.name}`}
+          title={`Close ${file.name}`}
+          onclick={() => requestClose(file.path)}
         >
-          Save and close
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+          <X size={11} />
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if active}
+    {#key active.path}
+      <StandaloneFilePane path={active.path} name={active.name} />
+    {/key}
+  {/if}
+</Modal>
+
+<ConfirmDialog
+  open={pendingClose !== null}
+  title="Unsaved changes"
+  onCancel={() => (pendingClose = null)}
+  onConfirm={saveAndClosePending}
+  confirmLabel="Save and close"
+  variant="primary"
+  secondaryAction={{ label: 'Discard', onSelect: discardPending, tone: 'danger' }}
+>
+  <p>
+    <span class="font-medium text-foreground">{pendingClose?.name}</span> has edits that are not saved
+    to disk yet.
+  </p>
+</ConfirmDialog>

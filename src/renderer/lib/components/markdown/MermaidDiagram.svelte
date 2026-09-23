@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { Check, Code2, Copy, Expand, MessageSquarePlus, X } from '@lucide/svelte'
-  import { Dialog } from 'bits-ui'
+  import { Check, Code2, Copy, Expand, MessageSquarePlus } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import { PanZoom } from '$lib/pan-zoom.svelte'
+  import Modal from '../ui/Modal.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     code: string
@@ -22,7 +21,6 @@
   let error = $state<string>()
   let errorDetail = $state<string>()
   let expanded = $state(false)
-  $effect(() => browserVisibility.hideWhile('mermaid-expanded', 'fullscreen-surface', expanded))
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')
@@ -262,31 +260,18 @@
   {/if}
 </div>
 
-<Dialog.Root bind:open={expanded}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="titlebar-no-drag fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-    <Dialog.Content
-      class="titlebar-no-drag fixed inset-6 z-50 flex min-h-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-2xl outline-none"
-    >
-      <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
-        <Dialog.Title class="text-xs font-semibold text-foreground">Mermaid diagram</Dialog.Title>
-        <Dialog.Description class="sr-only">
-          Expanded view of the generated Mermaid diagram
-        </Dialog.Description>
-        <Dialog.Close
-          class="rounded p-1 text-muted transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Close expanded Mermaid diagram"
-          title="Close expanded Mermaid diagram"
-        >
-          <X size={15} />
-        </Dialog.Close>
-      </div>
-      <div class="min-h-0 flex-1">
-        {@render diagramContent(true)}
-      </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<Modal
+  open={expanded}
+  title="Mermaid diagram"
+  onClose={() => (expanded = false)}
+  size="full"
+  fill
+  contentClass="flex flex-col overflow-hidden p-0"
+>
+  <div class="min-h-0 flex-1">
+    {@render diagramContent(true)}
+  </div>
+</Modal>
 
 <style>
   .mermaid-svg :global(svg) {

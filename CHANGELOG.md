@@ -21,6 +21,18 @@ All notable changes to CodeInOven are documented here. This project follows
   tool result nor any MCP transport ever carries the value: the model receives
   only `Secret set, you may proceed.` and the names.
 
+- The secret card now offers **Provide alternative**, the same escape hatch the
+  permission card has. A user who cannot reach a value they already supplied
+  answers with an instruction instead of pasting, and the app resolves every
+  requested name from state the device already holds   this thread's registry, a
+  credential bound to an installed utility, or another thread's registry   adopts
+  it for the current thread and exposes it exactly like a pasted value (session
+  environment and owner-only file, or the utility credential). The user may name
+  the stored variable when it was saved under a different spelling. Names with
+  nothing stored behind them are reported back as `unresolved_environment_variables`
+  together with the instruction, so the agent adapts instead of asking for the
+  same key twice.
+
 ### Changed
 
 - A capability installed without explicit harness targeting now applies to every harness,

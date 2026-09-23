@@ -51,6 +51,8 @@ import type {
   PullRequestPage,
   PullRequestReference,
   PullRequestReviewComment,
+  PrReactionContent,
+  PrReactionGroup,
   PullRequestReviewResult,
   RepositoryMentionUser,
   ThreadSettings,
@@ -705,6 +707,28 @@ export const invokeGitContract = {
       resolved: boolean
     ],
     GitHubMutationResult<boolean>
+  >,
+  /**
+   * Add or take back the signed-in account's reaction on one comment.
+   *
+   * Addressed by the subject's GraphQL node id because that is the one handle
+   * every reactable thing shares: the description, an issue comment, a review
+   * and an inline comment are four different REST shapes and one `Reactable`.
+   * The answer is the subject's reactions as the server now holds them, so the
+   * caller corrects what it is showing without refetching the conversation.
+   */
+  'pr:react': {} as Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      subjectNodeId: string,
+      content: PrReactionContent,
+      /** True to react, false to take the reaction back. */
+      add: boolean
+    ],
+    GitHubMutationResult<PrReactionGroup[]>
   >,
   'pr:review': {} as Contract<
     [

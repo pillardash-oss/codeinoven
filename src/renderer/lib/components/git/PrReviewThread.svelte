@@ -26,10 +26,12 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { openProjectFileFromAbsolutePath } from '$lib/reveal-file'
   import { githubDisplayLogin } from '$lib/format/github-login'
+  import type { PrReactionContent, PrReactionMap } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import PrCommentCard from './PrCommentCard.svelte'
   import PrDiffHunk from './PrDiffHunk.svelte'
   import PrReplyBox from './PrReplyBox.svelte'
+  import { entryReactions } from './pr-reactions'
   import {
     threadDiffHunk,
     type ConversationEntry,
@@ -50,6 +52,14 @@
     onCommentChat?: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
     /** Hand one of the thread's comments to an agent as an assignment. */
     onAssignAgent?: (entry: ConversationEntry) => void
+    /**
+     * Reactions on the conversation, keyed by the node id of the comment they are
+     * on. The thread reads its own comments out of it, the same map the stream
+     * above it was given.
+     */
+    reactions: PrReactionMap
+    /** React to one of the thread's comments, or take the reaction back. */
+    onReact: (entry: ConversationEntry, content: PrReactionContent, add: boolean) => void
     /** Open the Delete confirmation for one comment in the thread. */
     onDelete: (entry: ConversationEntry) => void
     onNotice: (message: string) => void
@@ -66,6 +76,8 @@
     onQuote,
     onCommentChat,
     onAssignAgent,
+    reactions,
+    onReact,
     onDelete,
     onNotice,
     onRefresh
@@ -263,6 +275,8 @@
             {onQuote}
             {onCommentChat}
             {onAssignAgent}
+            reactions={entryReactions(comment, reactions)}
+            onReact={(content, add) => onReact(comment, content, add)}
             onReply={openReply}
             {onDelete}
             {onNotice}

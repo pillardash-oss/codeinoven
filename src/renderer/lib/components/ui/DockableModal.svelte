@@ -47,10 +47,11 @@
     /**
      * Stacking layer. `surface` sits with the app's other floating panels at
      * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
-     * browser, file editor and the pull request reader are all `z-50`), which
-     * the pull request sheet needs because it can be opened from the full
-     * screen reader. Portaled menus and confirms inside a `top` panel belong at
-     * `z-90` so they still clear the panel itself.
+     * browser, file editor and the pull request reader all render through
+     * `ui/Modal.svelte` at `z-60`), which the pull request sheet needs because
+     * it can be opened from the full screen reader. Portaled menus and confirms
+     * inside a `top` panel belong at `z-90` so they still clear the panel
+     * itself.
      */
     layer?: 'surface' | 'top'
     /** Initial panel height before viewport clamping. */

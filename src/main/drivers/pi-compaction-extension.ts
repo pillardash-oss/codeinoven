@@ -249,6 +249,25 @@ function emergencyTailIndex(entries: SessionEntry[], budget: number): number {
   return Math.max(0, index)
 }
 
+function isToolResult(entry: SessionEntry): boolean {
+  return entry.type === 'message' && entry.message.role === 'toolResult'
+}
+
+/** Advance a cut to the first entry a request may start on.
+ *
+ *  A tool result only makes sense directly after the assistant message that
+ *  requested it. When the retained window would start on one, its owning
+ *  assistant was dropped by the budget walk, and the provider rejects the
+ *  request as a tool message answering nothing   an empty 400 with no body to
+ *  diagnose. Skipping the leading results keeps the retained tail valid. When
+ *  the newest entry is itself an unanswered tool result there is no valid
+ *  window to fall back on, so the caller keeps Pi's own summarizer instead. */
+function alignKeepIndex(entries: SessionEntry[], index: number): number {
+  let aligned = index
+  while (aligned < entries.length && isToolResult(entries[aligned])) aligned++
+  return aligned
+}
+
 /** Rebuild a checkpoint without a summary model: the request that started the
  *  turn, the plan and progress the thread is executing, and the last steps.
  *
@@ -272,7 +291,10 @@ async function buildEmergencyCheckpoint(
   // large, it is carried in the checkpoint text instead, so the request is
   // never lost even though its entries are dropped.
   const lastUserIndex = entries.findLastIndex(isUser)
-  const keepIndex = lastUserIndex >= 0 && lastUserIndex >= tailIndex ? lastUserIndex : tailIndex
+  const keepIndex = alignKeepIndex(
+    entries,
+    lastUserIndex >= 0 && lastUserIndex >= tailIndex ? lastUserIndex : tailIndex
+  )
   // Nothing would be dropped: the rebuild would only add text to a transcript
   // that is already small, so let Pi summarize it instead.
   if (keepIndex <= 0) return undefined
@@ -333,10 +355,63 @@ function recoverPart<T extends { type: string; text?: string }>(part: T): T | Te
   return part
 }
 
-type ContextContent = string | Array<{ type: string; text?: string }>
+type ContextPart = { type: string; text?: string; id?: string }
+type ContextContent = string | ContextPart[]
 interface ContextMessage {
   role: string
   content: ContextContent
+  toolCallId?: string
+}
+
+/** Drop tool results that answer nothing and tool calls that no result answers,
+ *  then drop the assistant messages left empty by either removal.
+ *
+ *  A rebuild can cut the window between an assistant message and the tool
+ *  results it requested, and a turn can abort mid-tool with no result at all.
+ *  Both leave a transcript the provider rejects with an empty 400 that retrying
+ *  only re-sends, so the request copy is pruned instead: this heals a session
+ *  broken by an earlier rebuild on its very next call. The session file keeps
+ *  every entry untouched. Returns the input reference when nothing had to be
+ *  pruned. */
+function pruneDanglingToolMessages<T extends ContextMessage>(messages: T[]): T[] {
+  const declared = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
+    for (const part of message.content) {
+      if (part.type === 'toolCall' && typeof part.id === 'string') declared.add(part.id)
+    }
+  }
+  const answered = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'toolResult' || typeof message.toolCallId !== 'string') continue
+    if (declared.has(message.toolCallId)) answered.add(message.toolCallId)
+  }
+  let changed = false
+  const pruned: T[] = []
+  for (const message of messages) {
+    if (message.role === 'toolResult') {
+      if (typeof message.toolCallId === 'string' && declared.has(message.toolCallId)) pruned.push(message)
+      else changed = true
+      continue
+    }
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) {
+      pruned.push(message)
+      continue
+    }
+    const content = message.content.filter(
+      (part) => part.type !== 'toolCall' || (typeof part.id === 'string' && answered.has(part.id))
+    )
+    const carriesText = content.some(
+      (part) => part.type !== 'text' || (typeof part.text === 'string' && part.text.trim().length > 0)
+    )
+    if (!carriesText) {
+      changed = true
+      continue
+    }
+    if (content.length !== message.content.length) changed = true
+    pruned.push(content.length === message.content.length ? message : { ...message, content })
+  }
+  return changed ? pruned : messages
 }
 
 /** Enforce the request image budget on a copy of the messages: when the
@@ -538,9 +613,14 @@ export default function (pi: ExtensionAPI): void {
       }
       messages = stripped as unknown as ContextMessage[]
     }
+    // A transcript whose cut landed between an assistant message and its tool
+    // results is rejected by the provider with an empty 400, and retrying only
+    // re-sends it. Prune the request copy so a session broken by an earlier
+    // rebuild heals on its next call; the session file keeps every entry.
+    const pruned = pruneDanglingToolMessages(messages)
     // The image budget applies on every request, armed or not: it prevents the
     // provider's image-count rejection from ever killing the turn.
-    const budgeted = applyImageBudget(messages)
+    const budgeted = applyImageBudget(pruned)
     const changed = budgeted !== (event.messages as unknown)
     // The trigger measures the request that will actually be sent, so it runs
     // even when this hook rewrote the request to fit an image budget.

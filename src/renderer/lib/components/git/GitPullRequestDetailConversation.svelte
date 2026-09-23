@@ -18,11 +18,12 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { flashElement } from '$lib/reveal-flash'
-  import type { PullRequestFile } from '$shared/types'
+  import type { PrReactionContent, PrReactionMap, PullRequestFile } from '$shared/types'
   import PrCommentCard from './PrCommentCard.svelte'
   import PrReplyBox from './PrReplyBox.svelte'
   import PrReviewThread from './PrReviewThread.svelte'
   import GitPullRequestDetailCommentDialogs from './GitPullRequestDetailCommentDialogs.svelte'
+  import { entryReactions } from './pr-reactions'
   import {
     conversationKindLabel,
     conversationQuoteBlock,
@@ -49,6 +50,13 @@
     onCommentChat: (entry: ConversationEntry, mode: 'explain' | 'quick') => void
     /** Hand one entry to an agent as an assignment. */
     onAssignAgent: (entry: ConversationEntry) => void
+    /**
+     * Reactions on the conversation, keyed by the node id of the comment they are
+     * on, which is the shape the bundle carries them in.
+     */
+    reactions: PrReactionMap
+    /** React to one entry, or take the reader's own reaction back. */
+    onReact: (entry: ConversationEntry, content: PrReactionContent, add: boolean) => void
     /** Surface a one-line confirmation in the reader's header. */
     onNotice: (message: string) => void
     /** Reload the bundle after a mutation. */
@@ -79,6 +87,8 @@
     onQuote,
     onCommentChat,
     onAssignAgent,
+    reactions,
+    onReact,
     onNotice,
     onRefresh,
     reveal = null,
@@ -189,6 +199,8 @@
         {onQuote}
         {onCommentChat}
         {onAssignAgent}
+        {reactions}
+        {onReact}
         onDelete={(entry) => (deletingEntry = entry)}
         {onNotice}
         {onRefresh}
@@ -220,6 +232,8 @@
           {onQuote}
           {onCommentChat}
           {onAssignAgent}
+          reactions={entryReactions(node.entry, reactions)}
+          onReact={(content, add) => onReact(node.entry, content, add)}
           onReply={(entry) => (replyEntry = entry)}
           onDelete={(entry) => (deletingEntry = entry)}
           {onNotice}
@@ -243,6 +257,8 @@
             {onQuote}
             {onCommentChat}
             {onAssignAgent}
+            reactions={entryReactions(node.entry, reactions)}
+            onReact={(content, add) => onReact(node.entry, content, add)}
             onReply={(entry) => (replyEntry = entry)}
             onDelete={(entry) => (deletingEntry = entry)}
             {onNotice}

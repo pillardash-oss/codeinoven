@@ -13,6 +13,9 @@ import type {
   PrCommentKind,
   PrDraft,
   PrListSort,
+  PrReactionActor,
+  PrReactionGroup,
+  PrReactionMap,
   PullRequestComment,
   PullRequestCommit,
   PullRequestCheck,
@@ -30,9 +33,11 @@ import type {
   PullRequestReference,
   PullRequestSummary,
   RepositoryMentionUser,
+  SetPrReactionInput,
   WorkflowRerunMode
 } from '../../lib/types'
 import { capJobLogText } from '../../lib/github-job-log'
+import { isReactionContent } from '../../lib/github-reactions'
 import type {
   CreatePrCommentInput,
   CreatePrReviewInput,
@@ -67,6 +72,47 @@ const MAX_JOB_LOG_BYTES = 200_000
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const USER_AGENT = 'CodeInOven'
+
+/**
+ * How many subjects one batched reaction read addresses.
+ *
+ * `nodes(ids:)` accepts at most 100, and a conversation longer than that is
+ * read in consecutive requests rather than by dropping the tail.
+ */
+const REACTION_BATCH_SIZE = 100
+
+/**
+ * How many reactors one reaction group carries.
+ *
+ * The count is the number the chip draws; this list is only what a hover can
+ * name, so it is capped rather than paid for in full on a popular comment.
+ */
+const REACTION_ACTOR_LIMIT = 10
+
+/**
+ * The reaction fields, selected identically everywhere a subject is read.
+ *
+ * `reactors.nodes` is a union (`User`, `Bot`, `Mannequin`, `Organization`), so
+ * each member is asked for the two fields the app draws. A Mannequin has no
+ * picture, which is why the picture is read as nullable rather than assumed.
+ */
+const REACTION_GROUP_SELECTION = `reactionGroups {
+        content
+        viewerHasReacted
+        reactors(first: ${String(REACTION_ACTOR_LIMIT)}) {
+          totalCount
+          nodes {
+            __typename
+            ... on User { login avatarUrl }
+            ... on Bot { login avatarUrl }
+            ... on Mannequin { login avatarUrl }
+            ... on Organization { login avatarUrl }
+          }
+        }
+      }`
+
+/** The batched reaction read: every subject's groups, addressed by node id. */
+const REACTION_GROUPS_QUERY = `query ReactionGroups($ids: [ID!]!) { nodes(ids: $ids) { id ... on Reactable { ${REACTION_GROUP_SELECTION} } } }`
 
 /** Sanitized provider failure that preserves the HTTP status for IPC handling. */
 export class ProviderHttpError extends Error {
@@ -433,6 +479,7 @@ export class GitHubProvider implements GitProvider {
       ...summary,
       authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
+      nodeId: this.readString(record, 'node_id'),
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       merged: record['merged'] === true,
       additions: this.readNumber(record, 'additions'),
@@ -677,6 +724,109 @@ export class GitHubProvider implements GitProvider {
         : 'mutation UnresolveReviewThread($threadId: ID!) { unresolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }',
       { threadId: input.nodeId }
     )
+  }
+
+  /**
+   * Read the reactions on many comments at once.
+   *
+   * Reactions hang off the subject rather than off a comment list, and GitHub
+   * answers `nodes(ids:)` for up to a hundred subjects per request, so a whole
+   * conversation is one round trip instead of one per comment. The answer is
+   * keyed by node id rather than positional: a subject that could not be
+   * resolved comes back as a null entry, and the id it was asked under is what
+   * keeps the rest of the batch placeable.
+   */
+  async listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap> {
+    const unique = [...new Set(subjectNodeIds.filter((id) => id.length > 0))]
+    if (unique.length === 0) return {}
+    const batches: string[][] = []
+    for (let index = 0; index < unique.length; index += REACTION_BATCH_SIZE) {
+      batches.push(unique.slice(index, index + REACTION_BATCH_SIZE))
+    }
+    const answers = await Promise.all(
+      batches.map((ids) => this.runGraphql(REACTION_GROUPS_QUERY, { ids }))
+    )
+    const reactions: PrReactionMap = {}
+    for (const data of answers) {
+      const nodes = data['nodes']
+      if (!Array.isArray(nodes)) continue
+      for (const node of nodes) {
+        if (typeof node !== 'object' || node === null) continue
+        const record = node as Record<string, unknown>
+        const nodeId = this.readString(record, 'id')
+        const groups = this.toReactionGroups(record)
+        // A subject nobody has reacted to is left out rather than carried as an
+        // empty list: GitHub answers all eight groups for every subject, and
+        // seven of them saying nothing is noise the reader would filter anyway.
+        if (!nodeId || groups.length === 0) continue
+        reactions[nodeId] = groups
+      }
+    }
+    return reactions
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on one subject.
+   *
+   * GitHub has one mutation per direction and both answer with the subject, so
+   * the write and the read are the same round trip: the caller corrects the
+   * comment it is showing from the server's answer instead of refetching a
+   * conversation that is already on screen.
+   */
+  async setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]> {
+    const field = input.add ? 'addReaction' : 'removeReaction'
+    const data = await this.runGraphql(
+      `mutation SetReaction($subjectId: ID!, $content: ReactionContent!) { ${field}(input: { subjectId: $subjectId, content: $content }) { subject { ... on Reactable { ${REACTION_GROUP_SELECTION} } } } }`,
+      { subjectId: input.nodeId, content: input.content }
+    )
+    const mutation = this.readRecord(data, field)
+    const subject = mutation ? this.readRecord(mutation, 'subject') : null
+    if (!subject) {
+      throw new Error('The provider did not answer with the comment that was reacted to')
+    }
+    return this.toReactionGroups(subject)
+  }
+
+  /**
+   * The reaction groups on one subject that actually carry a reaction.
+   *
+   * `count` is GitHub's own total, which is authoritative: the actor list is
+   * capped by the query, so a popular reaction names its first few reactors and
+   * still reports every one of them.
+   */
+  private toReactionGroups(record: Record<string, unknown>): PrReactionGroup[] {
+    const groups = record['reactionGroups']
+    if (!Array.isArray(groups)) return []
+    return groups.flatMap((entry): PrReactionGroup[] => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const group = entry as Record<string, unknown>
+      const content = this.readString(group, 'content')
+      if (!content || !isReactionContent(content)) return []
+      const reactors = this.readRecord(group, 'reactors')
+      const count = reactors ? this.readNumber(reactors, 'totalCount') : 0
+      if (count <= 0) return []
+      return [
+        {
+          content,
+          viewerHasReacted: group['viewerHasReacted'] === true,
+          count,
+          actors: this.toReactionActors(reactors)
+        }
+      ]
+    })
+  }
+
+  /** The reactors a reaction group carries, skipping any without a login. */
+  private toReactionActors(reactors: Record<string, unknown> | null): PrReactionActor[] {
+    const nodes = reactors ? reactors['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): PrReactionActor[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const record = node as Record<string, unknown>
+      const login = this.readString(record, 'login')
+      if (!login) return []
+      return [{ login, avatarUrl: this.readString(record, 'avatarUrl') }]
+    })
   }
 
   /** The numeric comment ids a GraphQL thread node holds, in thread order. */

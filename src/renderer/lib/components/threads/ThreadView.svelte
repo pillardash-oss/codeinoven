@@ -9824,6 +9824,27 @@
     )
   }
 
+  /**
+   * Answer a secret request with an instruction instead of a value. The main
+   * process reuses whatever the device already holds for the requested names
+   * (this thread, another thread, or a utility credential) and hands the
+   * instruction to the agent, so a value the user cannot reach any more never has
+   * to be asked for twice.
+   */
+  async function handleSecretAlternative(requestId: string, alternative: string): Promise<void> {
+    await invoke(
+      'agent:answerSecretAlternative',
+      thread.projectId,
+      thread.id,
+      requestId,
+      alternative
+    )
+    resolvedQuestionRequestIds.add(requestId)
+    pendingQuestionRequests = pendingQuestionRequests.filter(
+      (request) => request.requestId !== requestId
+    )
+  }
+
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
@@ -11827,7 +11848,9 @@
                 {#if pendingRequest.questions.some((question) => question.secretRequest === true)}
                   <AgentSecretCard
                     request={pendingRequest}
+                    scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                     onSubmit={handleSecretSubmit}
+                    onAlternative={handleSecretAlternative}
                     onDismiss={handleQuestionDismiss}
                   />
                 {:else}

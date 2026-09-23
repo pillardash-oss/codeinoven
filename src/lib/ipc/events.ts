@@ -4,7 +4,8 @@ import type {
   ComputerUsePipState,
   CuaUpdateProgress,
   ProviderConnectionInfo,
-  Thread
+  Thread,
+  TypesafeStatus
 } from '../types'
 import type {
   BrowserDevToolsState,
@@ -110,6 +111,12 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  /**
+   * State of the app-owned TypeSafe (Jev) capability, pushed after any change
+   * to the key or after a connection check, so an open Settings card never
+   * shows a state the app has already moved past.
+   */
+  'typesafe:status': [] as unknown as [status: TypesafeStatus],
   /** Background pass over the skills CodeInOven installed (progress and result). */
   'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],

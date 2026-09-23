@@ -12,12 +12,18 @@
  *
  * Bucket keys (served from `DOWNLOAD_MIRROR_URL`, see src/lib/download-mirror.ts):
  *
- *   <channel>/<artifact file name>   installers and their .blockmap files
+ *   <channel>/<artifact file name>   the installers the download page offers:
+ *                                    macOS .dmg, Windows .exe, Linux .AppImage and .deb
  *   <channel>/latest-mac.yml         the channel's update feed, per platform
  *   <channel>/latest.yml
  *   <channel>/latest-linux.yml
  *   <channel>/SHA256SUMS.txt         checksums of the newest release
  *   <channel>/RELEASE.json           machine-readable manifest for download pages
+ *
+ * The mirror carries only what a user downloads by hand (see
+ * MIRRORED_EXTENSIONS); the macOS auto-update `.zip` and the differential
+ * `.blockmap` files stay on GitHub, which is the archive, so nothing is
+ * duplicated at a size that matters.
  *
  * Upload order matters: artifacts first, the feed and manifest last, so a
  * consumer never sees a feed pointing at a file that is not there yet. Every
@@ -28,9 +34,14 @@
  * `--allow-downgrade` is passed, so a mis-typed backfill cannot replace the live
  * download with a stale one.
  *
- * Run this from CI. A release is about 970 MB of multipart uploads, which a home
- * uplink turns into an hour-long job; an interrupted run leaves orphaned upload
- * parts until the bucket's lifecycle rule aborts them (docs/DOWNLOAD-MIRROR.md).
+ * Run this from CI. A release is about 750 MB of multipart uploads, which a home
+ * uplink turns into an hour-long job. A run that is killed leaves its unfinished
+ * multipart uploads behind: the key stays unreadable (the origin answers 404 for
+ * it), but the parts are billed and the bucket lists them as a half-uploaded
+ * object. Every publish therefore aborts the unfinished uploads of an earlier
+ * run in the channel it is about to write, and the bucket lifecycle rule
+ * (docs/DOWNLOAD-MIRROR.md) is the backstop for a channel that is never
+ * published again.
  *
  * Usage:
  *   bun scripts/publish-release-mirror.ts --tag v0.5.57
@@ -70,9 +81,15 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  abortInterruptedUpload,
+  fetchObjectPrefix,
+  listInterruptedUploads,
+  type InterruptedUpload
+} from './lib/s3-request'
 import {
   DOWNLOAD_MIRROR_URL,
   MIRROR_CHECKSUMS_FILE,
@@ -89,6 +106,9 @@ import {
 
 const DEFAULT_KEEP = 1
 const DEFAULT_ARTIFACTS_DIR_ROOT = '.cio/tmp/download-mirror'
+
+/** Bytes of every uploaded object read back for verification after a publish. */
+const VERIFY_PREFIX_BYTES = 1024
 
 /** Installer file names produced by electron-builder's `artifactName` templates. */
 const ARTIFACT_PATTERN =
@@ -114,6 +134,24 @@ const EXTENSION_KINDS: Readonly<
   appimage: { platform: 'linux', kind: 'appimage' },
   deb: { platform: 'linux', kind: 'deb' }
 }
+
+/**
+ * The installers the mirror carries: exactly one per platform a user installs
+ * from the download page (macOS `.dmg`, Windows NSIS `.exe`, Linux `.AppImage`
+ * and `.deb`).
+ *
+ * GitHub Releases stays the archive, so anything the page does not offer stays
+ * on GitHub instead of being duplicated here:
+ *
+ * - the macOS `.zip` is electron-updater's auto-update payload. The app's trust
+ *   check only uses the mirror when its manifest lists the exact file the update
+ *   feed points at, so with no zip here a mac update downloads from GitHub (see
+ *   `src/main/notifications/updater-download.ts`).
+ * - `.blockmap` files only serve differential downloads. The app pre-downloads
+ *   the whole artifact into electron-updater's pending cache, so it never asks
+ *   for one.
+ */
+const MIRRORED_EXTENSIONS: readonly string[] = ['dmg', 'exe', 'appimage', 'deb']
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   dmg: 'application/x-apple-diskimage',
@@ -314,6 +352,16 @@ export function classifyArtifact(name: string): ClassifiedArtifact | null {
   return { name, version, platform: descriptor.platform, arch, kind: descriptor.kind, extension }
 }
 
+/**
+ * Whether the mirror carries this release asset; see {@link MIRRORED_EXTENSIONS}.
+ * A `.blockmap` is never carried, never mind which installer it belongs to.
+ */
+export function isMirroredArtifact(name: string): boolean {
+  if (isBlockmap(name)) return false
+  const classified = classifyArtifact(name)
+  return classified !== null && MIRRORED_EXTENSIONS.includes(classified.extension)
+}
+
 /** Content type R2 serves the object with, from the file extension. */
 export function contentTypeFor(name: string): string {
   const extension = path.extname(name).replace(/^\./, '').toLowerCase()
@@ -403,13 +451,21 @@ export function newerArtifacts(keys: readonly string[], version: string): string
  * Feeds, checksums, the manifest and anything unrecognized are never deleted, so
  * a sweep can neither break the channel nor leave it feedless; unrecognized
  * objects are reported instead of removed.
+ *
+ * `publishedKeys` is what this run uploads. The release being published holds
+ * exactly that set, so an object of the published version that this run does not
+ * write is a leftover from an earlier layout (a macOS zip, a differential
+ * blockmap) and is deleted too. Without it, objects of that version would be
+ * retained by version alone and a layout change could never reach the bucket.
  */
 export function pruneTargets(
   keys: readonly string[],
   keep: number,
-  retainVersion: string | null = null
+  retainVersion: string | null = null,
+  publishedKeys: readonly string[] = []
 ): string[] {
   if (keep <= 0) return []
+  const published = new Set(publishedKeys)
   const older = [...new Set(versionsIn(keys))]
     .filter((version) => version !== retainVersion)
     .sort((left, right) => compareVersions(right, left))
@@ -417,7 +473,9 @@ export function pruneTargets(
   for (const version of older.slice(0, Math.max(0, keep - retained.size))) retained.add(version)
   return keys.filter((key) => {
     const classified = classifyArtifact(path.basename(key))
-    return classified !== null && !retained.has(classified.version)
+    if (classified === null) return false
+    if (!retained.has(classified.version)) return true
+    return published.size > 0 && classified.version === retainVersion && !published.has(key)
   })
 }
 
@@ -499,6 +557,92 @@ async function listChannel(bucket: MirrorBucket, channel: ReleaseChannel): Promi
   return keys
 }
 
+/**
+ * Abort the multipart uploads an earlier run started and never finished.
+ *
+ * Installers are uploaded with multipart requests, so a run that is killed
+ * (Ctrl-C, a cancelled CI job, a dropped connection) leaves its parts behind.
+ * The key never becomes readable, but the parts are billed and the bucket
+ * dashboard lists them as a half-uploaded object. This run owns the channel
+ * while it runs, so every unfinished upload in the channel that was started
+ * before it began is a leftover and is aborted; one started after this run began
+ * belongs to a concurrent process and is left alone.
+ */
+async function sweepInterruptedUploads(
+  config: MirrorConfig,
+  channel: ReleaseChannel,
+  runStartedAt: Date,
+  dryRun: boolean
+): Promise<void> {
+  let uploads: InterruptedUpload[]
+  try {
+    uploads = await listInterruptedUploads(config, `${channel}/`)
+  } catch (error) {
+    annotate(
+      'warning',
+      `Download mirror: could not list unfinished uploads in ${channel}/ (${reasonOf(error)}); the bucket lifecycle rule still clears them`
+    )
+    return
+  }
+
+  if (uploads.length === 0) {
+    say(`Unfinished uploads: none in ${channel}/`)
+    return
+  }
+
+  const startedAtMs = runStartedAt.getTime()
+  const leftover = uploads.filter((upload) => {
+    const initiated = Date.parse(upload.initiated)
+    return Number.isNaN(initiated) || initiated <= startedAtMs
+  })
+  const inFlight = uploads.length - leftover.length
+  const list = (items: readonly InterruptedUpload[]): void => {
+    for (const upload of items.slice(0, 8)) say(`  - ${upload.key} (started ${upload.initiated})`)
+    if (items.length > 8) say(`  and ${items.length - 8} more`)
+  }
+
+  if (leftover.length === 0) {
+    say(`Unfinished uploads: ${uploads.length} in flight from another process; left alone`)
+    return
+  }
+  if (dryRun) {
+    say(`Unfinished uploads: would abort ${leftover.length} left by an earlier run:`)
+    list(leftover)
+    return
+  }
+
+  const aborted: InterruptedUpload[] = []
+  for (const upload of leftover) {
+    try {
+      await abortInterruptedUpload(config, upload)
+    } catch (error) {
+      annotate('warning', `Download mirror: could not abort ${upload.key} (${reasonOf(error)})`)
+      continue
+    }
+    aborted.push(upload)
+  }
+  say(`Unfinished uploads: aborted ${aborted.length} left by an earlier run:`)
+  list(aborted)
+  if (inFlight > 0) say(`  ${inFlight} more are in flight from another process; left alone`)
+}
+
+/**
+ * The first `length` bytes of a planned upload, read without loading the whole
+ * file: a 223 MB installer is compared byte for byte at its head, not in full.
+ */
+async function expectedPrefix(item: PlannedUpload, length: number): Promise<Buffer> {
+  if (item.content !== null) return Buffer.from(item.content, 'utf8').subarray(0, length)
+  if (item.file === null) throw new Error(`${item.key} has neither a file nor inline content`)
+  const handle = await open(item.file, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    const { bytesRead } = await handle.read(buffer, 0, length, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
 async function upload(bucket: MirrorBucket, item: PlannedUpload): Promise<void> {
   const startedAt = Date.now()
   const file = bucket.file(item.key)
@@ -550,6 +694,7 @@ function buildManifest(input: {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+  const runStartedAt = new Date()
   let flags: CliFlags
   try {
     flags = parseFlags(argv)
@@ -627,6 +772,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return fail(`No installer artifacts found in ${artifactsDir}`)
   }
 
+  // Only the installers the download page offers are copied here; the rest stay
+  // on GitHub, which is the archive (see MIRRORED_EXTENSIONS).
+  const mirrored = installers.filter((installer) => isMirroredArtifact(installer.name))
+  if (mirrored.length === 0) {
+    return fail(
+      `No mirrored installer in ${artifactsDir}: expected at least one of ${MIRRORED_EXTENSIONS.join(', ')}`
+    )
+  }
+  const skipped = installers.filter((installer) => !isMirroredArtifact(installer.name))
+
   const versions = new Set(installers.map((installer) => installer.version))
   if (versions.size !== 1) {
     return fail(`Artifacts in ${artifactsDir} span several versions: ${[...versions].join(', ')}`)
@@ -637,7 +792,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   const verified: VerifiedArtifact[] = []
-  for (const installer of installers) {
+  for (const installer of mirrored) {
     const expected = checksums.get(installer.name)
     if (expected === undefined) {
       return fail(`${installer.name} is not listed in ${MIRROR_CHECKSUMS_FILE}`)
@@ -656,6 +811,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     })
   }
   say(`Verified ${verified.length} installers against ${MIRROR_CHECKSUMS_FILE}`)
+  if (skipped.length > 0) {
+    say(
+      `Not mirrored (kept on GitHub only): ${skipped.map((installer) => installer.name).join(', ')}`
+    )
+  }
 
   // Every installer the release lists must be on disk, or the mirror would be partial.
   for (const name of checksums.keys()) {
@@ -696,18 +856,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       content: null
     })
   }
-  for (const artifact of verified) {
-    const blockmapName = `${artifact.name}.blockmap`
-    if (!files.includes(blockmapName)) continue
-    plan.push({
-      key: `${channel}/${blockmapName}`,
-      role: 'blockmap',
-      contentType: contentTypeFor(blockmapName),
-      bytes: await fileBytes(path.join(artifactsDir, blockmapName)),
-      file: path.join(artifactsDir, blockmapName),
-      content: null
-    })
-  }
   for (const feed of feeds) {
     plan.push({
       key: feed.key,
@@ -737,6 +885,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   })
 
   const totalBytes = plan.reduce((sum, item) => sum + item.bytes, 0)
+  const publishedKeys = new Set(plan.map((item) => item.key))
   say('')
   say(`Plan (${plan.length} objects, ${megabytes(totalBytes)}):`)
   for (const item of plan) say(`  ${item.role.padEnd(9)} ${item.key}  ${megabytes(item.bytes)}`)
@@ -756,7 +905,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const sweep =
     listed?.keys === null || listed?.keys === undefined
       ? null
-      : pruneTargets(listed.keys, flags.keep, version)
+      : pruneTargets(listed.keys, flags.keep, version, [...publishedKeys])
   say('')
   if (flags.keep === 0) {
     say('Sweep: disabled (--keep 0); the channel keeps every release it is given')
@@ -791,7 +940,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     )
   }
 
-  if (flags.dryRun || bucket === null) {
+  // --- abort the parts an earlier run left behind --------------------------
+  if (config !== null) {
+    say('')
+    await sweepInterruptedUploads(config, channel, runStartedAt, flags.dryRun)
+  }
+
+  if (flags.dryRun || bucket === null || config === null) {
     say('')
     say(flags.dryRun ? 'Dry run: nothing was uploaded.' : 'Dry run: no configuration.')
     return 0
@@ -811,16 +966,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // --- verify what the origin actually serves ------------------------------
+  // A ranged read, not a HEAD or `S3File.stat()`: Cloudflare compresses the
+  // text/plain and application/json objects, so their HEAD carries no
+  // content-length and `stat()` reports 0 (see scripts/lib/s3-request.ts).
   say('')
   say('Verifying uploaded objects...')
   for (const item of plan) {
-    const stats = await bucket
-      .file(item.key)
-      .stat()
-      .catch(() => null)
-    if (stats === null) return fail(`${item.key} is missing from the bucket after upload`)
-    if (stats.size !== item.bytes) {
-      return fail(`${item.key} is ${stats.size} bytes on the origin but ${item.bytes} locally`)
+    const prefix = await expectedPrefix(item, VERIFY_PREFIX_BYTES).catch((error: unknown) => {
+      throw new Error(`could not read ${item.key} locally: ${reasonOf(error)}`)
+    })
+    const probe = await fetchObjectPrefix(config, item.key, VERIFY_PREFIX_BYTES).catch(
+      (error: unknown) => {
+        throw new Error(`could not read ${item.key} back: ${reasonOf(error)}`)
+      }
+    )
+    if (probe === null) return fail(`${item.key} is missing from the bucket after upload`)
+    if (probe.size !== item.bytes) {
+      return fail(`${item.key} is ${probe.size} bytes on the origin but ${item.bytes} locally`)
+    }
+    if (!Buffer.from(probe.bytes).subarray(0, prefix.length).equals(prefix)) {
+      return fail(`${item.key} does not serve the bytes that were uploaded`)
     }
   }
   say(`Verified ${plan.length} objects (${megabytes(uploadedBytes)})`)
@@ -843,7 +1008,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // are the live download, so they are left in place unless --allow-downgrade
     // asked for exactly that replacement.
     const protectedKeys = new Set(flags.allowDowngrade ? [] : newerArtifacts(keys, version))
-    for (const key of pruneTargets(keys, flags.keep, version)) {
+    for (const key of pruneTargets(keys, flags.keep, version, [...publishedKeys])) {
       if (protectedKeys.has(key)) continue
       try {
         await bucket.file(key).delete()

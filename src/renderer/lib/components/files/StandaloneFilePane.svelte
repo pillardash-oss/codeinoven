@@ -27,6 +27,7 @@
   } from '$lib/mime'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -164,10 +165,18 @@
     }
   })
 
+  /** True while the confirmation for reloading a dirty buffer is open. */
+  let reloadConfirmOpen = $state(false)
+
   function reload(): void {
-    if (dirty && !window.confirm(`Discard unsaved changes to ${name} and reload it from disk?`)) {
+    if (dirty) {
+      reloadConfirmOpen = true
       return
     }
+    applyReload()
+  }
+
+  function applyReload(): void {
     reloadToken += 1
     void reloadFromDisk()
     void loadDocument()
@@ -364,3 +373,13 @@
     </button>
   </div>
 {/if}
+
+<ConfirmDialog
+  open={reloadConfirmOpen}
+  title={`Discard unsaved changes to ${name} and reload it from disk?`}
+  onCancel={() => (reloadConfirmOpen = false)}
+  onConfirm={applyReload}
+  confirmLabel="Discard and reload"
+>
+  <p>The version on disk replaces your unsaved edits.</p>
+</ConfirmDialog>

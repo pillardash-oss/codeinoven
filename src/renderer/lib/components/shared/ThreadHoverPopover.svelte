@@ -7,7 +7,8 @@
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket, type Thread } from '$shared/types'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import type { Thread } from '$shared/types'
 
   interface Props {
     thread: Thread
@@ -55,11 +56,7 @@
   /** Git remote origin URL for the thread's project, resolved lazily on hover. */
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const bucketId = scopeState.bucketForThread(thread)
-    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return null
-    return scopeState.bucketFor(thread.projectId, bucketId)
-  })
+  let scopeBucket = $derived(threadScopeBucket(thread))
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''

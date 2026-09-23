@@ -22,6 +22,7 @@
   } from '$lib/editor/codemirror-file-editor'
   import { gitState } from '$lib/stores/git.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { conflictSaveActionLabels, conflictSaveActionTitle } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -76,6 +77,9 @@
   const activeState = $derived(hunkStates[activeHunk] ?? null)
   const resolvedCount = $derived(hunkStates.filter(isResolved).length)
   const allResolved = $derived(hunkStates.length > 0 && resolvedCount === hunkStates.length)
+  /** Resolved progress the scratch file has not taken yet. The editor's own
+   *  save button writes exactly this as a draft; marking the file resolved is
+   *  the panel's save control, and it does not need this draft. */
   const canSaveDraft = $derived(resolvedCount > 0 && dirty)
 
   function isResolved(state: GitConflictWorkHunkState): boolean {
@@ -523,13 +527,13 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="flex h-6 items-center gap-1 rounded border border-border bg-elevated px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:opacity-30"
         disabled={!canSaveDraft || draftSaving || saving}
-        title="Save resolved conflict progress to the scratch file (Cmd/Ctrl+S)"
+        title={conflictSaveActionTitle('draft')}
         onclick={() => void saveDraft()}
       >
         {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
-        Save draft
+        {conflictSaveActionLabels.draft}
       </button>
       <button
         type="button"

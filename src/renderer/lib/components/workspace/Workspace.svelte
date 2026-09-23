@@ -1008,13 +1008,31 @@
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
 
+  /** The terminal tab actually shown fullscreen, or null when the recorded id no
+   *  longer names an open terminal.
+   *
+   *  A bare id is not enough. It is what publishes the `workspace-terminal-fullscreen`
+   *  suppression block below, and a tab can disappear without any of the three
+   *  closers running   its thread or project can be deleted, or the whole sidebar
+   *  can be rebuilt. A stale id would then keep the browser's native view
+   *  detached with nothing on screen to justify it, which reads as a browser
+   *  panel that never paints. Deriving from the live tab list makes that
+   *  unreachable, and it is also the id the fullscreen surface itself renders
+   *  from, so a stale one can no longer reopen an empty terminal dialog later. */
+  let terminalFullscreenTab = $derived(
+    contextSidebarState.tabs.find(
+      (tab) => tab.id === terminalFullscreenTabId && tab.kind === 'terminal'
+    ) ?? null
+  )
+
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
   function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
     const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
     const remaining = openTabs.filter((tab) => tab.id !== tabId)
     closeContextTab(tabId)
-    if (remaining.length === 0) return
+    // Nothing left of that kind: the surface has no tab to show, so the record
+    // has to go with it rather than point at the tab that just closed.
     const fallback = remaining.at(-1)?.id ?? null
     if (kind === 'terminal') terminalFullscreenTabId = fallback
     else browserFullscreenTabId = fallback
@@ -1061,11 +1079,15 @@
   // browser panel asks the browser-visibility store and detaches its native
   // surface accordingly. The browser's own fullscreen dialog is not registered
   // here so the browser stays visible when the user fullscreens it deliberately.
+  // Every modal publishes that block for itself now (`ui/Modal.svelte`), and the
+  // full screen browser is the one surface that opts out of it
+  // (`blocksBrowserView`), because the view it would suppress is the page it is
+  // showing.
   $effect(() =>
     browserVisibility.hideWhile(
       'workspace-terminal-fullscreen',
       'fullscreen-surface',
-      terminalFullscreenTabId !== null
+      terminalFullscreenTab !== null
     )
   )
 
@@ -1135,10 +1157,20 @@
       : 'minmax(0, 1fr)'
   )
 
+  /** Show one context tab fullscreen. Only one surface can own the window, so
+   *  opening one closes the other kind instead of leaving two full screen dialogs
+   *  stacked, where the lower one's suppression block would blank the browser's
+   *  native view. */
   function openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
-    if (tab?.kind === 'browser') browserFullscreenTabId = tabId
-    if (tab?.kind === 'terminal') terminalFullscreenTabId = tabId
+    if (tab?.kind === 'browser') {
+      browserFullscreenTabId = tabId
+      terminalFullscreenTabId = null
+    }
+    if (tab?.kind === 'terminal') {
+      terminalFullscreenTabId = tabId
+      browserFullscreenTabId = null
+    }
   }
 
   /** A files tab with unsaved changes waiting on a save/discard decision. */
@@ -1192,6 +1224,11 @@
     if (tab.kind === 'browser') {
       if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
       void invoke('browser:destroy', tab.id)
+    }
+    // Symmetric with the browser: closing the terminal that is showing fullscreen
+    // would otherwise leave the fullscreen record pointing at a tab that is gone.
+    if (tab.kind === 'terminal' && terminalFullscreenTabId === tab.id) {
+      terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
@@ -3194,7 +3231,7 @@
 />
 
 <WorkspaceFullscreenTerminal
-  tabId={terminalFullscreenTabId}
+  tabId={terminalFullscreenTab?.id ?? null}
   onTabIdChange={(id) => (terminalFullscreenTabId = id)}
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}

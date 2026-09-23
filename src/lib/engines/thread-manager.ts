@@ -128,6 +128,33 @@ export class ThreadManager {
     this.searchService = new ThreadSearchService(db, this.threadRepo)
   }
 
+  /**
+   * Announce a persisted thread, and the coordinator that owns it when the
+   * write was delegated work.
+   *
+   * A worker or auditor write advances its Sr. Engineer row's `last_activity`
+   * in the same statement (the `threads_coordinator_activity` trigger), so the
+   * Sr. Engineer bubbles up the status list the moment one of its workers is
+   * touched, a plain prompt to a worker included. The trigger keeps the
+   * database column current on its own, but a renderer only re-sorts a row it
+   * has been told about, so the refreshed coordinator is announced here.
+   */
+  private async announce(thread: Thread): Promise<void> {
+    this.onChange?.(thread)
+    if (!thread.coordinatorThreadId) return
+    try {
+      const coordinator = await this.threadRepo.getViaWorker(thread.coordinatorThreadId)
+      if (coordinator) this.onChange?.(coordinator)
+    } catch (error) {
+      // The write already landed; a failed refresh must never fail the caller.
+      Logger.dev('Coordinator activity announce failed', {
+        threadId: thread.id,
+        coordinatorThreadId: thread.coordinatorThreadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   /** Reads scope boards to keep pinned scopes outside the thread bucket. */
   private readonly scopeManager: ScopeManager
 
@@ -584,7 +611,7 @@ export class ThreadManager {
     }
 
     await this.threadRepo.upsertViaWorker(updated)
-    this.onChange?.(updated)
+    await this.announce(updated)
     return updated
   }
 
@@ -838,7 +865,7 @@ export class ThreadManager {
     }
 
     await this.threadRepo.upsertViaWorker(updated)
-    this.onChange?.(updated)
+    await this.announce(updated)
     return updated
   }
 
@@ -864,7 +891,7 @@ export class ThreadManager {
     }
 
     await this.threadRepo.upsertViaWorker(updated)
-    this.onChange?.(updated)
+    await this.announce(updated)
     return updated
   }
 
@@ -904,7 +931,7 @@ export class ThreadManager {
       lastActivity: now
     }
     await this.threadRepo.upsertViaWorker(updated)
-    this.onChange?.(updated)
+    await this.announce(updated)
     return updated
   }
 

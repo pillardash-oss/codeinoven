@@ -9,6 +9,7 @@ import {
   MAX_GITHUB_NUMERIC_ID
 } from './primitives'
 import { validateBranchName, validateRemoteName } from './git'
+import { GITHUB_REACTIONS } from '../../../lib/github-reactions'
 
 const MERGE_METHODS = new Set<import('../../../lib/types').PrMergeMethod>([
   'merge',
@@ -59,6 +60,13 @@ const WORKFLOW_RERUN_MODES = new Set<import('../../../lib/types').WorkflowRerunM
   'all',
   'failed'
 ])
+/**
+ * GitHub's eight reaction values, taken from the shared table the picker draws
+ * from so the boundary can never reject an emoji the picker offers.
+ */
+const PR_REACTION_CONTENTS = new Set<import('../../../lib/types').PrReactionContent>(
+  GITHUB_REACTIONS.map((reaction) => reaction.content)
+)
 /** How an agent assignment was opened. */
 const PR_AGENT_ASSIGNMENT_KINDS = new Set<import('../../../lib/types').PrAgentAssignmentKind>([
   'triage',
@@ -327,6 +335,20 @@ export function validatePrMinimizeReason(
   value: unknown
 ): import('../../../lib/types').PrMinimizeReason {
   return assertEnum(value, PR_MINIMIZE_REASONS, 'PR minimise reason')
+}
+
+/**
+ * Validate which emoji a comment is being reacted with.
+ *
+ * GitHub accepts its own eight values and nothing else, so the set comes from
+ * the shared reaction table rather than being restated here: a ninth emoji added
+ * to that table is a value the picker offers, and it must not be one the
+ * boundary then rejects.
+ */
+export function validatePrReactionContent(
+  value: unknown
+): import('../../../lib/types').PrReactionContent {
+  return assertEnum(value, PR_REACTION_CONTENTS, 'PR reaction')
 }
 
 /**

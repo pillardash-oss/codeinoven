@@ -5,6 +5,7 @@ import type {
   PrAgentAssignmentWorkspace,
   PrAgentReport,
   PrListQuery,
+  PrReactionGroup,
   PrState,
   PullRequestBundle,
   PullRequestFile,
@@ -226,6 +227,33 @@ export class GitPullRequestCache {
         [bundleKey]: { ...bundle, detail: { ...bundle.detail, ...patch } }
       }
     }
+  }
+
+  /**
+   * Replace one comment's reactions in the cached bundle.
+   *
+   * A reaction write answers with the subject's own reactions, so the reader's
+   * view is corrected from the server's answer rather than refetched: the
+   * conversation is already on screen, and re-reading eighty comments and every
+   * file patch to move one emoji would be the whole bundle's cost for it.
+   *
+   * A subject that now holds no reactions drops out of the map entirely, which is
+   * the same shape the read returns: absent means nothing reacted, not unknown.
+   */
+  patchBundleReactions(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    groups: PrReactionGroup[]
+  ): void {
+    const bundleKey = prBundleKey(owner, repo, pullNumber)
+    const bundle = this.bundles[bundleKey]
+    if (!bundle) return
+    const reactions = { ...bundle.reactions }
+    if (groups.length === 0) delete reactions[nodeId]
+    else reactions[nodeId] = groups
+    this.bundles = { ...this.bundles, [bundleKey]: { ...bundle, reactions } }
   }
 
   /**

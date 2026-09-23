@@ -680,12 +680,7 @@
   }
 </script>
 
-<SideSheet
-  {open}
-  width="max-w-md"
-  title={mode === 'provider' ? 'Add provider' : 'Add container'}
-  {onClose}
->
+<SideSheet {open} title={mode === 'provider' ? 'Add provider' : 'Add container'} {onClose}>
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
       <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-dimmed">

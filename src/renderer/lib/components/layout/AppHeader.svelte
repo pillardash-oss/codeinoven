@@ -179,9 +179,12 @@
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
+<!-- No mirrored right inset: the header's own pr-1 is the same 4px gutter the
+     context dock rail leaves around its 32px tool buttons, so the notification
+     bell stays on the dock's x axis on every platform. -->
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
-  style={trafficLightInsetStyle()}
+  style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav
     class="titlebar-no-drag flex shrink-0 items-center gap-1"

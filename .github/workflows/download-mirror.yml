@@ -5,6 +5,7 @@ name: Download mirror
 #
 # Nothing is rebuilt here: the job downloads the assets GitHub already
 # published, verifies every installer against the release's own SHA256SUMS.txt,
+# aborts any unfinished multipart upload an earlier run left in that channel,
 # uploads them with their update feeds and a RELEASE.json manifest, HEAD-checks
 # what the origin actually serves, and deletes the previous release of that
 # channel, so the bucket holds only the release it serves (GitHub Releases is
@@ -18,6 +19,12 @@ name: Download mirror
 # Until the two variables exist, automatic runs are skipped instead of turning
 # every release red; a manual run always executes and reports exactly what is
 # missing.
+#
+# The `release: published` trigger only fires for a release published by hand or
+# by a token other than the default one: GitHub does not start a workflow from an
+# event that a GITHUB_TOKEN caused, so the release workflows (nightly.yml,
+# release.yml) dispatch this workflow explicitly instead. `workflow_dispatch` is
+# the documented exception to that rule, which is why the dispatch works.
 
 on:
   release:

@@ -26,6 +26,32 @@ export interface AgentSecretStoreRequest {
   threadId: string
 }
 
+/**
+ * One secret the app should satisfy from state the device already holds instead
+ * of from a pasted value: the user answered the card with an alternative
+ * instruction ("this key was supplied in another session"), so the app looks
+ * the value up itself and never asks for it twice.
+ */
+export interface AgentSecretReuseRequest {
+  secretId: string
+  /** Variable the value must end up under, exactly as the target expects it. */
+  environmentVariable: string
+  /** Human label shown on the card, reused as the credential label. */
+  label: string
+  /** Thread adopting the value. */
+  threadId: string
+  /** Bind the reused value to an installed utility as its credential. */
+  utilityId?: string
+  /**
+   * Names the user pointed at in their instruction, tried in order after the
+   * requested one, so a value stored under another spelling is still reused.
+   */
+  candidateNames?: readonly string[]
+}
+
+/** Where a value the app reused instead of collecting came from. */
+export type AgentSecretReuseSource = 'this-thread' | 'another-thread' | 'utility'
+
 /** One collected secret, described without ever exposing its value to the model. */
 export interface AgentStoredSecret {
   secretId: string
@@ -37,6 +63,11 @@ export interface AgentStoredSecret {
   /** Owner-only file the agent interpolates with `"$(cat path)"`, for plain secrets. */
   secretPath?: string
   /**
+   * Set when the user's alternative instruction let the app reuse a value the
+   * device already held, instead of the user pasting one.
+   */
+  reusedFrom?: AgentSecretReuseSource
+  /**
    * Plaintext, consumed in-process by the harness transport that applies it to
    * the session environment. Never part of a tool result.
    */
@@ -45,8 +76,17 @@ export interface AgentStoredSecret {
 
 /** How a pending `cio_ask_secret` request ended, as the waiting tool call sees it. */
 export interface AgentSecretResolution {
-  status: 'set' | 'dismissed'
+  /**
+   * `set` when the user pasted values, `alternative` when they answered with an
+   * instruction instead (and any value the device held was reused), `dismissed`
+   * when they closed the card.
+   */
+  status: 'set' | 'alternative' | 'dismissed'
   secrets: AgentStoredSecret[]
+  /** The instruction the user sent instead of a value, verbatim. */
+  alternative?: string
+  /** Requested names the device holds no value for, so the agent can adapt. */
+  unresolved?: string[]
 }
 
 /** One durable entry of a thread's secret registry; the value stays in the vault. */
@@ -148,6 +188,138 @@ export class AgentSecretService {
   /** Remove this thread's secret files; the vault keeps the durable values. */
   async purgeSecretFiles(threadId: string): Promise<void> {
     await rm(this.filesDirectory(threadId), { recursive: true, force: true })
+  }
+
+  /**
+   * Resolve one thread's stored secret by variable name.
+   *
+   * Returns null instead of throwing when the thread holds no such secret, or
+   * when the reference no longer resolves, so a caller looking for an optional
+   * key is never handed a failure it has to interpret.
+   */
+  async resolveThreadSecret(threadId: string, environmentVariable: string): Promise<string | null> {
+    const secret = (await this.loadThreadSecrets(threadId)).find(
+      (entry) => entry.environmentVariable === environmentVariable
+    )
+    if (!secret) return null
+    try {
+      return await this.vault.resolve(secret.secretRef)
+    } catch (error) {
+      Logger.dev('Agent secret could not be resolved:', error)
+      return null
+    }
+  }
+
+  /**
+   * Find the first secret stored under one variable name, across every thread
+   * that ever collected a secret.
+   *
+   * One thread asked for a key does not mean only that thread may use it: the
+   * app's own auxiliary work belongs to no single thread, so it looks here
+   * before asking the user to enter the same key twice. The registry holds one
+   * small file per thread that called `cio_ask_secret`, so this stays a handful
+   * of tiny reads rather than a scan of every thread on the device.
+   */
+  async findThreadSecret(
+    environmentVariable: string
+  ): Promise<{ threadId: string; value: string } | null> {
+    let entries: string[]
+    try {
+      entries = await this.storage.list(SECRET_REGISTRY_DIRECTORY)
+    } catch (error) {
+      Logger.dev('Agent secret registry could not be listed:', error)
+      return null
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue
+      const threadId = entry.slice(0, -'.json'.length)
+      if (!threadId) continue
+      const value = await this.resolveThreadSecret(threadId, environmentVariable)
+      if (value) return { threadId, value }
+    }
+    return null
+  }
+
+  /**
+   * Adopt a value the device already holds for one requested secret.
+   *
+   * This is the path a user takes when they have no access to the value any more
+   * but the app already has it: they answer the card with an instruction instead
+   * of pasting, and the value is resolved, adopted by this thread and exposed
+   * exactly like a pasted one (encrypted vault plus an owner-only file, or a
+   * utility credential when the agent named a capability). It is always stored
+   * under the name the agent asked for, because that is the spelling the target
+   * expects, and returns null when nothing matches any candidate name.
+   */
+  async reuse(request: AgentSecretReuseRequest): Promise<AgentStoredSecret | null> {
+    for (const name of this.reuseCandidateNames(request)) {
+      const found = await this.findReusableSecret(request.threadId, name)
+      if (!found) continue
+      const stored = await this.store({
+        secretId: request.secretId,
+        environmentVariable: request.environmentVariable,
+        value: found.value,
+        label: request.label,
+        threadId: request.threadId,
+        ...(request.utilityId ? { utilityId: request.utilityId } : {})
+      })
+      return { ...stored, reusedFrom: found.source }
+    }
+    return null
+  }
+
+  /** The requested name first, then the names the user mentioned, deduplicated. */
+  private reuseCandidateNames(request: AgentSecretReuseRequest): string[] {
+    const names = [request.environmentVariable, ...(request.candidateNames ?? [])]
+    return names
+      .map((name) => name.trim())
+      .filter(
+        (name, index, all) =>
+          SECRET_ENVIRONMENT_VARIABLE_PATTERN.test(name) && all.indexOf(name) === index
+      )
+  }
+
+  /**
+   * Resolve one variable name from state the user already stored.
+   *
+   * Order is most deliberate first: a value this thread already owns is exactly
+   * what is being asked for, a utility credential is a value the user attached
+   * to a specific capability, and another thread's secret was collected for a
+   * different piece of work and is only reused because the name matches exactly.
+   */
+  private async findReusableSecret(
+    threadId: string,
+    environmentVariable: string
+  ): Promise<{ value: string; source: AgentSecretReuseSource } | null> {
+    const own = await this.resolveThreadSecret(threadId, environmentVariable)
+    if (own) return { value: own, source: 'this-thread' }
+    const utility = await this.findUtilityCredentialValue(environmentVariable)
+    if (utility) return utility
+    const elsewhere = await this.findThreadSecret(environmentVariable)
+    return elsewhere ? { value: elsewhere.value, source: 'another-thread' } : null
+  }
+
+  /** A stored credential an installed utility reads under this exact name. */
+  private async findUtilityCredentialValue(
+    environmentVariable: string
+  ): Promise<{ value: string; source: AgentSecretReuseSource } | null> {
+    const utilities = await this.registry.list().catch((error: unknown) => {
+      Logger.dev('Utility registry could not be read for a stored credential:', error)
+      return null
+    })
+    if (!utilities) return null
+    for (const utility of utilities) {
+      for (const credential of utility.credentials) {
+        if (credential.environmentVariable !== environmentVariable) continue
+        try {
+          const value = await this.vault.resolve(credential.secretRef)
+          if (value) return { value, source: 'utility' }
+        } catch (error) {
+          Logger.dev('Utility credential could not be resolved:', error)
+        }
+      }
+    }
+    return null
   }
 
   /** Forget one thread's secrets entirely, including their vault entries. */

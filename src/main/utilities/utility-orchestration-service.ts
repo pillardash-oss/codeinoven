@@ -19,7 +19,7 @@ import {
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
-import { CuaBridgeService } from './cua-bridge-service'
+import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -151,6 +151,12 @@ export interface CuaOperationEvent {
   pid: number | null
   /** Turn-scoped Cua cursor session, when the driver declared one. */
   sessionId?: string
+  /**
+   * The tier this turn runs at. The daemon's authorization mode is fixed when it
+   * starts, so the PiP monitor has to ask for the same one the run already owns
+   * rather than starting a second, differently-tiered daemon under it.
+   */
+  permissionLevel: PermissionLevel
 }
 
 export interface UtilityTurnGateway {
@@ -830,6 +836,14 @@ export class UtilityOrchestrationService {
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
     })
+    const sharedNote = `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
+    const secretEntries = resolution.secrets.map((secret) => ({
+      label: secret.label,
+      environment_variable: secret.environmentVariable,
+      ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
+      ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {}),
+      ...(secret.reusedFrom ? { reused_from: secret.reusedFrom } : {})
+    }))
     const result: Record<string, unknown> =
       resolution.status === 'dismissed'
         ? {
@@ -837,18 +851,31 @@ export class UtilityOrchestrationService {
             message:
               'The user dismissed the secret request without providing a value. Continue without it, and ask again only if the secret is essential.'
           }
-        : {
-            status: 'set',
-            message: 'Secret set, you may proceed.',
-            secrets: resolution.secrets.map((secret) => ({
-              label: secret.label,
-              environment_variable: secret.environmentVariable,
-              ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
-              ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {})
-            })),
-            note: `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
-          }
-    if (input['apply_environment'] !== true || resolution.status === 'dismissed') return result
+        : resolution.status === 'alternative'
+          ? {
+              status: 'alternative',
+              message:
+                'The user answered with an instruction instead of a value. This is an answer, not a dismissal: do not ask for the same secret again in this turn. Follow the instruction and continue.',
+              user_instruction: resolution.alternative,
+              secrets: secretEntries,
+              ...(resolution.unresolved?.length
+                ? {
+                    unresolved_environment_variables: resolution.unresolved,
+                    unresolved_note:
+                      'Nothing was exposed for these names. Continue with the user instruction. If one of them is already defined in your own environment, use it directly and never print, echo, or log it; otherwise take a different route or say plainly what is missing.'
+                  }
+                : {}),
+              note: sharedNote
+            }
+          : {
+              status: 'set',
+              message: 'Secret set, you may proceed.',
+              secrets: secretEntries,
+              note: sharedNote
+            }
+    // A reused value must reach the session environment exactly like a pasted
+    // one, which is what a user answering "this key was already supplied" needs.
+    if (input['apply_environment'] !== true || resolution.secrets.length === 0) return result
     // Only an in-process gateway transport asks for this, and it applies the map
     // to its own session environment before the result is shown to the model.
     return {
@@ -912,6 +939,9 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.delete(turn.token)
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
+    // Last, so the claim covers the clients it was taken for: an unrestricted
+    // daemon is stopped here once nothing needs it any more.
+    await this.cuaBridge.releaseDaemonClaim(turn.state.id)
     await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
@@ -1241,6 +1271,15 @@ export class UtilityOrchestrationService {
     }
     let client = state.clients.get(utilityId)
     if (!client) {
+      if (this.isComputerUseUtility(resolved)) {
+        // The Cua daemon's authorization mode is a start-time, daemon-wide
+        // property: whichever client starts the daemon fixes it for every later
+        // run until the daemon stops. Claiming the tier here, before the client
+        // connects, is what keeps a full_access run from leaving an
+        // approval-free daemon behind and an auto_review run from silently
+        // downgrading a full_access one.
+        await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+      }
       client = await this.mcpClient(resolved.utility)
       state.clients.set(utilityId, client)
     }
@@ -1334,13 +1373,19 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
-      result = await client.callTool(operation, routedInput)
+      try {
+        result = await client.callTool(operation, routedInput)
+      } catch (error) {
+        await this.dropDeadComputerUseTransport(state, resolved, client, error)
+        throw error
+      }
       if (this.isComputerUseUtility(resolved)) {
         this.cuaActivityListener?.({
           threadId: state.request.threadId,
           operation,
           pid: operationPid(routedInput),
-          sessionId: state.cuaSessionIds.get(utilityId)
+          sessionId: state.cuaSessionIds.get(utilityId),
+          permissionLevel: state.request.permissionLevel
         })
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
@@ -1399,6 +1444,47 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === CUA_UTILITY_ID) return true
     const capability = normalizeCapability(resolved.binding.nativeCapability ?? '')
     return capability === 'computer_use'
+  }
+
+  /**
+   * Drop a Cua client whose daemon connection died mid-turn.
+   *
+   * The `cua-driver mcp` server owns one connection to the shared Cua daemon and
+   * never re-establishes it, so a daemon that dies while a run is in flight (a
+   * crash, a driver update, a quit from the menu bar) leaves every remaining
+   * computer-use call of that turn failing against a connection that can never
+   * work again   measured against cua-driver 0.17.0: the connected server keeps
+   * answering `daemon transport error ... cua-driver.sock: No such file or
+   * directory` while a freshly spawned one starts a new daemon and works.
+   *
+   * Closing the client and forgetting its session is what lets the next call
+   * reconnect: reconnecting re-claims the daemon, which starts a fresh one on
+   * macOS, and the cursor session is re-created on it. The session id is dropped
+   * with the client because that session lived inside the daemon that just died.
+   *
+   * The call that failed is deliberately never retried: a computer-use operation
+   * may already have moved the mouse or typed, so replaying it is not safe.
+   *
+   * The failing client is the one named here, and it is only forgotten when it is
+   * still the cached one: the gateway serves concurrent requests, so another call
+   * may already have replaced it with a fresh connection that must survive.
+   */
+  private async dropDeadComputerUseTransport(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    error: unknown
+  ): Promise<void> {
+    if (!this.isComputerUseUtility(resolved)) return
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isCuaDaemonTransportFailure(message)) return
+    const utilityId = resolved.utility.id
+    if (state.clients.get(utilityId) === client) {
+      state.clients.delete(utilityId)
+      state.cuaSessionIds.delete(utilityId)
+    }
+    await client.close().catch(() => undefined)
+    Logger.dev('Cua daemon connection was lost; the next computer-use call reconnects')
   }
 
   /** Establish a visible, never-idle-hidden cursor for one Cua turn. */

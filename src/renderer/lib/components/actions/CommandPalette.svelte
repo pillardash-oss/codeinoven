@@ -1,18 +1,19 @@
 <script lang="ts">
-  import { Command, Dialog } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, X, Zap } from '@lucide/svelte'
+  import { Command } from 'bits-ui'
+  import { ArrowLeft, CornerDownLeft, FolderTree, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
 
   interface Props {
     open: boolean
@@ -71,17 +72,9 @@
     onSelectedProjectsChange
   }: Props = $props()
 
-  // The dialog-mode palette draws a full-window backdrop (fixed inset-0), and
-  // the browser's native view floats above every DOM surface (see
-  // browserVisibility.hideWhile), so the view must be
-  // suppressed while the palette is open: the same treatment every Modal
-  // gets. Keyed per instance so stacked palettes don't clear each other's
-  // suppression. Inline mode stays inside the composer column and never
-  // overlaps the sidebar, so it does not suppress.
-  const suppressionKey = `command-palette-${Math.random().toString(36).slice(2)}`
-  $effect(() =>
-    browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open && mode === 'dialog')
-  )
+  // The dialog-mode palette is a `Modal`, which publishes the full-window
+  // suppression itself. Inline mode stays inside the composer column and never
+  // overlaps the sidebar, so it renders no Modal and suppresses nothing.
 
   let query = $state('')
   let selectedActionId = $state('')
@@ -312,6 +305,22 @@
                   <span class="truncate">{action.status.label}</span>
                 </span>
               {/if}
+              {#if action.scope}
+                {@const scope = action.scope}
+                <span class="flex shrink-0 items-center gap-1">
+                  {#if scope.root.kind === 'worktree'}
+                    <span
+                      class="flex shrink-0 items-center"
+                      role="img"
+                      aria-label="Managed Git worktree scope on {scope.root.branch}"
+                      title="Managed Git worktree scope on {scope.root.branch}"
+                    >
+                      <FolderTree size={11} class="text-warning" />
+                    </span>
+                  {/if}
+                  <ScopeBadge bucket={scope} size="xs" />
+                </span>
+              {/if}
             </span>
             {#if action.disabledReason}
               <span class="mt-0.5 block truncate text-[0.6875rem] text-danger">
@@ -419,25 +428,19 @@
 {/snippet}
 
 {#if mode === 'dialog'}
-  <Dialog.Root
+  <Modal
     {open}
-    onOpenChange={(nextOpen) => {
-      if (!nextOpen) onClose()
+    {title}
+    {onClose}
+    placement="palette"
+    size="lg"
+    chrome={false}
+    onCloseAutoFocus={(event) => {
+      if (onRestoreFocus?.()) event.preventDefault()
     }}
   >
-    <Dialog.Portal>
-      <Dialog.Overlay class="fixed inset-0 z-40 bg-app/50" />
-      <Dialog.Content
-        class="fixed left-1/2 top-[18%] z-50 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
-        onCloseAutoFocus={(event) => {
-          if (onRestoreFocus?.()) event.preventDefault()
-        }}
-      >
-        <Dialog.Title class="sr-only">{title}</Dialog.Title>
-        {@render paletteBody()}
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>
+    {@render paletteBody()}
+  </Modal>
 {:else if open}
   <section
     class="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"

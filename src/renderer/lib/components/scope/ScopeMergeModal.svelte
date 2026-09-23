@@ -1,6 +1,6 @@
 <script lang="ts">
   import { RefreshCw } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
@@ -195,9 +195,18 @@
   )
 </script>
 
-<Modal {open} title="Merge scope into project" onClose={close} footer={footerSnippet}>
+<ConfirmDialog
+  {open}
+  title="Merge scope into project"
+  onCancel={close}
+  onConfirm={confirm}
+  confirmLabel={mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
+  variant={mode === 'merge-keep' ? 'primary' : 'danger'}
+  disabled={!preflightMatches}
+  busy={working}
+>
   <div class="space-y-5">
-    <p class="text-sm text-muted">
+    <p>
       Merge <span class="font-medium text-foreground">{sourceBucket?.name ?? 'this scope'}</span>
       back into the project. The merge target defaults to the Default scope.
     </p>
@@ -312,27 +321,4 @@
       <p class="text-xs text-danger" role="alert">{error}</p>
     {/if}
   </div>
-</Modal>
-
-{#snippet footerSnippet()}
-  <button
-    type="button"
-    class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
-    onclick={close}
-  >
-    Cancel
-  </button>
-  <button
-    type="button"
-    class={[
-      'rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50',
-      mode === 'merge-keep'
-        ? 'bg-primary text-on-primary hover:bg-primary-hover'
-        : 'bg-danger text-on-danger hover:bg-danger-hover'
-    ].join(' ')}
-    disabled={!preflightMatches || working}
-    onclick={() => void confirm()}
-  >
-    {working ? 'Merging…' : mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
-  </button>
-{/snippet}
+</ConfirmDialog>

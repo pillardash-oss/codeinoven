@@ -1,9 +1,10 @@
 <script lang="ts">
   import { ChevronDown, Check, FolderTree, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { parseRemoteIdentity } from '$lib/git-remote-identity'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import type { GitBranchInfo } from '$shared/types'
 
   interface Props {
@@ -396,31 +397,15 @@
   </DropdownMenu.Portal>
 </DropdownMenu.Root>
 
-<AlertDialog.Root open={deleteTarget !== null} onOpenChange={() => (deleteTarget = null)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Delete branch?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Branch <strong class="text-foreground">{deleteTarget}</strong> will be permanently deleted. This
-        cannot be undone.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={confirmDelete}
-        >
-          Delete
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmDialog
+  open={deleteTarget !== null}
+  title="Delete branch?"
+  onCancel={() => (deleteTarget = null)}
+  onConfirm={confirmDelete}
+  confirmLabel="Delete"
+>
+  <p>
+    Branch <strong class="text-foreground">{deleteTarget}</strong> will be permanently deleted. This cannot
+    be undone.
+  </p>
+</ConfirmDialog>

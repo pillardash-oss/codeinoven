@@ -74,6 +74,30 @@ const UPDATER_TERMINATION_SIGNAL_HINT =
 
 let permissionCache: { status: CuaPermissionStatus; at: number } | null = null
 
+/**
+ * The driver's daemon-wide authorization modes. `bounded` needs an immutable
+ * per-session manifest that CodeInOven never writes, so it is never requested;
+ * it is still parsed so a daemon someone else started is recognised as a
+ * mismatch rather than as "no mode".
+ */
+type CuaDaemonPermissionMode = 'standard' | 'bounded' | 'unrestricted'
+
+/**
+ * The mode a run needs. `cua-driver status` prints
+ * `permission mode: standard (built_in_default)`; the source in parentheses is
+ * kept so a refused request can say who decided the mode instead of guessing.
+ */
+interface CuaDaemonMode {
+  mode: CuaDaemonPermissionMode
+  source: string
+}
+
+interface CuaDaemonClaim {
+  mode: CuaDaemonPermissionMode
+  /** The binary that owns the daemon, recorded so a release never rediscovers it. */
+  binaryPath: string
+}
+
 interface CuaBridgeConfig {
   enabled: boolean
 }
@@ -116,6 +140,15 @@ export class CuaBridgeService {
 
   /** A second click must join the running update, not start a second installer. */
   private updateInFlight: Promise<CuaBridgeStatus> | null = null
+
+  /**
+   * Live computer-use runs, keyed by their owner, with the mode each one needs.
+   *
+   * The driver's authorization mode is decided when the daemon starts and is
+   * immutable for the daemon's lifetime, and restarting it ends every live
+   * session, so the first run to claim a mode owns it until that run ends.
+   */
+  private readonly daemonClaims = new Map<string, CuaDaemonClaim>()
 
   async getStatus(): Promise<CuaBridgeStatus> {
     const config = await this.loadConfig()
@@ -511,6 +544,148 @@ export class CuaBridgeService {
       await execFileAsync(binaryPath, ['stop'], { timeout: 8_000, maxBuffer: 128_000 })
     } catch {
       // The transient daemon may already be gone.
+    }
+  }
+
+  /**
+   * The daemon's authorization mode as the daemon itself reports it, or null
+   * when no daemon is running.
+   *
+   * A read, never a guess: cua-driver answers `permission mode: <mode>
+   * (<source>)`, and that answer is the only thing that says which mode the
+   * shared daemon will actually enforce.
+   */
+  private async readDaemonMode(binaryPath: string): Promise<CuaDaemonMode | null> {
+    try {
+      const { stdout, stderr } = await execFileAsync(binaryPath, ['status'], {
+        timeout: 8_000,
+        maxBuffer: 256_000
+      })
+      return parseDaemonMode(`${stdout}\n${stderr}`)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Make the shared daemon match the tier of a computer-use run that is about
+   * to start, and record that the run owns that mode.
+   *
+   * The mode cannot be negotiated per client: the daemon reads it once at
+   * startup, so a second client asking for something else is ignored. Without
+   * this, a `full_access` run leaves an approval-free daemon serving later
+   * `auto_review` threads, and an `auto_review` client that happens to start the
+   * daemon silently downgrades a `full_access` run.
+   *
+   * Throws instead of degrading when another live run owns a different mode: a
+   * restart would end that run's sessions, and running under the wrong mode is
+   * the silent failure this exists to prevent.
+   */
+  async claimDaemonMode(permissionLevel: PermissionLevel, ownerKey: string): Promise<void> {
+    const required = daemonModeForPermission(permissionLevel)
+    const conflicting = [...this.daemonClaims.entries()].find(
+      ([owner, claim]) => owner !== ownerKey && claim.mode !== required
+    )
+    if (conflicting) {
+      throw new Error(
+        `The Cua Driver daemon is running in ${conflicting[1].mode} mode for another computer-use run, ` +
+          `and its authorization mode cannot change until that run ends. This run needs ${required} mode.`
+      )
+    }
+    const { selected } = await this.selectedInstallation()
+    if (!selected) throw new Error('Cua Driver was not found in a supported install location')
+    const binaryPath = selected.realPath
+    this.daemonClaims.set(ownerKey, { mode: required, binaryPath })
+    try {
+      const live = await this.readDaemonMode(binaryPath)
+      if (live?.mode === required) return
+      // Only macOS has an app bundle to launch the daemon in, and on Windows and
+      // Linux the daemon belongs to the interactive desktop session rather than
+      // to this app, so a wrong mode there is reported instead of replaced.
+      if (platformName() !== 'macos') {
+        const current = live ? `${live.mode} mode` : 'no mode at all'
+        throw new Error(
+          `The Cua Driver daemon is running in ${current}, and this run needs ${required} mode. ` +
+            `Restart it with \`cua-driver serve --permission-mode ${required}${modeArgs(required)
+              .map((flag) => ` ${flag}`)
+              .join('')}\` and try again.`
+        )
+      }
+      // A daemon someone else started with the wrong mode is replaced rather than
+      // adopted: every run this app starts has to run at the tier the user chose.
+      await this.stopDaemon(binaryPath)
+      await this.startDaemon(binaryPath, required)
+    } catch (error) {
+      // A start that failed after the daemon actually came up must not leave it
+      // running: with the claim gone, nothing would ever stop it.
+      await this.abandonDaemon(binaryPath, required)
+      this.daemonClaims.delete(ownerKey)
+      throw error
+    }
+  }
+
+  /**
+   * Drop one run's claim, and stop a daemon that is still running unrestricted
+   * once nothing needs it.
+   *
+   * A standard daemon is left alone: it is the driver's own default, and keeping
+   * it up costs the next run nothing. An unrestricted one is not, because it
+   * disables every runtime approval prompt for as long as it lives.
+   */
+  async releaseDaemonClaim(ownerKey: string): Promise<void> {
+    const claim = this.daemonClaims.get(ownerKey)
+    if (!claim) return
+    this.daemonClaims.delete(ownerKey)
+    if (this.daemonClaims.size > 0 || claim.mode === 'standard') return
+    const live = await this.readDaemonMode(claim.binaryPath)
+    if (!live || live.mode === 'standard') return
+    await this.stopDaemon(claim.binaryPath)
+  }
+
+  /**
+   * Stop a daemon this app started for a run that then failed, when leaving it
+   * up would keep a mode nobody asked for. A standard daemon is the driver's own
+   * default and is left alone.
+   */
+  private async abandonDaemon(binaryPath: string, mode: CuaDaemonPermissionMode): Promise<void> {
+    if (mode === 'standard') return
+    const live = await this.readDaemonMode(binaryPath)
+    if (!live || live.mode === 'standard') return
+    await this.stopDaemon(binaryPath)
+  }
+
+  /**
+   * Start the shared daemon in one exact mode and verify what it adopted.
+   *
+   * The requested mode is not proof: a managed policy can disable unrestricted
+   * mode outright, and the daemon then reports the mode it settled on. Comparing
+   * the two is what turns that into a failure the run can report instead of a
+   * permission tier the user never chose.
+   */
+  private async startDaemon(binaryPath: string, mode: CuaDaemonPermissionMode): Promise<void> {
+    const serveArgs = ['serve', '--permission-mode', mode, ...modeArgs(mode)]
+    const appRoot = appBundleRoot(binaryPath)
+    const args = appRoot
+      ? ['-n', '-g', appRoot, '--args', ...serveArgs]
+      : ['-n', '-g', '-a', 'CuaDriver', '--args', ...serveArgs]
+    try {
+      await execFileAsync('open', args, { timeout: 8_000, maxBuffer: 128_000 })
+    } catch (error) {
+      throw new Error('The Cua Driver daemon could not be started', { cause: error })
+    }
+    const deadline = Date.now() + DAEMON_START_TIMEOUT_MS
+    for (;;) {
+      const live = await this.readDaemonMode(binaryPath)
+      if (live) {
+        if (live.mode === mode) return
+        throw new Error(
+          `The Cua Driver daemon started in ${live.mode} mode (${live.source}) instead of ${mode} mode.`
+        )
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`The Cua Driver daemon did not start in ${mode} mode`)
+      }
+      await sleep(DAEMON_WAIT_STEP_MS)
     }
   }
 
@@ -928,6 +1103,65 @@ function parseTextPermissionStatus(output: string): CuaPermissionStatus {
   if (accessibilityGranted && screenRecordingGranted) return 'granted'
   if (/(denied|not granted|missing|❌)/u.test(lower)) return 'missing'
   return 'unknown'
+}
+
+/**
+ * The daemon-specific wording. `daemon transport error forwarding <tool>` is what
+ * the MCP server answers when it cannot reach the daemon, and the socket path is
+ * named in the same breath.
+ */
+const CUA_DAEMON_TRANSPORT_FAILURE_PATTERN = /daemon transport error|cua-driver\.sock/iu
+/**
+ * The generic I/O renderings the driver can produce for a lost socket (a connect
+ * that finds no socket file, a write that hits a closed pipe, a response that was
+ * cut off mid-line). Deliberately not enough on their own: the driver uses the
+ * same wording for unrelated files and streams, so they only count next to a
+ * daemon reference.
+ */
+const CUA_SOCKET_FAILURE_PATTERN =
+  /os error (?:2|32|61)\b|connection refused|broken pipe|EOF while parsing/iu
+const CUA_DAEMON_CONTEXT_PATTERN = /cua[\s-]?driver|daemon|\.sock/iu
+
+/**
+ * Whether a driver failure means the MCP server lost its connection to the
+ * shared Cua daemon.
+ *
+ * That server owns one connection to the daemon and never re-establishes it, so
+ * a daemon that dies mid-run (a crash, a driver update, a quit from the menu
+ * bar) leaves it answering transport errors for the rest of its life. Measured
+ * against cua-driver 0.17.0: the connected server keeps failing after
+ * `cua-driver stop` while a freshly spawned one starts a new daemon and works.
+ * Callers use this to drop a connection they cached instead of reusing one that
+ * can never work again.
+ */
+export function isCuaDaemonTransportFailure(message: string): boolean {
+  if (CUA_DAEMON_TRANSPORT_FAILURE_PATTERN.test(message)) return true
+  return CUA_DAEMON_CONTEXT_PATTERN.test(message) && CUA_SOCKET_FAILURE_PATTERN.test(message)
+}
+
+/** The daemon mode one permission tier requires. */
+function daemonModeForPermission(permissionLevel: PermissionLevel): CuaDaemonPermissionMode {
+  return permissionLevel === 'full_access' ? 'unrestricted' : 'standard'
+}
+
+/**
+ * The extra `cua-driver serve` flags one mode needs. Unrestricted mode is only
+ * granted when the launch acknowledges its risk in the same breath.
+ */
+function modeArgs(mode: CuaDaemonPermissionMode): string[] {
+  return mode === 'unrestricted' ? ['--dangerously-bypass-approvals'] : []
+}
+
+/**
+ * Parse `permission mode: <mode> (<source>)` out of a `cua-driver status`
+ * report. Null when the report carries no mode, which is also what a stopped
+ * daemon's error output looks like.
+ */
+function parseDaemonMode(output: string): CuaDaemonMode | null {
+  const match = /permission mode:\s*([a-z_]+)\s*\(([^)]*)\)/u.exec(output)
+  const mode = match?.[1]
+  if (mode !== 'standard' && mode !== 'bounded' && mode !== 'unrestricted') return null
+  return { mode, source: match?.[2]?.trim() || 'unreported' }
 }
 
 function appBundleRoot(binaryPath: string): string | null {

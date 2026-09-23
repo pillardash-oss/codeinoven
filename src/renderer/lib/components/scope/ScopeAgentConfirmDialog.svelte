@@ -1,6 +1,6 @@
 <script lang="ts">
   import { AlertTriangle } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 
   /**
@@ -21,7 +21,16 @@
   }
 </script>
 
-<Modal {open} title="Confirm scope action" onClose={close} size="md">
+<ConfirmDialog
+  {open}
+  title="Confirm scope action"
+  onCancel={close}
+  onConfirm={() => void scopeConfirmations.respond(true)}
+  confirmLabel="Allow"
+  cancelLabel="Deny"
+  busy={scopeConfirmations.responding}
+  disabled={scopeConfirmations.responding}
+>
   {#if request}
     <div class="space-y-4">
       <div class="flex items-start gap-3">
@@ -62,26 +71,4 @@
       </p>
     </div>
   {/if}
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Deny this action; nothing will be changed"
-      onclick={() => void scopeConfirmations.respond(false)}
-      disabled={scopeConfirmations.responding}
-    >
-      Deny
-    </button>
-    <button
-      type="button"
-      data-modal-primary
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:pointer-events-none disabled:opacity-60"
-      title="Allow this action exactly as described"
-      onclick={() => void scopeConfirmations.respond(true)}
-      disabled={scopeConfirmations.responding}
-    >
-      Allow
-    </button>
-  {/snippet}
-</Modal>
+</ConfirmDialog>

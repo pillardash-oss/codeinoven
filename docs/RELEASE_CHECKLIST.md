@@ -49,7 +49,7 @@ Control who can merge, what must pass, and what runs automatically.
 - [x] **Enable GitHub secret scanning & push protection** on the repo (repo Settings → Security).
 - [x] **Environment branches created and protected**: `dev` (PR review + quality checks + linear history) and `nightly` (PR review + quality checks) exist and are protected; CI runs on all three (`main`/`dev`/`nightly`).
 - [x] **Nightly build workflow** (`.github/workflows/nightly.yml`): scheduled daily build from `nightly` branch publishing a `nightly` prerelease with checksums.
-- [x] **Mirror releases to our own download origin** (`.github/workflows/download-mirror.yml` + `scripts/publish-release-mirror.ts`): after a release is published, the same verified artifacts are copied to Cloudflare R2 and served from `dl.codeinoven.com`, which is what the app downloads updates from (GitHub stays the fallback). Setup and verification: `docs/DOWNLOAD-MIRROR.md`.
+- [x] **Mirror releases to our own download origin** (`.github/workflows/download-mirror.yml` + `scripts/publish-release-mirror.ts`): when the release workflow finishes it dispatches the mirror job, which copies the same verified artifacts to Cloudflare R2 and serves them from `dl.codeinoven.com`, which is what the app downloads updates from (GitHub stays the fallback). Setup and verification: `docs/DOWNLOAD-MIRROR.md`.
 - [ ] **Set the mirror repository variables/secrets** (`DOWNLOAD_MIRROR_S3_ENDPOINT`, `DOWNLOAD_MIRROR_S3_BUCKET`, `DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID`, `DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY`) so the mirror job runs instead of being skipped; see `docs/SECRETS.md` § 1.
 - [ ] **Require signed/verified commits** for maintainer pushes (optional but recommended for auditability).
 

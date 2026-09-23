@@ -88,7 +88,14 @@ function hasRuleLikeContent(message: string): boolean {
   )
 }
 
-function isTrivialUserTurn(message: string): boolean {
+/**
+ * Whether the turn is too thin to be worth a model call.
+ *
+ * A length and acknowledgement sanity check, not a judgement about durability:
+ * it is exported so a caller that lets a model decide durability can still keep
+ * this much of the deterministic gate.
+ */
+export function isTrivialUserTurn(message: string): boolean {
   const trimmed = message.trim()
   if (trimmed.length === 0) return true
   if (hasFrustrationSignal(trimmed)) return false

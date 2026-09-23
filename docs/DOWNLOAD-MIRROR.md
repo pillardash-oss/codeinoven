@@ -28,11 +28,25 @@ One directory per channel, served from the bucket root:
 
 ```
 https://dl.codeinoven.com/stable/    latest-mac.yml, latest.yml, latest-linux.yml
-                                     codeinoven-<version>-arm64.zip | .dmg | -setup.exe
-                                     codeinoven-<version>.AppImage | .deb, *.blockmap
+                                     codeinoven-<version>-arm64.dmg          macOS
+                                     codeinoven-<version>-setup.exe          Windows
+                                     codeinoven-<version>.AppImage | .deb    Linux
                                      SHA256SUMS.txt, RELEASE.json
 https://dl.codeinoven.com/nightly/   same shape, nightly versions
 ```
+
+The mirror carries one installer per platform a user installs from the download page, and
+nothing else. GitHub Releases stays the archive, so these stay on GitHub and are **not**
+duplicated here:
+
+- the macOS `.zip` is electron-updater's auto-update payload, not a download;
+- `.blockmap` files only serve differential downloads, which the app never performs: it
+  pre-downloads the whole artifact into electron-updater's pending cache.
+
+Consequence worth knowing: the app's trust check only uses the mirror when its manifest
+lists the exact file the update feed points at, and macOS updates download the `.zip`. With
+no zip in the bucket, **macOS in-app updates download from GitHub** while Windows and Linux
+updates come from the mirror.
 
 Each directory is a self-contained update-feed root: the feed and the artifacts it points at
 sit side by side, and both describe the same, single release. Nightly feed assets
@@ -55,7 +69,7 @@ array.
       "name": "codeinoven-0.5.56-arm64.dmg",
       "platform": "macos", // macos | windows | linux
       "arch": "arm64", // arm64 | x64
-      "kind": "dmg", // dmg | zip | installer | appimage | deb
+      "kind": "dmg", // dmg | installer | appimage | deb (never zip)
       "sizeBytes": 234487204,
       "sha256": "…",
       "sha512": "…", // base64, identical to the value in the channel's update feed
@@ -130,10 +144,27 @@ fees), but downloads are then not edge-cached.
 ### 3b. Abort incomplete multipart uploads
 
 Artifacts are larger than S3's single-request limit, so each one is a multipart upload. An
-upload that is interrupted (a cancelled workflow, a closed laptop) leaves its parts behind,
-and R2 bills those parts as stored data even though the object never appears in a listing.
+upload that is interrupted (a cancelled workflow, a closed laptop, `Ctrl-C`) leaves its parts
+behind: the key stays unreadable, because R2 answers 404 for an object that never completed,
+but the parts are billed as stored data and the bucket's object list shows the key as a
+half-uploaded object. That entry is not a partial download and nothing can download from it.
+
+Every publish aborts the unfinished uploads an earlier run left in the channel it is about to
+write, so a backfill or the next release clears them, and it prints what it removed. The
+lifecycle rule below is the backstop for a channel that is never published again:
+
 Bucket, **Settings**, **Object lifecycle rules**, **Add rule**: condition **Abort incomplete
 multipart uploads**, 1 day after initiation. Finished objects are untouched by this rule.
+
+To see what is waiting, without uploading anything:
+
+```bash
+bun run release:mirror --tag v0.5.56 --channel stable --dry-run
+
+# Or straight from the bucket (any S3 client works)
+curl -s --aws-sigv4 "aws:amz:auto:s3" --user "$ACCESS_KEY_ID:$SECRET_ACCESS_KEY" \
+  "$ENDPOINT/$BUCKET?uploads" | grep -E "<Key>|<Initiated>"
+```
 
 ### 4. CORS (only for browser-side fetches)
 
@@ -157,8 +188,13 @@ automatic mirror runs are **skipped** instead of failing every release.
 
 ## Publishing
 
-`.github/workflows/download-mirror.yml` runs automatically when a release is published
-(stable and nightly), and can be run by hand to backfill:
+`.github/workflows/download-mirror.yml` is dispatched by the release workflows, and can be run
+by hand to backfill. It also listens for `release: published`, but that event only fires for a
+release published by hand or by a token other than the default one: GitHub does not start a
+workflow from an event a `GITHUB_TOKEN` caused, and both `nightly.yml` and `release.yml` publish
+their releases with `GITHUB_TOKEN`. Each of them therefore ends by dispatching this workflow,
+because `workflow_dispatch` is the documented exception to that rule (it needs `actions: write`
+on the token).
 
 ```bash
 # Mirror an already-published release (workflow_dispatch inputs: tag, channel, keep,
@@ -179,11 +215,17 @@ The script (`scripts/publish-release-mirror.ts`):
    prerelease flag;
 2. downloads the release assets (or uses `--artifacts-dir`) and **verifies every installer
    against `SHA256SUMS.txt`** before uploading anything: a mismatch aborts the run;
-3. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
+3. aborts any unfinished multipart upload in that channel left by an earlier run, and
+   reports what it removed;
+4. uploads the mirrored installers, then feeds, checksums and `RELEASE.json` last, so a
    feed never points at a file that is not there yet;
-4. HEAD-verifies every uploaded key's size against the local file;
-5. deletes the release the channel no longer serves (with the default `--keep 1`, everything
-   except the release just uploaded), never touching feeds, checksums or the manifest.
+5. reads the first kilobyte of every uploaded key back with a range request and checks the
+   size the origin reports for the whole object and the bytes it serves;
+6. deletes the release the channel no longer serves (with the default `--keep 1`, everything
+   except the release just uploaded), never touching feeds, checksums or the manifest. An
+   object of the published version that this run does not upload is a leftover from the
+   previous layout (a macOS zip, a blockmap) and is deleted too, so a layout change reaches
+   the bucket on the next publish.
 
 Two guards keep the sweep from taking away the release the channel is serving:
 
@@ -196,7 +238,7 @@ Two guards keep the sweep from taking away the release the channel is serving:
   failed before the upload and a second mirror run publishing concurrently. The workflow
   serializes mirror runs (`concurrency: download-mirror`) so this stays a safety net.
 
-Upload the release from CI, not from a laptop. A release is about 970 MB, so a home uplink
+Upload the release from CI, not from a laptop. A release is about 750 MB, so a home uplink
 turns that into an hour-long job (measured 0.12 MiB/s up on a constrained connection), while
 the GitHub runner that published the release finishes it in a minute or two. A local run is
 for backfills on a fast connection, and for `--dry-run`, which needs no credentials and
@@ -211,6 +253,13 @@ curl -sI https://dl.codeinoven.com/stable/RELEASE.json | grep -i 'cf-cache-statu
 curl -s -o /dev/null -w '%{http_code}\n' -r 0-1023 \
   "https://dl.codeinoven.com/stable/$(curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq -r '.artifacts[0].name')"
 ```
+
+A note for anyone scripting checks against R2: a `HEAD` is not a reliable way to read an
+object's size here. Cloudflare compresses `text/plain` and `application/json` responses, so a
+HEAD of `SHA256SUMS.txt` or `RELEASE.json` comes back with `content-encoding: gzip` and **no**
+`content-length` (Bun's `S3File.stat()` reports 0 for exactly those two, which is why the
+publish script reads objects back with `Range: bytes=0-1023` and takes the total from
+`content-range`). A range request answers 206 uncompressed, so it works for every content type.
 
 An installer URL downloaded from the mirror must hash to the `sha256` in `RELEASE.json`. To
 confirm the mirror is currently trustworthy for an installed app, compare its `sha512` with
@@ -230,10 +279,10 @@ mean the app silently uses GitHub instead; re-run the mirror job for that releas
 
 ## Retention and cost
 
-A full release is ~970 MB across the five installers plus a few MB of blockmaps
-(measured on the `v0.5.56` assets). With the default `--keep 1` each channel holds exactly
-the release it serves, so the bucket stays at ~970 MB per channel (~1.9 GB for both) and
-does not grow: publishing the next release deletes the previous one. R2 storage is
+A full release is ~750 MB across the four mirrored installers (measured on the `v0.5.56`
+assets: dmg 223.6, exe 164.5, AppImage 202.3, deb 156.4). With the default `--keep 1` each
+channel holds exactly the release it serves, so the bucket stays at ~750 MB per channel
+(~1.5 GB for both) and does not grow: publishing the next release deletes the previous one. R2 storage is
 $0.015/GB-month with no egress fees
 ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)), so the whole mirror costs
 cents per month. `--keep 0` disables deletion if you ever want the bucket to accumulate.

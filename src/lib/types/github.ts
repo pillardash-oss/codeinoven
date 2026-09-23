@@ -205,6 +205,15 @@ export interface PullRequestCompare {
 export interface PullRequestDetail extends PullRequestSummary {
   body: string
   /**
+   * GraphQL global id of the pull request itself.
+   *
+   * The description is a field on the pull request rather than a comment, so the
+   * only handle GitHub accepts for reacting to it is the pull request's own node
+   * id. Null when the payload did not carry one, and the description then offers
+   * no reaction control rather than one that cannot land.
+   */
+  nodeId: string | null
+  /**
    * What the pull request's author is to the repository. The description is a
    * comment like any other in the conversation, so it carries the same role
    * badge its author's comments do.
@@ -285,6 +294,63 @@ export interface GitHubAvatarRequest {
  * order: `minimizeComment` rejects anything outside this set.
  */
 export type PrMinimizeReason = 'ABUSE' | 'OFF_TOPIC' | 'OUTDATED' | 'RESOLVED' | 'SPAM'
+
+/**
+ * One emoji a comment can be reacted with, as GitHub's GraphQL enum spells it.
+ *
+ * These eight are the whole set GitHub accepts: its picker draws exactly them,
+ * and `addReaction` rejects anything else. The REST endpoints spell the same
+ * values differently (`+1`, `-1`, `laugh`, `hooray`), so the GraphQL spelling is
+ * the one the app keeps and the one every surface passes around.
+ */
+export type PrReactionContent =
+  'THUMBS_UP' | 'THUMBS_DOWN' | 'LAUGH' | 'HOORAY' | 'CONFUSED' | 'HEART' | 'ROCKET' | 'EYES'
+
+/** One account that reacted to a comment. */
+export interface PrReactionActor {
+  login: string
+  /** The actor's picture as the provider declared it, when it published one. */
+  avatarUrl: string | null
+}
+
+/**
+ * One emoji's reactions on one comment.
+ *
+ * `count` is authoritative and `actors` is capped by the read, so a reader that
+ * shows a name list must read `count` for the total rather than the array's
+ * length. A group with no reactors is never carried at all: GitHub answers all
+ * eight groups for every subject, and seven of them saying nothing is noise the
+ * conversation would otherwise have to filter on every render.
+ */
+export interface PrReactionGroup {
+  content: PrReactionContent
+  /** True when the signed-in account is one of the reactors. */
+  viewerHasReacted: boolean
+  /** How many accounts reacted with this emoji. */
+  count: number
+  /** The reactors the read returned, newest first, capped by the provider. */
+  actors: PrReactionActor[]
+}
+
+/**
+ * Every reaction on a pull request's conversation, keyed by the GraphQL node id
+ * of the comment it belongs to.
+ *
+ * Keyed rather than attached to each comment because GitHub answers reactions per
+ * subject, not per comment list: one batched read covers the description, the
+ * issue comments, the reviews and the inline comments alike, and the renderer
+ * looks a row up by the node id it already carries.
+ */
+export type PrReactionMap = Record<string, PrReactionGroup[]>
+
+/** One reaction to add or take back, addressed to the comment it belongs to. */
+export interface SetPrReactionInput {
+  /** GraphQL global id of the comment, review or pull request being reacted to. */
+  nodeId: string
+  content: PrReactionContent
+  /** True to add the signed-in account's reaction, false to take it back. */
+  add: boolean
+}
 
 /** One issue comment on a pull request. */
 export interface PullRequestComment {
@@ -506,6 +572,12 @@ export interface PullRequestBundle {
   reviewComments: PullRequestReviewComment[]
   /** Resolution state per inline thread, which only GraphQL reports. */
   reviewThreads: PullRequestReviewThread[]
+  /**
+   * Reactions on the conversation, keyed by the node id of the comment they are
+   * on. One batched GraphQL read fills it for the description, the comments, the
+   * reviews and the inline comments together.
+   */
+  reactions: PrReactionMap
   files: PullRequestFile[]
   checks: PullRequestChecks
   /** Epoch ms this bundle was fetched, for cache staleness display. */

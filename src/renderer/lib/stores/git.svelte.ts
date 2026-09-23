@@ -39,6 +39,7 @@ import type {
   PrAgentReport,
   PrCommentKind,
   PrMinimizeReason,
+  PrReactionContent,
   PrResolveOptions,
   PullRequestBundle,
   PullRequestPage,
@@ -207,6 +208,8 @@ export class GitState {
       void this.refreshPrConflictIndicators(projectId, force),
     patchPullRequest: (owner, repo, pullNumber, patch) =>
       this.prs.patchPullRequest(owner, repo, pullNumber, patch),
+    patchBundleReactions: (owner, repo, pullNumber, nodeId, groups) =>
+      this.prs.patchBundleReactions(owner, repo, pullNumber, nodeId, groups),
     applyPullRequestState: (owner, repo, pullNumber, state) =>
       this.prs.applyPullRequestState(owner, repo, pullNumber, state)
   })
@@ -1450,6 +1453,26 @@ export class GitState {
       threadNodeId,
       resolved
     )
+  }
+
+  /**
+   * React to one comment, or take that reaction back.
+   *
+   * Addressed by the subject's GraphQL node id, because that is the one handle
+   * the description, an issue comment, a review and an inline comment all share.
+   * The store corrects the cached bundle from the write's own answer, so the
+   * reader's chip changes without the conversation refetching.
+   */
+  setPrCommentReaction(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    nodeId: string,
+    content: PrReactionContent,
+    add: boolean
+  ): Promise<boolean> {
+    return this.prOps.setPrCommentReaction(projectId, owner, repo, pullNumber, nodeId, content, add)
   }
 
   /**

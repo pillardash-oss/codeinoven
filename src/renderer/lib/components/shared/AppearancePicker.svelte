@@ -67,7 +67,6 @@
       value={color ?? null}
       allowNone={false}
       oncolorchange={(next) => onColorChange(next ?? undefined)}
-      suppressKey="appearance-color-picker"
     />
   </div>
 

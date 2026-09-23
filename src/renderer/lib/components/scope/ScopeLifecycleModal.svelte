@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import type { ScopeLifecycleAction, ScopeLifecyclePreflight } from '$shared/types'
@@ -111,12 +111,18 @@
   })
 </script>
 
-<Modal {open} title={`Confirm ${labelFor(action)}`} onClose={close} footer={footerSnippet}>
+<ConfirmDialog
+  {open}
+  title={`Confirm ${labelFor(action)}`}
+  onCancel={close}
+  onConfirm={confirm}
+  confirmLabel="Confirm"
+  disabled={!preflight || (forceNeeded && !secondConfirm)}
+  {busy}
+>
   <div class="space-y-4">
     {#if !preflight}
-      <p class="text-sm text-muted">
-        Checking this scope for blocking changes before anything is removed…
-      </p>
+      <p>Checking this scope for blocking changes before anything is removed…</p>
     {:else}
       <div class="space-y-3">
         <p class="text-sm text-foreground">
@@ -174,22 +180,4 @@
       </div>
     {/if}
   </div>
-</Modal>
-
-{#snippet footerSnippet()}
-  <button
-    type="button"
-    class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
-    onclick={close}
-  >
-    Cancel
-  </button>
-  <button
-    type="button"
-    class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger hover:bg-danger-hover disabled:opacity-50"
-    disabled={!preflight || busy || (forceNeeded && !secondConfirm)}
-    onclick={() => void confirm()}
-  >
-    {busy ? 'Working…' : 'Confirm'}
-  </button>
-{/snippet}
+</ConfirmDialog>

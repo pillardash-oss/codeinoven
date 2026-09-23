@@ -87,6 +87,23 @@ import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
+import {
+  buildTurnGradeQuestions,
+  buildTurnGradeState,
+  readTurnGrade,
+  TURN_GRADE_JUDGE_HARNESS_ID,
+  TURN_GRADE_SEAM
+} from './turn-grader-decision'
+import {
+  buildMemoryDecisionQuestions,
+  buildMemoryDecisionState,
+  MEMORY_DECISION_SEAM,
+  memoryDecisionDefaultScope,
+  memorySpanCandidates,
+  readMemoryDecision
+} from './memory/memory-decision'
+import { estimateTypesafeTokens, typesafeCostUsd } from '../../lib/typesafe/policy'
+import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
 import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
@@ -140,6 +157,7 @@ import type {
   UtilityTurnGateway
 } from '../utilities/utility-orchestration-service'
 import {
+  alternativeSecretNames,
   deriveSecretEnvironmentVariable,
   normalizeAgentSecretRequests,
   secretRequestQuestions,
@@ -687,6 +705,15 @@ export class ChatEngine {
   private static readonly RANKING_JUDGE_COOLDOWN_MAX_MS = 6 * 60 * 60_000
 
   /**
+   * How long a "can the TypeSafe capability answer?" reading is reused.
+   *
+   * Read only when deciding whether the deterministic memory gate may widen, so a
+   * stale value costs at most one widened turn. Shorter than the capability's own
+   * key-resolution cache, so a key stored in Settings qualifies without a restart.
+   */
+  private static readonly TYPESAFE_ANSWERABLE_TTL_MS = 30_000
+
+  /**
    * Spread added to a held-back or retried deadline. Conversations that closed
    * in the same session share one inactivity deadline, so without this a whole
    * batch of them expires together and is judged as one back-to-back burst  
@@ -1182,6 +1209,20 @@ export class ChatEngine {
   private rankingRepo: ModelRankingRepo
 
   private rankingSnapshotRepo: ModelRankingSnapshotRepo
+
+  /**
+   * The app's TypeSafe (Jev) decision capability, attached during boot.
+   *
+   * Null means the capability is not available at all, and every seam that asks
+   * it for a judgement falls straight through to the code it ran before TypeSafe
+   * existed. A seam never has to distinguish "not configured" from "down": both
+   * are the same fallback, which is what keeps an outage from being a special case
+   * in each caller.
+   */
+  private typesafeDecision: TypesafeDecisionService | null = null
+
+  /** Last reading of whether the capability is currently in a state that answers. */
+  private typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
 
   private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -1939,6 +1980,11 @@ export class ChatEngine {
       ) => this.answerSecret(projectId, threadId, requestId, secrets)
     )
     ipcMain.handle(
+      'agent:answerSecretAlternative',
+      (_, projectId: string, threadId: string, requestId: string, alternative: string) =>
+        this.answerSecretAlternative(projectId, threadId, requestId, alternative)
+    )
+    ipcMain.handle(
       'agent:dismissQuestion',
       (_, projectId: string, threadId: string, requestId: string) =>
         this.dismissQuestion(projectId, threadId, requestId)
@@ -2219,6 +2265,63 @@ export class ChatEngine {
       pending.settleSecret?.({
         status: stored.length > 0 ? 'set' : 'dismissed',
         secrets: stored
+      })
+    })
+  }
+
+  /**
+   * Settle a `cio_ask_secret` card with an instruction instead of a pasted value.
+   *
+   * The user is answering the request without handing over a value: typically the
+   * value already exists somewhere on this device and they no longer have it at
+   * hand. Every requested name is therefore resolved from state the user already
+   * stored (this thread, a credential bound to an installed utility, or another
+   * thread), adopted by this thread so later turns re-expose it, and settled on
+   * the waiting tool call together with the user's own words. Names with nothing
+   * stored behind them are reported back so the agent can adapt instead of asking
+   * for the same value again.
+   */
+  async answerSecretAlternative(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    alternative: string
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    requestId = validateEntityId(requestId, 'Question request ID', 256)
+    const instruction = validateBoundedString(alternative, 'Alternative instruction', 1, 20_000)
+    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const secretQuestions = pending.request.questions.filter(isSecretQuestion)
+    if (secretQuestions.length === 0) throw new TypeError('This request is not a secret request')
+    // Only names the user actually wrote are treated as extra candidates: the
+    // value is still adopted under the variable the agent asked for.
+    const candidateNames = alternativeSecretNames(instruction)
+    const stored: AgentStoredSecret[] = []
+    const unresolved: string[] = []
+    for (const question of secretQuestions) {
+      const environmentVariable = question.secretEnvironmentVariable
+      const secretId = question.secretId
+      if (!environmentVariable || !secretId) continue
+      const reused = await this.agentSecrets.reuse({
+        secretId,
+        environmentVariable,
+        label: question.header ?? question.prompt,
+        threadId,
+        ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
+        candidateNames
+      })
+      if (reused) stored.push(reused)
+      else unresolved.push(environmentVariable)
+    }
+    const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
+    await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
+      pending.settleSecret?.({
+        status: 'alternative',
+        secrets: stored,
+        alternative: instruction,
+        ...(unresolved.length > 0 ? { unresolved } : {})
       })
     })
   }
@@ -2753,16 +2856,19 @@ export class ChatEngine {
    *
    * A thread with a feature slug owns `.cio/specs/<slug>`, the authoritative
    * pair for engineering work. Every other thread keeps its plan beside its own
-   * scratch work, so the newest `.cio/work/<feature>` pair is used instead: the
-   * app cannot know which directory a chat chose, and the most recently written
-   * plan is the one the thread is following.
+   * scratch work, in the `.cio/work/<feature>` directory named after the slug of
+   * its own title   the same derivation the rest of the app uses. The newest
+   * work directory in the project is deliberately not consulted: it belongs to
+   * whichever chat wrote last, so it attached another thread's plan to this
+   * thread's checkpoint. Publishing no plan is the honest outcome when this
+   * thread's directory is not there.
    */
   private async resolveThreadPlan(
     projectPath: string,
     threadId: string
   ): Promise<CompactionFallbackContext> {
-    const row = this.database.get<{ feature_slug: string | null }>(
-      'SELECT feature_slug FROM threads WHERE id=?',
+    const row = this.database.get<{ feature_slug: string | null; title: string | null }>(
+      'SELECT feature_slug, title FROM threads WHERE id=?',
       threadId
     )
     // A slug that no longer round-trips is not a directory this app wrote, so
@@ -2772,7 +2878,8 @@ export class ChatEngine {
       slug && featureSlugFromTitle(slug) === slug
         ? join(projectPath, featureArtifactDirectory(slug))
         : null
-    const directory = specDirectory ?? (await this.newestWorkDirectory(projectPath))
+    const directory =
+      specDirectory ?? (await this.threadWorkDirectory(projectPath, threadId, row?.title ?? ''))
     if (!directory) return { plan: null, progress: null, planPath: null, progressPath: null }
     const plan = await this.readPlanArtifact(join(directory, 'plan.md'))
     const progress = await this.readPlanArtifact(join(directory, 'progress.md'))
@@ -2794,30 +2901,28 @@ export class ChatEngine {
     }
   }
 
-  /** Newest `.cio/work/<feature>` directory holding a plan, or null. */
-  private async newestWorkDirectory(projectPath: string): Promise<string | null> {
-    try {
-      const root = join(projectPath, PROJECT_DATA_DIRECTORY, 'work')
-      let newest: string | null = null
-      let newestAt = 0
-      for (const entry of await readdir(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const directory = join(root, entry.name)
-        try {
-          const modified = (await stat(join(directory, 'plan.md'))).mtimeMs
-          if (modified > newestAt) {
-            newestAt = modified
-            newest = directory
-          }
-        } catch {
-          // A work directory without a plan is not a plan candidate.
-        }
+  /**
+   * This thread's own `.cio/work/<feature>` scratch directory, or null.
+   *
+   * The feature slug comes from the thread's title, matching
+   * `projectArtifactDirectory()`, and both the feature-level layout
+   * (`.cio/work/<feature>/plan.md`) and the thread-scoped one
+   * (`.cio/work/<feature>/<threadId>/plan.md`) are accepted.
+   */
+  private async threadWorkDirectory(
+    projectPath: string,
+    threadId: string,
+    title: string
+  ): Promise<string | null> {
+    const root = join(projectPath, PROJECT_DATA_DIRECTORY, 'work', featureSlugFromTitle(title))
+    for (const directory of [root, join(root, threadId)]) {
+      try {
+        if ((await stat(join(directory, 'plan.md'))).isFile()) return directory
+      } catch {
+        // Not this layout; try the next one.
       }
-      return newest
-    } catch {
-      // No scratch directory, or a project with no local filesystem root.
-      return null
     }
+    return null
   }
 
   /**
@@ -20938,6 +21043,18 @@ export class ChatEngine {
   }
 
   /**
+   * Attach the app's TypeSafe (Jev) decision capability.
+   *
+   * Attached after construction because the capability is built later in boot
+   * than this engine is, the same way the heartbeat and retry schedulers are. One
+   * instance serves every seam, so the key, the breaker and the audit trail are
+   * shared rather than duplicated per caller.
+   */
+  attachTypesafeDecisionService(service: TypesafeDecisionService): void {
+    this.typesafeDecision = service
+  }
+
+  /**
    * Send one disposable "ping" completion for a configured Heartbeat, pinned
    * to its exact harness/provider/model   no visible thread, no cheap-model
    * substitution. Runs in the same inbox scratch directory as standalone chats.
@@ -23261,6 +23378,64 @@ export class ChatEngine {
   }
 
   /**
+   * Grade one ranked conversation with the app's TypeSafe capability.
+   *
+   * Null hands the row back to the harness lanes below exactly as they ran before
+   * this existed. That covers every way the capability can fail to produce a
+   * usable number, so a revoked key, an outage, and an unreadable answer all cost
+   * a slower judge instead of a lost grade.
+   */
+  private async gradeWithTypesafe(
+    candidate: RankingGradeCandidate
+  ): Promise<RankingJudgeOutcome | null> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return null
+    const decision = await capabilities.decide({
+      seam: TURN_GRADE_SEAM,
+      state: buildTurnGradeState({
+        userMessage: candidate.userMessage,
+        assistantOutput: candidate.assistantOutput,
+        followUp: candidate.followUp
+      }),
+      questions: buildTurnGradeQuestions(),
+      // The grade is read from the answer's own distribution, so the capability's
+      // floors   which ask for a confident yes   do not apply to a rating.
+      thresholds: { noul: 0, confidence: 0 }
+    })
+    if (decision.status !== 'answered') {
+      Logger.dev('Ranking grading fell through from TypeSafe:', {
+        harnessId: candidate.harnessId,
+        modelId: candidate.modelId,
+        status: decision.status,
+        detail: decision.detail
+      })
+      return null
+    }
+    const grade = readTurnGrade(decision.answers)
+    if (!grade) {
+      Logger.dev('TypeSafe returned no readable grade:', {
+        harnessId: candidate.harnessId,
+        modelId: candidate.modelId
+      })
+      return null
+    }
+    Logger.dev('Ranking grading completed on TypeSafe', {
+      harnessId: candidate.harnessId,
+      modelId: candidate.modelId,
+      score: grade.score,
+      confidence: grade.confidence,
+      judgeModelId: decision.model,
+      latencyMs: decision.latencyMs
+    })
+    return {
+      score: grade.score,
+      judgeHarnessId: TURN_GRADE_JUDGE_HARNESS_ID,
+      judgeModelId: decision.model,
+      viaAuxiliary: false
+    }
+  }
+
+  /**
    * Judge one candidate and persist nothing. Returns the 0–10 score, or null on
    * judge failure, together with the judge that ran so a failure is reported
    * against the model that produced it rather than against the graded model.
@@ -23276,6 +23451,12 @@ export class ChatEngine {
       viaAuxiliary: false
     }
     try {
+      // TypeSafe first whenever it is available: one HTTPS call with no process
+      // spawn, no provider account and a judge outside every harness. Anything
+      // short of a readable score falls through to the lanes below.
+      const typesafe = await this.gradeWithTypesafe(candidate)
+      if (typesafe) return typesafe
+
       const workingDirectory = await this.auxiliaryWorkingDirectory()
       // A user-assigned auxiliary model judges the conversation when one is
       // configured for the graded model's harness. Grading has no thread, so a
@@ -24814,7 +24995,11 @@ export class ChatEngine {
         candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
         assistantResponse,
         projectId,
-        threadId
+        threadId,
+        // With the capability able to answer, durability is its judgement to make
+        // and the standing-preference patterns stop gating the turn. When it
+        // cannot answer, the patterns stay exactly as load bearing as before.
+        requireDurableCandidate: !(await this.typesafeCanAnswer())
       })
       if (extraction.run) {
         // The decision needs the user's earlier message to tell a standing rule
@@ -24981,6 +25166,105 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Whether the capability can actually answer a question right now.
+   *
+   * Only the memory gate needs this. That gate decides whether the deterministic
+   * pattern list is what judges durability, and widening it while the capability
+   * cannot answer would send turns the patterns rejected to the cheap-model chain
+   * instead, spending more than the code did before TypeSafe existed. A missing
+   * key and an open breaker therefore both read as "cannot answer".
+   */
+  private async typesafeCanAnswer(): Promise<boolean> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return false
+    const now = Date.now()
+    const cached = this.typesafeAnswerable
+    if (cached && now - cached.checkedAt < ChatEngine.TYPESAFE_ANSWERABLE_TTL_MS) {
+      return cached.value
+    }
+    let value = false
+    try {
+      const status = await capabilities.getStatus()
+      // `unverified` is the ordinary state before the first call has succeeded,
+      // so it counts: a key is present and nothing has failed yet.
+      value =
+        status.hasKey && (status.availability === 'ready' || status.availability === 'unverified')
+    } catch (error) {
+      Logger.dev('TypeSafe availability could not be read:', error)
+    }
+    this.typesafeAnswerable = { value, checkedAt: now }
+    return value
+  }
+
+  /**
+   * Decide one memory proposal with the app's TypeSafe capability.
+   *
+   * Null is the caller's signal to run the cheap-model chain exactly as it ran
+   * before, so this method never has to report *why* it could not answer.
+   *
+   * The seam deliberately passes zero confidence floors and applies its own
+   * policy to the raw probabilities instead. A floor tuned for a confident yes
+   * would reject the most common answer there is   "this turn states nothing
+   * lasting"   and pay for a second model call on every ordinary turn, which is
+   * worse than the code path it replaced.
+   */
+  private async decideMemoryWithTypesafe(input: {
+    userMessage: string
+    assistantResponse: string
+    previousUserMessage: string | null
+    projectId: string
+    threadId: string
+    allowedScopes: readonly MemoryScope[]
+  }): Promise<StructuredMemoryProposal | null> {
+    const capabilities = this.typesafeDecision
+    if (!capabilities) return null
+    const spans = memorySpanCandidates(input.userMessage)
+    if (spans.length === 0) return null
+    const state = buildMemoryDecisionState({
+      userMessage: input.userMessage,
+      assistantResponse: input.assistantResponse,
+      previousUserMessage: input.previousUserMessage
+    })
+    const questions = buildMemoryDecisionQuestions({ allowedScopes: input.allowedScopes, spans })
+    const decision = await capabilities.decide({
+      seam: MEMORY_DECISION_SEAM,
+      state,
+      questions,
+      thresholds: { noul: 0, confidence: 0 },
+      threadId: input.threadId
+    })
+    if (decision.status !== 'answered') return null
+    const proposal = readMemoryDecision({
+      answers: decision.answers,
+      spans,
+      allowedScopes: input.allowedScopes,
+      defaultScope: memoryDecisionDefaultScope({
+        isStandaloneChat: input.projectId === INBOX_PROJECT_ID
+      })
+    })
+    // The capability answered the question, so this turn's auxiliary cost belongs
+    // to it even when the answer is "nothing durable"   that answer consumed the
+    // call, and reporting only the proposing turns would understate the cost.
+    const usage = decision.usage ?? {
+      inputTokens: estimateTypesafeTokens(state, questions),
+      outputTokens: 0
+    }
+    this.memoryService.recordAuxiliaryUsage('memory', usage.inputTokens, input.userMessage.length, {
+      outputTokens: usage.outputTokens,
+      costUsd: typesafeCostUsd(usage),
+      costStatus: 'estimated'
+    })
+    Logger.dev('Memory proposal decided by TypeSafe', {
+      projectId: input.projectId,
+      threadId: input.threadId,
+      propose: proposal.propose,
+      model: decision.model,
+      latencyMs: decision.latencyMs
+    })
+    return proposal
+  }
+
   private async generateMemoryProposal(
     userMessage: string,
     assistantResponse: string,
@@ -25041,6 +25325,16 @@ export class ChatEngine {
       `COMPLETED_TURN_JSON: ${turnEvidence}`,
       'Return only the required memory decision JSON object.'
     ].join('\n\n')
+    const typesafe = await this.decideMemoryWithTypesafe({
+      userMessage,
+      assistantResponse,
+      previousUserMessage,
+      projectId,
+      threadId,
+      allowedScopes
+    })
+    if (typesafe) return typesafe
+
     let cheapFailure: string | null
     // A user-assigned auxiliary model decides instead of the thread's harness
     // when one is configured for that harness. Any failure falls through to the

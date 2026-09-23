@@ -37,6 +37,7 @@
       activeTabId={tabId}
       newLabel="New browser tab"
       minimizeLabel="Minimize browser"
+      hostsBrowserView
       onSelect={(id) => onTabIdChange(id)}
       onCloseTab={(id) => onCloseTab(id)}
       onNew={() => {

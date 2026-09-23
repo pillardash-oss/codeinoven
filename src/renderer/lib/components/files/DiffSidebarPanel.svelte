@@ -44,6 +44,10 @@
     loading = $state(false)
     error = $state('')
     restoringId = $state<string | null>(null)
+    /** The run a Restore confirmation is open for, or null. The request is parked
+     *  here while the shared confirmation asks, so the question is asked with the
+     *  app's own dialog instead of a native browser one. */
+    pendingRestoreId = $state<string | null>(null)
     selections = $state<Record<string, string[]>>({})
     mode = $state<ChangesMode>('diffs')
     fileDiffs = $state<TurnCheckpointFileDiff[]>([])
@@ -303,8 +307,19 @@
       }
     }
 
-    async restoreRun(checkpointId: string): Promise<void> {
-      if (!window.confirm('Restore every file in this run to its pre-run state?')) return
+    /** Park the run so the confirmation can ask before anything is restored. */
+    requestRestoreRun(checkpointId: string): void {
+      this.pendingRestoreId = checkpointId
+    }
+
+    cancelRestoreRun(): void {
+      this.pendingRestoreId = null
+    }
+
+    async confirmRestoreRun(): Promise<void> {
+      const checkpointId = this.pendingRestoreId
+      if (checkpointId === null) return
+      this.pendingRestoreId = null
       const generation = this.generation
       this.restoringId = checkpointId
       this.error = ''
@@ -393,6 +408,7 @@
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
@@ -750,7 +766,7 @@
                         type="button"
                         class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id}
-                        onclick={() => void controller.restoreRun(checkpoint.id)}
+                        onclick={() => controller.requestRestoreRun(checkpoint.id)}
                       >
                         {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
                       </button>
@@ -764,4 +780,15 @@
       {/if}
     {/if}
   </div>
+
+  <ConfirmDialog
+    open={controller.pendingRestoreId !== null}
+    title="Restore every file in this run to its pre-run state?"
+    onCancel={() => controller.cancelRestoreRun()}
+    onConfirm={() => void controller.confirmRestoreRun()}
+    confirmLabel="Restore run"
+    busy={controller.restoringId !== null}
+  >
+    <p>The files this run changed go back to the content they had before it started.</p>
+  </ConfirmDialog>
 </div>

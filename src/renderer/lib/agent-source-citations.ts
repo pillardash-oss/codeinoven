@@ -28,6 +28,13 @@ const FILE_EXT =
 
 const FILE_EXT_PATTERN = `(?:${FILE_EXT})`
 const BACKTICK_CANDIDATE = /(?<!\[)`([^`\n]+)`/gu
+
+// A citation's trailing line location. Ranges may be listed, comma separated
+// (`:1-3,29-43`): the whole list belongs to the one citation, so the label keeps
+// every range and nothing is left dangling behind the link. Only the first
+// range becomes the link's line target.
+const LINE_RANGES_SOURCE = '\\d+(?:-\\d+)?(?:,\\d+(?:-\\d+)?)*'
+const LINE_RANGES_SUFFIX = new RegExp(`:(${LINE_RANGES_SOURCE})$`, 'u')
 // A prose citation (`src/a/b.ts:12`) only counts when it is its own token. It may
 // not be preceded by a word or path character (negative lookbehind), so a match
 // can never start in the middle of a longer path or a URL, and it must be
@@ -37,7 +44,7 @@ const BACKTICK_CANDIDATE = /(?<!\[)`([^`\n]+)`/gu
 // omits `]`: a trailing `]` means the candidate sits inside a markdown link
 // label, which must never be rewritten from the inside.
 const PLAIN_WITH_LINE = new RegExp(
-  `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN}):(\\d+)(?:-(\\d+))?(?=$|[\\s.,;:!?)"'*_])`,
+  `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN}):(${LINE_RANGES_SOURCE})(?=$|[\\s.,;:!?)"'*_])`,
   'giu'
 )
 const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
@@ -242,10 +249,11 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
     lineEnd = hashLocation[2] ? Number(hashLocation[2]) : undefined
     target = target.slice(0, -hashLocation[0].length)
   } else {
-    const colonLocation = target.match(/:(\d+)(?:-(\d+))?$/u)
+    const colonLocation = LINE_RANGES_SUFFIX.exec(target)
     if (colonLocation) {
-      line = Number(colonLocation[1])
-      lineEnd = colonLocation[2] ? Number(colonLocation[2]) : undefined
+      const [start, end] = (colonLocation[1] ?? '').split(',')[0]!.split('-')
+      line = Number(start)
+      lineEnd = end ? Number(end) : undefined
       target = target.slice(0, -colonLocation[0].length)
     }
   }
@@ -322,9 +330,7 @@ export function extractCitations(text: string): SourceCitation[] {
   }
 
   for (const match of normalizedText.matchAll(PLAIN_WITH_LINE)) {
-    const parsed = parseFileCitation(
-      `${match[1] ?? ''}:${match[2] ?? ''}${match[3] ? `-${match[3]}` : ''}`
-    )
+    const parsed = parseFileCitation(`${match[1] ?? ''}:${match[2] ?? ''}`)
     if (!parsed) continue
     add({ kind: 'file', ...parsed, raw: match[0] })
   }
@@ -379,7 +385,21 @@ export function linkifyFileCitations(
   // an existing external absolute path).
   result = linkifyCodexCitations(result, isClickable)
 
-  result = result.replace(
+  // Every remaining pass runs line by line and never reaches inside fenced code
+  // or an inline-code span. Rewriting a fragment of a span injects backticks
+  // into it, the span breaks, and the citation link it was supposed to become
+  // shows up as literal text in the thread, `#opencode-source:` target and all.
+  const out: string[] = []
+  scanMarkdownLines(result, (line, inFence) => {
+    out.push(inFence ? line : linkifyLine(line, isClickable))
+  })
+  return out.join('\n')
+}
+
+/** Linkify one line of prose. Whole inline-code spans are claimed first, so the
+ *  prose pass only ever sees the text between spans. */
+function linkifyLine(line: string, isClickable: (path: string) => boolean): string {
+  const withLinks = line.replace(
     MARKDOWN_LINK_PATTERN,
     (match, label: string, angleTarget?: string, plainTarget?: string) => {
       const parsed = parseFileCitation(angleTarget ?? plainTarget ?? '', true)
@@ -388,33 +408,40 @@ export function linkifyFileCitations(
     }
   )
 
-  result = result.replace(BACKTICK_CANDIDATE, (match, value: string) => {
+  const withSpans = withLinks.replace(BACKTICK_CANDIDATE, (match, value: string) => {
     const parsed = parseFileCitation(value)
     if (!parsed || !isClickable(parsed.path)) return match
     return `[\`${value}\`](${citationHref(parsed)})`
   })
 
-  result = result.replace(
+  return splitAroundInlineCode(withSpans)
+    .map((segment, index) =>
+      index % 2 === 1 ? segment : linkifyProseSegment(segment, isClickable)
+    )
+    .join('`')
+}
+
+/** Linkify the parts of a line that sit outside inline code. */
+function linkifyProseSegment(segment: string, isClickable: (path: string) => boolean): string {
+  return segment.replace(
     PLAIN_WITH_LINE,
-    (
-      match,
-      path: string,
-      line: string,
-      lineEnd: string | undefined,
-      offset: number,
-      whole: string
-    ) => {
+    (match, path: string, ranges: string, offset: number, whole: string) => {
       // A markdown link label always ends with `](`, so a citation followed by
       // at most emphasis markers and `](` is the text of a link, not a citation:
       // rewriting it would nest a link inside a link and break the label.
       if (/^[*_]{0,2}\]\(/u.test(whole.slice(offset + match.length))) return match
-      const parsed = parseFileCitation(`${path}:${line}${lineEnd ? `-${lineEnd}` : ''}`)
+      const parsed = parseFileCitation(`${path}:${ranges}`)
       if (!parsed || !isClickable(parsed.path)) return match
       return `[\`${match}\`](${citationHref(parsed)})`
     }
   )
+}
 
-  return result
+/** Split a markdown line into segments where even indices sit outside inline
+ *  code and odd indices are code payloads. Link rewrites belong on even
+ *  segments only. */
+function splitAroundInlineCode(line: string): string[] {
+  return line.split('`')
 }
 
 /** A file candidate becomes a link only when it is confirmed to exist on disk;
@@ -432,7 +459,7 @@ function linkifyCodexCitations(text: string, isKnown: (path: string) => boolean)
       out.push(line)
       return
     }
-    const segments = line.split('`')
+    const segments = splitAroundInlineCode(line)
     const linked = segments
       .map((segment, index) => {
         if (index % 2 === 1) return segment

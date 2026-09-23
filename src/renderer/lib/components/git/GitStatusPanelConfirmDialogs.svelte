@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ExternalLink, Loader2 } from '@lucide/svelte'
-  import { AlertDialog } from 'bits-ui'
+  import { ExternalLink } from '@lucide/svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitCommitInfo, GitConflictSide, GitStashEntry } from '$shared/types'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import { absoluteTime, relativeTime } from './git-status-panel-format'
 
@@ -55,242 +55,134 @@
 
 {#if stashDropTarget}
   {@const dropTarget = stashDropTarget}
-  <AlertDialog.Root open onOpenChange={() => (stashDropTarget = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Discard stash?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Stash
-          <strong class="font-medium text-foreground">
-            “{dropTarget.message}”
-          </strong>
-          ({dropTarget.id}) will be permanently discarded. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={onConfirmStashDrop}
-          >
-            Discard
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title="Discard stash?"
+    onCancel={() => (stashDropTarget = null)}
+    onConfirm={onConfirmStashDrop}
+    confirmLabel="Discard"
+  >
+    <p>
+      Stash
+      <strong class="font-medium text-foreground">
+        “{dropTarget.message}”
+      </strong>
+      ({dropTarget.id}) will be permanently discarded. This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if discardConfirm}
-  <AlertDialog.Root open onOpenChange={() => (discardConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Discard changes?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Changes to
-          {discardConfirm.length}
-          {discardConfirm.length === 1 ? 'file' : 'files'} will be permanently discarded. This cannot
-          be undone.
-        </AlertDialog.Description>
-        {#if discardConfirm.length > 4}
-          <div
-            class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
-          >
-            {#each discardConfirm as path (path)}
-              <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
-            {/each}
-          </div>
-        {/if}
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={onConfirmDiscard}
-          >
-            Discard changes
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title="Discard changes?"
+    onCancel={() => (discardConfirm = null)}
+    onConfirm={onConfirmDiscard}
+    confirmLabel="Discard changes"
+  >
+    <p>
+      Changes to
+      {discardConfirm.length}
+      {discardConfirm.length === 1 ? 'file' : 'files'} will be permanently discarded. This cannot be undone.
+    </p>
+    {#if discardConfirm.length > 4}
+      <div class="max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2">
+        {#each discardConfirm as path (path)}
+          <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
+        {/each}
+      </div>
+    {/if}
+  </ConfirmDialog>
 {/if}
 
 {#if restoreWorktreeConfirm}
-  <AlertDialog.Root open onOpenChange={() => (restoreWorktreeConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Restore {restoreWorktreeConfirm.path}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          The file on disk will be overwritten with its content from this history entry. Any
-          uncommitted local edits to it are lost. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={onConfirmRestoreWorktree}
-          >
-            Restore file
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Restore ${restoreWorktreeConfirm.path}?`}
+    onCancel={() => (restoreWorktreeConfirm = null)}
+    onConfirm={onConfirmRestoreWorktree}
+    confirmLabel="Restore file"
+  >
+    <p>
+      The file on disk will be overwritten with its content from this history entry. Any uncommitted
+      local edits to it are lost. This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if removeCommitChangesConfirm}
   {@const removal = removeCommitChangesConfirm}
-  <AlertDialog.Root open onOpenChange={() => (removeCommitChangesConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Remove from commit?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          The selected
-          {removal.paths.length === 1 ? 'file change leaves' : 'file changes leave'}
-          <strong class="font-medium text-foreground">{removal.hash.slice(0, 7)}</strong>, so the
-          commit is rewritten and looks like it never touched
-          {removal.paths.length === 1 ? 'that file' : 'those files'}. Commits after it are replayed
-          and get new hashes. A file still in the working tree keeps its content and shows up as an
-          unstaged change. This cannot be undone.
-        </AlertDialog.Description>
-        {#if removal.paths.length > 1}
-          <div
-            class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
-          >
-            {#each removal.paths as path (path)}
-              <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
-            {/each}
-          </div>
-        {/if}
-        {#if removeCommitOnRemote}
-          <p class="mt-3 text-xs leading-5 text-warning">
-            This commit is already on the remote, so the branch needs a force push afterwards.
-          </p>
-        {/if}
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={onConfirmRemoveCommitChanges}
-          >
-            Remove from commit
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title="Remove from commit?"
+    onCancel={() => (removeCommitChangesConfirm = null)}
+    onConfirm={onConfirmRemoveCommitChanges}
+    confirmLabel="Remove from commit"
+  >
+    <p>
+      The selected
+      {removal.paths.length === 1 ? 'file change leaves' : 'file changes leave'}
+      <strong class="font-medium text-foreground">{removal.hash.slice(0, 7)}</strong>, so the commit
+      is rewritten and looks like it never touched
+      {removal.paths.length === 1 ? 'that file' : 'those files'}. Commits after it are replayed and
+      get new hashes. A file still in the working tree keeps its content and shows up as an unstaged
+      change. This cannot be undone.
+    </p>
+    {#if removal.paths.length > 1}
+      <div class="max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2">
+        {#each removal.paths as path (path)}
+          <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
+        {/each}
+      </div>
+    {/if}
+    {#if removeCommitOnRemote}
+      <p class="text-warning">
+        This commit is already on the remote, so the branch needs a force push afterwards.
+      </p>
+    {/if}
+  </ConfirmDialog>
 {/if}
 
 {#if abortConfirmOpen}
-  <AlertDialog.Root open onOpenChange={() => (abortConfirmOpen = false)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Abort {conflictState === 'merge' ? 'merge' : 'rebase'}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          This cancels the in-progress
-          <strong class="font-medium text-foreground">{conflictState}</strong> operation and
-          restores the working tree to how it was before it started. Any partially resolved files
-          will be lost.
-          {#if conflictState === 'rebase'}
-            Commits created since the rebase started are dropped with it, because the branch goes
-            back to the commit it was on when the rebase began.
-          {/if}
-          This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-            onclick={onConfirmAbortConflict}
-          >
-            {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Abort ${conflictState === 'merge' ? 'merge' : 'rebase'}?`}
+    onCancel={() => (abortConfirmOpen = false)}
+    onConfirm={onConfirmAbortConflict}
+    confirmLabel={`Abort ${conflictState === 'merge' ? 'merge' : 'rebase'}`}
+    busy={gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+  >
+    <p>
+      This cancels the in-progress
+      <strong class="font-medium text-foreground">{conflictState}</strong> operation and restores
+      the working tree to how it was before it started. Any partially resolved files will be lost.
+      {#if conflictState === 'rebase'}
+        Commits created since the rebase started are dropped with it, because the branch goes back
+        to the commit it was on when the rebase began.
+      {/if}
+      This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if acceptConflictsSide}
   {@const side = acceptConflictsSide}
-  <AlertDialog.Root open onOpenChange={() => (acceptConflictsSide = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Accept all {side}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Every conflicted file is replaced with its
-          <strong class="font-medium text-foreground">{side}</strong> version and staged, so the
-          merge editor's work on the other side of
-          <strong class="font-medium text-foreground">{conflictedCount}</strong>
-          {conflictedCount === 1 ? 'file' : 'files'} is discarded. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('accept-conflicts')}
-            onclick={onConfirmAcceptAllConflicts}
-          >
-            {#if gitState.isBusy('accept-conflicts')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Accept all {side}
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+  <ConfirmDialog
+    open
+    title={`Accept all ${side}?`}
+    onCancel={() => (acceptConflictsSide = null)}
+    onConfirm={onConfirmAcceptAllConflicts}
+    confirmLabel={`Accept all ${side}`}
+    busy={gitState.isBusy('accept-conflicts')}
+  >
+    <p>
+      Every conflicted file is replaced with its
+      <strong class="font-medium text-foreground">{side}</strong> version and staged, so the merge
+      editor's work on the other side of
+      <strong class="font-medium text-foreground">{conflictedCount}</strong>
+      {conflictedCount === 1 ? 'file' : 'files'} is discarded. This cannot be undone.
+    </p>
+  </ConfirmDialog>
 {/if}
 
 {#if commitInfoTarget}
