@@ -593,6 +593,22 @@ CREATE TABLE IF NOT EXISTS active_turns (
   PRIMARY KEY (project_id, thread_id)
 );
 
+-- ─── Workflow Owners ─────────────────────────────────────────────────
+-- A coordinated workflow   the Sr. Engineer coordinator and its worker and
+-- auditor children   is one unit of instance ownership, not a set of
+-- independent threads: one process drives it and the whole group moves
+-- together. owner_pid names that process, keyed by the coordinator thread
+-- exactly as assignment_workflow is, so a sibling instance can tell a
+-- workflow a live peer is running from one a departed process left behind.
+-- No row means nobody owns it, which every instance may then claim.
+CREATE TABLE IF NOT EXISTS workflow_owners (
+  project_id            TEXT NOT NULL,
+  coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  owner_pid             INTEGER,
+  updated_at            INTEGER NOT NULL,
+  PRIMARY KEY (project_id, coordinator_thread_id)
+);
+
 -- ─── Assignment Plans ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assignment_versions (
   assignment_id        TEXT NOT NULL,

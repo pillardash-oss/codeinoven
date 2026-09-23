@@ -123,6 +123,7 @@ import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
+import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
@@ -269,8 +270,13 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
+  isWorkflowCoordinatorThread,
   workerReportsToCoordinator
 } from '../../lib/types'
+import {
+  resolveWorkflowCoordinatorThreadId,
+  workflowGroupThreads
+} from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
 import { foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
@@ -975,6 +981,7 @@ export class ChatEngine {
   private threadManager: ThreadManager
 
   private checkpointManager: CheckpointManager
+  private workflowOwnership: WorkflowOwnershipService
 
   private specEngine: SpecEngine
 
@@ -1295,6 +1302,7 @@ export class ChatEngine {
     // (the Default scope included) fails closed before a turn can start.
     this.projectFilesService = new ProjectFilesService(this.projectManager, this.scopeRoots)
     this.checkpointManager = new CheckpointManager(database)
+    this.workflowOwnership = new WorkflowOwnershipService(database)
     this.threadManager = new ThreadManager(
       database,
       broadcastThreadUpdate,
@@ -7137,17 +7145,26 @@ export class ChatEngine {
    * Runs at launch and again when this process takes over from a sibling that
    * exited, so a deferred queue is never stranded. Delivery is otherwise driven
    * by the coordinator's own runtime (`queueCoordinatorHandoff` and the session
-   * idle signal), which is why the launch pass defers to a live instance: the
-   * queue file is shared, and only the instance running the coordinator may
-   * decide that its handoff is due.
+   * idle signal), which is why the launch pass must not touch a queue another
+   * instance owns: the file is shared, and only the instance running the
+   * coordinator may decide that its handoff is due. A queue file is named by its
+   * coordinator thread, so each one is gated as the workflow it belongs to.
    */
   async restoreCoordinatorHandoffQueues(): Promise<void> {
-    if (this.deferAutomaticResumeToLiveInstance('queued coordinator handoffs')) return
     for (const projectId of await this.storage.listDirectories(COORDINATOR_HANDOFF_QUEUE_DIR)) {
       const projectQueuePath = join(COORDINATOR_HANDOFF_QUEUE_DIR, projectId)
       for (const entry of await this.storage.list(projectQueuePath)) {
         if (!entry.endsWith('.json')) continue
         const threadId = entry.slice(0, -'.json'.length)
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        // A queue whose thread is gone is a leftover the drain itself removes,
+        // so it needs no owner.
+        if (
+          thread &&
+          !(await this.claimWorkflowForDrive(projectId, thread, 'queued coordinator handoffs'))
+        ) {
+          continue
+        }
         void this.drainCoordinatorHandoffQueue(projectId, threadId).catch((error) =>
           Logger.error('Queued coordinator handoff could not be restored', {
             projectId,
@@ -7212,6 +7229,11 @@ export class ChatEngine {
       await this.ensureAchievementScope(projectId, threadId)
       targetThread = await this.threadManager.getThread(projectId, threadId)
     }
+    // This process is about to drive the workflow this thread belongs to, so it
+    // records ownership for the whole group now. A peer launching between two of
+    // the workflow's turns must see a live owner rather than an unowned persisted
+    // workflow it could adopt and double-drive.
+    if (targetThread) await this.claimWorkflowOwnershipForThread(projectId, targetThread)
     if (
       specAction === undefined &&
       targetThread?.sessionId &&
@@ -10957,18 +10979,14 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return { released: false, reason: 'The thread no longer exists.' }
+    // A coordinated workflow moves as one unit, so a release for any of its
+    // threads is a release for the whole group.
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId !== null) {
+      return this.releaseWorkflowForTransfer(projectId, coordinatorThreadId)
+    }
     if (!thread.sessionId || !thread.settings) {
       return { released: false, reason: 'This thread has no resumable session to transfer.' }
-    }
-    if (
-      thread.assignmentRole === 'coordinator' ||
-      thread.achievementRole === 'coordinator' ||
-      isOrchestrationChildThread(thread)
-    ) {
-      return {
-        released: false,
-        reason: 'This thread belongs to a coordinated workflow and cannot be moved while it runs.'
-      }
     }
     const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
     if (ownerPid !== process.pid) {
@@ -10978,6 +10996,57 @@ export class ChatEngine {
     await this.settleThreadTurnForTransfer(projectId, threadId)
     instanceRegistry.publishTurnActivity()
     return { released: true }
+  }
+
+  /**
+   * Hand a coordinated workflow to a sibling instance, as one unit.
+   *
+   * The Sr. Engineer and its workers are never split across instances, so a
+   * release stops and settles every member this process is running, then drops
+   * the workflow's ownership row so the adopter can claim the whole group. The
+   * row goes last, because it is what tells a peer the workflow is still owned
+   * here.
+   */
+  async releaseWorkflowForTransfer(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<{ released: boolean; reason?: string }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator Thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || !isWorkflowCoordinatorThread(coordinator)) {
+      return { released: false, reason: 'This thread is not the Sr. Engineer of a workflow.' }
+    }
+    const group = await this.workflowGroup(projectId, coordinatorThreadId)
+    if (!(await this.ownsWorkflow(projectId, coordinatorThreadId, group))) {
+      return { released: false, reason: 'This instance is no longer running that workflow.' }
+    }
+    for (const member of group) {
+      const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)
+      if (ownerPid !== process.pid) continue
+      await this.abort(projectId, member.id, { reason: 'transfer' })
+      await this.settleThreadTurnForTransfer(projectId, member.id)
+    }
+    await this.workflowOwnership.release(projectId, coordinatorThreadId)
+    instanceRegistry.publishTurnActivity()
+    return { released: true }
+  }
+
+  /** Whether this process is the one driving the workflow, by row or by turn. */
+  private async ownsWorkflow(
+    projectId: string,
+    coordinatorThreadId: string,
+    group: Thread[]
+  ): Promise<boolean> {
+    if ((await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)) === process.pid) {
+      return true
+    }
+    for (const member of group) {
+      if ((await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)) === process.pid) {
+        return true
+      }
+    }
+    return false
   }
 
   /**
@@ -10993,6 +11062,11 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return { ok: false, reason: 'The thread no longer exists.' }
+    // A coordinated workflow is adopted as one unit, never thread by thread.
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId !== null) {
+      return this.adoptTransferredWorkflow(projectId, coordinatorThreadId)
+    }
     if (!thread.sessionId || !thread.settings) {
       return { ok: false, reason: 'This thread has no resumable session.' }
     }
@@ -11022,6 +11096,73 @@ export class ChatEngine {
         ok: false,
         reason: `The transfer could not resume this run: ${rawErrorMessage(error)}`
       }
+    }
+  }
+
+  /**
+   * Take a transferred workflow over on this instance.
+   *
+   * The departing instance stopped every member's run and released the
+   * workflow's ownership row, so this process claims the group and resumes it
+   * through the same path restart recovery uses. A workflow waiting on a user
+   * gate starts no turn, and that is still a successful transfer: the whole group
+   * now belongs here.
+   */
+  async adoptTransferredWorkflow(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<ThreadTransferResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator Thread ID')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator) return { ok: false, reason: 'The workflow no longer exists.' }
+    await this.workflowOwnership.claim(projectId, coordinatorThreadId)
+    try {
+      const group = await this.workflowGroup(projectId, coordinatorThreadId)
+      await this.resumePendingWorkflow(coordinator, group)
+      instanceRegistry.publishTurnActivity()
+      return { ok: true }
+    } catch (error) {
+      Logger.error('Transferred workflow resume failed:', {
+        projectId,
+        coordinatorThreadId,
+        error: rawErrorMessage(error)
+      })
+      return {
+        ok: false,
+        reason: `The transfer could not resume this workflow: ${rawErrorMessage(error)}`
+      }
+    }
+  }
+
+  /**
+   * What a transfer request for `threadId` actually moves, and which process owns
+   * it right now.
+   *
+   * A coordinated workflow moves as a whole, so the target is its coordinator and
+   * the owner is whoever holds the workflow: the durable ownership row first,
+   * then an in-flight turn on any member. Everything else transfers on its own
+   * thread, exactly as before.
+   */
+  async resolveTransferTarget(
+    projectId: string,
+    threadId: string
+  ): Promise<{ rootThreadId: string; ownerPid: number | null }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return { rootThreadId: threadId, ownerPid: null }
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId === null) {
+      return {
+        rootThreadId: threadId,
+        ownerPid: await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+      }
+    }
+    const claimOwner = await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)
+    return {
+      rootThreadId: coordinatorThreadId,
+      ownerPid: claimOwner ?? (await this.workflowActiveTurnOwner(projectId, coordinatorThreadId))
     }
   }
 
@@ -17570,10 +17711,118 @@ export class ChatEngine {
   }
 
   /**
-   * Whether this launch must leave work that carries no turn owner alone.
+   * The Sr. Engineer coordinator that owns the workflow `thread` belongs to, or
+   * `null` when the thread is not part of a coordinated workflow.
+   *
+   * A coordinator is its own root. A worker or auditor walks up its
+   * `coordinatorThreadId` chain, which is one hop for every workflow the app
+   * creates and is walked transitively only to stay correct if a sub-agent ever
+   * dispatches one of its own. Pass `threads` to resolve from an already-loaded
+   * snapshot instead of reading again.
+   */
+  private async workflowCoordinatorFor(
+    projectId: string,
+    thread: Thread,
+    threads?: Thread[]
+  ): Promise<string | null> {
+    if (threads) return resolveWorkflowCoordinatorThreadId(threads, thread.id)
+    if (isWorkflowCoordinatorThread(thread)) return thread.id
+    const seen = new Set<string>([thread.id])
+    let current: Thread | undefined = thread
+    while (current?.coordinatorThreadId) {
+      const parentId = current.coordinatorThreadId
+      if (seen.has(parentId)) return null
+      seen.add(parentId)
+      const parent = await this.threadManager.getThread(projectId, parentId)
+      if (!parent) return parentId
+      if (isWorkflowCoordinatorThread(parent)) return parent.id
+      current = parent
+    }
+    return null
+  }
+
+  /** Every thread of the workflow rooted at `coordinatorThreadId`, coordinator first. */
+  private async workflowGroup(
+    projectId: string,
+    coordinatorThreadId: string,
+    threads?: Thread[]
+  ): Promise<Thread[]> {
+    const snapshot =
+      threads ?? (await this.threadManager.listProjectThreads(projectId, { includeArchived: true }))
+    return workflowGroupThreads(snapshot, coordinatorThreadId)
+  }
+
+  /** Record this process as the owner of the workflow `thread` belongs to. */
+  private async claimWorkflowOwnershipForThread(projectId: string, thread: Thread): Promise<void> {
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
+    if (coordinatorThreadId === null) return
+    await this.workflowOwnership.claim(projectId, coordinatorThreadId)
+  }
+
+  /**
+   * The process running a turn on any thread of the workflow, or `null` when the
+   * whole group is idle. This is the "driving right now" signal, independent of
+   * the durable ownership row.
+   */
+  private async workflowActiveTurnOwner(
+    projectId: string,
+    coordinatorThreadId: string,
+    threads?: Thread[]
+  ): Promise<number | null> {
+    for (const member of await this.workflowGroup(projectId, coordinatorThreadId, threads)) {
+      const owner = await this.checkpointManager.activeTurnOwnerPid(projectId, member.id)
+      if (owner !== null) return owner
+    }
+    return null
+  }
+
+  /**
+   * Whether this process may drive the workflow `thread` belongs to.
+   *
+   * A coordinated workflow is one unit of ownership, so the whole group answers
+   * one question, never per thread. The owner is the durable `workflow_owners`
+   * row; a live in-flight turn on any member also counts, so a workflow a peer is
+   * running right now is never adopted even when its ownership row was never
+   * written (an older build, or a failed write). Work that is not part of a
+   * workflow keeps the blanket live-instance gate it has always used.
+   */
+  private async claimWorkflowForDrive(
+    projectId: string,
+    thread: Thread,
+    reason: string,
+    threads?: Thread[]
+  ): Promise<boolean> {
+    const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread, threads)
+    if (coordinatorThreadId === null) return !this.deferAutomaticResumeToLiveInstance(reason)
+    const claimOwner = await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)
+    if (claimOwner === process.pid) return true
+    if (claimOwner !== null && instanceRegistry.isRunOwnerAlive(claimOwner)) {
+      this.logWorkflowResumeDeferred(coordinatorThreadId, claimOwner)
+      return false
+    }
+    const driver = await this.workflowActiveTurnOwner(projectId, coordinatorThreadId, threads)
+    if (driver !== null && driver !== process.pid && instanceRegistry.isRunOwnerAlive(driver)) {
+      this.logWorkflowResumeDeferred(coordinatorThreadId, driver)
+      return false
+    }
+    const claimed = await this.workflowOwnership.claimIfOwnerGone(projectId, coordinatorThreadId)
+    if (!claimed) this.logWorkflowResumeDeferred(coordinatorThreadId, claimOwner)
+    return claimed
+  }
+
+  private logWorkflowResumeDeferred(coordinatorThreadId: string, ownerPid: number | null): void {
+    Logger.info('Workflow resume deferred to the instance that owns it', {
+      pid: process.pid,
+      coordinatorThreadId,
+      ownerPid
+    })
+  }
+
+  /**
+   * Whether this launch must leave work that carries no owner at all alone.
    *
    * Every instance shares one config root, so the thread table, the persisted
-   * retry ledger, and the queued coordinator handoffs are common. The paths this
+   * retry ledger, and the ready-spec/Brainstorm rows are common. The paths this
    * guards resume work from persisted state that names no owning process, so a
    * launch that finds another live instance cannot tell whether that instance is
    * already driving it. The driver busy probes cannot help: `isSessionBusy` only
@@ -17582,9 +17831,10 @@ export class ChatEngine {
    * that is already working   which then rewrites that session's per-turn runtime
    * files and strips the original run of its tools.
    *
-   * Turns that DO record an owner are handled precisely instead: restart recovery
-   * settles only turns whose owner process is gone, so a launch never has to
-   * guess about them.
+   * This is the fallback for work with no ownership record. Coordinated workflows
+   * do have one   {@link claimWorkflowForDrive} decides them per workflow   and
+   * turns that record an owner are handled precisely by restart recovery, which
+   * settles only turns whose owner process is gone.
    */
   private deferAutomaticResumeToLiveInstance(reason: string): boolean {
     if (!instanceRegistry.hasOtherLiveInstance()) return false
@@ -17596,49 +17846,73 @@ export class ChatEngine {
   }
 
   async resumePendingWork(): Promise<void> {
-    if (this.deferAutomaticResumeToLiveInstance('pending workflows')) return
     try {
       const config = await this.storage.getConfig()
       if (config.resumeWorkOnRestart === false) return
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
         if (thread.archived) continue
-        let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
-        if (assignment?.status === 'draft') {
-          continue
-        }
-        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
-          assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
-          await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
-          continue
-        }
-        if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'running') {
-          void this.resumeInterruptedAssignmentAudit(assignment, thread.settings)
-          continue
-        }
-        if (thread.settings?.loopMode !== true) continue
-        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
-        if (
-          activeSpec?.status !== 'approved' ||
-          this.engineeringLifecycleActive(thread.projectId, thread.id)
-        ) {
-          continue
-        }
-        if (
-          !thread.auditState &&
-          (thread.loopIteration ?? 0) === 0 &&
-          thread.status !== 'completed'
-        ) {
-          continue
-        }
-        if (thread.auditState === 'running') {
-          await this.threadManager.setAuditState(thread.projectId, thread.id, 'offered')
-        }
-        void this.continueLoop(thread.projectId, thread.id)
+        await this.resumePendingWorkflow(thread, threads)
       }
     } catch (error) {
       Logger.error('Achievement recovery failed:', error)
     }
+  }
+
+  /**
+   * Resume one thread's persisted workflow, if it needs it and this process may
+   * own it.
+   *
+   * Every workflow is gated as a unit before it is touched: an Assignment, its
+   * interrupted audit cycle, and an Achievement loop all belong to one
+   * coordinated group, and that group is only driven by the instance that owns it
+   * (see {@link claimWorkflowForDrive}). This is also the resumption a
+   * cross-instance workflow transfer uses, so the two can never drift apart in
+   * what they skip or how they resume.
+   */
+  private async resumePendingWorkflow(thread: Thread, threads: Thread[]): Promise<boolean> {
+    let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
+    if (assignment?.status === 'draft') return false
+    if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
+      if (
+        !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+      ) {
+        return false
+      }
+      assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
+      await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
+      return true
+    }
+    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'running') {
+      if (
+        !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+      ) {
+        return false
+      }
+      void this.resumeInterruptedAssignmentAudit(assignment, thread.settings)
+      return true
+    }
+    if (thread.settings?.loopMode !== true) return false
+    const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+    if (
+      activeSpec?.status !== 'approved' ||
+      this.engineeringLifecycleActive(thread.projectId, thread.id)
+    ) {
+      return false
+    }
+    if (!thread.auditState && (thread.loopIteration ?? 0) === 0 && thread.status !== 'completed') {
+      return false
+    }
+    if (
+      !(await this.claimWorkflowForDrive(thread.projectId, thread, 'pending workflows', threads))
+    ) {
+      return false
+    }
+    if (thread.auditState === 'running') {
+      await this.threadManager.setAuditState(thread.projectId, thread.id, 'offered')
+    }
+    void this.continueLoop(thread.projectId, thread.id)
+    return true
   }
 
   /**

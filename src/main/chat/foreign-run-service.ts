@@ -36,9 +36,17 @@ const REFRESH_DEBOUNCE_MS = 200
 const MAX_ACTIVE_TURN_ROWS = 10_000
 
 /**
- * Liveness probes, injectable so the notice rule can be exercised without a
- * second real app process. Defaults to the instance registry.
+ * Whether a joined `active_turns` row names a thread that belongs to a
+ * coordinated workflow (its Sr. Engineer, a worker, or an auditor).
  */
+function isWorkflowRow(row: Record<string, unknown>): boolean {
+  return (
+    row['assignment_role'] === 'coordinator' ||
+    row['achievement_role'] === 'coordinator' ||
+    row['coordinator_thread_id'] != null
+  )
+}
+
 export interface ForeignRunServiceOptions {
   /** Whether another CodeInOven process is registered and alive. */
   hasLiveSibling?: () => boolean
@@ -115,8 +123,16 @@ export class ForeignRunService {
    */
   async listForeignRuns(): Promise<ForeignRunNotice[]> {
     if (!this.hasLiveSibling()) return []
+    // The thread join is only there to say whether a notice is part of a
+    // coordinated workflow, which the transfer card needs in order to state that
+    // the whole group moves.
     const result = await this.db.queryViaWorker(
-      'SELECT project_id, thread_id, owner_pid FROM active_turns',
+      `SELECT at.project_id, at.thread_id, at.owner_pid,
+              t.coordinator_thread_id AS coordinator_thread_id,
+              t.assignment_role AS assignment_role,
+              t.achievement_role AS achievement_role
+       FROM active_turns AS at
+       LEFT JOIN threads AS t ON t.id = at.thread_id`,
       [],
       MAX_ACTIVE_TURN_ROWS
     )
@@ -137,7 +153,7 @@ export class ForeignRunService {
       const key = `${projectId}:${threadId}`
       if (seen.has(key)) continue
       seen.add(key)
-      notices.push({ projectId, threadId })
+      notices.push({ projectId, threadId, workflow: isWorkflowRow(row) })
     }
     notices.sort(
       (left, right) =>
@@ -177,7 +193,9 @@ export class ForeignRunService {
   }
 
   private publish(notices: ForeignRunNotice[]): void {
-    const signature = notices.map((notice) => `${notice.projectId}:${notice.threadId}`).join('|')
+    const signature = notices
+      .map((notice) => `${notice.projectId}:${notice.threadId}:${notice.workflow ? 'w' : '-'}`)
+      .join('|')
     if (signature === this.signature) return
     this.signature = signature
     for (const win of BrowserWindow.getAllWindows()) {

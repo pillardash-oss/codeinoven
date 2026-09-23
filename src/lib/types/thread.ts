@@ -145,8 +145,18 @@ export interface ThreadNote {
  * coordinator panels. The coordinator thread itself is always a normal,
  * user-facing thread and never matches this predicate.
  */
+/**
+ * Whether the thread is the Sr. Engineer of a coordinated workflow   an
+ * Assignment coordinator or an Achievement coordinator. Such a thread is the
+ * root of a workflow group: it owns its worker/auditor children, and the whole
+ * group is one unit of instance ownership (see `workflowGroupThreads`).
+ */
+export function isWorkflowCoordinatorThread(thread: Thread | null | undefined): boolean {
+  return thread?.assignmentRole === 'coordinator' || thread?.achievementRole === 'coordinator'
+}
+
 export function isOrchestrationChildThread(thread: Thread): boolean {
-  if (thread.achievementRole === 'coordinator' || thread.assignmentRole === 'coordinator') {
+  if (isWorkflowCoordinatorThread(thread)) {
     return false
   }
   return (
@@ -217,8 +227,7 @@ export function coordinatorHasActiveDelegates(
   coordinator: Thread,
   threads: readonly Thread[]
 ): boolean {
-  const isOrchestrationCoordinator =
-    coordinator.assignmentRole === 'coordinator' || coordinator.achievementRole === 'coordinator'
+  const isOrchestrationCoordinator = isWorkflowCoordinatorThread(coordinator)
   // An Independent Audit runs on a dedicated (hidden) auditor thread even
   // though its parent is a plain thread without a coordinator role: the parent
   // row must still pulse while that auditor works.
@@ -299,6 +308,10 @@ export interface ThreadSearchResult {
 export interface ForeignRunNotice {
   projectId: string
   threadId: string
+  /** Whether this run belongs to a coordinated workflow. A workflow is one unit
+   *  of ownership, so transferring it moves the Sr. Engineer and every worker,
+   *  never a single thread. */
+  workflow: boolean
 }
 
 /**
