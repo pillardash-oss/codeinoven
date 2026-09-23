@@ -77,15 +77,10 @@
     if (status.keySource === 'utility') {
       return `the credential on ${status.keySourceDetail ?? 'an installed utility'}`
     }
-    return `a secret set in a thread (${shortId(status.keySourceDetail)})`
+    return 'a secret you saved in a thread'
   })
 
   let lastFailure = $derived(status?.lastFailure)
-
-  function shortId(value: string | undefined): string {
-    if (!value) return 'thread'
-    return value.length > 8 ? `${value.slice(0, 8)}…` : value
-  }
 
   function errorMessage(cause: unknown, fallback: string): string {
     return cause instanceof Error && cause.message ? cause.message : fallback
@@ -169,9 +164,7 @@
     <div>
       <h2 class="text-sm font-semibold text-foreground">TypeSafe decisions</h2>
       <p class="mt-0.5 text-xs text-muted">
-        One key for every TypeSafe judgment {APP_NAME} asks for. Nothing depends on TypeSafe answering:
-        an unreachable service, a revoked key, or an exhausted balance falls back to the behavior you
-        have today.
+        The API key {APP_NAME} uses for TypeSafe judgments.
       </p>
     </div>
     <StatusPill tone={availabilityTone} dot title={availabilityLabel}>
@@ -257,7 +250,7 @@
         <button
           type="button"
           class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          title="Send one typed question to TypeSafe and report what it answered"
+          title="Test the key with a live TypeSafe request"
           disabled={checking || !status?.hasKey}
           onclick={() => void check()}
         >
@@ -317,6 +310,6 @@
   onCancel={() => (confirmingRemove = false)}
   onConfirm={() => void removeKey()}
 >
-  TypeSafe judgments stop until a key is configured again. A key supplied by your environment, an
-  installed utility, or a thread is left untouched.
+  {APP_NAME} stops using the key stored on this device. A key from your environment or an installed utility
+  is still used.
 </ConfirmDialog>
