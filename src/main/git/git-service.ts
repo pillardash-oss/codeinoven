@@ -115,6 +115,27 @@ function uncommittedCount(status: GitStatus): number {
 }
 
 /**
+ * How much of git's own output a failed rebase step keeps in the error log. The
+ * reason the sequencer refused is its last words, while the summary of every
+ * commit it replayed comes first, so the tail is the part worth keeping and the
+ * whole thing would bury the log line.
+ */
+const REBASE_FAILURE_LOG_CHARS = 2000
+
+/**
+ * The tail of git's own output for a rebase step git could not move, for the
+ * error log. A rebase prints a summary for every commit it replayed before the
+ * lines that say why it stopped, so this reads from the end and never hands the
+ * panel the wall of output it would have to render as a message.
+ */
+function rebaseFailureDetail(failure: unknown): string {
+  const text = failure instanceof Error ? failure.message : String(failure)
+  return text.length > REBASE_FAILURE_LOG_CHARS
+    ? `...${text.slice(-REBASE_FAILURE_LOG_CHARS)}`
+    : text
+}
+
+/**
  * Main-process git runtime built on `simple-git`   the same thin wrapper over
  * the system `git` binary the app already execs in `repository-service`,
  * `change-tracking-service`, and `project-file-index-service`.
@@ -1879,6 +1900,13 @@ export class GitService {
    * can stop again on the next commit's conflict, which is not an error   the
    * refreshed status carries the new conflict state for the panel to show.
    *
+   * git exits non-zero with the conflict in its output when it stops again, so
+   * that failure is caught here instead of reported: a stop that left conflicted
+   * files is the same state the first stop was, and the panel renders it from
+   * the refreshed status. Only a failure that left no conflict to resolve is
+   * reported, and then as the step the user owes, because git's own output for a
+   * rebase is a summary of every commit it replayed followed by three hints.
+   *
    * Unresolved conflicts are refused here rather than left to git: `rebase
    * --continue` reports them on stdout with an empty stderr, and simple-git only
    * raises a task error when stderr has something in it, so git's refusal would
@@ -1900,13 +1928,29 @@ export class GitService {
           `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
         )
       }
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.clientWithoutEditor(directory).raw([
-          'rebase',
-          action === 'continue' ? '--continue' : '--skip'
-        ])
-      })
-      return this.readStatus(directory)
+      const verb = action === 'continue' ? 'continue' : 'skip'
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.clientWithoutEditor(directory).raw([
+            'rebase',
+            action === 'continue' ? '--continue' : '--skip'
+          ])
+        })
+      } catch (error) {
+        failure = error
+      }
+      // Read the state back either way: it is what says whether the action moved
+      // the rebase on, stopped it again, or left nothing to continue.
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      if (status.conflictState === 'rebase' && status.conflicted.length > 0) return status
+      Logger.error(`Rebase ${verb} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      throw new GitRefusal(
+        status.conflictState === 'rebase'
+          ? `Git could not ${verb} the rebase. Resolve and stage what it is holding, skip this commit, or abort the rebase`
+          : `Git could not ${verb} the rebase, and no rebase is in progress any more`
+      )
     })
   }
 

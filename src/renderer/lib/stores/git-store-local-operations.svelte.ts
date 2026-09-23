@@ -630,6 +630,9 @@ export class GitLocalOperations {
    * Move a stopped rebase along: continue it, or skip the commit git stopped
    * on. A rebase can stop again on the next commit's conflict, which is a normal
    * state rather than an error, so the refreshed status is what the panel shows.
+   * A failure describes that same state too (the rebase may have ended while the
+   * panel still showed it), so the status is read back here without clearing the
+   * message that explains it.
    */
   async rebaseAction(projectId: string, action: GitRebaseAction): Promise<void> {
     this.access.markBusy('rebase-action', true)
@@ -644,6 +647,12 @@ export class GitLocalOperations {
         reason,
         action === 'continue' ? 'The rebase could not continue' : 'The commit could not be skipped'
       )
+      const status = await this.access.readStatus(projectId).catch(() => null)
+      if (!status) return
+      this.status = status
+      // The same invariant the full refresh keeps: the conflicts-only filter is
+      // only meaningful while conflicts exist.
+      if (status.conflicted.length === 0) this.conflictsMode = false
     } finally {
       this.access.markBusy('rebase-action', false)
     }
