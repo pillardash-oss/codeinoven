@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { Dialog } from 'bits-ui'
-
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import Modal from '../ui/Modal.svelte'
 
   interface Props {
     fullscreenPendingPath: string | null
@@ -51,46 +50,46 @@
   </p>
 </ConfirmDialog>
 
-<Dialog.Root open={renameTarget !== null} onOpenChange={(open) => !open && onClearRenameTarget()}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+<Modal
+  open={renameTarget !== null}
+  title="Rename file"
+  description="Enter a new file name, including its extension."
+  onClose={onClearRenameTarget}
+>
+  {#if renameTarget}
+    <form id="viewer-rename-file-form" onsubmit={submitRename}>
+      <label class="text-xs font-medium text-foreground" for="viewer-rename-file">File name</label>
+      <input
+        id="viewer-rename-file"
+        bind:value={renameTarget.name}
+        class="mt-1 h-9 w-full rounded-lg border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
+        autocomplete="off"
+      />
+    </form>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      data-modal-dismiss
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={onClearRenameTarget}
     >
-      <Dialog.Title class="text-sm font-semibold text-foreground">Rename file</Dialog.Title>
-      <Dialog.Description class="mt-1 text-xs text-muted">
-        Enter a new file name, including its extension.
-      </Dialog.Description>
-      {#if renameTarget}
-        <form class="mt-4" onsubmit={submitRename}>
-          <label class="text-xs font-medium text-foreground" for="viewer-rename-file">
-            File name
-          </label>
-          <input
-            id="viewer-rename-file"
-            bind:value={renameTarget.name}
-            class="mt-1 h-9 w-full rounded-lg border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
-            autocomplete="off"
-          />
-          <div class="mt-5 flex justify-end gap-2">
-            <Dialog.Close
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </Dialog.Close>
-            <button
-              type="submit"
-              class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              disabled={mutationPending || !renameTarget.name.trim()}
-            >
-              Rename
-            </button>
-          </div>
-        </form>
-      {/if}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+      Cancel
+    </button>
+    <!-- The submit button lives in the fixed footer, outside the form it
+         submits, so it carries the form attribute. -->
+    <button
+      type="submit"
+      form="viewer-rename-file-form"
+      data-modal-primary
+      class="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={mutationPending || !renameTarget?.name.trim()}
+    >
+      Rename
+    </button>
+  {/snippet}
+</Modal>
 
 <ConfirmDialog
   open={deleteTargetPath !== null}

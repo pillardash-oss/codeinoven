@@ -30,6 +30,7 @@
   import { relativeTime } from '$lib/format/relative-time'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
@@ -1139,42 +1140,17 @@
 {/if}
 
 {#if deleteTarget}
-  <div class="fixed inset-0 z-50 flex items-center justify-center">
-    <button
-      class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"
-      aria-label="Close modal"
-      onclick={() => (deleteTarget = null)}
-    ></button>
-    <div
-      class="relative mx-6 max-h-[calc(100vh-3rem)] w-full max-w-md overflow-hidden rounded-2xl border bg-surface shadow-xl"
-    >
-      <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
-        <h2 class="text-base font-semibold">Delete utility</h2>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto p-6">
-        <p class="text-sm text-muted">
-          Delete <strong class="text-foreground">{deleteTarget.name}</strong>? Its files or registry
-          entry will be removed.
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-6 py-4">
-        <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-          type="button"
-          onclick={() => (deleteTarget = null)}
-        >
-          Cancel
-        </button>
-        <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-          type="button"
-          disabled={deleting}
-          onclick={() => void confirmDelete()}
-        >
-          {#if deleting}<Loader2 size={13} class="animate-spin" />{/if}
-          Delete
-        </button>
-      </div>
-    </div>
-  </div>
+  <ConfirmDialog
+    open
+    title="Delete utility"
+    onCancel={() => (deleteTarget = null)}
+    onConfirm={confirmDelete}
+    confirmLabel="Delete"
+    busy={deleting}
+  >
+    <p>
+      Delete <strong class="text-foreground">{deleteTarget.name}</strong>? Its files or registry
+      entry will be removed.
+    </p>
+  </ConfirmDialog>
 {/if}

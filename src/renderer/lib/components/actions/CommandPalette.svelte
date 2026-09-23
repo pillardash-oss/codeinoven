@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Command, Dialog } from 'bits-ui'
+  import { Command } from 'bits-ui'
   import { ArrowLeft, CornerDownLeft, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
@@ -12,7 +12,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
 
   interface Props {
     open: boolean
@@ -71,17 +71,9 @@
     onSelectedProjectsChange
   }: Props = $props()
 
-  // The dialog-mode palette draws a full-window backdrop (fixed inset-0), and
-  // the browser's native view floats above every DOM surface (see
-  // browserVisibility.hideWhile), so the view must be
-  // suppressed while the palette is open: the same treatment every Modal
-  // gets. Keyed per instance so stacked palettes don't clear each other's
-  // suppression. Inline mode stays inside the composer column and never
-  // overlaps the sidebar, so it does not suppress.
-  const suppressionKey = `command-palette-${Math.random().toString(36).slice(2)}`
-  $effect(() =>
-    browserVisibility.hideWhile(suppressionKey, 'fullscreen-surface', open && mode === 'dialog')
-  )
+  // The dialog-mode palette is a `Modal`, which publishes the full-window
+  // suppression itself. Inline mode stays inside the composer column and never
+  // overlaps the sidebar, so it renders no Modal and suppresses nothing.
 
   let query = $state('')
   let selectedActionId = $state('')
@@ -419,25 +411,19 @@
 {/snippet}
 
 {#if mode === 'dialog'}
-  <Dialog.Root
+  <Modal
     {open}
-    onOpenChange={(nextOpen) => {
-      if (!nextOpen) onClose()
+    {title}
+    {onClose}
+    placement="palette"
+    size="lg"
+    chrome={false}
+    onCloseAutoFocus={(event) => {
+      if (onRestoreFocus?.()) event.preventDefault()
     }}
   >
-    <Dialog.Portal>
-      <Dialog.Overlay class="fixed inset-0 z-40 bg-app/50" />
-      <Dialog.Content
-        class="fixed left-1/2 top-[18%] z-50 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
-        onCloseAutoFocus={(event) => {
-          if (onRestoreFocus?.()) event.preventDefault()
-        }}
-      >
-        <Dialog.Title class="sr-only">{title}</Dialog.Title>
-        {@render paletteBody()}
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>
+    {@render paletteBody()}
+  </Modal>
 {:else if open}
   <section
     class="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
