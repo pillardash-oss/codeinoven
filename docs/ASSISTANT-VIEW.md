@@ -212,10 +212,12 @@ the divider, and the row list stay one implementation. A pinned task leaves its
 routine's nested list and the Tasks list, so it appears exactly once, and its
 row carries the pin indicator next to the title. The routine row's task count
 still counts it, and a routine whose every task is pinned says so in place of an
-empty list. Assistant tasks are excluded from the Projects sidebar's pinned
-section and from the Threads timeline, so a pinned assistant thread (every
-routine's how-to thread) is only ever a row in Assistant View, never a Projects
-row.
+empty list. The one exception is a routine's **how-to thread**: it is pinned for
+life so it is never evicted, but it belongs to its routine and renders nested
+there, so it never rises into the Pinned section. Assistant tasks are excluded
+from the Projects sidebar's pinned section and from the Threads timeline, so a
+pinned assistant thread (every routine's how-to thread) is only ever a row in
+Assistant View, never a Projects row.
 
 Task rows carry no generic assistant robot. The icon slot resolves a custom
 `assistantIconType` image first, then the **Hammer** for a routine's how-to
@@ -289,6 +291,9 @@ prompt"; the user-facing term is how-to.
   databases), so it survives reloads and regroups. It is created **pinned**
   (`ThreadManager.prepareCreateThread` owns that invariant, and a migration pins
   the threads that predate it), so it is never an automatic-eviction candidate.
+  That pin is retention, not a move: `AssistantSidebar` keeps a pinned how-to
+  thread nested inside its routine instead of lifting it into the Pinned
+  section, so the pin only ever means "never evicted".
 - **The how-to thread is pinned for its whole life.** `ThreadManager.setPinned`
   refuses to unpin it, and its task menu offers **Hide how-to thread** instead of
   Pin/Unpin and carries no Delete item at all. Hiding is an archive:

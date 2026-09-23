@@ -1145,9 +1145,11 @@ export class Database {
       )
     }
     // A routine's how-to ("Getting started") thread is pinned for its whole
-    // life: pinning keeps it out of automatic eviction and puts it in the
-    // sidebar's Pinned section. Rows created before that rule are pinned once
-    // here, and the guard makes the statement a no-op on every later boot.
+    // life: pinning is what keeps it out of automatic eviction. It still renders
+    // nested inside its routine (AssistantSidebar keeps a pinned how-to thread
+    // in place), so the pin is retention, not a move to the Pinned section. Rows
+    // created before that rule are pinned once here, and the guard makes the
+    // statement a no-op on every later boot.
     connection.exec(
       'UPDATE threads SET pinned = 1, pinned_at = COALESCE(pinned_at, updated_at) ' +
         'WHERE assistant_getting_started = 1 AND pinned = 0'

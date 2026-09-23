@@ -9,7 +9,7 @@
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import type { Routine, Thread } from '$shared/types'
+  import { isAssistantSetupThread, type Routine, type Thread } from '$shared/types'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
@@ -96,12 +96,17 @@
   )
 
   /**
-   * Every pinned task, in one shared pin order. A pinned task leaves its
-   * routine's nested list and the Tasks list, so it appears exactly once   the
-   * same rule the project sidebar uses for pinned threads.
+   * Pinned tasks that leave their routine and join the flat Pinned section, in
+   * one shared pin order, exactly as the project sidebar treats pinned threads.
+   * A routine's how-to ("Getting started") thread is the exception: it is pinned
+   * for its whole life so it is never evicted, but it belongs to its routine and
+   * stays nested there. Only a routine-less how-to thread (its routine was
+   * removed) rises to this list.
    */
   const pinnedTasks = $derived(
-    tasks.filter((task) => task.pinned).sort((a, b) => pinnedThreadSort(a, b))
+    tasks
+      .filter((task) => task.pinned && !(task.routineId && isAssistantSetupThread(task)))
+      .sort((a, b) => pinnedThreadSort(a, b))
   )
 
   /** Open a pinned task, docking its routine's how-to panel like a nested row. */
@@ -119,9 +124,13 @@
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }
 
-  /** The routine's tasks that render nested under it (pinned rows do not). */
+  /**
+   * The routine's tasks that render nested under it. A user-pinned task leaves
+   * for the Pinned section above, but a pinned how-to thread stays here: its pin
+   * is retention, not a request to move it out of its routine.
+   */
   function nestedRoutineTasks(routineId: string): Thread[] {
-    return routineTasks(routineId).filter((task) => !task.pinned)
+    return routineTasks(routineId).filter((task) => !task.pinned || isAssistantSetupThread(task))
   }
 
   /** The accent colour a flat (pinned) row should tint its icon with. */
