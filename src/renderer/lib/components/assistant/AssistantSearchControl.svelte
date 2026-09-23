@@ -1,7 +1,8 @@
 <script lang="ts">
   import { AlertTriangle, Clock1, Hammer, Search, Workflow, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
-  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getRoutineIcon } from '$lib/routine-icons'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { Routine, Thread } from '$shared/types'
   import { routineGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
@@ -34,9 +35,7 @@
       : routines.filter((routine) => routine.name.toLowerCase().includes(trimmed))
   )
   const taskResults = $derived(
-    trimmed.length === 0
-      ? []
-      : tasks.filter((task) => task.title.toLowerCase().includes(trimmed))
+    trimmed.length === 0 ? [] : tasks.filter((task) => task.title.toLowerCase().includes(trimmed))
   )
   const empty = $derived(
     trimmed.length > 0 && routineResults.length === 0 && taskResults.length === 0
@@ -54,10 +53,11 @@
     query = ''
   }
 
+  /** The routine's own icon, so a routine edited in the sidebar reads the same
+   *  in the search results: custom image first, then the SVG icon type tinted
+   *  with its accent colour. */
   function routineIcon(routine: Routine): string | null {
-    return routine.iconType
-      ? getIconSvgDataUrl(routine.iconType, routine.color ?? '#8b95a5')
-      : null
+    return getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
   }
 </script>
 
@@ -105,7 +105,9 @@
       </div>
 
       {#if empty}
-        <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">No matching routines or tasks</p>
+        <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">
+          No matching routines or tasks
+        </p>
       {:else if trimmed.length > 0}
         <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
           {#if routineResults.length > 0}
@@ -158,7 +160,9 @@
                 {:else}
                   <Clock1 size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
                 {/if}
-                <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{task.title}</span>
+                <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
+                  >{task.title}</span
+                >
               </button>
             {/each}
           {/if}

@@ -14,7 +14,7 @@
   } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
-  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getRoutineIcon } from '$lib/routine-icons'
   import type { Routine } from '$shared/types'
   import { routineGap } from './assistant-view'
   import {
@@ -82,10 +82,7 @@
   const color = $derived(routine.color ?? 'var(--color-muted)')
   // Custom image wins, then the SVG icon type tinted with the routine colour;
   // without either the row falls back to the generic routine (Workflow) icon.
-  const routineIcon = $derived(
-    iconUrl ??
-      (routine.iconType ? getIconSvgDataUrl(routine.iconType, routine.color ?? '#8b95a5') : null)
-  )
+  const routineIcon = $derived(getRoutineIcon(routine, iconUrl))
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)

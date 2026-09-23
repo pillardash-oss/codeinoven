@@ -70,6 +70,14 @@ workspace instead of a shared scratch directory:
   (`src/main/editor/project-files/thread-workspace-roots.ts`). Previews of those
   files are served from `appfile://thread/assistant/<threadId>/<path>`, so a
   task only ever previews inside its own routine's workspace.
+- Because the tree's root **is** the routine's directory, the tree carries the
+  routine's identity instead of the hidden assistant space's:
+  `WorkspaceContextPanelContent.svelte` resolves the mounted thread's routine
+  and passes its name, its `getRoutineIcon` icon, and its accent colour to
+  `ProjectFilesPanel.svelte`. The explorer header shows that icon (the folder
+  fallback is tinted with the routine colour) with the colour as an inset left
+  edge, and the editor's breadcrumb root button shows the same icon. A
+  routine-less task keeps the assistant space's own identity.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.
@@ -175,10 +183,13 @@ Routines are editable exactly like projects: **Edit routine**
 colour and SVG icon, an **Upload Image** action for a custom icon, and the
 routine name. Custom icons are stored under `routines/<routine-id>/` through the
 shared `src/lib/icon-file.ts` helpers (the same ones project icons use), served
-back by `routine:getIcon`, and cached on `assistantRoutines.iconUrls`. A routine
-row resolves its icon as custom image, then SVG icon type tinted with the accent
-colour, then the generic routine icon; the accent colour stays as the row's left
-border.
+back by `routine:getIcon`, and cached on `assistantRoutines.iconUrls`. One
+resolver, `getRoutineIcon` (`src/renderer/lib/routine-icons.ts`), is the single
+rule every surface reads: custom image, then SVG icon type tinted with the
+routine's accent colour (`routineAccentColor`), then the surface's own generic
+routine icon. So an edited routine icon and colour read identically in the
+sidebar row, the routine search results, and the file tree mounted on the
+routine's workspace; the accent colour stays as the row's left border.
 
 Task rows (`AssistantTaskRow.svelte`) behave exactly like thread rows. Hovering
 reveals an ellipsis (overlaid, so the title truncates at the full row width)

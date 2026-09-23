@@ -15,6 +15,8 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
@@ -22,6 +24,7 @@
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { INBOX_PROJECT_ID, type AgentPart, type Project } from '$shared/types'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
@@ -65,6 +68,48 @@
   let gitPanelThreadId = $derived(
     activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''
   )
+
+  /** The thread whose own workspace the file tree mounts. Only a chat or an
+   *  assistant task has one; a real project always reads the project root. */
+  let filesThreadId = $derived(
+    activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : null
+  )
+
+  /**
+   * Identity of the file tree's root: its name, its icon, and its accent
+   * colour. A routine behaves like a project, and an assistant task's tree
+   * mounts on the routine's own workspace, so the routine's edited name, icon,
+   * and colour stand in for the hidden assistant space's everywhere the root
+   * is named.
+   */
+  let filesRootIdentity = $derived.by(() => {
+    const routine = assistantRoutines.routineForTask(
+      filesThreadId === null
+        ? null
+        : (scopeState.allScopeThreads.find((candidate) => candidate.id === filesThreadId) ?? null)
+    )
+    if (routine) {
+      return {
+        name: routine.name,
+        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
+        accentColor: routineAccentColor(routine)
+      }
+    }
+    // The notifications tab carries no project, so the fallback name reads the
+    // project id only from a tab that has one.
+    const tabProjectId =
+      activeContextTab && 'projectId' in activeContextTab ? activeContextTab.projectId : null
+    return {
+      name:
+        tabProjectId === INBOX_PROJECT_ID
+          ? 'Chat artifacts'
+          : (activeProject?.name ?? 'Project files'),
+      iconUrl: activeProject
+        ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
+        : null,
+      accentColor: null
+    }
+  })
 </script>
 
 {#if gitPanelProjectId}
@@ -85,12 +130,9 @@
     {#if activeContextTab.kind === 'files'}
       <ProjectFilesPanel
         projectId={activeContextTab.projectId}
-        projectName={activeContextTab.projectId === INBOX_PROJECT_ID
-          ? 'Chat artifacts'
-          : (activeProject?.name ?? 'Project files')}
-        projectIconUrl={activeProject
-          ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
-          : null}
+        projectName={filesRootIdentity.name}
+        projectIconUrl={filesRootIdentity.iconUrl}
+        projectAccentColor={filesRootIdentity.accentColor}
       />
     {:else if activeContextTab.kind === 'diff'}
       <DiffSidebarPanel

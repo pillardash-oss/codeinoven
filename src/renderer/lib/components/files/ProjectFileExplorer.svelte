@@ -41,6 +41,12 @@
   interface Props {
     projectId: string
     projectName: string
+    /** Root icon image for the tree header (a routine's own icon), or null for
+     *  the generic folder. */
+    projectIconUrl?: string | null
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. */
+    projectAccentColor?: string | null
     projectState: ProjectFilesState
     onWidthChange: (width: number, persist: boolean) => void
     selectedPath: string | null
@@ -63,6 +69,8 @@
   let {
     projectId,
     projectName,
+    projectIconUrl = null,
+    projectAccentColor = null,
     projectState,
     onWidthChange,
     selectedPath,
@@ -1071,6 +1079,8 @@
 >
   <ProjectFileExplorerHeader
     {projectName}
+    {projectIconUrl}
+    {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}
     {dropActive}

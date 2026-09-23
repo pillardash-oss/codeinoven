@@ -3,6 +3,13 @@
 
   interface Props {
     projectName: string
+    /** Root icon image: the routine's own icon when the tree is mounted on a
+     *  routine's workspace, else null for the generic folder. */
+    projectIconUrl?: string | null
+    /** Accent colour of the root identity (a routine's colour), or null for the
+     *  default primary accent. Drawn as an inset left edge so the header never
+     *  shifts, whatever the scope. */
+    projectAccentColor?: string | null
     explorerWidth: number
     resizing: boolean
     dropActive: boolean
@@ -20,6 +27,8 @@
 
   let {
     projectName,
+    projectIconUrl = null,
+    projectAccentColor = null,
     explorerWidth,
     resizing,
     dropActive,
@@ -58,8 +67,24 @@
     >
   </div>
 {/if}
-<div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
-  <FolderOpen size={13} class="shrink-0 text-primary" />
+<div
+  class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2"
+  style:box-shadow={projectAccentColor ? `inset 2px 0 0 0 ${projectAccentColor}` : undefined}
+>
+  {#if projectIconUrl}
+    <img
+      src={projectIconUrl}
+      alt=""
+      class="h-3.5 w-3.5 shrink-0 object-contain"
+      draggable="false"
+    />
+  {:else}
+    <FolderOpen
+      size={13}
+      class="shrink-0"
+      style="color: {projectAccentColor ?? 'var(--color-primary)'}"
+    />
+  {/if}
   <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground">
     {projectName}
   </span>

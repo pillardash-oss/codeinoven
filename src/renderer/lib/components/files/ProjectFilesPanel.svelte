@@ -72,9 +72,13 @@
     projectId: string
     projectName: string
     projectIconUrl?: string | null
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. An assistant task's tree mounts on its routine's own workspace,
+     *  so the parent passes that routine's colour here. */
+    projectAccentColor?: string | null
   }
 
-  let { projectId, projectName, projectIconUrl = null }: Props = $props()
+  let { projectId, projectName, projectIconUrl = null, projectAccentColor = null }: Props = $props()
 
   let contextTab = $derived(
     contextSidebarState.sidebarActiveTab?.kind === 'files'
@@ -1039,6 +1043,8 @@
         <ProjectFileExplorer
           {projectId}
           {projectName}
+          {projectIconUrl}
+          {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
             projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
@@ -1318,6 +1324,8 @@
         <ProjectFileExplorer
           {projectId}
           {projectName}
+          {projectIconUrl}
+          {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
             projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
