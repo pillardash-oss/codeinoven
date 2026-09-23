@@ -376,6 +376,21 @@ prompt"; the user-facing term is how-to.
   how-to is saved. Credentials are collected with `cio_ask_secret`, never pasted
   into chat, and nothing is installed without the user's agreement; the only
   acceptable blockers are network and a closed app.
+- The `install_bundle` argument is documented in the tool schema *and* accepted
+  tolerantly. The canonical shape is
+  `{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}`:
+  `utilities` is the array, each entry's only required key is `definition`, and
+  `kind` lives inside that definition. Because the schema cannot both teach the
+  shape and survive a harness that validates strictly, it stays descriptive
+  (nested properties, no `required` on the wrapper) and the gateway normalises
+  the variants callers reliably write: an entry list named `entries`, the
+  utility fields flat on the entry instead of inside `definition`, and `type` as
+  an alias for `kind`. Every rejection quotes the exact shape to send, including
+  the received keys. This replaced an earlier version that failed a real turn
+  three times: the entry list under the wrong key was told only "must contain
+  between 1 and 20 utilities", and a flat entry threw the opaque
+  "Expected an object" from the object coercion before any shape check ran, so
+  the agent had no signal about the `definition` wrapper and gave up.
 
 ## Assistant panel
 

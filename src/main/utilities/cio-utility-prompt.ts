@@ -16,7 +16,7 @@ const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
  * Versioned application-owned setup knowledge. This is deliberately source code rather
  * than a discoverable skill so its API contract cannot drift independently of the app.
  */
-export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 7)
+export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 8)
 
 The user explicitly invoked @cio-utility. You work in two roles, resolved from
 the user's request:
@@ -120,6 +120,32 @@ Setup role - bundle shape:
     "utilities": [{ "definition": { ... } }]
   }
 }
+
+The nesting is exact and is the most common mistake: "utilities" is the array, each entry is an
+object whose only required key is "definition", and "kind" lives inside that definition, never on
+the entry. A complete, valid remote-MCP call looks exactly like this:
+{
+  "action": "install_bundle",
+  "bundle": {
+    "name": "Slack MCP",
+    "utilities": [
+      {
+        "definition": {
+          "kind": "mcp",
+          "name": "Slack MCP",
+          "description": "Read and search Slack conversations.",
+          "activation": "on_demand",
+          "scope": { "level": "global" },
+          "credentials": [],
+          "config": { "transport": "http", "url": "https://mcp.slack.com/mcp" }
+        }
+      }
+    ]
+  }
+}
+Do not send an "id" (the app generates it), do not put "kind" or "config" directly on the entry,
+and do not put "transport" or "url" outside "config". If the call is rejected, read the error: it
+names the exact field and shape to send, so fix that field rather than trying a different layout.
 
 Every definition contains:
 - kind: "skill" or "mcp" (a plugin is a bundle with multiple definitions)

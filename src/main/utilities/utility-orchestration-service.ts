@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type {
   ResolvedUtility,
   UtilityDefinition,
-  UtilityDefinitionInput,
   UtilityDefinitionFor,
   McpUtilityConfig,
   UtilityKind,
@@ -87,6 +86,7 @@ import {
   requiredString,
   resolveEnvironmentReferences
 } from './utility-orchestration/utility-input'
+import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
@@ -727,27 +727,7 @@ export class UtilityOrchestrationService {
     if (input['action'] !== 'install_bundle') {
       throw new TypeError('Utility management action is invalid')
     }
-    const bundle = recordValue(input['bundle'])
-    requiredString(bundle['name'], 'Utility bundle name', 120)
-    const entries = bundle['utilities']
-    if (!Array.isArray(entries) || entries.length === 0 || entries.length > 20) {
-      throw new TypeError('Utility bundle must contain between 1 and 20 utilities')
-    }
-    const definitions = entries.map((rawEntry, index) => {
-      const entry = recordValue(rawEntry)
-      if (entry['credentials'] !== undefined) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      const definition = recordValue(entry['definition'])
-      if (definition['kind'] !== 'skill' && definition['kind'] !== 'mcp') {
-        throw new TypeError(`Utility bundle entry ${index} must be a skill or MCP server`)
-      }
-      const credentials = definition['credentials']
-      if (credentials !== undefined && (!Array.isArray(credentials) || credentials.length > 0)) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
-    })
+    const definitions = normalizeBundleDefinitions(input['bundle'])
     const outcomes = await this.registry.installMany(definitions, { consolidate: true })
     state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
     // Hot reload: make what this turn just installed reachable by the next search

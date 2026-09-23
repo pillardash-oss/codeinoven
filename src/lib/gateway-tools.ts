@@ -158,7 +158,10 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_MANAGE_TOOL_NAME,
     description:
-      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. When a capability needs an API key or token, never put the value in the bundle: collect it with ' +
+      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. The bundle is ' +
+      '{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}: every entry wraps its ' +
+      'utility in a "definition" object, and "kind" sits inside that definition, never on the entry. ' +
+      'When a capability needs an API key or token, never put the value in the bundle: collect it with ' +
       ASK_SECRET_TOOL_NAME +
       ' after installing, passing the installed id as utility_id and the variable the server expects as environment_variable, and the app stores it in the encrypted vault exactly as the Utilities page would. Reinstalling an existing capability updates that entry in place and reports it as "updated", removing extra copies of it, so never install a second copy to work around one that already exists. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden in the bundle itself; if ' +
       ASK_SECRET_TOOL_NAME +
@@ -167,10 +170,54 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['install_bundle'] },
+        // Deliberately descriptive rather than enforcing: the nested properties
+        // teach the caller the exact shape, while the missing `required` and the
+        // `additionalProperties` leave a near-miss (an entry named `entries`, or
+        // the utility fields flat on the entry) to the gateway's tolerant parser.
+        // A harness that validates strictly would otherwise reject the call with
+        // a generic error and hide the precise, shape-quoting message the gateway
+        // returns, which is what let an agent guess three times and give up.
         bundle: {
           type: 'object',
           description:
-            'A UtilityBundleInstallRequest-shaped object with name and one or more secret-free definition entries.',
+            'The bundle to install: a name plus one entry per utility. Each entry is ' +
+            '{"definition":{...}}; the definition carries "kind" plus the utility fields.',
+          properties: {
+            name: { type: 'string', description: 'Human-readable bundle name.' },
+            utilities: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 20,
+              description:
+                'One entry per utility. Each entry wraps its utility in a "definition" object.',
+              items: {
+                type: 'object',
+                description: 'A single entry: {"definition":{"kind":"skill"|"mcp",...}}.',
+                properties: {
+                  definition: {
+                    type: 'object',
+                    description:
+                      'The utility itself. "kind" must be "skill" or "mcp"; an MCP server also ' +
+                      'needs config.transport and config.url (or config.command for stdio).',
+                    properties: {
+                      kind: { type: 'string', enum: ['skill', 'mcp'] },
+                      name: { type: 'string', description: 'Utility name.' },
+                      description: { type: 'string' },
+                      enabled: { type: 'boolean' },
+                      activation: { type: 'string', enum: ['on_demand', 'always'] },
+                      scope: { type: 'object' },
+                      credentials: { type: 'array', maxItems: 0 },
+                      harnessBindings: { type: 'array' },
+                      config: { type: 'object' }
+                    },
+                    required: ['kind', 'name'],
+                    additionalProperties: true
+                  }
+                },
+                additionalProperties: true
+              }
+            }
+          },
           additionalProperties: true
         }
       },
