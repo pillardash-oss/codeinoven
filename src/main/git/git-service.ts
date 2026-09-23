@@ -1101,14 +1101,40 @@ export class GitService {
    * `git rebase --onto <target>^ <target>` replays every commit after `target`
    * onto its parent, skipping `target` itself. Only safe for unpushed commits;
    * pushed commits need a force-push afterwards.
+   *
+   * A replay that conflicts stops the rebase, and that stop is where the drop is
+   * finished from: the conflicts land in this checkout, the panel's Rebase in
+   * progress notice offers Continue, Skip and Abort, and continuing the rebase
+   * completes the drop. It is reported as the step the user owes rather than as
+   * git's own output, which is a summary of every commit it replayed plus three
+   * hints, and a refusal that never started the rebase says so instead of leaving
+   * the panel to guess.
    */
   async deleteCommit(projectPath: string, target: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
-      })
-      return this.readStatus(directory)
+      const short = target.slice(0, 7)
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
+        })
+      } catch (error) {
+        failure = error
+      }
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      Logger.error(`Deleting ${short} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      if (status.conflictState === 'rebase') {
+        throw new GitRefusal(
+          `Deleting ${short} stopped on a conflict in the commits after it. Resolve and continue the rebase to finish the drop, or abort the rebase to keep the commit`
+        )
+      }
+      throw new GitRefusal(
+        isUncommittedChangesRefusal(failure)
+          ? `Deleting ${short} needs a clean working tree. Commit or stash the uncommitted changes, then try again`
+          : `Deleting ${short} could not start, so nothing was changed`
+      )
     })
   }
 

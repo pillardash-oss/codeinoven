@@ -89,6 +89,22 @@ export class GitLocalOperations {
 
   constructor(private readonly access: GitLocalOperationAccess) {}
 
+  /**
+   * Publish the state a failed git action left behind, without clearing the
+   * message that explains it. A rebase that stopped is a state the panel renders
+   * (conflict row, Rebase in progress notice), and a failure can also have ended
+   * the rebase the panel still shows, so the status is read back here instead of
+   * being left stale. The full refresh cannot do this: it clears `error` first.
+   */
+  private async publishStateAfterFailure(projectId: string): Promise<void> {
+    const status = await this.access.readStatus(projectId).catch(() => null)
+    if (!status) return
+    this.status = status
+    // The same invariant the full refresh keeps: the conflicts-only filter is
+    // only meaningful while conflicts exist.
+    if (status.conflicted.length === 0) this.conflictsMode = false
+  }
+
   async stage(projectId: string, paths: string[]): Promise<void> {
     this.access.markBusy('stage', true)
     this.error = null
@@ -647,12 +663,7 @@ export class GitLocalOperations {
         reason,
         action === 'continue' ? 'The rebase could not continue' : 'The commit could not be skipped'
       )
-      const status = await this.access.readStatus(projectId).catch(() => null)
-      if (!status) return
-      this.status = status
-      // The same invariant the full refresh keeps: the conflicts-only filter is
-      // only meaningful while conflicts exist.
-      if (status.conflicted.length === 0) this.conflictsMode = false
+      await this.publishStateAfterFailure(projectId)
     } finally {
       this.access.markBusy('rebase-action', false)
     }
@@ -869,16 +880,22 @@ export class GitLocalOperations {
     }
   }
 
+  /**
+   * Drop one commit from history. A delete whose replay conflicts leaves a
+   * stopped rebase in this checkout, so a failure publishes that state and keeps
+   * the sentence naming the step the user owes.
+   */
   async deleteCommit(projectId: string, target: string): Promise<void> {
     this.access.markBusy('delete-commit', true)
     this.error = null
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:deleteCommit',
         ...this.access.scopedGitArgs(projectId, target)
       )
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit could not be deleted')
+      await this.publishStateAfterFailure(projectId)
     } finally {
       this.access.markBusy('delete-commit', false)
     }
