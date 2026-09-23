@@ -15,6 +15,7 @@ import type {
   SessionAgentEvent
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
@@ -340,7 +341,7 @@ export class PiDriver extends PersistentCliDriver {
     string,
     { provider: string; modelId: string; thinkingLevel: string }
   >()
-  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
+  /** Session-keyed turn handoff files carrying the gateway endpoint for the extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
   /**
    * Session-keyed endpoints published before the gateway extension was materialized.
@@ -349,7 +350,7 @@ export class PiDriver extends PersistentCliDriver {
    * held here and flushed by materializeCioCoreToolsExtension   otherwise every first
    * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
    */
-  private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
+  private pendingGatewayEndpoints = new Map<string, UtilityGatewayEndpoint>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   /**
@@ -1265,7 +1266,7 @@ export class PiDriver extends PersistentCliDriver {
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
   ): Promise<void> {
     void _projectPath
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)

@@ -240,7 +240,8 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     }))
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
       url: 'http://127.0.0.1:12345',
-      token: 'first-turn'
+      token: 'first-turn',
+      timeoutMs: 600_000
     })
     await driver.sendPrompt('/project', {
       sessionId,
@@ -487,7 +488,8 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, null)
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
       url: 'http://127.0.0.1:12345',
-      token: 'second-turn'
+      token: 'second-turn',
+      timeoutMs: 600_000
     })
     await driver.sendPrompt('/project', {
       sessionId,

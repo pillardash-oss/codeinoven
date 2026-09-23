@@ -20,6 +20,7 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import { ASK_SECRET_TOOL_NAME, GATEWAY_TOOLS } from '../../lib/gateway-tools'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
@@ -122,7 +123,7 @@ export class CodexDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch', 'computer_use']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
-  private utilityEndpoints = new Map<string, { url: string; token: string }>()
+  private utilityEndpoints = new Map<string, UtilityGatewayEndpoint>()
   private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
@@ -310,7 +311,7 @@ export class CodexDriver extends PersistentCliDriver {
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
   ): Promise<void> {
     if (endpoint) this.utilityEndpoints.set(sessionId, endpoint)
     else this.utilityEndpoints.delete(sessionId)
@@ -1269,9 +1270,12 @@ export class CodexDriver extends PersistentCliDriver {
           'content-type': 'application/json'
         },
         body: JSON.stringify(recordValue(params['arguments']) ?? {}),
-        // The secret card is human-paced, so that one call outlives the short
-        // gateway timeout every other tool is bounded by.
-        signal: AbortSignal.timeout(tool.name === ASK_SECRET_TOOL_NAME ? 600_000 : 120_000)
+        // The secret card is human-paced, so that one call waits as long as the
+        // app's own deadline   the endpoint carries it   while every other tool
+        // stays bounded by the short gateway timeout.
+        signal: AbortSignal.timeout(
+          tool.name === ASK_SECRET_TOOL_NAME ? endpoint.timeoutMs : 120_000
+        )
       })
       const result: unknown = await response.json()
       const body = recordValue(result)

@@ -47,6 +47,7 @@ import {
   type ImageDescriptorExecutor
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
+import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
 import type { AgentSecretResolution } from './agent-secret-service'
 import {
@@ -171,7 +172,7 @@ export interface UtilityTurnGateway {
    * Pi hand { url, token } to their bridge through a session-keyed channel;
    * `null` when the direct path is not in use for this turn.
    */
-  directEndpoint: { url: string; token: string } | null
+  directEndpoint: UtilityGatewayEndpoint | null
   /**
    * Whether this turn carries the explicit-setup contract (utility management and
    * app diagnostics). A gateway fixes its tool set when the turn starts, so a
@@ -590,7 +591,11 @@ export class UtilityOrchestrationService {
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
-      directEndpoint: { url: bridgeUrl, token },
+      directEndpoint: {
+        url: bridgeUrl,
+        token,
+        timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
+      },
       managementEnabled: request.allowManagement === true,
       cleanup
     }

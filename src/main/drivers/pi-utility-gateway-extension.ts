@@ -80,7 +80,15 @@ import { Type } from 'typebox'
 interface GatewayHandoff {
   url: string
   token: string
+  /** How long the app wants a gateway call to be allowed to take. Published per
+   *  turn from the app's own human-decision deadline, so a card that is still on
+   *  screen is never abandoned by a shorter client default. */
+  timeoutMs?: number
 }
+
+/** Floor for a call whose reply is paced by a human, used when a handoff
+ *  predates the published timeout. */
+const HUMAN_PACED_TIMEOUT_MS = 600000
 
 const HANDOFF_PATH = '__HANDOFF_PATH__'
 
@@ -123,7 +131,7 @@ async function loadHandoff(): Promise<GatewayHandoff> {
   return handoff
 }
 
-function postJson(base: string, token: string, route: string, body: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+function postJson(base: string, token: string, route: string, body: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   const url = new URL(route, base)
   const payload = JSON.stringify(body)
   return new Promise((resolve, reject) => {
@@ -171,15 +179,16 @@ function postJson(base: string, token: string, route: string, body: Record<strin
       }
     )
     req.on('error', reject)
-    req.setTimeout(timeoutMs ?? 60_000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy(new Error('Utility gateway request timed out'))
     })
     req.end(payload)
   })
 }
 
-async function callGateway(route: string, body: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+async function callGateway(route: string, body: Record<string, unknown>, minimumTimeoutMs?: number): Promise<unknown> {
   const first = await loadHandoff()
+  const timeoutMs = Math.max(first.timeoutMs ?? 60_000, minimumTimeoutMs ?? 0)
   try {
     return await postJson(first.url, first.token, route, body, timeoutMs)
   } catch (error) {
@@ -201,6 +210,7 @@ async function callGateway(route: string, body: Record<string, unknown>, timeout
         throw retryError
       }
     }
+
     if (error && error.gatewayInactive) throw error
     throw error
   }
@@ -348,9 +358,10 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       const result = await callGateway(
         ${JSON.stringify(askSecretTool.route)},
         { secrets: params.secrets, apply_environment: true },
-        // The card is human-paced, so this call must outlive a short request
-        // timeout; ten minutes still bounds a turn that is truly abandoned.
-        600000
+        // The card is human-paced, so this call waits for the deadline the app
+        // published with the turn, and never less than ten minutes if that
+        // handoff predates the published timeout.
+        HUMAN_PACED_TIMEOUT_MS
       )
       return textResult(applySecretEnvironment(result))
     }

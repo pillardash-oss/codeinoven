@@ -2450,7 +2450,7 @@ export class ChatEngine {
         sessionId: context.sessionId,
         questions: secretRequestQuestions(entries)
       },
-      DEFAULT_QUESTION_TIMEOUT_MS
+      await this.pendingQuestionTimeoutMs()
     )
     const settled = new Promise<AgentSecretResolution>((resolve) => {
       pending.settleSecret = resolve
@@ -3197,7 +3197,13 @@ export class ChatEngine {
       const request = {
         projectPath,
         providerId: settings.providerId,
-        resolvedUtilities
+        resolvedUtilities,
+        // Publish the app's own human-decision deadline to the transport, so a
+        // harness whose client has a shorter request timeout (OpenCode's MCP
+        // client) does not abandon a `cio_ask_secret` card mid-wait.
+        ...(gateway.directEndpoint
+          ? { gatewayRequestTimeoutMs: gateway.directEndpoint.timeoutMs }
+          : {})
       }
       const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
       if (overlay.gatewayAvailable === false) {
@@ -20021,17 +20027,55 @@ export class ChatEngine {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
   }
 
+  /**
+   * The configured human-decision timer, shared by questions and secret
+   * requests. Read per request so a Settings change applies to the next card
+   * rather than only after a restart.
+   */
+  private async pendingQuestionTimeoutMs(): Promise<number> {
+    const config = await this.storage.getConfig()
+    return config.questionTimeoutMs
+  }
+
+  /**
+   * Close an abandoned secret card and settle the gateway call waiting on it.
+   * Nothing can answer a secret on the user's behalf, so the only correct
+   * outcome for an expired card is a dismissal the agent can react to: leaving
+   * the call open would strand the harness turn on a card nobody will fill in.
+   */
+  private expireSecretQuestion(pending: PendingQuestionInfo): void {
+    if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
+    pending.timer = undefined
+    this.finalizePendingQuestion(pending.request.requestId, 'dismissed')
+  }
+
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
-    // Creating a Brainstorm version and supplying a secret are both human
-    // decisions, never a timer default.
+    // Creating a Brainstorm version is a human decision with no safe default at
+    // all, so that card never expires. A secret request does run on the timer:
+    // nothing can invent a value the user never supplied, but an abandoned card
+    // must still close so the waiting tool call is settled.
     if (
-      pending.request.questions.some(
-        (question) => isBrainstormDocumentQuestion(question.prompt) || isSecretQuestion(question)
-      )
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
     ) {
       pending.timer = undefined
       pending.request.expiresAt = undefined
+      return
+    }
+
+    // A secret request runs an absolute countdown from the moment its card
+    // appeared. It deliberately skips the activity pause that questions use:
+    // the user usually steps away from the app to obtain the value, and a card
+    // that only counted down while they were elsewhere would expire exactly
+    // when they are fetching it. Nothing can invent a secret, so the deadline
+    // closes the card rather than answering it.
+    if (pending.request.questions.some(isSecretQuestion)) {
+      const secretExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
+      pending.request.expiresAt = secretExpiresAt
+      pending.timer = setTimeout(
+        () => this.expireSecretQuestion(pending),
+        Math.max(0, secretExpiresAt - Date.now())
+      )
       return
     }
 

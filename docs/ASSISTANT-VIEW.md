@@ -486,6 +486,25 @@ prompt"; the user-facing term is how-to.
   between 1 and 20 utilities", and a flat entry threw the opaque
   "Expected an object" from the object coercion before any shape check ran, so
   the agent had no signal about the `definition` wrapper and gave up.
+- A human decision runs on the app's one timer. `questionTimeoutMs` is read per
+  request, so a Settings change applies to the next card instead of a restart,
+  and both the question card and the `cio_ask_secret` card count down to the
+  same `expiresAt` the main process is running. A secret card deliberately skips
+  the activity pause a question uses: the user usually leaves the app to obtain
+  the value, so a card that only counted down while they were elsewhere would
+  expire exactly when they are fetching it. Nothing can invent a secret, so an
+  expired card closes and settles the waiting tool call as dismissed
+  (`expireSecretQuestion`) rather than answering it, which lets the agent react
+  instead of hanging on an unreachable card.
+- The app publishes that deadline to every gateway transport, because a harness
+  whose client has its own shorter request timeout abandons the call while the
+  card is still on screen. That is how a Slack token request was lost three times
+  to OpenCode's 60-second MCP client timeout. `src/lib/gateway-timeout.ts`
+  derives `questionTimeoutMs + GATEWAY_HARNESS_TIMEOUT_MARGIN_MS`, the endpoint
+  carries it as `timeoutMs`, and each transport honours it: OpenCode raises the
+  MCP `timeout` for the app-owned gateway server only (recognised by
+  `GATEWAY_UTILITY_ID_PREFIX`), Codex sets the `AbortSignal` from the endpoint,
+  and the Pi extension waits at least the published value.
 
 ## Assistant panel
 
