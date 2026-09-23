@@ -852,6 +852,20 @@ html body [data-sonner-toaster] {
   font-family: var(--font-app) !important;
 }
 
+html body [data-sonner-toaster] {
+  /* A toast floats above every modal (svelte-sonner stacks itself at
+     `z-index: 999999999`, the modals sit at `z-60`), but a modal bits-ui
+     Dialog locks the whole page with `body { pointer-events: none }` while it
+     is open, and pointer events inherit. Without opting back in here, a toast
+     raised over a modal was painted yet dead to the mouse: its close button
+     did nothing, and the click fell through to the modal's overlay, which
+     dismissed the modal instead and left the toast stranded on screen.
+
+     `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
+     panel; `lib/toast-layer.ts` owns the selector both sides share. */
+  pointer-events: auto;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
