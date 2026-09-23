@@ -79,7 +79,10 @@ async function loadExtension(armed: boolean): Promise<{
 describe('piCompactionExtension', () => {
   const messages: ContextMessage[] = [
     { role: 'user', content: [{ type: 'text', text: 'hi' }] },
-    { role: 'assistant', content: [{ type: 'toolCall', id: 'call_1', name: 'read', arguments: {} }] },
+    {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call_1', name: 'read', arguments: {} }]
+    },
     {
       role: 'toolResult',
       toolCallId: 'call_1',
