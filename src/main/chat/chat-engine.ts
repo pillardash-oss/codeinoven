@@ -275,6 +275,8 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
+  isAssistantSetupThread,
+  isAssistantThread,
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
   workerReportsToCoordinator
@@ -1097,7 +1099,12 @@ export class ChatEngine {
    * no model fallback.
    */
   private assistantAgentsResolver: ((task: Thread) => RoutineAgents | undefined) | null = null
-
+  /**
+   * Records that an assistant task's run turn settled, so the routine can note
+   * its last successful run. Attached by the bootstrap, which owns the routine
+   * manager; absent means run outcomes are not tracked.
+   */
+  private assistantRunSettled: ((threadId: string, success: boolean) => void) | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -6950,11 +6957,13 @@ export class ChatEngine {
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
     const previousPendingMemoryDecision = this.pendingMemoryDecisions.get(activeSessionId)
-    this.pendingMemoryDecisions.set(activeSessionId, {
-      userMessage: text,
-      settings: steerSettings,
-      references: validatedPromptReferences
-    })
+    if (!isAssistantSetupThread(thread)) {
+      this.pendingMemoryDecisions.set(activeSessionId, {
+        userMessage: text,
+        settings: steerSettings,
+        references: validatedPromptReferences
+      })
+    }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
@@ -7457,6 +7466,7 @@ export class ChatEngine {
     const shouldAutoTitle =
       targetThread?.status === 'created' &&
       targetThread.titleSource !== 'manual' &&
+      !(targetThread && isAssistantSetupThread(targetThread)) &&
       mirrorBeforePrompt.messages.length === 0
 
     // Persist the user message to the mirror immediately   before any slow
@@ -7743,7 +7753,7 @@ export class ChatEngine {
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
     // running turn still carries its text and referenced selections.
-    if (origin === 'user') {
+    if (origin === 'user' && !(targetThread && isAssistantSetupThread(targetThread))) {
       this.pendingMemoryDecisions.set(sessionId, {
         userMessage: text,
         settings,
@@ -10280,7 +10290,7 @@ export class ChatEngine {
     parentSessionId?: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.titleSource === 'manual') return
+    if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
@@ -21481,6 +21491,17 @@ export class ChatEngine {
     this.assistantAgentsResolver = resolver
   }
 
+  /**
+   * Wire the assistant run-outcome recorder. Fired when an internal-origin turn
+   * on an assistant task settles, so the routine manager can stamp the task's
+   * last successful run.
+   */
+  attachAssistantRunSettledRecorder(
+    recorder: ((threadId: string, success: boolean) => void) | null
+  ): void {
+    this.assistantRunSettled = recorder
+  }
+
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     scheduler.attachPing((config) => this.sendHeartbeatPing(config))
@@ -23039,6 +23060,13 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      // A settled turn on an assistant task is reported to the routine scheduler,
+      // which knows whether it dispatched a run on that task and stamps its last
+      // successful run. Harmless for a user's own chat: the scheduler ignores a
+      // thread no run was dispatched on.
+      if (this.assistantRunSettled && finishedThread && isAssistantThread(finishedThread)) {
+        this.assistantRunSettled(finishedThread.id, finalStatus === 'completed')
+      }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
           await this.notifyCoordinatorOfAssignmentAuditFeedback(finishedThread, lastAssistant)
@@ -25730,7 +25758,11 @@ export class ChatEngine {
     settings: ThreadSettings,
     references: PromptReference[]
   ): Promise<void> {
-    const routineId = (await this.threadManager.getThread(projectId, threadId))?.routineId
+    // A routine's "Getting started" thread is an authoring conversation, not a
+    // run: its exchanges must never be mined for memory.
+    const ownerThread = await this.threadManager.getThread(projectId, threadId)
+    if (ownerThread && isAssistantSetupThread(ownerThread)) return
+    const routineId = ownerThread?.routineId
     const current = await this.memoryService.current(projectId, threadId, routineId)
     if (current.enabled) {
       // Deterministic extraction gate (A-06): skip the auxiliary model call when
@@ -26280,7 +26312,15 @@ export class ChatEngine {
     projectId: string,
     threadId: string
   ): Promise<Record<string, unknown>> {
-    const routineId = (await this.threadManager.getThread(projectId, threadId))?.routineId
+    const ownerThread = await this.threadManager.getThread(projectId, threadId)
+    if (ownerThread && isAssistantSetupThread(ownerThread)) {
+      return {
+        status: 'memory_unavailable',
+        message:
+          'Memory is not collected on a routine\'s getting-started thread. Save the how-to first, then propose memory on a task.'
+      }
+    }
+    const routineId = ownerThread?.routineId
     const current = await this.memoryService.current(projectId, threadId, routineId)
     if (!current.enabled) {
       return {

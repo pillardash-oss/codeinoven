@@ -43,5 +43,11 @@ export const invokeAssistantContract = {
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   'assistant:dismissMissedRun': {} as Contract<[id: string], void>,
   /** Dispatch the missed run on its task thread and settle the record. */
-  'assistant:runMissedRunNow': {} as Contract<[id: string], void>
+  'assistant:runMissedRunNow': {} as Contract<[id: string], void>,
+  /**
+   * Run a routine immediately, ignoring its schedule and pause state, and
+   * return how many tasks were dispatched. This is the manual "test this
+   * routine" action.
+   */
+  'assistant:runRoutineNow': {} as Contract<[routineId: string], number>
 }

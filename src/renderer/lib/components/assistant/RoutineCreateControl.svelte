@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Workflow } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import type { ProviderCatalog, RoutineAgents } from '$shared/types'
+  import type { AgentModelSelection, ProviderCatalog, RoutineAgents } from '$shared/types'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
 
   interface Props {
@@ -11,6 +11,11 @@
     providers: ProviderCatalog[]
     /** Project whose harness catalog the pickers display. */
     projectId?: string | null
+    /**
+     * The model the user is working on   the routine's default primary, so
+     * creating a routine never requires an explicit model pick.
+     */
+    getDefaultPrimary?: () => AgentModelSelection | undefined
     title?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
@@ -21,6 +26,7 @@
     onCreate,
     providers,
     projectId = null,
+    getDefaultPrimary,
     title = 'New routine',
     trigger = 0
   }: Props = $props()
@@ -29,6 +35,16 @@
   let name = $state('')
   let agents = $state<RoutineAgents>({ fallbacks: [] })
   let busy = $state(false)
+
+  function defaultAgents(): RoutineAgents {
+    const primary = getDefaultPrimary?.()
+    return primary ? { primary, fallbacks: [] } : { fallbacks: [] }
+  }
+
+  function openDialog(): void {
+    agents = defaultAgents()
+    open = true
+  }
 
   /** Highest trigger value already handled. The control unmounts when the view
    *  changes and remounts later; re-initialising from the live value keeps a
@@ -39,6 +55,7 @@
   $effect(() => {
     if (trigger > handledTrigger) {
       handledTrigger = trigger
+      agents = defaultAgents()
       open = true
     }
   })
@@ -64,7 +81,7 @@
   class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
   aria-label="New routine"
   title="New routine"
-  onclick={() => (open = true)}
+  onclick={openDialog}
 >
   <Workflow size={15} strokeWidth={1.8} />
 </button>

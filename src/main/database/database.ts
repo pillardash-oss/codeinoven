@@ -1116,6 +1116,14 @@ export class Database {
     if (!columns.has('last_run_at')) {
       connection.exec('ALTER TABLE threads ADD COLUMN last_run_at INTEGER')
     }
+    if (!columns.has('last_success_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_success_at INTEGER')
+    }
+    if (!columns.has('assistant_getting_started')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN assistant_getting_started INTEGER NOT NULL DEFAULT 0'
+      )
+    }
   }
 
   /** Existing databases predate the per-message generation duration used by

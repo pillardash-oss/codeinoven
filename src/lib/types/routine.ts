@@ -79,6 +79,12 @@ export interface RoutineAgents {
 /** Fallbacks the assistant panel asks for when a routine is first created. */
 export const ROUTINE_DEFAULT_FALLBACKS = 2
 
+/**
+ * Fixed title of a routine's seed task   the "Getting started" conversation
+ * where the how-to is authored. It is never auto-titled.
+ */
+export const ASSISTANT_SETUP_TITLE = 'Getting started'
+
 export interface CreateRoutineInput {
   name: string
   color?: string

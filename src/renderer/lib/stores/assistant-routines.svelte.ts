@@ -193,6 +193,11 @@ class AssistantRoutinesState {
   async runMissedRunNow(id: string): Promise<void> {
     await invoke('assistant:runMissedRunNow', id)
   }
+
+  /** Run a routine now, returning how many tasks were dispatched. */
+  runRoutineNow(routineId: string): Promise<number> {
+    return invoke('assistant:runRoutineNow', routineId)
+  }
 }
 
 export const assistantRoutines = new AssistantRoutinesState()

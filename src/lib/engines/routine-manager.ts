@@ -207,6 +207,19 @@ export class RoutineManager {
     return updated
   }
 
+  /**
+   * Record that a run's turn finished successfully on a task. Best-effort: a
+   * task removed while its run was in flight simply reports null so the caller
+   * does not fail on a deleted row.
+   */
+  markTaskRunSuccess(threadId: string, at: number): Thread | null {
+    const existing = this.threadRepo.get(threadId)
+    if (!existing) return null
+    const updated: Thread = { ...existing, lastSuccessAt: at, updatedAt: Date.now() }
+    this.threadRepo.upsert(updated)
+    return updated
+  }
+
   /** The schedule a task runs on: its override when set, else its routine's. */
   resolveTaskSchedule(task: Thread): RoutineSchedule | null {
     if (task.scheduleOverride) return task.scheduleOverride

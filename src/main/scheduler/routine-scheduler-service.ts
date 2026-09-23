@@ -28,6 +28,12 @@ export interface RoutineSchedulerDeps {
   dispatch: RoutineDispatch
   /** Injectable clock so evaluation windows are testable. Defaults to Date.now. */
   now?: () => number
+  /**
+   * Notified whenever the scheduler writes run bookkeeping (last run, last
+   * successful run) onto a task, so the workspace can push the fresh row to
+   * every renderer without the scheduler depending on Electron.
+   */
+  onTaskChanged?: (task: Thread) => void
 }
 
 /**
@@ -47,6 +53,13 @@ export class RoutineSchedulerService {
   private startedAt = 0
   private changeListener: (() => void) | null = null
   private tickChain: Promise<void> = Promise.resolve()
+  /**
+   * Task ids whose dispatched run has not settled yet. Dispatch returns once
+   * the prompt is accepted, so success is only known when the session idles;
+   * the engine reports that back through `settleRun`. A task the scheduler
+   * never dispatched a run on is never stamped as a run.
+   */
+  private readonly inFlightRuns = new Set<string>()
 
   constructor(
     storage: StorageEngine,
@@ -94,16 +107,70 @@ export class RoutineSchedulerService {
       return
     }
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
+    this.beginRun(task.id)
     try {
       await this.deps.dispatch(task, routine)
-      this.deps.routines.setTaskLastRun(task.id, run.dueAt)
+      this.recordLastRun(task.id, run.dueAt)
       this.missed.markRun(id)
     } catch (error) {
+      this.endRun(task.id)
       Logger.error('Missed run dispatch failed', error)
       throw error
     } finally {
       this.notifyChange()
     }
+  }
+
+  /**
+   * Run one task immediately, ignoring its schedule and its routine's pause
+   * state   the manual "test this routine" action. Fails when the routine has
+   * no how-to yet: a run with no instructions would do nothing useful, and the
+   * user is still in the authoring conversation.
+   */
+  async runTaskNow(task: Thread): Promise<void> {
+    const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
+    if (!routine?.howTo.trim()) {
+      throw new Error('This routine has no how-to yet. Describe it to the agent first.')
+    }
+    this.beginRun(task.id)
+    try {
+      await this.deps.dispatch(task, routine)
+    } catch (error) {
+      this.endRun(task.id)
+      throw error
+    }
+    this.recordLastRun(task.id, this.now())
+    this.notifyChange()
+  }
+
+  /**
+   * Report that a run's turn settled on a task. Only tasks the scheduler
+   * actually dispatched a run on are stamped, so a user's own chat on a task
+   * never counts as a run. Failed turns are dropped: they surface in the Issues
+   * tab, and `lastSuccessAt` keeps pointing at the last good run.
+   */
+  settleRun(threadId: string, success: boolean): void {
+    if (!this.inFlightRuns.has(threadId)) return
+    this.inFlightRuns.delete(threadId)
+    if (!success) return
+    const updated = this.deps.routines.markTaskRunSuccess(threadId, this.now())
+    if (updated) this.deps.onTaskChanged?.(updated)
+  }
+
+  /**
+   * Run every runnable task of a routine now and return how many were
+   * dispatched, so the panel can confirm the manual run.
+   */
+  async runRoutineNow(routineId: string): Promise<number> {
+    const routine = this.deps.routines.getRoutine(routineId)
+    if (!routine) throw new Error(`Routine not found: ${routineId}`)
+    if (!routine.howTo.trim()) {
+      throw new Error('This routine has no how-to yet. Describe it to the agent first.')
+    }
+    const tasks = this.deps.routines.listRoutineTasks(routineId)
+    if (tasks.length === 0) throw new Error('This routine has no task to run.')
+    await Promise.all(tasks.map((task) => this.runTaskNow(task)))
+    return tasks.length
   }
 
   /** Evaluate every scheduled task once (used by start and by tests). */
@@ -167,7 +234,7 @@ export class RoutineSchedulerService {
         title: task.title
       })
       // Claim the slot so a repeated tick cannot re-detect the same fire.
-      this.deps.routines.setTaskLastRun(task.id, due)
+      this.recordLastRun(task.id, due)
       if (this.missed.list().length !== before) this.notifyChange()
       return
     }
@@ -178,12 +245,27 @@ export class RoutineSchedulerService {
 
   private fire(task: Thread, dueAt: number): void {
     // Claim the slot before the async dispatch so the next tick cannot double-fire.
-    this.deps.routines.setTaskLastRun(task.id, dueAt)
+    this.recordLastRun(task.id, dueAt)
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
+    this.beginRun(task.id)
     void Promise.resolve(this.deps.dispatch(task, routine)).catch((error) => {
+      this.endRun(task.id)
       Logger.error('Routine scheduled run failed', error)
     })
     this.notifyChange()
+  }
+
+  private beginRun(threadId: string): void {
+    this.inFlightRuns.add(threadId)
+  }
+
+  private endRun(threadId: string): void {
+    this.inFlightRuns.delete(threadId)
+  }
+
+  private recordLastRun(threadId: string, at: number): void {
+    const updated = this.deps.routines.setTaskLastRun(threadId, at)
+    this.deps.onTaskChanged?.(updated)
   }
 
   private notifyChange(): void {

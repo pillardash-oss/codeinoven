@@ -58,7 +58,7 @@
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings, chatEffectiveSettings } from '$lib/stores/thread-settings.svelte'
+  import { threadSettings, chatEffectiveSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -66,7 +66,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { routinePrimaryModel, settingsWithRoutineModel } from '$shared/routine-agents'
+  import { routinePrimaryModel, settingsWithRoutineModel, withDefaultRoutinePrimary } from '$shared/routine-agents'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -102,6 +102,7 @@
     activeThreadRowId,
     INBOX_PROJECT_ID,
     ASSISTANT_SPACE_ID,
+    ASSISTANT_SETUP_TITLE,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
@@ -110,6 +111,7 @@
     usesThreadWorkspaceMount
   } from '$shared/types'
   import type {
+    AgentModelSelection,
     AgentPart,
     AppConfig,
     AppConfigPatch,
@@ -1899,6 +1901,7 @@
             onCreate: createAssistantRoutine,
             providers: providerCatalog.allCached(),
             projectId: rendererRecovery.selectedProjectId,
+            getDefaultPrimary: currentAssistantModelSelection,
             trigger: routineCreateTrigger
           }
         },
@@ -2689,9 +2692,12 @@
   async function createThreadInProject(
     project: Project,
     requestedBucketId?: string,
-    /** Assistant-space grouping: the routine the new task belongs to. */
-    routineId?: string
+    /** Assistant-space grouping: the routine the new task belongs to, and whether
+     *  this is a routine's seed "Getting started" thread. */
+    assistant: { routineId?: string; gettingStarted?: boolean } = {}
   ): Promise<void> {
+    const routineId = assistant.routineId
+    const gettingStarted = assistant.gettingStarted === true
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -2706,20 +2712,44 @@
     if (existing) {
       // A routine-scoped create always lands inside its routine, even when it
       // reuses a blank thread: the reused row predates this call, so its
-      // grouping is applied here rather than at creation time.
-      if (routineId && existing.routineId !== routineId) {
-        const optimistic = { ...existing, routineId }
+      // grouping and setup label are applied here rather than at creation time.
+      const regroup = routineId !== undefined && existing.routineId !== routineId
+      const needsSetupPatch = gettingStarted && existing.assistantGettingStarted !== true
+      if (regroup || needsSetupPatch) {
+        const optimistic: Thread = {
+          ...existing,
+          ...(regroup ? { routineId } : {}),
+          ...(gettingStarted
+            ? {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual' as const,
+                assistantGettingStarted: true
+              }
+            : {})
+        }
         upsertThreadInList(optimistic)
         if (workspaceState.selectedThread?.id === existing.id) {
           workspaceState.updateThread(optimistic)
         }
-        void assistantRoutines
-          .setTaskRoutine(existing.id, routineId)
-          .then((grouped) => {
-            upsertThreadInList(grouped)
-            workspaceState.updateThread(grouped)
-          })
-          .catch(() => undefined)
+        const persist = async (): Promise<void> => {
+          if (regroup && routineId) {
+            upsertThreadInList(await assistantRoutines.setTaskRoutine(existing.id, routineId))
+          }
+          if (needsSetupPatch) {
+            upsertThreadInList(
+              await invoke('thread:update', existing.projectId, existing.id, {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual',
+                assistantGettingStarted: true
+              })
+            )
+          }
+          const current = allThreads.find((candidate) => candidate.id === existing.id)
+          if (current && workspaceState.selectedThread?.id === existing.id) {
+            workspaceState.updateThread(current)
+          }
+        }
+        void persist().catch(() => undefined)
       }
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
@@ -2762,8 +2792,8 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi' as const,
-      title: DEFAULT_THREAD_TITLE,
-      titleSource: 'default' as const,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
+      titleSource: gettingStarted ? ('manual' as const) : ('default' as const),
       status: 'created' as const,
       pinned: false,
       archived: false,
@@ -2774,6 +2804,7 @@
       lastActivity: Date.now(),
       workingDirectory: project.path,
       ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { assistantGettingStarted: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
@@ -2802,11 +2833,12 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi',
-      title: DEFAULT_THREAD_TITLE,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {}),
-      ...(routineId ? { routineId } : {})
+      ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
@@ -2987,6 +3019,25 @@
   }
 
   /**
+   * The model the composer would start a new assistant task on: the selected
+   * assistant task's model, else the Chats last-used selection (assistant
+   * threads run on chat-style settings). A routine defaults its primary to it.
+   */
+  function currentAssistantModelSelection(): AgentModelSelection | undefined {
+    const selected = workspaceState.selectedThread
+    const settings =
+      selected && selected.projectId === ASSISTANT_SPACE_ID ? selected.settings : chatSettings.lastUsed
+    if (!settings?.modelId) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
+    }
+  }
+
+  /**
    * The routine the user is currently "inside": the routine of the selected
    * task, else the routine whose how-to panel is docked (so a shortcut still
    * lands in the routine while its panel is open on another task).
@@ -3014,10 +3065,16 @@
   /** Create a routine and seed its first task, then open the how-to panel. */
   async function createAssistantRoutine(name: string, agents: RoutineAgents): Promise<void> {
     if (!assistantProject) return
-    const routine = await assistantRoutines.createRoutine({ name, agents })
+    // The model the user starts with becomes the routine's primary when they
+    // did not pick one explicitly: a routine never blocks on an empty model set.
+    const resolvedAgents = withDefaultRoutinePrimary(agents, currentAssistantModelSelection())
+    const routine = await assistantRoutines.createRoutine({ name, agents: resolvedAgents })
     // The seed task is created already inside the routine: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
-    await createThreadInProject(assistantProject, undefined, routine.id)
+    await createThreadInProject(assistantProject, undefined, {
+      routineId: routine.id,
+      gettingStarted: true
+    })
     await applyRoutineModelToTask(workspaceState.selectedThread, routine)
     await openAssistantHowToForRoutine(routine)
   }
@@ -3025,7 +3082,7 @@
   /** Create a task inside a routine and open the routine's how-to panel. */
   async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
     if (!assistantProject) return
-    await createThreadInProject(assistantProject, undefined, routine.id)
+    await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
     const created = workspaceState.selectedThread
     await applyRoutineModelToTask(created, routine)
     if (created && created.projectId === ASSISTANT_SPACE_ID) {
@@ -3123,7 +3180,7 @@
         : undefined)
     if (!anchor) {
       if (!assistantProject) return
-      await createThreadInProject(assistantProject, undefined, routine.id)
+      await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
       const created = workspaceState.selectedThread
       if (!created) return
       upsertThreadInList(created)

@@ -66,3 +66,18 @@ export function settingsWithRoutineModel(
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {})
   }
 }
+
+/**
+ * The model set a routine starts with. When the user did not pick a primary,
+ * the model they were already working on   the composer's current selection  
+ * becomes the primary, so a routine defaults to the model they started with
+ * rather than blocking on an explicit pick.
+ */
+export function withDefaultRoutinePrimary(
+  agents: RoutineAgents,
+  fallback: AgentModelSelection | undefined
+): RoutineAgents {
+  if (agents.primary?.modelId) return agents
+  if (!fallback || !fallback.modelId) return agents
+  return { ...agents, primary: fallback }
+}

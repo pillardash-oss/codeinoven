@@ -269,6 +269,9 @@ export class ThreadManager {
       routineId: input.routineId,
       assistantIconType: input.assistantIconType,
       assistantIcon: input.assistantIcon,
+      // Kept out of the row when absent: the repository stores only the true
+      // case, so the in-memory shape must match what a read returns.
+      ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
       // The repository stores an absent override as NULL and reads it back as
       // `undefined`, so the in-memory row must use the same shape.
       scheduleOverride: input.scheduleOverride ?? undefined,
@@ -565,6 +568,7 @@ export class ThreadManager {
         | 'routineId'
         | 'assistantIconType'
         | 'assistantIcon'
+        | 'assistantGettingStarted'
         | 'lastRunAt'
         | 'scheduleOverride'
       >
@@ -604,6 +608,7 @@ export class ThreadManager {
       routineId: input.routineId ?? existing.routineId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
       lastRunAt: input.lastRunAt ?? existing.lastRunAt,
       scheduleOverride:
         input.scheduleOverride !== undefined ? input.scheduleOverride : existing.scheduleOverride,

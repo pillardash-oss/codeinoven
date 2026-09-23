@@ -21,7 +21,11 @@ import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
-import { setNotificationService, setPowerWakeService } from '../chat/thread-events'
+import {
+  broadcastThreadUpdate,
+  setNotificationService,
+  setPowerWakeService
+} from '../chat/thread-events'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -182,6 +186,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const routineManager = state.routineManager
   state.routineScheduler = new RoutineSchedulerService(storage, {
     routines: routineManager,
+    onTaskChanged: (task) => broadcastThreadUpdate(task),
     dispatch: (task, routine) => {
       const chatEngine = state.chatEngine
       const settings = task.settings
@@ -229,6 +234,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.attachAssistantAgentsResolver((task) =>
     state.routineManager?.resolveTaskAgents(task)
   )
+  // A finished assistant run turn stamps the task's last successful run. The
+  // scheduler ignores a thread it did not dispatch a run on, so a user's own
+  // chat never counts as a run, and failures are surfaced through Issues.
+  state.chatEngine.attachAssistantRunSettledRecorder((threadId, success) => {
+    state.routineScheduler?.settleRun(threadId, success)
+  })
   state.speechService = new SpeechService(
     {
       catalogPath: app.isPackaged

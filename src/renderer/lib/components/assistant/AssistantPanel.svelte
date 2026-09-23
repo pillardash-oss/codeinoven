@@ -14,6 +14,7 @@
     Workflow
   } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { toast } from 'svelte-sonner'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -233,6 +234,43 @@
 
   const issueCount = $derived(missedRuns.length + runIssues.length)
 
+  // ─── Run history ──────────────────────────────────────────────────────────
+
+  /** The run panel is routine-scoped; a routine-less task reports on itself. */
+  const runScopeTasks = $derived(routine ? routineTasks : task ? [task] : [])
+
+  const lastRunAt = $derived(
+    runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastRunAt ?? 0), 0)
+  )
+  const lastSuccessAt = $derived(
+    runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastSuccessAt ?? 0), 0)
+  )
+  const lastRunLabel = $derived(
+    lastRunAt > 0 ? describeRelativeTime(lastRunAt, Date.now()) : 'never'
+  )
+  const lastSuccessLabel = $derived(
+    lastSuccessAt > 0 ? describeRelativeTime(lastSuccessAt, Date.now()) : 'never'
+  )
+
+  let running = $state(false)
+
+  /**
+   * Run the routine immediately, ignoring its schedule and pause state, so the
+   * user can test what they built without waiting for the next fire.
+   */
+  async function runRoutineNow(): Promise<void> {
+    if (!routine || running) return
+    running = true
+    try {
+      const count = await assistantRoutines.runRoutineNow(routine.id)
+      toast.success(count === 1 ? 'Run started' : `${count} runs started`)
+    } catch (error) {
+      reportError(error, 'Could not run the routine')
+    } finally {
+      running = false
+    }
+  }
+
   async function dismissRun(id: string): Promise<void> {
     try {
       await assistantRoutines.dismissMissedRun(id)
@@ -394,6 +432,33 @@
               <span class="text-[0.625rem] text-dimmed">Running</span>
             {/if}
           </button>
+
+          <div class="flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                title="Run this routine now, even while paused"
+                aria-label="Run this routine now"
+                disabled={running || !howToComplete}
+                onclick={() => void runRoutineNow()}
+              >
+                <RotateCcw size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
+                Run now
+              </button>
+              <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
+                {howToComplete
+                  ? 'Test it without waiting for the schedule.'
+                  : 'Save a how-to first.'}
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.625rem] text-dimmed">
+              <span title="The last time a run was dispatched">Last run: {lastRunLabel}</span>
+              <span title="The last time a run finished successfully">
+                Last success: {lastSuccessLabel}
+              </span>
+            </div>
+          </div>
 
           {@render summaryRow({
             title: 'Routine',

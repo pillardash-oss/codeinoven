@@ -130,6 +130,15 @@ export interface Thread {
   scheduleOverride?: RoutineSchedule | null
   /** Epoch ms of the last scheduled run fired on this task. */
   lastRunAt?: number
+  /** Epoch ms of the last run that finished successfully (a `completed` turn). */
+  lastSuccessAt?: number
+  /**
+   * The routine's seed task: the "Getting started" conversation where the
+   * how-to is authored. It carries a fixed title and runs no auxiliary work
+   * (auto-title, memory extraction), so its first exchange stays a pure
+   * planning chat rather than a task run.
+   */
+  assistantGettingStarted?: boolean
 
   createdAt: number
   updatedAt: number
@@ -154,6 +163,16 @@ export interface ThreadNote {
 /** A thread that lives in the assistant space (a routine task). */
 export function isAssistantThread(thread: Thread): boolean {
   return thread.projectId === ASSISTANT_SPACE_ID
+}
+
+/**
+ * Whether a thread is a routine's "Getting started" authoring thread. Auxiliary
+ * work   prompt-derived titles and memory extraction   is suppressed on it.
+ */
+export function isAssistantSetupThread(
+  thread: Pick<Thread, 'assistantGettingStarted'>
+): boolean {
+  return thread.assistantGettingStarted === true
 }
 
 /**
@@ -302,6 +321,7 @@ export interface CreateThreadInput {
   assistantIconType?: string
   assistantIcon?: string
   scheduleOverride?: RoutineSchedule | null
+  assistantGettingStarted?: boolean
 }
 
 /** Where a thread search match was found. */
