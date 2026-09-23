@@ -200,7 +200,8 @@ The script (`scripts/publish-release-mirror.ts`):
    reports what it removed;
 4. uploads installers and blockmaps, then feeds, checksums and `RELEASE.json` last, so a
    feed never points at a file that is not there yet;
-5. HEAD-verifies every uploaded key's size against the local file;
+5. reads the first kilobyte of every uploaded key back with a range request and checks the
+   size the origin reports for the whole object and the bytes it serves;
 6. deletes the release the channel no longer serves (with the default `--keep 1`, everything
    except the release just uploaded), never touching feeds, checksums or the manifest.
 
@@ -230,6 +231,13 @@ curl -sI https://dl.codeinoven.com/stable/RELEASE.json | grep -i 'cf-cache-statu
 curl -s -o /dev/null -w '%{http_code}\n' -r 0-1023 \
   "https://dl.codeinoven.com/stable/$(curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq -r '.artifacts[0].name')"
 ```
+
+A note for anyone scripting checks against R2: a `HEAD` is not a reliable way to read an
+object's size here. Cloudflare compresses `text/plain` and `application/json` responses, so a
+HEAD of `SHA256SUMS.txt` or `RELEASE.json` comes back with `content-encoding: gzip` and **no**
+`content-length` (Bun's `S3File.stat()` reports 0 for exactly those two, which is why the
+publish script reads objects back with `Range: bytes=0-1023` and takes the total from
+`content-range`). A range request answers 206 uncompressed, so it works for every content type.
 
 An installer URL downloaded from the mirror must hash to the `sha256` in `RELEASE.json`. To
 confirm the mirror is currently trustworthy for an installed app, compare its `sha512` with

@@ -75,14 +75,15 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   abortInterruptedUpload,
+  fetchObjectPrefix,
   listInterruptedUploads,
   type InterruptedUpload
-} from './lib/s3-multipart'
+} from './lib/s3-request'
 import {
   DOWNLOAD_MIRROR_URL,
   MIRROR_CHECKSUMS_FILE,
@@ -99,6 +100,9 @@ import {
 
 const DEFAULT_KEEP = 1
 const DEFAULT_ARTIFACTS_DIR_ROOT = '.cio/tmp/download-mirror'
+
+/** Bytes of every uploaded object read back for verification after a publish. */
+const VERIFY_PREFIX_BYTES = 1024
 
 /** Installer file names produced by electron-builder's `artifactName` templates. */
 const ARTIFACT_PATTERN =
@@ -578,6 +582,23 @@ async function sweepInterruptedUploads(
   if (inFlight > 0) say(`  ${inFlight} more are in flight from another process; left alone`)
 }
 
+/**
+ * The first `length` bytes of a planned upload, read without loading the whole
+ * file: a 223 MB installer is compared byte for byte at its head, not in full.
+ */
+async function expectedPrefix(item: PlannedUpload, length: number): Promise<Buffer> {
+  if (item.content !== null) return Buffer.from(item.content, 'utf8').subarray(0, length)
+  if (item.file === null) throw new Error(`${item.key} has neither a file nor inline content`)
+  const handle = await open(item.file, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    const { bytesRead } = await handle.read(buffer, 0, length, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
 async function upload(bucket: MirrorBucket, item: PlannedUpload): Promise<void> {
   const startedAt = Date.now()
   const file = bucket.file(item.key)
@@ -877,7 +898,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     await sweepInterruptedUploads(config, channel, runStartedAt, flags.dryRun)
   }
 
-  if (flags.dryRun || bucket === null) {
+  if (flags.dryRun || bucket === null || config === null) {
     say('')
     say(flags.dryRun ? 'Dry run: nothing was uploaded.' : 'Dry run: no configuration.')
     return 0
@@ -897,16 +918,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // --- verify what the origin actually serves ------------------------------
+  // A ranged read, not a HEAD or `S3File.stat()`: Cloudflare compresses the
+  // text/plain and application/json objects, so their HEAD carries no
+  // content-length and `stat()` reports 0 (see scripts/lib/s3-request.ts).
   say('')
   say('Verifying uploaded objects...')
   for (const item of plan) {
-    const stats = await bucket
-      .file(item.key)
-      .stat()
-      .catch(() => null)
-    if (stats === null) return fail(`${item.key} is missing from the bucket after upload`)
-    if (stats.size !== item.bytes) {
-      return fail(`${item.key} is ${stats.size} bytes on the origin but ${item.bytes} locally`)
+    const prefix = await expectedPrefix(item, VERIFY_PREFIX_BYTES).catch((error: unknown) => {
+      throw new Error(`could not read ${item.key} locally: ${reasonOf(error)}`)
+    })
+    const probe = await fetchObjectPrefix(config, item.key, VERIFY_PREFIX_BYTES).catch(
+      (error: unknown) => {
+        throw new Error(`could not read ${item.key} back: ${reasonOf(error)}`)
+      }
+    )
+    if (probe === null) return fail(`${item.key} is missing from the bucket after upload`)
+    if (probe.size !== item.bytes) {
+      return fail(`${item.key} is ${probe.size} bytes on the origin but ${item.bytes} locally`)
+    }
+    if (!Buffer.from(probe.bytes).subarray(0, prefix.length).equals(prefix)) {
+      return fail(`${item.key} does not serve the bytes that were uploaded`)
     }
   }
   say(`Verified ${plan.length} objects (${megabytes(uploadedBytes)})`)

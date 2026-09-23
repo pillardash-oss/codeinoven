@@ -1,28 +1,37 @@
 /// <reference types="node" />
 
 /**
- * Multipart-upload administration for the release mirror's bucket.
+ * The bucket requests Bun's S3 client does not cover, or does not answer
+ * reliably, for the release mirror.
  *
- * Bun's S3 client covers object operations (put, head, list, delete) but not
- * the multipart administration endpoints, and those are the only way to see or
- * remove the parts an interrupted publish leaves behind:
+ * Multipart administration is the only way to see or remove the parts an
+ * interrupted publish leaves behind:
  *
  *   GET    /<bucket>?uploads               list unfinished multipart uploads
  *   DELETE /<bucket>/<key>?uploadId=<id>   abort one of them
  *
  * An unfinished multipart upload is invisible to readers (the key does not
  * exist until the upload completes, so it serves a 404) but it is billed and it
- * shows up as a half-uploaded object in the bucket's dashboard. Every request
- * here is signed with SigV4 by hand for that reason alone.
+ * shows up as a half-uploaded object in the bucket's dashboard.
  *
- * See `scripts/publish-release-mirror.ts`, which aborts the leftovers of an
- * earlier run before it uploads, and docs/DOWNLOAD-MIRROR.md.
+ * `fetchObjectPrefix` reads an object back, because neither of the obvious size
+ * checks survives Cloudflare's compression: R2 answers a HEAD for a
+ * `text/plain` or `application/json` object with `content-encoding: gzip` and
+ * **no** `content-length` (reproduced against the real bucket), which is why
+ * Bun's `S3File.stat()` reports 0 for a 498-byte `SHA256SUMS.txt` and the real
+ * size for a `text/yaml` feed. A one-kilobyte ranged GET answers 206 with
+ * `content-range: bytes 0-N/<total>`, uncompressed, so the publish's
+ * post-upload check reads the true size and the first bytes the origin serves.
+ *
+ * Every request here is signed with SigV4 by hand for those reasons alone.
+ *
+ * See `scripts/publish-release-mirror.ts` and docs/DOWNLOAD-MIRROR.md.
  */
 
 import { createHash, createHmac } from 'node:crypto'
 
 /** Credentials and origin needed to sign a request against the bucket. */
-export interface S3AdminConfig {
+export interface S3RequestConfig {
   endpoint: string
   bucket: string
   region: string
@@ -78,7 +87,7 @@ function canonicalQuery(query: Readonly<Record<string, string>>): string {
     .join('&')
 }
 
-function signingKey(config: S3AdminConfig, dateStamp: string): Buffer {
+function signingKey(config: S3RequestConfig, dateStamp: string): Buffer {
   const dateKey = hmacSha256(`AWS4${config.secretAccessKey}`, dateStamp)
   const regionKey = hmacSha256(dateKey, config.region)
   const serviceKey = hmacSha256(regionKey, 's3')
@@ -92,7 +101,7 @@ function signingKey(config: S3AdminConfig, dateStamp: string): Buffer {
  * reach the administration endpoints.
  */
 export function signS3Request(
-  config: S3AdminConfig,
+  config: S3RequestConfig,
   method: SignedMethod,
   options: { key?: string; query?: Readonly<Record<string, string>>; now?: Date } = {}
 ): SignedRequest {
@@ -176,13 +185,58 @@ function describeError(body: string): string {
   return detail === '' ? body.slice(0, 200) : detail
 }
 
+/** What a ranged read of an object returns. */
+export interface ObjectProbe {
+  /** Total size of the object on the origin. */
+  size: number
+  /** The first bytes of the object, exactly as the origin serves them. */
+  bytes: Uint8Array
+}
+
+/** `bytes 0-1023/234469127` -> 234469127 */
+function totalFromContentRange(value: string): number | null {
+  const match = /^bytes\s+\d+-\d+\/(\d+)$/.exec(value.trim())
+  if (match === null) return null
+  const total = Number.parseInt(match[1] ?? '', 10)
+  return Number.isFinite(total) ? total : null
+}
+
+/**
+ * Read the first `maxBytes` of an object, and the size the origin reports for
+ * the whole object, or null when it is not there. The range request is what
+ * makes this trustworthy for compressed content types (see the module comment).
+ */
+export async function fetchObjectPrefix(
+  config: S3RequestConfig,
+  key: string,
+  maxBytes: number
+): Promise<ObjectProbe | null> {
+  const request = signS3Request(config, 'GET', { key })
+  const response = await fetch(request.url, {
+    headers: { ...request.headers, range: `bytes=0-${String(Math.max(0, maxBytes - 1))}` }
+  })
+  if (response.status === 404) return null
+  if (response.status !== 206) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error(`Range read of ${key} answered ${response.status} instead of 206`)
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  const total = totalFromContentRange(response.headers.get('content-range') ?? '')
+  if (total === null) {
+    throw new Error(
+      `Range read of ${key} returned no usable content-range: ${String(response.headers.get('content-range'))}`
+    )
+  }
+  return { size: total, bytes }
+}
+
 /**
  * Every unfinished multipart upload under `prefix`, newest first page order.
  * Throws when the origin refuses the request (a token without
  * `ListBucketMultipartUploads`, an unreachable endpoint).
  */
 export async function listInterruptedUploads(
-  config: S3AdminConfig,
+  config: S3RequestConfig,
   prefix = ''
 ): Promise<InterruptedUpload[]> {
   const uploads: InterruptedUpload[] = []
@@ -215,7 +269,7 @@ export async function listInterruptedUploads(
 
 /** Abort one unfinished upload, discarding its parts. */
 export async function abortInterruptedUpload(
-  config: S3AdminConfig,
+  config: S3RequestConfig,
   upload: Pick<InterruptedUpload, 'key' | 'uploadId'>
 ): Promise<void> {
   const request = signS3Request(config, 'DELETE', {
@@ -236,7 +290,7 @@ export async function abortInterruptedUpload(
  * Start a multipart upload and return its id. Only used to prove the abort path
  * (a harness starts one, then checks the sweep removes it), never by a publish.
  */
-export async function startMultipartUpload(config: S3AdminConfig, key: string): Promise<string> {
+export async function startMultipartUpload(config: S3RequestConfig, key: string): Promise<string> {
   const request = signS3Request(config, 'POST', { key, query: { uploads: '' } })
   const response = await fetch(request.url, { method: 'POST', headers: request.headers })
   const body = await response.text()
