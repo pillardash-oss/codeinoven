@@ -282,9 +282,10 @@
     applyResponseHighlights,
     captureResponseSelection,
     measureResponseBubblePositions,
+    releaseResponseHighlights,
     responseRangeFor,
+    responseRangeIsCurrent,
     RESPONSE_BUBBLE_SIZE,
-    RESPONSE_HIGHLIGHT_NAME,
     type ResponseBubblePosition,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
@@ -570,7 +571,7 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. Keyed on the structure snapshot   
+   *  would only produce an empty recall step. Keyed on the structure snapshot  
    *  a user message's text only ever changes through a merge that reports
    *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
@@ -654,15 +655,17 @@
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
-  // This removes the false working flash on refresh and on view remounts.
+  // This removes the false working flash on refresh and on view remounts, and it
+  // covers controller-driven side chats too: a stale busy flag there hides the
+  // newest answer behind the working trace (the final-answer block is gated on
+  // it) and turns the composer into a queue/steer surface for a run that is
+  // already over.
   // svelte-ignore state_referenced_locally
-  if (!hasController) {
-    if (
-      !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
-      agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
-    ) {
-      agentRuns.setIdle(thread.projectId, thread.id)
-    }
+  if (
+    !agentRuns.isLiveBusy(thread.projectId, conversationId) &&
+    agentRuns.activity(thread.projectId, conversationId) !== 'brainstorm_report'
+  ) {
+    agentRuns.setIdle(thread.projectId, conversationId)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived(
@@ -1944,6 +1947,9 @@
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
+  /** Identity of this view as the CSS highlight registry's owner, so its
+   *  teardown can never clear highlights another view published. */
+  const responseHighlightOwner = {}
   /** Viewport position for the comment bubble of each reference anchor. */
   let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
@@ -1962,11 +1968,15 @@
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    applyResponseHighlights(responseReferenceRanges)
+    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
   }
 
   /** Re-measure where each annotation's comment bubble belongs in the viewport. */
   function updateResponseBubblePositions(): void {
+    // Nothing annotated (and nothing measured): skip the forced layout that
+    // reading every range rect costs, so the common conversation pays nothing.
+    if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
+      return
     responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
   }
 
@@ -1980,19 +1990,51 @@
     })
   }
 
-  function restoreResponseHighlights(references: ResponseReferenceAnchor[]): void {
-    responseReferenceRanges.clear()
+  /**
+   * Bring the live annotation ranges back in line with the conversation DOM.
+   *
+   * This is deliberately not a one-shot restore. An annotation is anchored to a
+   * character range inside `[data-assistant-response]`, and that element is not
+   * stable across a view's life: the newest answer renders inside the working
+   * trace while the conversation reads as busy and only moves into its
+   * final-answer block once the run settles, the mounted history window grows
+   * after the first paint, and every publish re-renders message blocks. A range
+   * built before any of those points at nodes that are gone, which paints no
+   * highlight and measures no bubble.
+   *
+   * Only ranges that actually went stale are rebuilt (see
+   * `responseRangeIsCurrent`), so this stays cheap enough to run on every
+   * conversation publish.
+   */
+  function syncResponseHighlights(references: ResponseReferenceAnchor[]): void {
+    let changed = false
+    const liveIds = references.map((reference) => reference.id)
     for (const reference of references) {
+      const existing = responseReferenceRanges.get(reference.id)
+      if (responseRangeIsCurrent(existing, reference)) continue
       const range = responseRangeFor(scrollEl, reference)
-      if (range) responseReferenceRanges.set(reference.id, range)
+      if (range) {
+        responseReferenceRanges.set(reference.id, range)
+        changed = true
+      } else if (existing) {
+        responseReferenceRanges.delete(reference.id)
+        changed = true
+      }
     }
-    refreshResponseHighlights()
-    updateResponseBubblePositions()
+    // A detached selection is no longer part of the chat component.
+    for (const id of [...responseReferenceRanges.keys()]) {
+      if (liveIds.includes(id)) continue
+      responseReferenceRanges.delete(id)
+      changed = true
+    }
+    if (changed) refreshResponseHighlights()
+    scheduleResponseBubbleUpdate()
   }
 
   function scheduleResponseHighlightRestore(references: ResponseReferenceAnchor[]): void {
     void tick().then(() => {
-      restoreResponseHighlights(references)
+      if (!alive) return
+      syncResponseHighlights(references)
     })
   }
 
@@ -2103,19 +2145,24 @@
     return responseReferences.find((reference) => reference.id === id) ?? null
   }
 
-  // Keep comment bubbles anchored to their highlights as the conversation
-  // re-renders (message streaming, history windowing, thread restore).
+  // Keep comment bubbles and highlights anchored to their text as the
+  // conversation re-renders. Every trigger below can change which DOM nodes
+  // carry the annotated text: a streamed publish, the mounted history window
+  // growing after the first paint, and the run state settling (which moves the
+  // newest answer out of the working trace into its final-answer block, the
+  // only place that carries the annotation anchor). Without them the restore
+  // ran once - before that anchor existed - and never ran again, so the
+  // highlights and comment bubbles stayed missing until a new selection
+  // happened to re-trigger it.
   $effect(() => {
     void responseReferences.length
     void visibleMessages.length
+    void conversationBusy
+    void threadMessages.streamRevision(thread.projectId, conversationId)
+    if (responseReferences.length === 0) return
     void tick().then(() => {
-      // Highlights depend on the message DOM; re-create them whenever the
-      // conversation re-renders so annotations/comments come back after a
-      // thread switch (onMount runs before the async mirror finishes loading).
-      if (responseReferences.length > 0) {
-        restoreResponseHighlights(responseReferences)
-      }
-      scheduleResponseBubbleUpdate()
+      if (!alive) return
+      syncResponseHighlights(responseReferences)
     })
   })
 
@@ -6057,6 +6104,8 @@
       const plan = draft.plan
       const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
       if (plan?.schedule) patch.schedule = plan.schedule
+      if (plan?.delivery) patch.delivery = plan.delivery
+      if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
         const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
         const catalog = await invoke('utilities:list').catch(() => null)
@@ -10460,7 +10509,7 @@
   })
 
   onDestroy(() => {
-    CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
+    releaseResponseHighlights(responseHighlightOwner)
     imageUrls.destroy()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.

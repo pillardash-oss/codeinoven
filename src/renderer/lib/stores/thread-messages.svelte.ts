@@ -190,7 +190,17 @@ class ThreadMessagesStore {
       this.cache.notify(projectId, conversationId)
       try {
         const serverMessages = await invoke('agent:loadTemporaryChatMessages', conversationId)
-        this.reconcile(projectId, conversationId, serverMessages)
+        // A side chat owns no durable mirror: this renderer cache IS its visible
+        // trail, and it is discarded only when the chat expires. The harness
+        // transcript is not a reliable authority over that trail   a side chat
+        // whose process was evicted, or whose native transcript is unavailable,
+        // reports an empty (or user-only) history, and the thread reconcile
+        // would then delete every cached answer from the view, leaving the user
+        // staring at their own message. Merge additively instead: a snapshot may
+        // add or refresh messages, never erase the answers already on screen.
+        // Deliberate removals do not come through here   they arrive as the kept
+        // conversation through `applyKept`.
+        this.mergePage(projectId, conversationId, serverMessages)
         entry.hasOlder = false
         entry.loaded = true
       } catch (err) {
