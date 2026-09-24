@@ -10111,6 +10111,18 @@
     )
   }
 
+  /**
+   * Pause a secret card's countdown while the user reads a temporary chat: the
+   * same interaction that pauses a question (an update with no next index)
+   * clears the request's deadline. Best-effort, so the chat still opens when the
+   * request is already resolving.
+   */
+  function handleSecretPause(requestId: string, questionIndex: number): void {
+    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
+      // The request may already be resolving; the chat still opens.
+    })
+  }
+
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
@@ -10146,16 +10158,15 @@
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
   function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
-    const selection = formatQuestionForTemporaryChat(question)
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
       'elaborate',
-      selection,
+      formatQuestionForTemporaryChat(question),
       temporaryConversationContext(),
       settings,
       true,
-      EXPLAIN_QUESTION_PROMPT
+      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT
     )
   }
 
@@ -10175,11 +10186,23 @@
   const EXPLAIN_QUESTION_PROMPT =
     'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral   do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
+  const EXPLAIN_SECRET_PROMPT =
+    'Explain this secret request clearly so the user can understand what the agent needs, why it needs it, and where the user can obtain or create it, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral: never invent, guess, or suggest an actual secret value, and do not recommend a specific provider or credential unless the context already names one. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this secret request.'
+
   function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
     if (question.header) parts.push(`Question: ${question.header}`)
     if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
     if (question.description) parts.push(`Description: ${question.description}`)
+    if (question.secretRequest) {
+      if (question.secretEnvironmentVariable) {
+        parts.push(`Exposed to the agent as: ${question.secretEnvironmentVariable}`)
+      }
+      if (question.secretUtilityId) parts.push(`Bound to utility: ${question.secretUtilityId}`)
+      parts.push(
+        '(The user pastes the value; it is stored in the encrypted vault and is never sent to the model.)'
+      )
+    }
     if (question.richOptions && question.richOptions.length > 0) {
       parts.push(
         'Options:',
@@ -11956,12 +11979,14 @@
                         class="size-7 rounded-[0.375rem] object-cover"
                       />
                     {/if}
-                    {project?.name ?? 'New thread'}
+                    {chatMode ? 'Start a new chat' : (project?.name ?? 'New thread')}
                   </h1>
                   <p class="mt-1 text-[0.875rem] text-muted">
-                    {centeredModelName
-                      ? `What should ${centeredModelName} work on?`
-                      : 'How can CIO serve you today?'}
+                    {chatMode
+                      ? 'Send a message to begin no project needed'
+                      : centeredModelName
+                        ? `What should ${centeredModelName} work on?`
+                        : 'How can CIO serve you today?'}
                   </p>
                 </div>
               {/if}
@@ -12147,6 +12172,9 @@
                     onSubmit={handleSecretSubmit}
                     onAlternative={handleSecretAlternative}
                     onDismiss={handleQuestionDismiss}
+                    onExplain={handleQuestionExplain}
+                    onQuickChat={handleQuestionQuickChat}
+                    onPause={handleSecretPause}
                   />
                 {:else}
                   <AgentQuestionCard

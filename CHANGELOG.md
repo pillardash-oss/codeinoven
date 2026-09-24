@@ -115,6 +115,13 @@ All notable changes to CodeInOven are documented here. This project follows
   together with the instruction, so the agent adapts instead of asking for the
   same key twice.
 
+- The secret card now offers **Explain** and **Quick chat** at the bottom left of
+  its footer, matching the question card. Both open the temporary read-only side
+  chat with the request attached as its selection, and opening either pauses the
+  card's countdown so it cannot expire while the user reads. The explain chat is
+  told what the request is for and that an actual value must never be invented or
+  guessed.
+
 ### Changed
 
 - A capability installed without explicit harness targeting now applies to every harness,

@@ -1,15 +1,5 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    HelpCircle,
-    MessageSquareDashed,
-    Paperclip,
-    Send,
-    X
-  } from '@lucide/svelte'
+  import { Check, ChevronLeft, ChevronRight, Clock, Paperclip, Send, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -29,6 +19,7 @@
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
+  import AgentCardChatActions from './AgentCardChatActions.svelte'
   import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
@@ -666,34 +657,12 @@
       >
         <div class="flex min-w-0 items-center gap-2">
           {#if onExplain || onQuickChat}
-            <div class="flex min-w-0 items-center gap-1">
-              {#if onExplain}
-                <button
-                  type="button"
-                  class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={working}
-                  onclick={() => openQuestionChat(onExplain)}
-                  title="Explain this question to help you decide"
-                  aria-label="Explain this question in a temporary read-only chat"
-                >
-                  <HelpCircle size={13} class="shrink-0" />
-                  <span class="question-footer-action-label min-w-0 truncate">Explain</span>
-                </button>
-              {/if}
-              {#if onQuickChat}
-                <button
-                  type="button"
-                  class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={working}
-                  onclick={() => openQuestionChat(onQuickChat)}
-                  title="Start a temporary read-only quick chat about this question"
-                  aria-label="Start a temporary read-only quick chat about this question"
-                >
-                  <MessageSquareDashed size={13} class="shrink-0" />
-                  <span class="question-footer-action-label min-w-0 truncate">Quick chat</span>
-                </button>
-              {/if}
-            </div>
+            <AgentCardChatActions
+              onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
+              onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
+              subject="question"
+              disabled={working}
+            />
           {:else}
             <p class="min-w-0 truncate text-[0.6875rem] text-muted">
               {#if !currentAnswers.length}
@@ -756,18 +725,12 @@
 
   /*
     The footer row is the query container so its controls retreat before the row
-    runs out of room (a wide side panel, a split pane). The chat actions drop
-    their words first: the glyph and the tooltip always still say what they do,
-    which leaves the speech control and the model switch their space instead of
-    letting one control overlap the other.
+    runs out of room (a wide side panel, a split pane). The shared chat actions
+    (`AgentCardChatActions`) drop their words first: the glyph and the tooltip
+    always still say what they do, which leaves the speech control and the model
+    switch their space instead of letting one control overlap the other.
   */
   .question-card-footer {
-    container: question-card-footer / inline-size;
-  }
-
-  @container question-card-footer (max-width: 40rem) {
-    .question-footer-action-label {
-      display: none;
-    }
+    container: agent-card-footer / inline-size;
   }
 </style>
