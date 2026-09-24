@@ -133,6 +133,26 @@ export class MissedRunStore {
     this.persist()
   }
 
+  /**
+   * Drop every record belonging to a routine that is being removed, matched by
+   * the record's own routine id and by the ids of that routine's threads.
+   *
+   * Both are needed: a record keeps the routine id it was detected under, so a
+   * task moved into this routine after its miss was recorded is only reachable
+   * by thread id. Returns how many records were dropped.
+   */
+  removeForRoutine(routineId: string, threadIds: readonly string[]): number {
+    const threads = new Set(threadIds)
+    let removed = 0
+    for (const [id, run] of this.runs) {
+      if (run.routineId !== routineId && !threads.has(run.threadId)) continue
+      this.runs.delete(id)
+      removed += 1
+    }
+    if (removed > 0) this.persist()
+    return removed
+  }
+
   /** Mark a missed run as run (Run Now dispatched it successfully). */
   markRun(id: string): void {
     const existing = this.runs.get(id)

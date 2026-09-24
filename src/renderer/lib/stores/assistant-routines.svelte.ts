@@ -5,6 +5,7 @@ import {
   type CreateRoutineInput,
   type MissedRun,
   type Routine,
+  type RoutineDeletionResult,
   type RoutineSchedule,
   type Thread,
   type UpdateRoutineInput
@@ -47,13 +48,20 @@ class AssistantRoutinesState {
   private iconSignatures = new Map<string, string>()
   private initialized = false
   private disposers: Array<() => void> = []
+  /**
+   * Routine ids the user already removed from the UI while the main process
+   * finishes the background cleanup. A routine list pushed in that window (a
+   * scheduler tick, a checkpoint write, another window's mutation) must not
+   * resurrect the container the user just removed.
+   */
+  private removing = new Set<string>()
 
   initialize(): void {
     if (this.initialized) return
     this.initialized = true
     this.disposers.push(
       subscribe('routine:changed', (routines) => {
-        this.routines = routines
+        this.publishRoutines(routines)
         void this.refreshIcons()
       }),
       subscribe('assistant:missedRunsChanged', (runs) => {
@@ -75,8 +83,19 @@ class AssistantRoutinesState {
   }
 
   async refresh(): Promise<void> {
-    this.routines = await invoke('routine:list')
+    this.publishRoutines(await invoke('routine:list'))
     await this.refreshIcons()
+  }
+
+  /**
+   * Publish a routine list from the main process, minus any routine the user
+   * already removed from the UI and whose cleanup is still running.
+   */
+  private publishRoutines(routines: Routine[]): void {
+    this.routines =
+      this.removing.size === 0
+        ? routines
+        : routines.filter((routine) => !this.removing.has(routine.id))
   }
 
   /**
@@ -179,9 +198,31 @@ class AssistantRoutinesState {
     return routine
   }
 
-  async deleteRoutine(routineId: string): Promise<void> {
-    await invoke('routine:delete', routineId)
-    await this.refresh()
+  /**
+   * Remove a routine: the container and its pending missed runs leave the UI at
+   * once, and the main process does the cleanup in the background   its threads
+   * and their runs, the scheduler's records, the database rows, and the
+   * routine's artifact folder. The promise resolves with what the sweep removed
+   * so the caller can report it, and a failed sweep puts the routine back rather
+   * than leaving a container that silently reappears on the next refresh.
+   */
+  async removeRoutine(routineId: string): Promise<RoutineDeletionResult> {
+    this.removing.add(routineId)
+    this.routines = this.routines.filter((routine) => routine.id !== routineId)
+    this.missedRuns = this.missedRuns.filter((run) => run.routineId !== routineId)
+    this.checkpoints.delete(routineId)
+    try {
+      return await invoke('routine:delete', routineId)
+    } catch (error) {
+      // The main process still has the routine, so restore it instead of
+      // pretending it is gone.
+      this.removing.delete(routineId)
+      await this.refresh()
+      await this.refreshMissedRuns()
+      throw error
+    } finally {
+      this.removing.delete(routineId)
+    }
   }
 
   async setRoutinePinned(routineId: string, pinned: boolean): Promise<Routine> {

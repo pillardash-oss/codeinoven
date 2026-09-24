@@ -212,3 +212,30 @@ export function routineAgentsComplete(routine: Pick<Routine, 'agents'>): boolean
 export function routineReady(routine: Pick<Routine, 'howTo' | 'agents'>): boolean {
   return routineHowToComplete(routine) && routineAgentsComplete(routine)
 }
+
+/**
+ * What removing one routine swept, so the caller can clear the scheduler's
+ * records for it and tell the user what went with the routine.
+ */
+export interface RoutineDeletionResult {
+  /**
+   * Every thread removed with the routine: its tasks, its hidden how-to thread,
+   * and the runs swept with the task they ran. The scheduler matches its missed
+   * records against these ids, so a pending miss of a removed task stops
+   * badging at once instead of surviving until the next launch.
+   */
+  removedThreadIds: string[]
+  /**
+   * Task threads removed. The hidden how-to thread is not a task and is not
+   * counted here, so the number matches what the user saw in the sidebar.
+   */
+  taskCount: number
+  /** Run threads swept with the task they ran. */
+  runCount: number
+  /**
+   * Whether the routine's artifact folder was deleted from disk. False only
+   * when a removal genuinely failed, since an already-missing folder counts as
+   * removed.
+   */
+  artifactsRemoved: boolean
+}

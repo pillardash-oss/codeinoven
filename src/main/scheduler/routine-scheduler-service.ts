@@ -121,6 +121,24 @@ export class RoutineSchedulerService {
   }
 
   /**
+   * Forget everything the scheduler holds for a routine that is being removed:
+   * its pending missed runs, which would otherwise keep badging until the next
+   * launch, and the in-flight run bookkeeping of its tasks.
+   *
+   * Nothing else needs resetting. Every tick re-reads the assistant tasks from
+   * the database, so a removed task is never evaluated, fired, or recorded as
+   * missed again, and a run already in flight is stopped by the deletion of its
+   * run thread through the canonical thread path.
+   */
+  forgetRoutine(routineId: string, removedThreadIds: readonly string[]): void {
+    const threads = new Set(removedThreadIds)
+    for (const [runThreadId, taskId] of this.inFlightRuns) {
+      if (threads.has(taskId) || threads.has(runThreadId)) this.inFlightRuns.delete(runThreadId)
+    }
+    if (this.missed.removeForRoutine(routineId, removedThreadIds) > 0) this.notifyChange()
+  }
+
+  /**
    * Run a missed schedule immediately on a fresh run thread and clear its
    * record on success. Returns the created run, or null when the task it
    * belonged to is gone (the orphan is settled so it stops badging).

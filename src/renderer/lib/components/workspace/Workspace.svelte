@@ -93,6 +93,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { toast } from 'svelte-sonner'
   import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
@@ -3275,9 +3276,10 @@
   /** Remove a routine and every thread it owns, its hidden how-to thread included. */
   async function deleteAssistantRoutine(routineId: string): Promise<void> {
     const affected = allThreads.filter((thread) => thread.routineId === routineId)
-    await assistantRoutines.deleteRoutine(routineId)
-    // `thread:deleted` prunes the rows; drop them here too so the sidebar is
-    // correct immediately, the same way a plain thread delete behaves.
+    // The container and its rows leave the sidebar first: the removal must not
+    // wait on the database sweep. The main process then deletes the threads and
+    // their runs, forgets the routine in the scheduler, and removes its artifact
+    // folder; the toast reports what went with it.
     for (const thread of affected) {
       allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
       scopeState.removeThread(thread.id)
@@ -3285,6 +3287,28 @@
     }
     // The routine is gone, so its how-to panel has nothing left to configure.
     contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
+    try {
+      const result = await assistantRoutines.removeRoutine(routineId)
+      toast.success('Routine removed', {
+        description: removalSummary(result.taskCount, result.runCount, result.artifactsRemoved)
+      })
+    } catch (error) {
+      reportError(error, 'The routine could not be removed.')
+    }
+  }
+
+  /**
+   * What one routine removal swept, in one sentence. The artifact folder is
+   * called out because it can hold files the agent produced, so the user knows
+   * they went with the routine.
+   */
+  function removalSummary(taskCount: number, runCount: number, artifactsRemoved: boolean): string {
+    const parts = [`${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}`]
+    if (runCount > 0) parts.push(`${runCount} ${runCount === 1 ? 'run' : 'runs'}`)
+    const swept = `${parts.join(' and ')} deleted`
+    return artifactsRemoved
+      ? `${swept}, along with the routine's artifact folder.`
+      : `${swept}. Its artifact folder could not be removed.`
   }
 
   async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {

@@ -1,4 +1,5 @@
 import { generateId, getRoutinePath } from '../utils'
+import { rm } from 'fs/promises'
 import { extname } from 'path'
 import {
   isSupportedIconExtension,
@@ -8,6 +9,8 @@ import {
 } from '../icon-file'
 import { ASSISTANT_SPACE_ID, isAssistantSetupThread, isAssistantRunThread } from '../types'
 import { pickColorForSeed } from '../project-colors'
+import { routineOwnedDirectories } from '../thread-storage-paths'
+import { Logger } from '../../main/system/logger'
 import type { Database } from '../../main/database/database'
 import { RoutineRepo } from '../../main/database/repositories/routine-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
@@ -15,6 +18,7 @@ import type {
   CreateRoutineInput,
   Routine,
   RoutineAgents,
+  RoutineDeletionResult,
   RoutineSchedule,
   Thread,
   UpdateRoutineInput
@@ -185,16 +189,64 @@ export class RoutineManager {
    * Threads go through the canonical deleter when one is attached (the app
    * always attaches it); without one they are ungrouped instead, so a unit
    * context can never leave a dangling `routineId`.
+   *
+   * The routine's artifact folder goes with it, and the returned summary is what
+   * lets the caller clear the scheduler's records for the removed tasks and tell
+   * the user what was swept.
    */
-  async deleteRoutine(routineId: string): Promise<void> {
-    for (const thread of this.allRoutineThreads(routineId)) {
+  async deleteRoutine(routineId: string): Promise<RoutineDeletionResult> {
+    // Collected across both passes, keyed by id, so a run an earlier pass already
+    // swept is still counted and reported.
+    const owned = new Map<string, Thread>()
+    const collect = (threads: Thread[]): void => {
+      for (const thread of threads) owned.set(thread.id, thread)
+    }
+    collect(this.allRoutineThreads(routineId))
+    for (const thread of owned.values()) {
       if (isAssistantRunThread(thread)) continue
       await this.removeRoutineThread(thread)
     }
-    for (const thread of this.allRoutineThreads(routineId)) {
+    const leftovers = this.allRoutineThreads(routineId)
+    collect(leftovers)
+    for (const thread of leftovers) {
       await this.removeRoutineThread(thread)
     }
     this.routineRepo.delete(routineId)
+    const artifactsRemoved = await this.removeRoutineArtifacts(routineId)
+    const threads = [...owned.values()]
+    return {
+      removedThreadIds: threads.map((thread) => thread.id),
+      taskCount: threads.filter(
+        (thread) => !isAssistantRunThread(thread) && !isAssistantSetupThread(thread)
+      ).length,
+      runCount: threads.filter(isAssistantRunThread).length,
+      artifactsRemoved
+    }
+  }
+
+  /**
+   * Remove the directories a routine owns on disk   its icon and how-to
+   * checkpoint folder, and the workspace its tasks ran in. Best-effort, exactly
+   * like project deletion: the database rows are already gone either way, so a
+   * failed removal is reported to the caller instead of thrown, and logged.
+   */
+  private async removeRoutineArtifacts(routineId: string): Promise<boolean> {
+    let removed = true
+    for (const directory of routineOwnedDirectories(routineId)) {
+      try {
+        // `force` treats an already-missing directory as removed; a real failure
+        // (permissions, a path that is a file) still throws.
+        await rm(directory, { recursive: true, force: true })
+      } catch (error) {
+        removed = false
+        Logger.error('Routine artifact directory could not be removed', {
+          routineId,
+          directory,
+          error: String(error)
+        })
+      }
+    }
+    return removed
   }
 
   /**

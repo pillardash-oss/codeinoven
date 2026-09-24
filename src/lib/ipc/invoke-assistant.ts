@@ -3,6 +3,7 @@ import type {
   MissedRun,
   Project,
   Routine,
+  RoutineDeletionResult,
   RoutineSchedule,
   Thread,
   UpdateRoutineInput
@@ -23,7 +24,12 @@ export const invokeAssistantContract = {
   'routine:list': {} as Contract<[], Routine[]>,
   'routine:create': {} as Contract<[input: CreateRoutineInput], Routine>,
   'routine:update': {} as Contract<[routineId: string, input: UpdateRoutineInput], Routine>,
-  'routine:delete': {} as Contract<[routineId: string], void>,
+  /**
+   * Remove a routine with everything it owns: its tasks, the runs they produced,
+   * its hidden how-to thread, the scheduler's records for them, and its artifact
+   * folder. Returns what was swept, so the caller can report it to the user.
+   */
+  'routine:delete': {} as Contract<[routineId: string], RoutineDeletionResult>,
   'routine:reorder': {} as Contract<[orderedIds: string[]], Routine[]>,
   /** Pin or unpin a routine so it sorts above the rest. */
   'routine:setPinned': {} as Contract<[routineId: string, pinned: boolean], Routine>,
