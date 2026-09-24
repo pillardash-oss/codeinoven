@@ -171,7 +171,7 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'delegate',
     description:
-      "Run one prompt on the model the user assigned to a named piece of design work, for example long-form copy, an SEO pass, a script or a storyboard. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. The reply says what that assignment produces, and words are all this lane can return: a picture, a clip or a track is a file, so produce it with a generation capability from the utilities bank and save it with save-media. Assignments that share one output are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
+      "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard, the prompts a generator will be given. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only, so a picture, a clip or a track is a file rather than an answer: produce one of those with a generation capability from the utilities bank and save it with save-media. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
     inputSchema: {
       type: 'object',
       properties: {

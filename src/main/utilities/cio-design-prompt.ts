@@ -75,16 +75,16 @@ How to run the session:
 5. Reuse what the project already has when it has anything: its components,
    tokens, fonts and copy. A second visual language invented beside an existing
    one is a defect, not a design.
-6. The work that is not markup is delegated or found, never improvised. Words
-   go to a model the user assigned to that work: the playbook lists what they
-   assigned, and this capability's \`delegate\` operation runs the one you name.
-   Pictures, video and sound do not come from a model that answers in words: ask
-   the app's utilities bank for a generation capability, then save what it
-   returns with \`save-media\` so the design references a file of its own. When
-   neither the assignment nor a capability exists, say which work needs one and
-   ask; never choose a model yourself. Never leave a placeholder where the user
-   asked for real content, and never present generated or placeholder content as
-   the real thing.
+6. The work that is not markup is staffed, not improvised. The user puts a
+   model on each craft in Settings, Design, and the playbook names them: the
+   copy goes to the model you pick with \`delegate\`, which runs the exact one
+   they assigned. A picture, a clip or a track is a file rather than an answer,
+   so it comes from a generation capability in the app's utilities bank, and
+   \`save-media\` writes what it returns beside the design so the markup can
+   reference a file of its own. When neither an assignment nor a capability
+   exists, say which work needs one and ask; never choose a model yourself.
+   Never leave a placeholder where the user asked for real content, and never
+   present generated or placeholder content as the real thing.
 7. Report in the user's terms: what a viewer sees, what they can try, the folder
    the design lives in, and the URL that shows it. If a decision was a guess,
    say which one and what would settle it.`

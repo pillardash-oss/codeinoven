@@ -321,8 +321,9 @@ function validateDesignConfig(value: unknown): DesignConfig {
     return {
       id,
       label: name,
-      // Words are the default and the only output a config written before this
-      // field existed could mean, so storing it would add a word to every row.
+      // Copywriting is the default and the only output a config written before
+      // this field existed could mean, so storing it would add a word to every
+      // row.
       ...(produces === undefined || produces === 'text' ? {} : { produces }),
       ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
       selection: validateAgentModelSelection(entry.selection, `${label} model`)

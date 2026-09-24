@@ -89,12 +89,13 @@ function delegationGuidance(assignments: readonly DesignAssignment[]): string {
     const named = group.map(designAssignmentReference).join(', ')
     lines.push(
       output === 'text'
-        ? `- Words (run with \`delegate\`): ${named}.`
-        : `- ${designAssignmentOutputLabel(output)} (names the model the user wants for this output): ${named}.`
+        ? `- ${designAssignmentOutputLabel(output)}, run with \`delegate\`: ${named}.`
+        : `- ${designAssignmentOutputLabel(output)}, produced with a generation capability: ${named}.`
     )
   }
   lines.push(
-    "Delegate words work. A media assignment cannot be run as a prompt, because this lane answers in words and a generated picture, clip or track is a file: produce it with a generation capability from the app's utilities bank and save it with `save-media`, and when no capability is installed, name the one that is needed and the model the user already chose. Several assignments with one output are alternatives, and `delegate` already tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
+    '',
+    "`delegate` answers with text, so it runs the copywriting work. A picture, a clip or a track is a file rather than an answer, so it comes from a generation capability in the app's utilities bank, and the model listed against that craft is the one the user had in mind: prefer a capability that reaches it, say which one you used, and save what it returns with `save-media`, because a generation link expires and the saved file does not. When no capability is installed, name the one that is needed and the model the user already chose. Two assignments that cover the same craft are the user's own alternatives, and `delegate` tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
   )
   return lines.join('\n')
 }
@@ -151,20 +152,20 @@ Activate the app's in-app browser capability, \`cio:browser\` (search for "brows
 
 ## Delegating to the models the user assigned
 
-Some design work is words: the copy that sounds like the product, an SEO pass, a script, a storyboard, the prompts a generator will be given. The user assigns a model to each kind of work in Settings, Design, and operation \`delegate\` runs that exact model:
+Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard, the images a page needs, the clip that opens it. The user puts a model on each craft in Settings, Design, and operation \`delegate\` runs the one they chose for the work you name:
 
 - \`assignment\`, the work to delegate, by its handle or by its title.
 - \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
 
 ${delegationGuidance(assignments)}
 
-A delegated model answers in words. It cannot hand back an image, a video or a sound file, so never delegate one and never accept prose as though it were the asset. What you get back is a brief or an answer, not the file.
+\`delegate\` is the copywriting lane and answers with text only, so it cannot hand back an image, a video or a sound file. Never accept prose as though it were the asset: what comes back is text, not a picture, a clip or a track.
 
 Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
 
 ## Pictures, video and sound
 
-Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it. When the user named a model for one of these outputs, that model says which generator they had in mind, so prefer a capability that reaches it and say which one you used.
+Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it. When the user named a model for one of these crafts, that model says which generator they had in mind, so prefer a capability that reaches it and say which one you used.
 
 1. Find it with the search tool the turn instructions name (query the work, for example "generate an image" or "video generation"), activate the result, then invoke it. Every one takes its own arguments, so read the capability's documentation before calling it.
 2. When it answers with a link, save that link with this capability's \`save-media\` operation, naming the design's own folder and a file name that says what the asset is. Generation links expire within hours or days, so a design that references one stops rendering; the saved file does not.

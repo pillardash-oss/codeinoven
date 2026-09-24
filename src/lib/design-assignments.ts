@@ -5,8 +5,8 @@ import type { DesignAssignment, DesignAssignmentOutput, DesignConfig } from './t
  * Design assignments, as pure functions.
  *
  * A design assignment is one named piece of design work and the model the user
- * assigned to it: image generation, SEO copy, long-form content, video, voice.
- * The model is never chosen by the app or by an agent working in a design
+ * assigned to it: the copy, the images, the clips, the voice-over. The model is
+ * never chosen by the app or by an agent working in a design
  * session; the user names it in Settings, Design, and the app runs exactly that
  * one model on exactly that work.
  *
@@ -27,18 +27,69 @@ export const DESIGN_ASSIGNMENT_OUTPUTS: readonly DesignAssignmentOutput[] = [
   'audio'
 ]
 
-/** Human name for one output, used by settings and by the playbook. */
-export function designAssignmentOutputLabel(output: DesignAssignmentOutput): string {
-  switch (output) {
-    case 'image':
-      return 'Images'
-    case 'video':
-      return 'Video'
-    case 'audio':
-      return 'Sound'
-    default:
-      return 'Words'
+/**
+ * One kind of work an assignment can cover, named the way a studio names the
+ * person who does it.
+ *
+ * The label is a craft rather than a medium on purpose: a user staffing a
+ * design recognizes "Copywriter" and "Illustrator", while "Text" and "Images"
+ * describe a file format. Settings and the playbook both read this record, so
+ * the option a user picks and the line an agent reads can never disagree.
+ */
+export interface DesignAssignmentRole {
+  /** The craft, as the person who practises it: what the user picks. */
+  label: string
+  /** The same craft as a noun, for a sentence that names the work rather than
+   *  the practitioner: "chosen for illustration". */
+  work: string
+  /** One line on what this craft delivers, shown under the option. */
+  description: string
+}
+
+/** Every craft, in the order settings offers them. Copywriting is the default. */
+export const DESIGN_ASSIGNMENT_ROLES: Readonly<
+  Record<DesignAssignmentOutput, DesignAssignmentRole>
+> = {
+  text: {
+    label: 'Copywriter',
+    work: 'copywriting',
+    description: 'Write good copy for your application'
+  },
+  image: {
+    label: 'Illustrator',
+    work: 'illustration',
+    description: 'Create the images your design needs'
+  },
+  video: {
+    label: 'Video editor',
+    work: 'video',
+    description: 'Produce the clips and motion your design needs'
+  },
+  audio: {
+    label: 'Voice-over artist',
+    work: 'voice-over',
+    description: 'Record the narration and sound for your design'
   }
+}
+
+/** The craft one output belongs to. */
+export function designAssignmentRole(output: DesignAssignmentOutput): DesignAssignmentRole {
+  return DESIGN_ASSIGNMENT_ROLES[output]
+}
+
+/** The craft's name, used by settings and by the playbook. */
+export function designAssignmentOutputLabel(output: DesignAssignmentOutput): string {
+  return designAssignmentRole(output).label
+}
+
+/** The craft as a noun, for a message that names the work being delegated. */
+export function designAssignmentOutputWork(output: DesignAssignmentOutput): string {
+  return designAssignmentRole(output).work
+}
+
+/** One line on what the craft delivers. */
+export function designAssignmentOutputDescription(output: DesignAssignmentOutput): string {
+  return designAssignmentRole(output).description
 }
 
 /** Whether a value is an output an assignment may declare. */

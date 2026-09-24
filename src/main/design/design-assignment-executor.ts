@@ -1,7 +1,7 @@
 import {
   designAssignmentCatalogue,
   designAssignmentOutput,
-  designAssignmentOutputLabel,
+  designAssignmentOutputWork,
   resolveDesignAssignment,
   usableDesignAssignments
 } from '../../lib/design-assignments'
@@ -15,7 +15,7 @@ import type { DesignCapabilityExecutor } from '../utilities/utility-orchestratio
  * Run the app-owned design capability's `delegate` operation.
  *
  * Delegation is how a design session reaches a model the user assigned to a
- * named piece of work (image generation, SEO copy, long-form content, video).
+ * named piece of work (the copy, an SEO pass, a storyboard, the images).
  * The app's whole job here is to honour that assignment and nothing else:
  *
  * - it resolves the assignment from the live config on every call, so a settings
@@ -130,19 +130,19 @@ export function createDesignAssignmentExecutor(
     throw new Error(
       candidates.length === 1
         ? `The model assigned to "${assignment.label}" did not answer. ${failures[0] ?? ''}`.trim()
-        : `Every model the user assigned to ${designAssignmentOutputLabel(output).toLowerCase()} failed. ${failures.join('; ')}`
+        : `Every model the user assigned for ${designAssignmentOutputWork(output)} failed. ${failures.join('; ')}`
     )
   }
 }
 
-/** One line on what came back, which differs for words work and for media. */
+/** One line on what came back, which differs for copywriting and for the other crafts. */
 function noteFor(output: DesignAssignmentOutput, usedFallback: boolean): string {
   const standing = usedFallback
     ? 'The first model the user assigned to this work did not answer, so this one did.'
     : 'Produced by the model the user assigned to this work.'
   return output === 'text'
     ? standing
-    : `${standing} It was named for ${designAssignmentOutputLabel(output).toLowerCase()}, and it answered in words: this lane returns no file, so the reply above is not the asset. Produce it with a generation capability and save it with save-media.`
+    : `${standing} It was chosen for ${designAssignmentOutputWork(output)}, and this lane answers with text only, so the reply above is not the asset: produce it with a generation capability and save it with save-media.`
 }
 
 function errorMessage(error: unknown): string {
