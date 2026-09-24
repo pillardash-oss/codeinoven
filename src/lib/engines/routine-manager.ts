@@ -145,20 +145,50 @@ export class RoutineManager {
   /**
    * Delete a routine and every thread it owns   the hidden how-to thread
    * included   so nothing survives pointing at a routine that no longer
-   * exists. Threads go through the canonical deleter when one is attached (the
-   * app always attaches it); without one they are ungrouped instead, so a unit
+   * exists.
+   *
+   * Swept in two passes. Roots first   the routine's tasks and its how-to
+   * thread   because a task owns its runs: the canonical deleter already sweeps
+   * a task's runs (`assistantRunDescendants`), so handing it a run id whose task
+   * was just removed would fail the whole routine deletion on "thread not
+   * found". The second pass sweeps whatever the roots did not cover: runs whose
+   * task lives outside the routine, and any thread a concurrent sweep left
+   * behind.
+   *
+   * Threads go through the canonical deleter when one is attached (the app
+   * always attaches it); without one they are ungrouped instead, so a unit
    * context can never leave a dangling `routineId`.
    */
   async deleteRoutine(routineId: string): Promise<void> {
     for (const thread of this.allRoutineThreads(routineId)) {
-      if (this.threadDeleter) {
-        await this.threadDeleter(thread.id)
-        continue
-      }
-      const ungrouped: Thread = { ...thread, routineId: undefined, updatedAt: Date.now() }
-      this.threadRepo.upsert(ungrouped)
+      if (isAssistantRunThread(thread)) continue
+      await this.removeRoutineThread(thread)
+    }
+    for (const thread of this.allRoutineThreads(routineId)) {
+      await this.removeRoutineThread(thread)
     }
     this.routineRepo.delete(routineId)
+  }
+
+  /**
+   * Remove one thread from the routine's ownership. A thread that is already
+   * gone is not a failure: it was swept as a descendant of another deletion or
+   * removed concurrently, which is exactly the outcome this wants. A thread
+   * that still exists keeps its error, so a real cleanup failure is never
+   * swallowed.
+   */
+  private async removeRoutineThread(thread: Thread): Promise<void> {
+    if (!this.threadDeleter) {
+      const ungrouped: Thread = { ...thread, routineId: undefined, updatedAt: Date.now() }
+      this.threadRepo.upsert(ungrouped)
+      return
+    }
+    try {
+      await this.threadDeleter(thread.id)
+    } catch (error) {
+      if (!this.threadRepo.get(thread.id)) return
+      throw error
+    }
   }
 
   /** Pin or unpin a routine. Pinning records the time so newest pins sort first. */
