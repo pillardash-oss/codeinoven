@@ -202,6 +202,16 @@ export const DEFAULT_IN_APP_NOTIFICATION_SOUND: InAppNotificationSoundSettings =
 }
 
 /**
+ * What a design assignment produces, which is what decides how a session
+ * reaches it.
+ *
+ * `text` work is answered by the assigned model itself. A media output names the
+ * model the user wants for that media, because not every model generates a
+ * picture or a clip, and the ones that do are usually picked for exactly that.
+ */
+export type DesignAssignmentOutput = 'text' | 'image' | 'video' | 'audio'
+
+/**
  * One named piece of design work and the model the user assigned to it.
  *
  * The model is the user's choice and is never chosen by the app or by an agent
@@ -213,6 +223,11 @@ export interface DesignAssignment {
   id: string
   /** Human name shown in settings, e.g. `Image generation`. */
   label: string
+  /**
+   * What the work produces. A stored assignment written before this field
+   * existed has none, which reads as `text`.
+   */
+  produces?: DesignAssignmentOutput
   /** Standing guidance handed to the assigned model with every call. */
   instructions?: string
   /** The model that does this work. */

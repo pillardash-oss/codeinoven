@@ -1,5 +1,5 @@
 import type { AgentModelSelection } from './types/common'
-import type { DesignAssignment, DesignConfig } from './types/settings'
+import type { DesignAssignment, DesignAssignmentOutput, DesignConfig } from './types/settings'
 
 /**
  * Design assignments, as pure functions.
@@ -18,6 +18,48 @@ import type { DesignAssignment, DesignConfig } from './types/settings'
 
 /** Ceiling on assignments, so a hand-edited config cannot inflate the playbook. */
 export const MAX_DESIGN_ASSIGNMENTS = 12
+
+/** Every output an assignment may declare, in the order settings offers them. */
+export const DESIGN_ASSIGNMENT_OUTPUTS: readonly DesignAssignmentOutput[] = [
+  'text',
+  'image',
+  'video',
+  'audio'
+]
+
+/** Human name for one output, used by settings and by the playbook. */
+export function designAssignmentOutputLabel(output: DesignAssignmentOutput): string {
+  switch (output) {
+    case 'image':
+      return 'Images'
+    case 'video':
+      return 'Video'
+    case 'audio':
+      return 'Sound'
+    default:
+      return 'Words'
+  }
+}
+
+/** Whether a value is an output an assignment may declare. */
+export function isDesignAssignmentOutput(value: unknown): value is DesignAssignmentOutput {
+  return (
+    typeof value === 'string' && (DESIGN_ASSIGNMENT_OUTPUTS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * What one assignment produces.
+ *
+ * A stored assignment written before the field existed has none, and reads as
+ * `text`: every assignment that predates it was a words job, because words were
+ * the only thing the app could reach.
+ */
+export function designAssignmentOutput(
+  assignment: DesignAssignment | undefined | null
+): DesignAssignmentOutput {
+  return isDesignAssignmentOutput(assignment?.produces) ? assignment.produces : 'text'
+}
 
 /** Longest accepted assignment id, the handle an agent names in a tool call. */
 export const DESIGN_ASSIGNMENT_ID_MAX_LENGTH = 48

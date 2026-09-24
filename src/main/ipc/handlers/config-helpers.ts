@@ -12,8 +12,10 @@ import {
   DESIGN_ASSIGNMENT_ID_MAX_LENGTH,
   DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH,
   DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_OUTPUTS,
   MAX_DESIGN_ASSIGNMENTS,
-  isDesignAssignmentId
+  isDesignAssignmentId,
+  isDesignAssignmentOutput
 } from '../../../lib/design-assignments'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
@@ -262,7 +264,7 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
 }
 
 /** Fields one design assignment may carry, and no others. */
-const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'instructions', 'selection'])
+const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'produces', 'instructions', 'selection'])
 
 /**
  * Validate the user's design assignments.
@@ -312,9 +314,16 @@ function validateDesignConfig(value: unknown): DesignConfig {
     ) {
       throw new TypeError(`${label} guidance is too long`)
     }
+    const produces = entry.produces
+    if (produces !== undefined && !isDesignAssignmentOutput(produces)) {
+      throw new TypeError(`${label} output must be one of ${DESIGN_ASSIGNMENT_OUTPUTS.join(', ')}`)
+    }
     return {
       id,
       label: name,
+      // Words are the default and the only output a config written before this
+      // field existed could mean, so storing it would add a word to every row.
+      ...(produces === undefined || produces === 'text' ? {} : { produces }),
       ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
       selection: validateAgentModelSelection(entry.selection, `${label} model`)
     }

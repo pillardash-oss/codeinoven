@@ -9,7 +9,10 @@
   import {
     DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH,
     DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
+    DESIGN_ASSIGNMENT_OUTPUTS,
     MAX_DESIGN_ASSIGNMENTS,
+    designAssignmentOutput,
+    designAssignmentOutputLabel,
     uniqueDesignAssignmentId
   } from '$shared/design-assignments'
   import { INBOX_PROJECT_ID } from '$shared/types'
@@ -18,20 +21,23 @@
     AppConfig,
     AppConfigPatch,
     DesignAssignment,
+    DesignAssignmentOutput,
     ProviderCatalog,
     ThinkingLevel
   } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import EmptyState from '../ui/EmptyState.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
 
   /**
    * Design assignments: the user names the model that does each kind of design
    * work, and nothing here is chosen for them.
    *
-   * A row is only written once it names a model, because the config the agent
-   * reads has to be executable: a half-written assignment would either be
-   * refused at delegation time or, worse, sent to a model the user never chose.
+   * An assignment also declares what it produces, because a model that writes
+   * copy cannot make a picture and one trained for pictures is picked for that.
+   * Two assignments with the same output are alternatives for the same job, so
+   * the order they are listed in is the order they are preferred.
    */
   interface Props {
     config: AppConfig
@@ -46,6 +52,8 @@
   let error = $state('')
   /** The work name being typed in the add form. */
   let draftLabel = $state('')
+  /** What that work produces. Words by default, since that is the common case. */
+  let draftOutput = $state<DesignAssignmentOutput>('text')
   /** The model picked for the work being added. A row needs one to be saved. */
   let draftSelection = $state<AgentModelSelection | null>(null)
   /** Rows whose guidance field is open; one at a time keeps the list scannable. */
@@ -68,6 +76,21 @@
       !draftLabelTooLong &&
       draftSelection !== null
   )
+
+  /**
+   * What an assignment may produce, with the one line that says what picking it
+   * means. A media output names the model the user wants for that output rather
+   * than one that will answer with words, because no model generates a picture
+   * and writes copy equally well.
+   */
+  const outputOptions = DESIGN_ASSIGNMENT_OUTPUTS.map((output) => ({
+    id: output,
+    label: designAssignmentOutputLabel(output),
+    hint:
+      output === 'text'
+        ? 'The assigned model answers with words'
+        : `The model the user wants for ${output}`
+  }))
 
   function labelOf(assignment: DesignAssignment): string {
     return labelDrafts[assignment.id] ?? assignment.label
@@ -129,6 +152,20 @@
     )
   }
 
+  /**
+   * Change what one assignment produces. Words are the default and the validator
+   * stores nothing for them, so switching back to words is not a special case.
+   */
+  async function selectOutput(
+    assignment: DesignAssignment,
+    output: DesignAssignmentOutput
+  ): Promise<void> {
+    await persist(
+      replace(assignment, { produces: output }),
+      'The design assignment output could not be saved.'
+    )
+  }
+
   async function commitLabel(assignment: DesignAssignment): Promise<void> {
     const next = (labelDrafts[assignment.id] ?? assignment.label).trim()
     if (next.length === 0 || next === assignment.label) {
@@ -175,6 +212,7 @@
         {
           id: uniqueDesignAssignmentId(config.design, label),
           label,
+          produces: draftOutput,
           selection: draftSelection
         }
       ],
@@ -220,12 +258,13 @@
   <div class="rounded-xl border bg-surface p-4">
     <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Assigned models</h3>
     <p class="mt-2 text-xs leading-relaxed text-dimmed">
-      Name each kind of design work and pick the model that does it: product copy, an SEO pass, a
-      script, a storyboard, the prompts a generator is given. A design session delegates that work
-      to the model you pick here, and it never picks one itself. The model answers in words, so
-      pictures, video and sound come from a generation capability instead: install one in Utilities
-      and the session uses it, then saves the result into the design as a file. With nothing
-      assigned, the agent says which work needs a model instead of improvising one.
+      Name each kind of design work, say what it produces, and pick the model that does it: product
+      copy, an SEO pass, the images a page needs, the clip that opens it. A design session delegates
+      to the model you pick here and never picks one itself. Words work is answered by the model
+      itself. A picture, a clip or a track names the model you want for that output, and the session
+      produces it with a generation capability, then saves the result into the design as a file.
+      Give one output several models and they cover each other, in the order they are listed. With
+      nothing assigned, the agent says which work needs a model instead of improvising one.
     </p>
   </div>
 
@@ -285,6 +324,21 @@
                   >
                     {assignment.id}
                   </p>
+                </div>
+
+                <div class="w-40 shrink-0">
+                  <span class="block text-xs text-muted">Produces</span>
+                  <div class="mt-1">
+                    <EnumSelect
+                      options={outputOptions}
+                      value={designAssignmentOutput(assignment)}
+                      onChange={(output) => void selectOutput(assignment, output)}
+                      placeholder="Produces"
+                      ariaLabel={`What the ${assignment.label} assignment produces`}
+                      title="What this assignment produces. Two assignments with the same output are alternatives for one job, so the order they are listed in is the order they are tried."
+                      disabled={!settingsReady}
+                    />
+                  </div>
                 </div>
 
                 <div class="flex w-64 shrink-0 items-center gap-1.5">
@@ -383,6 +437,22 @@
             bind:value={draftLabel}
             disabled={!settingsReady || atCapacity}
           />
+        </div>
+        <div class="w-40 shrink-0">
+          <span class="block text-xs text-muted">Produces</span>
+          <div class="mt-1">
+            <EnumSelect
+              options={outputOptions}
+              value={draftOutput}
+              onChange={(output) => {
+                draftOutput = output
+              }}
+              placeholder="Produces"
+              ariaLabel="What the new design assignment produces"
+              title="What this assignment will produce"
+              disabled={!settingsReady || atCapacity}
+            />
+          </div>
         </div>
         <div class="w-64 shrink-0">
           <span class="block text-xs text-muted">Model</span>

@@ -1,4 +1,12 @@
 import {
+  DESIGN_ASSIGNMENT_OUTPUTS,
+  designAssignmentOutput,
+  designAssignmentOutputLabel,
+  designAssignmentReference,
+  isUsableDesignAssignment
+} from './design-assignments'
+import type { DesignAssignment } from './types/settings'
+import {
   DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnOrigins,
   type PrototypeCdnPolicy
@@ -65,21 +73,38 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
 }
 
 /**
- * The delegation paragraph: the assignments the user set up, or the fact that
- * nothing is delegated yet. Either way the agent is told that picking a model is
- * the user's decision and never its own.
+ * The delegation paragraph: the assignments the user set up, split by what they
+ * produce, or the fact that nothing is delegated yet. Either way the agent is
+ * told that picking a model is the user's decision and never its own.
  */
-function delegationGuidance(assignments: string): string {
-  return assignments.length === 0
-    ? 'No design work is delegated yet: the user has not assigned a model to any design work. The assignments are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
-    : `The user assigned: ${assignments}. Delegate that work before telling the user it cannot be produced. When you need something that is not in that list, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design.`
+function delegationGuidance(assignments: readonly DesignAssignment[]): string {
+  const usable = assignments.filter((assignment) => isUsableDesignAssignment(assignment))
+  if (usable.length === 0) {
+    return 'No design work is delegated yet: the user has not assigned a model to any design work. The assignments are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
+  }
+  const lines: string[] = ['The user assigned:']
+  for (const output of DESIGN_ASSIGNMENT_OUTPUTS) {
+    const group = usable.filter((assignment) => designAssignmentOutput(assignment) === output)
+    if (group.length === 0) continue
+    const named = group.map(designAssignmentReference).join(', ')
+    lines.push(
+      output === 'text'
+        ? `- Words (run with \`delegate\`): ${named}.`
+        : `- ${designAssignmentOutputLabel(output)} (names the model the user wants for this output): ${named}.`
+    )
+  }
+  lines.push(
+    "Delegate words work. A media assignment cannot be run as a prompt, because this lane answers in words and a generated picture, clip or track is a file: produce it with a generation capability from the app's utilities bank and save it with `save-media`, and when no capability is installed, name the one that is needed and the model the user already chose. Several assignments with one output are alternatives, and `delegate` already tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
+  )
+  return lines.join('\n')
 }
 
 /**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
- * external-asset paragraph with the live policy, so this copy is a default
- * rather than the text a turn receives.
+ * external-asset paragraph with the live policy and the delegation paragraph
+ * with the user's live assignments, so this copy is a default rather than the
+ * text a turn receives.
  */
 export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
   allowExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
@@ -92,7 +117,10 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
  * section is the user's live assignments; a stale copy of either is the drift
  * both resolvers exist to prevent.
  */
-export function designCapabilityDocs(policy: PrototypeCdnPolicy, assignments: string = ''): string {
+export function designCapabilityDocs(
+  policy: PrototypeCdnPolicy,
+  assignments: readonly DesignAssignment[] = []
+): string {
   return `# Design studio
 
 Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
@@ -130,13 +158,13 @@ Some design work is words: the copy that sounds like the product, an SEO pass, a
 
 ${delegationGuidance(assignments)}
 
-A delegated model answers in words. It cannot hand back an image, a video or a sound file, so never delegate one and never accept prose as though it were the asset.
+A delegated model answers in words. It cannot hand back an image, a video or a sound file, so never delegate one and never accept prose as though it were the asset. What you get back is a brief or an answer, not the file.
 
 Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
 
 ## Pictures, video and sound
 
-Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it:
+Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it. When the user named a model for one of these outputs, that model says which generator they had in mind, so prefer a capability that reaches it and say which one you used.
 
 1. Find it with the search tool the turn instructions name (query the work, for example "generate an image" or "video generation"), activate the result, then invoke it. Every one takes its own arguments, so read the capability's documentation before calling it.
 2. When it answers with a link, save that link with this capability's \`save-media\` operation, naming the design's own folder and a file name that says what the asset is. Generation links expire within hours or days, so a design that references one stops rendering; the saved file does not.

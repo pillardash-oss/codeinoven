@@ -1,7 +1,13 @@
-import { designAssignmentCatalogue, resolveDesignAssignment } from '../../lib/design-assignments'
+import {
+  designAssignmentCatalogue,
+  designAssignmentOutput,
+  designAssignmentOutputLabel,
+  resolveDesignAssignment,
+  usableDesignAssignments
+} from '../../lib/design-assignments'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
-import type { AgentModelSelection, DesignConfig } from '../../lib/types'
+import type { AgentModelSelection, DesignAssignmentOutput, DesignConfig } from '../../lib/types'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 
@@ -85,21 +91,60 @@ export function createDesignAssignmentExecutor(
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
-    const guidance = assignment.instructions?.trim()
-    const result = await options.run({
-      selection: assignment.selection,
-      label: assignment.label,
-      prompt: guidance ? `${guidance}\n\n${prompt}` : prompt,
-      projectId: context.projectId,
-      threadId: context.threadId,
-      projectPath: project.path
-    })
-    return {
-      assignment: assignment.id,
-      label: assignment.label,
-      model: `${result.harnessId}/${result.providerId}/${result.modelId}`,
-      output: result.text,
-      note: 'Produced by the model the user assigned to this work. It did not see this conversation, so it knew only what the prompt carried.'
+    const output = designAssignmentOutput(assignment)
+    // Two assignments with one output are the user's own alternatives for that
+    // job, so the one they named is tried first and the rest cover it in their
+    // order. This is not the app substituting a model: every candidate here is a
+    // model the user assigned to exactly this output.
+    const candidates = [
+      assignment,
+      ...usableDesignAssignments(config).filter(
+        (entry) => entry.id !== assignment.id && designAssignmentOutput(entry) === output
+      )
+    ]
+    const failures: string[] = []
+    for (const [index, candidate] of candidates.entries()) {
+      const guidance = candidate.instructions?.trim()
+      try {
+        const result = await options.run({
+          selection: candidate.selection,
+          label: candidate.label,
+          prompt: guidance ? `${guidance}\n\n${prompt}` : prompt,
+          projectId: context.projectId,
+          threadId: context.threadId,
+          projectPath: project.path
+        })
+        return {
+          assignment: candidate.id,
+          label: candidate.label,
+          produces: output,
+          model: `${result.harnessId}/${result.providerId}/${result.modelId}`,
+          output: result.text,
+          ...(index === 0 ? {} : { fell_back_from: failures }),
+          note: `${noteFor(output, index > 0)} It did not see this conversation, so it knew only what the prompt carried.`
+        }
+      } catch (error) {
+        failures.push(`${candidate.label} (${candidate.id}): ${errorMessage(error)}`)
+      }
     }
+    throw new Error(
+      candidates.length === 1
+        ? `The model assigned to "${assignment.label}" did not answer. ${failures[0] ?? ''}`.trim()
+        : `Every model the user assigned to ${designAssignmentOutputLabel(output).toLowerCase()} failed. ${failures.join('; ')}`
+    )
   }
+}
+
+/** One line on what came back, which differs for words work and for media. */
+function noteFor(output: DesignAssignmentOutput, usedFallback: boolean): string {
+  const standing = usedFallback
+    ? 'The first model the user assigned to this work did not answer, so this one did.'
+    : 'Produced by the model the user assigned to this work.'
+  return output === 'text'
+    ? standing
+    : `${standing} It was named for ${designAssignmentOutputLabel(output).toLowerCase()}, and it answered in words: this lane returns no file, so the reply above is not the asset. Produce it with a generation capability and save it with save-media.`
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

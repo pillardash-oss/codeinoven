@@ -33,7 +33,7 @@ import {
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
-import { designAssignmentCatalogue } from '../../lib/design-assignments'
+import { designAssignmentsFromConfig } from '../../lib/design-assignments'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
@@ -1329,7 +1329,7 @@ export class UtilityOrchestrationService {
     const config = await this.storage.getConfig()
     return designCapabilityDocs(
       prototypeCdnPolicyFromConfig(config),
-      designAssignmentCatalogue(config.design)
+      designAssignmentsFromConfig(config.design)
     )
   }
 
