@@ -39,7 +39,7 @@
    * contract rather than a placement.
    */
   type ModalPlacement = 'center' | 'right' | 'bottom' | 'palette' | 'fullscreen'
-  type ModalSize = 'md' | 'lg' | 'xl' | 'full'
+  export type ModalSize = 'md' | 'lg' | 'xl' | 'full'
 
   const INPUT_FIELD_SELECTOR = [
     'input:not([type="hidden"]):not([disabled]):not([readonly])',
