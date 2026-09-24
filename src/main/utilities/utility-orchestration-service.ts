@@ -11,7 +11,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { APP_ADB_UTILITY_ID } from '../../lib/utility-ids'
+import { APP_ADB_UTILITY_ID, APP_DESIGN_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -31,6 +31,8 @@ import {
 } from '../../lib/gateway-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
+import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
+import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
@@ -79,6 +81,7 @@ import {
 } from './utility-orchestration/utility-turn-state'
 import {
   BROWSER_UTILITY_TOOLS,
+  DESIGN_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   buildCuaSessionId,
   buildUtilityGatewayScript,
@@ -205,6 +208,18 @@ export type BrowserUtilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Runs one gateway invocation of the app-owned design capability for the turn
+ * that made it. The app supplies it because serving a folder and owning the
+ * thread's browser tab are both app concerns: the executor composes the
+ * loopback directory preview with the in-app browser.
+ */
+export type DesignPreviewExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
  * Runs one gateway invocation of the app-owned scope and worktree capability
  * for the turn that made it. The chat engine supplies it because it owns the
  * thread's scope, project root and permission tier.
@@ -297,6 +312,7 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private designPreviewExecutor: DesignPreviewExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -358,6 +374,16 @@ export class UtilityOrchestrationService {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:design` capability's
+   * `preview` operation. The design pass itself is text; what the app adds is
+   * the ability to serve the folder it produced and show it in the thread's
+   * browser tab.
+   */
+  setDesignPreviewExecutor(executor: DesignPreviewExecutor | null): void {
+    this.designPreviewExecutor = executor
   }
 
   /**
@@ -498,6 +524,10 @@ export class UtilityOrchestrationService {
     // than a schema. It is knowledge an agent applies with its own shell, so the
     // only thing a turn needs from the app is to know the playbook exists.
     const hasAdbCapability = eligible.some(({ utility }) => utility.id === APP_ADB_UTILITY_ID)
+    // The design capability is advertised the same way: the app wants an agent
+    // that is about to design an interface to know the guidance and the preview
+    // exist, without carrying the design pass in every turn's context.
+    const hasDesignCapability = eligible.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -561,6 +591,11 @@ export class UtilityOrchestrationService {
       ...(hasAdbCapability
         ? [
             `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+          ]
+        : []),
+      ...(hasDesignCapability
+        ? [
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus one operation, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, and a \`preview\` operation that serves that folder and opens it in this thread's browser tab. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1243,6 +1278,18 @@ export class UtilityOrchestrationService {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
     }
+    if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      // The playbook states the CDN policy the preview servers are enforcing,
+      // so it is rebuilt from settings at activation rather than seeded once
+      // and left to go stale. The operation catalog travels with it, because
+      // unlike the scope capability this one is invoked with typed fields.
+      return {
+        instructions: designCapabilityDocs(
+          prototypeCdnPolicyFromConfig(await this.storage.getConfig())
+        ),
+        tools: DESIGN_UTILITY_TOOLS
+      }
+    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
@@ -1389,6 +1436,13 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      const executor = this.designPreviewExecutor
+      if (!executor) throw new Error('The design preview is unavailable')
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId

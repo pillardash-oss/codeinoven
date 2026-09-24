@@ -4,6 +4,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
+import { DESIGN_OUTPUT_ROOT } from '../../../lib/design-skill'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
@@ -119,6 +120,42 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     description:
       'Read console messages and browser runtime errors from the current project and thread tab.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  }
+]
+
+/**
+ * Operations of the app-owned design capability (`cio:design`).
+ *
+ * One operation, because showing the design is the only thing the app has to do
+ * that the agent cannot do with its own tools. Looking at the result is
+ * deliberately not repeated here: the browser capability already owns
+ * screenshots, viewports and console reads, and the docs point at it.
+ */
+export const DESIGN_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'preview',
+    description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to serve. Defaults to ${DESIGN_OUTPUT_ROOT}.`
+        },
+        entry: {
+          type: 'string',
+          description:
+            'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+        },
+        attention: {
+          type: 'string',
+          enum: ['focus', 'background'],
+          description:
+            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+        }
+      },
+      additionalProperties: false
+    }
   }
 ]
 

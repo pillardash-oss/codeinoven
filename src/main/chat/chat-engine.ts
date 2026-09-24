@@ -174,6 +174,7 @@ import { UtilityOrchestrationService } from '../utilities/utility-orchestration-
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
+  DesignPreviewExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
   UtilityResultAttribution,
@@ -1641,6 +1642,15 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the app-owned design capability's `preview`
+   * operation. The chat engine owns the turn's project and thread, so it is the
+   * app surface that hands the executor those two ids.
+   */
+  setDesignPreviewExecutor(executor: DesignPreviewExecutor | null): void {
+    this.utilityOrchestration.setDesignPreviewExecutor(executor)
   }
 
   /**

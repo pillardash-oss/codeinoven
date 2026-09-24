@@ -33,11 +33,28 @@ export const APP_SCOPE_UTILITY_ID = 'cio:scope'
 export const APP_ADB_UTILITY_ID = 'cio:adb'
 
 /**
+ * Stable id of the app-owned design capability.
+ *
+ * Its kind is `skill` because the design pass is the substance of it: the
+ * capability teaches how to design and where the design lives, and the app adds
+ * one operation, `preview`, that serves the design folder and opens it in the
+ * project's browser tab.
+ */
+export const APP_DESIGN_UTILITY_ID = 'cio:design'
+
+/**
  * App-owned knowledge a user may switch off.
  *
  * `cio:adb` is advice: an agent applies that playbook with its own shell, so a
  * user who already has a better runbook for Android must be able to stop ours
  * competing with it in every turn.
+ *
+ * `cio:design` is knowledge with a convenience attached: a design pass carries
+ * opinions a project or a user may already hold elsewhere, and nothing shipped
+ * tells an agent to reach for this id the way the Git panel tells it to reach
+ * for `cio:scope`. Switching it off withdraws the design guidance and the
+ * preview operation together, which is what a user with their own design skill
+ * wants.
  *
  * Everything else the app owns stays locked, because the app supplies the
  * wiring behind it and a turn that lost it would fail in a way the user cannot
@@ -48,7 +65,10 @@ export const APP_ADB_UTILITY_ID = 'cio:adb'
  * freeing one. New app-owned entries are locked by default and join this list
  * only on purpose.
  */
-const DISABLEABLE_APP_OWNED_UTILITY_IDS: ReadonlySet<string> = new Set([APP_ADB_UTILITY_ID])
+const DISABLEABLE_APP_OWNED_UTILITY_IDS: ReadonlySet<string> = new Set([
+  APP_ADB_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID
+])
 
 /**
  * Whether a utility's `enabled` flag may be toggled, from the Utilities page or

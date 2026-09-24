@@ -359,6 +359,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       service.executeUtility(operation, input, browserContext)
     )
   }
+  // The design capability's `preview` operation composes the two services above:
+  // the loopback static host that serves a folder and the thread's browser tab
+  // that shows it. Serving must keep working with no window to host a tab, so the
+  // browser is read lazily and a missing one degrades to a URL in the reply.
+  const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
+  state.chatEngine.setDesignPreviewExecutor(
+    createDesignPreviewExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)
