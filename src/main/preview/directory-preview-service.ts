@@ -1,5 +1,9 @@
 import { realpath } from 'node:fs/promises'
-import { DirectoryPreviewServer, type DirectoryPreviewEndpoint } from './directory-preview-server'
+import {
+  DirectoryPreviewServer,
+  type DirectoryPreviewChangeListener,
+  type DirectoryPreviewEndpoint
+} from './directory-preview-server'
 import { Logger } from '../system/logger'
 
 /**
@@ -31,6 +35,17 @@ export interface DirectoryPreviewRegistration {
 
 export class DirectoryPreviewService {
   private readonly live = new Map<string, LivePreview>()
+  private changeListener: DirectoryPreviewChangeListener | null = null
+
+  /**
+   * Register who refreshes a preview when its files change. The app supplies the
+   * browser side of this, because refreshing means finding the tab that is
+   * showing the origin and reloading it, and this service knows nothing about
+   * browsers.
+   */
+  setChangeListener(listener: DirectoryPreviewChangeListener | null): void {
+    this.changeListener = listener
+  }
 
   /**
    * Serve one directory over its own loopback origin and return its URL.
@@ -44,7 +59,7 @@ export class DirectoryPreviewService {
       existing.touchedAt = Date.now()
       return { ...existing.endpoint, root, started: false }
     }
-    const server = new DirectoryPreviewServer(root)
+    const server = new DirectoryPreviewServer(root, (change) => this.changeListener?.(change))
     const endpoint = await server.start()
     this.live.set(root, { server, endpoint, touchedAt: Date.now() })
     await this.evictBeyondCapacity(root)

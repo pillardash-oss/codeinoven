@@ -31,6 +31,21 @@ export function isLocalDevelopmentUrl(value: string): boolean {
   return false
 }
 
+/**
+ * Whether a page URL belongs to one preview origin.
+ *
+ * This is how the tab a preview server is feeding gets found: the server knows
+ * its own origin and nothing about browsers, so the browser side matches tabs by
+ * the URL they are showing. The comparison is on the origin rather than the whole
+ * URL, because a preview can be on any path under it, and the separator keeps
+ * `:8080` from matching `:80801`.
+ */
+export function isPreviewOriginUrl(value: string, origin: string): boolean {
+  const base = origin.endsWith('/') ? origin.slice(0, -1) : origin
+  if (!base) return false
+  return value === base || value.startsWith(`${base}/`)
+}
+
 /** Add a development-friendly scheme when the address bar receives a host only. */
 export function normalizeBrowserUrl(value: string): string | null {
   const trimmed = value.trim()

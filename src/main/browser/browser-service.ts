@@ -13,6 +13,7 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
+import { isPreviewOriginUrl } from '../../lib/local-development-url'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
@@ -517,6 +518,28 @@ export class BrowserService {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /**
+   * Reload every live tab showing a page under one preview origin, and report how
+   * many were reloaded.
+   *
+   * A preview server knows its own origin and nothing about browsers, so its tab
+   * is found by the URL it is showing rather than by a registration. Matching on
+   * the origin means a tab the user navigated somewhere else is left alone, and a
+   * tab is never reloaded out from under a page that has nothing to do with the
+   * folder that changed.
+   */
+  reloadPreviewOrigin(origin: string): number {
+    let reloaded = 0
+    for (const tab of this.tabs.values()) {
+      const contents = tab.view.webContents
+      if (contents.isDestroyed()) continue
+      if (!isPreviewOriginUrl(contents.getURL(), origin)) continue
+      contents.reload()
+      reloaded += 1
+    }
+    return reloaded
   }
 
   private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {

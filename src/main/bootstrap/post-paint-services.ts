@@ -371,6 +371,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       browser: () => state.browserService
     })
   )
+  // A previewed folder refreshes itself: the preview server reports a batched
+  // change for the directory it serves, and the tab showing that origin reloads.
+  // The browser is read lazily because it exists only while the app has a window,
+  // and a missing one simply means there is no tab to refresh.
+  state.directoryPreviewService.setChangeListener(({ url }) =>
+    state.browserService?.reloadPreviewOrigin(url)
+  )
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)

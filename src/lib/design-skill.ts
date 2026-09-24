@@ -99,7 +99,7 @@ Invoke this capability with operation \`preview\`:
 - \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. With no entry file the app opens its own file listing.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 
-The reply carries the URL, so you can also put it in your final message. The preview rereads the folder on every request, so a reload shows your latest edit.
+The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
 
 ## Checking your own work
 
