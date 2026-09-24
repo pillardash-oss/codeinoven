@@ -1,17 +1,11 @@
 import { createHash } from 'crypto'
-import type {
-  MemoryCategory,
-  MemoryEntry,
-  MemoryPriority,
-  MemoryScope,
-  MemorySource
-} from '../../../lib/types'
+import type { MemoryCategory, MemoryEntry, MemoryPriority, MemorySource } from '../../../lib/types'
+import { readMemoryScopes, writeMemoryScopes } from '../../../lib/memory/memory-scopes'
 import { ENTRY_MARKER } from './memory-constants'
 import {
   SAFE_ID,
   VALID_CATEGORIES,
   VALID_PRIORITIES,
-  VALID_SCOPES,
   VALID_SOURCES,
   parseModelKeysMetadata
 } from './memory-validation'
@@ -40,7 +34,7 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
       if (separator <= 0) continue
       metadata.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim())
     }
-    const hasMetadata = ['category', 'priority', 'scope', 'source', 'id'].some((key) =>
+    const hasMetadata = ['category', 'priority', 'scope', 'scopes', 'source', 'id'].some((key) =>
       metadata.has(key)
     )
     const cleanBody = hasMetadata ? sections.slice(1).join('\n\n').trim() : body
@@ -53,8 +47,10 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
     const category = metadata.get('category')
     const priority = metadata.get('priority')
     const scope = metadata.get('scope')
+    const storedScopes = metadata.get('scopes')
     const source = metadata.get('source')
     const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
+    const projectId = metadata.get('projectid') || undefined
 
     const updatedAt = safeInteger(metadata.get('updatedat'), now)
     entries.push({
@@ -71,12 +67,22 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
       priority: VALID_PRIORITIES.includes(priority as MemoryPriority)
         ? (priority as MemoryPriority)
         : 'medium',
-      scope: VALID_SCOPES.includes(scope as MemoryScope) ? (scope as MemoryScope) : 'global',
+      scopes:
+        storedScopes === undefined && scope === undefined
+          ? // A file written before scope sets existed with no scope at all meant
+            // the projects-and-chats audience, which is the old `global` default.
+            ['projects', 'chat']
+          : readMemoryScopes({
+              scopes: storedScopes === undefined ? undefined : storedScopes.split(','),
+              scope,
+              projectId
+            }),
       source: VALID_SOURCES.includes(source as MemorySource) ? (source as MemorySource) : 'manual',
       frequency: safeInteger(metadata.get('frequency'), 1),
       lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
-      projectId: metadata.get('projectid') || undefined,
+      projectId,
       threadId: metadata.get('threadid') || undefined,
+      routineId: metadata.get('routineid') || undefined,
       ...(modelKeys.length > 0 ? { modelKeys } : {})
     })
   }
@@ -94,13 +100,14 @@ export function serializeMemoryMd(entries: MemoryEntry[]): string {
         `updatedAt: ${entry.updatedAt}`,
         `category: ${entry.category}`,
         `priority: ${entry.priority}`,
-        `scope: ${entry.scope}`,
+        `scopes: ${writeMemoryScopes(entry.scopes)}`,
         `source: ${entry.source}`,
         `frequency: ${entry.frequency}`,
         `lastReinforced: ${entry.lastReinforced}`
       ]
       if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
       if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
+      if (entry.routineId) meta.push(`routineId: ${entry.routineId}`)
       if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)
       return `${ENTRY_MARKER}\n## ${entry.label}\n\n${meta.join('\n')}\n\n${entry.content}`
     })

@@ -8,6 +8,7 @@ import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
 import type { Database } from '../../../src/main/database/database'
 import { CioDiagnosticsService } from '../../../src/main/utilities/cio-diagnostics-service'
+import { MAIN_LOG_FILE, logDayName } from '../../../src/main/system/log-paths'
 import { APP_SLUG, ORG_SLUG } from '../../../src/lib/brand'
 
 const temporaryPaths: string[] = []
@@ -153,8 +154,10 @@ describe('CioDiagnosticsService', () => {
   })
 
   it('reads bounded redacted entries from an allow-listed log file', async () => {
+    const dayDirectory = join(configRoot, 'logs', logDayName())
+    mkdirSync(dayDirectory, { recursive: true })
     writeFileSync(
-      join(configRoot, 'logs', 'main.jsonl'),
+      join(dayDirectory, MAIN_LOG_FILE),
       [
         JSON.stringify({ timestamp: '2026-08-29T10:00:00Z', level: 'info', message: 'started' }),
         JSON.stringify({
@@ -167,7 +170,7 @@ describe('CioDiagnosticsService', () => {
     )
     const service = await createService()
     const result = await service.readLog('logs/main.jsonl', { level: 'error', limit: 10 })
-    expect(result.file).toBe('logs/main.jsonl')
+    expect(result.file).toBe(`logs/${logDayName()}/${MAIN_LOG_FILE}`)
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0]?.level).toBe('error')
     expect(result.entries[0]?.message).toContain('[REDACTED]')
@@ -175,10 +178,18 @@ describe('CioDiagnosticsService', () => {
     expect(result.truncated).toBe(false)
   })
 
-  it('rejects log files outside the allow-list', async () => {
+  it('rejects log files outside the allow-list and still reads a pre-split flat file', async () => {
     const service = await createService()
     await expect(service.readLog('../../etc/passwd')).rejects.toThrow(/not readable/iu)
     await expect(service.readLog('config.json')).rejects.toThrow(/not readable/iu)
+    // A log tree written before the day split keeps every sink flat under `logs/`.
+    writeFileSync(
+      join(configRoot, 'logs', 'error.log'),
+      '[2026-08-29T10:00:00Z] [error] legacy line\n'
+    )
+    const legacy = await service.readLog('logs/error.log')
+    expect(legacy.file).toBe('logs/error.log')
+    expect(legacy.entries[0]?.message).toContain('legacy line')
   })
 
   it('returns empty entries when the log file does not exist', async () => {
@@ -186,7 +197,7 @@ describe('CioDiagnosticsService', () => {
     const result = await service.readLog('logs/error.log')
     expect(result.entries).toEqual([])
     expect(result.truncated).toBe(false)
-    expect(result.file).toBe('logs/error.log')
+    expect(result.file).toBe(`logs/${logDayName()}/error.log`)
   })
 
   it('lists the schema and narrows it to one table', async () => {

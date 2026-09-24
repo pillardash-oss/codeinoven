@@ -126,9 +126,9 @@
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
-    threadSettings,
-    chatSettings,
-    chatEffectiveSettings
+    initialSettingsFor,
+    settingsStoreFor,
+    type ModelScope
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
@@ -139,6 +139,15 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import {
+    connectionsFromPlan,
+    isRoutineConfirmation,
+    latestHowToDraft as latestHowToDraftIn,
+    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
+    type RoutinePlanDraft
+  } from '$lib/components/assistant/assistant-view'
+  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -257,13 +266,12 @@
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
   import {
     auditReportForTurn,
+    buildTranscriptIndex,
     getTurnFinalText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
     isTurnCompleted,
-    isTurnEndIndex,
-    isTurnStartIndex,
     lastTurnStartIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
@@ -274,9 +282,10 @@
     applyResponseHighlights,
     captureResponseSelection,
     measureResponseBubblePositions,
+    releaseResponseHighlights,
     responseRangeFor,
+    responseRangeIsCurrent,
     RESPONSE_BUBBLE_SIZE,
-    RESPONSE_HIGHLIGHT_NAME,
     type ResponseBubblePosition,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
@@ -314,6 +323,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
+    /** True in Assistant View   the thread authors a routine's how-to. */
+    assistantMode?: boolean
+    /** Routine the assistant task belongs to, when any. */
+    assistantRoutineId?: string | null
+    /** Routine name, shown in the authoring head start. */
+    assistantRoutineName?: string | null
+    /** Whether the routine already has a saved how-to. */
+    assistantHowToComplete?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -354,6 +371,10 @@
   let {
     thread: threadProp,
     chatMode = false,
+    assistantMode = false,
+    assistantRoutineId = null,
+    assistantRoutineName = null,
+    assistantHowToComplete = false,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -446,6 +467,26 @@
    *  moment they land   never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
+  let checkpoints = $state<TurnCheckpointSummary[]>([])
+  /**
+   * The transcript as of its last structural change: identity, role, and
+   * timestamps, without subscribing to streamed content. A delta replaces text
+   * inside an existing part without moving this reference, so everything that
+   * only needs the shape of the conversation   which window is mounted, where
+   * the last turn starts, what the user has already asked   reads this instead
+   * of the live `messages` array and stops recomputing at the stream cadence.
+   */
+  let structureMessages = $derived(
+    hasController ? messages : threadMessages.structureMessages(thread.projectId, thread.id)
+  )
+  /**
+   * Every per-message turn question, answered once per structural change. The
+   * transcript asks these once per mounted message per render; reading them from
+   * here turns that into an array lookup and keeps a long transcript from being
+   * rescanned on every streamed frame.
+   */
+  let transcriptIndex = $derived(buildTranscriptIndex(structureMessages, checkpoints))
+
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
     'Review the codebase and list the top improvement opportunities',
@@ -498,11 +539,11 @@
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
   const latestTurnInfo = $derived.by(() => {
-    const startIndex = lastTurnStartIndex(messages)
+    const startIndex = lastTurnStartIndex(structureMessages)
     if (startIndex === -1) return { startIndex: -1, active: false }
     let endIndex = startIndex
-    while (endIndex + 1 < messages.length) {
-      const next = messages[endIndex + 1]
+    while (endIndex + 1 < structureMessages.length) {
+      const next = structureMessages[endIndex + 1]
       if (!next) break
       if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
         endIndex += 1
@@ -511,9 +552,9 @@
       break
     }
     const trailingUserOnly =
-      endIndex < messages.length - 1 &&
-      messages.slice(endIndex + 1).every((message) => message.role === 'user')
-    const turnCompleted = messages[endIndex]?.completedAt !== undefined
+      endIndex < structureMessages.length - 1 &&
+      structureMessages.slice(endIndex + 1).every((message) => message.role === 'user')
+    const turnCompleted = structureMessages[endIndex]?.completedAt !== undefined
     const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
@@ -530,9 +571,11 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. */
+   *  would only produce an empty recall step. Keyed on the structure snapshot  
+   *  a user message's text only ever changes through a merge that reports
+   *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
-    mergedUserMessageSummaries(messages, fullUserMessageHistory)
+    mergedUserMessageSummaries(structureMessages, fullUserMessageHistory)
       .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
@@ -568,8 +611,8 @@
     if (!conversationBusy || brainstormReportRefreshing) return null
     const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
     if (!userMessageId) return null
-    const userMessageIndex = messages.findIndex((message) => message.id === userMessageId)
-    const userMessage = messages[userMessageIndex]
+    const userMessageIndex = structureMessages.findIndex((message) => message.id === userMessageId)
+    const userMessage = structureMessages[userMessageIndex]
     if (
       userMessageIndex === -1 ||
       !userMessage ||
@@ -578,7 +621,7 @@
     ) {
       return null
     }
-    const assistantMirrored = messages
+    const assistantMirrored = structureMessages
       .slice(userMessageIndex + 1)
       .some((message) => message.role === 'assistant')
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
@@ -612,15 +655,17 @@
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
-  // This removes the false working flash on refresh and on view remounts.
+  // This removes the false working flash on refresh and on view remounts, and it
+  // covers controller-driven side chats too: a stale busy flag there hides the
+  // newest answer behind the working trace (the final-answer block is gated on
+  // it) and turns the composer into a queue/steer surface for a run that is
+  // already over.
   // svelte-ignore state_referenced_locally
-  if (!hasController) {
-    if (
-      !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
-      agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
-    ) {
-      agentRuns.setIdle(thread.projectId, thread.id)
-    }
+  if (
+    !agentRuns.isLiveBusy(thread.projectId, conversationId) &&
+    agentRuns.activity(thread.projectId, conversationId) !== 'brainstorm_report'
+  ) {
+    agentRuns.setIdle(thread.projectId, conversationId)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived(
@@ -656,13 +701,27 @@
   })
   // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
+  /**
+   * Which model memory this conversation belongs to: an assistant task, a
+   * standalone chat, or a project thread. It decides the settings a thread
+   * starts on, the store a change is committed to, and the model lists the
+   * pickers show, so a model picked for one kind of conversation never reshapes
+   * another kind's. Props, not state: the view is remounted (keyed) per thread.
+   */
+  function modelScope(): ModelScope {
+    if (assistantMode) return 'assistant'
+    return chatMode ? 'chat' : 'project'
+  }
+
+  /** The settings a thread starts on: its own, else its family's model memory. */
+  function initialThreadSettings(source: Thread): ThreadSettings {
+    const next = initialSettingsFor(modelScope(), source)
+    return chatMode ? normalizeChatSettings(next) : next
+  }
+
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
-    hasController
-      ? normalizeChatSettings(controller!.settings)
-      : chatMode
-        ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-        : threadSettings.initialFor(thread)
+    hasController ? normalizeChatSettings(controller!.settings) : initialThreadSettings(thread)
   )
 
   function shouldHydrateEngineeringState(): boolean {
@@ -958,12 +1017,10 @@
     return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
-  /** Commit to the chat-scoped last-used store on the Chats tab, and to the
-   *  project last-used store everywhere else, so switching a chat model never
-   *  changes the model used for project work. */
+  /** Commit to the model memory of this conversation's family, so a model picked
+   *  for a chat or an assistant task never changes what another kind starts on. */
   function commitSettings(next: ThreadSettings): void {
-    if (chatMode) chatSettings.commit(next)
-    else threadSettings.commit(next)
+    settingsStoreFor(modelScope()).commit(next)
   }
 
   function captureLiveWorkingSelection(): void {
@@ -985,9 +1042,10 @@
    *  inherited or otherwise preselected model without opening the picker. */
   function recordModelUse(): void {
     if (!settings.harnessId || !settings.providerId || !settings.modelId) return
-    const key = modelKey(settings.harnessId, settings.providerId, settings.modelId)
-    if (chatMode) rendererRecovery.addChatRecentModel(key)
-    else rendererRecovery.addRecentModel(key)
+    rendererRecovery.addModelRecentFor(
+      modelScope(),
+      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+    )
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
@@ -1414,6 +1472,24 @@
       slashCommand: true,
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
+
+    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // and asks the user to confirm the recap. The recap card commits the agreed
+    // draft in one click; this command is only the fallback for when that path
+    // cannot run, so it appears only while a draft is waiting to be committed
+    // and disappears for good once the routine is saved.
+    if (assistantRoutineDraft) {
+      actions.push({
+        id: 'command:save-how-to',
+        title: '/save-how-to',
+        description: 'Fallback: save the how-to the agent drafted for this routine',
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
+        slashCommand: true,
+        ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
 
     // Skills the thread's harness can see but does not expose as native slash
     // commands: global-layer skills and CodeInOven-registered skills. Harness-
@@ -1872,7 +1948,6 @@
       }
     }
   })
-  let checkpoints = $state<TurnCheckpointSummary[]>([])
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
@@ -1885,6 +1960,9 @@
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
+  /** Identity of this view as the CSS highlight registry's owner, so its
+   *  teardown can never clear highlights another view published. */
+  const responseHighlightOwner = {}
   /** Viewport position for the comment bubble of each reference anchor. */
   let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
@@ -1903,11 +1981,15 @@
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    applyResponseHighlights(responseReferenceRanges)
+    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
   }
 
   /** Re-measure where each annotation's comment bubble belongs in the viewport. */
   function updateResponseBubblePositions(): void {
+    // Nothing annotated (and nothing measured): skip the forced layout that
+    // reading every range rect costs, so the common conversation pays nothing.
+    if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
+      return
     responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
   }
 
@@ -1921,19 +2003,51 @@
     })
   }
 
-  function restoreResponseHighlights(references: ResponseReferenceAnchor[]): void {
-    responseReferenceRanges.clear()
+  /**
+   * Bring the live annotation ranges back in line with the conversation DOM.
+   *
+   * This is deliberately not a one-shot restore. An annotation is anchored to a
+   * character range inside `[data-assistant-response]`, and that element is not
+   * stable across a view's life: the newest answer renders inside the working
+   * trace while the conversation reads as busy and only moves into its
+   * final-answer block once the run settles, the mounted history window grows
+   * after the first paint, and every publish re-renders message blocks. A range
+   * built before any of those points at nodes that are gone, which paints no
+   * highlight and measures no bubble.
+   *
+   * Only ranges that actually went stale are rebuilt (see
+   * `responseRangeIsCurrent`), so this stays cheap enough to run on every
+   * conversation publish.
+   */
+  function syncResponseHighlights(references: ResponseReferenceAnchor[]): void {
+    let changed = false
+    const liveIds = references.map((reference) => reference.id)
     for (const reference of references) {
+      const existing = responseReferenceRanges.get(reference.id)
+      if (responseRangeIsCurrent(existing, reference)) continue
       const range = responseRangeFor(scrollEl, reference)
-      if (range) responseReferenceRanges.set(reference.id, range)
+      if (range) {
+        responseReferenceRanges.set(reference.id, range)
+        changed = true
+      } else if (existing) {
+        responseReferenceRanges.delete(reference.id)
+        changed = true
+      }
     }
-    refreshResponseHighlights()
-    updateResponseBubblePositions()
+    // A detached selection is no longer part of the chat component.
+    for (const id of [...responseReferenceRanges.keys()]) {
+      if (liveIds.includes(id)) continue
+      responseReferenceRanges.delete(id)
+      changed = true
+    }
+    if (changed) refreshResponseHighlights()
+    scheduleResponseBubbleUpdate()
   }
 
   function scheduleResponseHighlightRestore(references: ResponseReferenceAnchor[]): void {
     void tick().then(() => {
-      restoreResponseHighlights(references)
+      if (!alive) return
+      syncResponseHighlights(references)
     })
   }
 
@@ -2044,19 +2158,24 @@
     return responseReferences.find((reference) => reference.id === id) ?? null
   }
 
-  // Keep comment bubbles anchored to their highlights as the conversation
-  // re-renders (message streaming, history windowing, thread restore).
+  // Keep comment bubbles and highlights anchored to their text as the
+  // conversation re-renders. Every trigger below can change which DOM nodes
+  // carry the annotated text: a streamed publish, the mounted history window
+  // growing after the first paint, and the run state settling (which moves the
+  // newest answer out of the working trace into its final-answer block, the
+  // only place that carries the annotation anchor). Without them the restore
+  // ran once - before that anchor existed - and never ran again, so the
+  // highlights and comment bubbles stayed missing until a new selection
+  // happened to re-trigger it.
   $effect(() => {
     void responseReferences.length
     void visibleMessages.length
+    void conversationBusy
+    void threadMessages.streamRevision(thread.projectId, conversationId)
+    if (responseReferences.length === 0) return
     void tick().then(() => {
-      // Highlights depend on the message DOM; re-create them whenever the
-      // conversation re-renders so annotations/comments come back after a
-      // thread switch (onMount runs before the async mirror finishes loading).
-      if (responseReferences.length > 0) {
-        restoreResponseHighlights(responseReferences)
-      }
-      scheduleResponseBubbleUpdate()
+      if (!alive) return
+      syncResponseHighlights(responseReferences)
     })
   })
 
@@ -2097,6 +2216,19 @@
     taskReferences: PromptAssignmentTaskReference[] = [],
     startAfterThreads: StartAfterThreadReference[] = []
   ): void {
+    // The user answered the agent's "shall I save it?" with a plain yes. The app
+    // owns the commit: save the pending draft, then have the agent post its
+    // next-steps list. The yes is consumed as the confirmation and never sent,
+    // so it cannot become a user bubble or re-open the recap.
+    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
+      void confirmRoutineSave()
+      return
+    }
+    // The primary is, by definition, the model the user triggers the how-to with.
+    // While the how-to is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the routine's
+    // primary   a fresh install has no last-used model to default from.
+    syncRoutinePrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -2118,6 +2250,10 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
+    // The assistant how-to authoring contract is not assembled here: the chat
+    // engine attaches it to every user turn in a routine that still has no
+    // how-to, so a resend from the message editor or a queued delivery can
+    // never drop it.
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
@@ -3703,28 +3839,6 @@
 
   /** For the final assistant message of a turn, return the total duration from
    *  the user's prompt to the agent's final output. */
-  function getCurrentTurnDuration(msgIndex: number): number | null {
-    const assistantMsg = messages[msgIndex]
-    if (assistantMsg?.role !== 'assistant' || !assistantMsg.completedAt) return null
-    let turnStartIndex = msgIndex - 1
-    while (turnStartIndex >= 0) {
-      const message = messages[turnStartIndex]
-      if (!message) break
-      if (message.role === 'assistant') {
-        turnStartIndex--
-        continue
-      }
-      if (message.role === 'user' && isActivityOnlyUserMessage(message)) {
-        turnStartIndex--
-        continue
-      }
-      break
-    }
-    const userMsg = messages[turnStartIndex]
-    if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
-    return assistantMsg.completedAt - userMsg.createdAt
-  }
-
   /** When the agent started working on the turn whose trace opens at msgIndex.
    *  Activity-only user messages between the prompt and the first assistant
    *  message are skipped so the trace timer starts at the real prompt. */
@@ -4117,9 +4231,7 @@
       queueMicrotask(() => {
         if (!alive) return
         if (thread.settings) {
-          settings = chatMode
-            ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-            : threadSettings.initialFor(thread)
+          settings = initialThreadSettings(thread)
         }
         auditSettings = auditSettingsForThread()
         syncOpenSubagentTabs()
@@ -4151,11 +4263,7 @@
           queueMicrotask(() => {
             if (!alive) return
             if (threadData?.settings) {
-              settings = chatMode
-                ? normalizeChatSettings(
-                    chatSettings.initialFor(threadData, chatEffectiveSettings())
-                  )
-                : threadSettings.initialFor(threadData)
+              settings = initialThreadSettings(threadData)
             }
             agentDefaults = config.agentDefaults
             imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -4187,9 +4295,7 @@
       // around the newest tail now. No-op when the warm path already revealed.
       beginInitialPaintReveal()
       if (threadData?.settings) {
-        settings = chatMode
-          ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
-          : threadSettings.initialFor(threadData)
+        settings = initialThreadSettings(threadData)
       }
       agentDefaults = config.agentDefaults
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -5671,14 +5777,10 @@
     // unmount   releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab this seeds the chat's own
-    // store, so the next chat inherits this chat's model, thinking level, and
-    // File System state   never the project view's configuration.
-    if (chatMode) {
-      chatSettings.commit(settings)
-    } else {
-      threadSettings.commit(settings)
-    }
+    // Persist settings as last-used. Each family seeds its own store, so the
+    // next chat or assistant task inherits this thread's model, thinking level
+    // and File System state, never another family's configuration.
+    commitSettings(settings)
 
     errorMessage = ''
     providerStatus = null
@@ -5852,8 +5954,186 @@
     requestSkillUse(skill.name, args)
   }
 
+  /** The routine this assistant thread is authoring, when it is one. */
+  const assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
+      : null
+  )
+
+  /**
+   * The complete draft the agent has presented for this routine: the how-to it
+   * wrote plus the machine-readable plan (schedule and connections). A draft is
+   * what makes the routine committable, so the recap card and the fallback
+   * command both key off it. It is computed only while the agent is idle: a
+   * running turn streams the draft token by token, and re-parsing fences on
+   * every delta would be wasted work for a card that cannot show yet anyway.
+   * The authoring conversation is short and lives only until the routine is
+   * saved, so scanning it once per settled turn is bounded work.
+   */
+  const assistantRoutineDraft = $derived.by(
+    (): {
+      howTo: string
+      plan: RoutinePlanDraft | null
+    } | null => {
+      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
+      const howTo = latestHowToDraft()
+      if (!howTo) return null
+      return { howTo, plan: latestRoutinePlanDraft() }
+    }
+  )
+
+  /**
+   * Identity of the current draft. Dismissing the recap card hides it only for
+   * this revision, so a revised draft brings the card back.
+   */
+  const assistantRoutineDraftSignature = $derived(
+    assistantRoutineDraft
+      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+      : ''
+  )
+
+  /** The draft revision the user chose to keep editing; empty means none. */
+  let routineRecapDismissed = $state('')
+  let routineSaving = $state(false)
+
+  const routineRecapVisible = $derived(
+    assistantRoutineDraft !== null &&
+      !routineSaving &&
+      routineRecapDismissed !== assistantRoutineDraftSignature
+  )
+
+  function keepEditingRoutine(): void {
+    routineRecapDismissed = assistantRoutineDraftSignature
+  }
+
+  /**
+   * The how-to the agent last drafted for this routine, taken from the newest
+   * how-to fenced block in an assistant message. The authoring contract asks
+   * for a `how-to` fence, but a bare fence whose body starts with a
+   * `how-to: <title>` line is accepted too.
+   */
+  function latestHowToDraft(): string | null {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestHowToDraftIn(assistantTexts)
+  }
+
+  /** The machine-readable routine plan the agent last emitted, if any. */
+  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestRoutinePlanDraftIn(assistantTexts)
+  }
+
+  /**
+   * Keep the routine's primary in step with the model the user is working on
+   * while the how-to is still being written. The primary is the model that
+   * triggers the how-to, so a model switched in the composer before the first
+   * turn must become the model the routine runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the how-to
+   * is saved, and no-op while the composer already matches the primary.
+   */
+  function syncRoutinePrimaryToCurrentModel(): void {
+    const routineId = assistantRoutineId
+    if (!routineId || assistantHowToComplete) return
+    const current = settings
+    if (!current.modelId) return
+    const primary = assistantRoutine?.agents?.primary
+    if (
+      primary &&
+      primary.harnessId === current.harnessId &&
+      primary.providerId === current.providerId &&
+      primary.modelId === current.modelId
+    ) {
+      return
+    }
+    void assistantRoutines
+      .updateRoutine(routineId, {
+        agents: {
+          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          primary: {
+            harnessId: current.harnessId,
+            providerId: current.providerId,
+            modelId: current.modelId,
+            ...(current.accountId ? { accountId: current.accountId } : {}),
+            ...(current.thinkingLevel ? { thinkingLevel: current.thinkingLevel } : {})
+          }
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  /**
+   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * have the agent post a short next-steps list in the Getting started thread.
+   * Both the recap card's Save button and a typed confirmation route here, so
+   * the follow-up turn happens whichever way the user agreed.
+   */
+  async function confirmRoutineSave(): Promise<void> {
+    const routineId = assistantRoutineId
+    if (!routineId) return
+    const saved = await saveRoutineHowTo()
+    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+  }
+
+  /**
+   * Commit the agent-drafted how-to, schedule, and connections to the routine
+   * once the user agrees. Called by the recap card and by the `/save-how-to`
+   * fallback. The plan block is optional: without it the how-to is saved on its
+   * own and the existing schedule is left untouched.
+   */
+  async function saveRoutineHowTo(draftOverride?: {
+    howTo: string
+    plan: RoutinePlanDraft | null
+  }): Promise<boolean> {
+    const routineId = assistantRoutineId
+    if (!routineId || routineSaving) return false
+    const draft = draftOverride ?? assistantRoutineDraft
+    if (!draft) {
+      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      return false
+    }
+    routineSaving = true
+    try {
+      const plan = draft.plan
+      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
+      if (plan?.schedule) patch.schedule = plan.schedule
+      if (plan?.delivery) patch.delivery = plan.delivery
+      if (plan?.priority) patch.priority = plan.priority
+      if (plan && plan.connections.length > 0) {
+        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+        const catalog = await invoke('utilities:list').catch(() => null)
+        patch.connections = connectionsFromPlan(
+          plan.connections,
+          routine?.connections ?? [],
+          catalog?.utilities ?? []
+        )
+      }
+      await assistantRoutines.updateRoutine(routineId, patch)
+      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      routineRecapDismissed = ''
+      return true
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      return false
+    } finally {
+      routineSaving = false
+    }
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:save-how-to') {
+      await saveRoutineHowTo()
+      return
+    }
     if (commandId === 'command:cio-utility') {
       triggerCioUtilityTurn(args)
       return
@@ -6179,20 +6459,6 @@
       return
     }
     pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
-  }
-
-  function checkpointForTurn(messageIndex: number): TurnCheckpointSummary | null {
-    const assistant = messages[messageIndex]
-    if (!assistant || assistant.role !== 'assistant') return null
-
-    // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
-    // (completedAt). Every message of that turn   including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction
-    // falls inside this window, so match the card by time instead of walking
-    // back to a "user" message (whose role/shape varies with what the agent
-    // did mid-turn). Choosing the most recent window resolves
-    // interrupted-then-resumed turns to the resumed checkpoint.
-    return CheckpointMatching.checkpointForTurn(messages, checkpoints, messageIndex)
   }
 
   /** True when `messageIndex` is the final assistant message of `checkpoint`'s
@@ -10244,7 +10510,7 @@
   })
 
   onDestroy(() => {
-    CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
+    releaseResponseHighlights(responseHighlightOwner)
     imageUrls.destroy()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
@@ -10897,8 +11163,8 @@
               {/if}
             {:else}
               <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(messages, absIndex)}
-              {@const isTurnEnd = isTurnEndIndex(messages, absIndex)}
+              {@const isTurnStart = transcriptIndex.isTurnStart[absIndex] ?? false}
+              {@const isTurnEnd = transcriptIndex.isTurnEnd[absIndex] ?? false}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg, providers)}
               {@const modelLabel = messageModelLabel(msg, allModels)}
@@ -10911,8 +11177,8 @@
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(absIndex)}
-              {@const turnCheckpoint = checkpointForTurn(absIndex)}
+              {@const turnDuration = transcriptIndex.duration[absIndex] ?? null}
+              {@const turnCheckpoint = transcriptIndex.checkpoint[absIndex] ?? null}
               {@const turnAuditReport =
                 isAssignmentAuditorThread && isTurnEnd
                   ? auditReportForTurn(messages, auditVersions, absIndex)
@@ -10921,7 +11187,7 @@
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(messages, absIndex)}
+                    {@const turnDone = transcriptIndex.turnCompleted[absIndex] ?? false}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
@@ -10931,7 +11197,7 @@
                     {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(messages, streamParts, absIndex)}
+                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
@@ -11391,25 +11657,22 @@
                     : settings)}
                 {providers}
                 projectId={thread.projectId}
-                favoriteModels={chatMode
-                  ? rendererRecovery.chatFavoriteModels
-                  : rendererRecovery.favoriteModels}
-                recentModels={chatMode
-                  ? rendererRecovery.chatRecentModels
-                  : rendererRecovery.recentModels}
-                onRemoveRecent={(key) =>
-                  chatMode
-                    ? rendererRecovery.removeChatRecentModel(key)
-                    : rendererRecovery.removeRecentModel(key)}
+                favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
-                  chatMode
-                    ? rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))
-                    : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  rendererRecovery.toggleModelFavoriteFor(
+                    modelScope(),
+                    modelKey(harnessId, providerId, modelId)
+                  )}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
-                  chatMode
-                    ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                    : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  rendererRecovery.reorderModelFavoriteFor(
+                    modelScope(),
+                    draggedKey,
+                    targetKey,
+                    position
+                  )}
                 onStop={abortRun}
                 onRetry={retryConnection}
                 retrying={providerRetrying}
@@ -11659,26 +11922,49 @@
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
-              <div class="mb-5 text-center">
-                <h1
-                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
-                >
-                  {#if centeredProjectIconUrl}
-                    <img
-                      src={centeredProjectIconUrl}
-                      alt=""
-                      aria-hidden="true"
-                      class="size-7 rounded-[0.375rem] object-cover"
-                    />
-                  {/if}
-                  {project?.name ?? 'New thread'}
-                </h1>
-                <p class="mt-1 text-[0.875rem] text-muted">
-                  {centeredModelName
-                    ? `What should ${centeredModelName} work on?`
-                    : 'How can CIO serve you today?'}
-                </p>
-              </div>
+              {#if assistantMode}
+                <div class="mb-5 text-center">
+                  <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
+                    {assistantRoutineName ?? thread.title}
+                  </h1>
+                  <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
+                    {#if assistantRoutineName && !assistantHowToComplete}
+                      How should this routine happen? Describe it properly for the agent. Say what
+                      it should do, how often, and where the information comes from. The agent works
+                      out what it needs, asks about anything missing, and drafts the how-to with you
+                      until you agree. It then shows a recap for you to save.
+                    {:else if assistantRoutineName}
+                      This task follows the <span class="text-foreground"
+                        >{assistantRoutineName}</span
+                      >
+                      how-to. Send a message to run it now, or adjust anything in How to.
+                    {:else}
+                      Describe what this task should do and the agent will take it from there.
+                    {/if}
+                  </p>
+                </div>
+              {:else}
+                <div class="mb-5 text-center">
+                  <h1
+                    class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                  >
+                    {#if centeredProjectIconUrl}
+                      <img
+                        src={centeredProjectIconUrl}
+                        alt=""
+                        aria-hidden="true"
+                        class="size-7 rounded-[0.375rem] object-cover"
+                      />
+                    {/if}
+                    {project?.name ?? 'New thread'}
+                  </h1>
+                  <p class="mt-1 text-[0.875rem] text-muted">
+                    {centeredModelName
+                      ? `What should ${centeredModelName} work on?`
+                      : 'How can CIO serve you today?'}
+                  </p>
+                </div>
+              {/if}
             {/if}
             {#if aiAccountPromptVisible}
               <div class="mb-2">
@@ -11687,26 +11973,21 @@
                   {providers}
                   {settings}
                   projectId={thread.projectId}
-                  favoriteModels={chatMode
-                    ? rendererRecovery.chatFavoriteModels
-                    : rendererRecovery.favoriteModels}
-                  recentModels={chatMode
-                    ? rendererRecovery.chatRecentModels
-                    : rendererRecovery.recentModels}
-                  onRemoveRecent={(key) =>
-                    chatMode
-                      ? rendererRecovery.removeChatRecentModel(key)
-                      : rendererRecovery.removeRecentModel(key)}
+                  favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                  recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                  onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
-                    chatMode
-                      ? rendererRecovery.toggleChatFavorite(
-                          modelKey(harnessId, providerId, modelId)
-                        )
-                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    rendererRecovery.toggleModelFavoriteFor(
+                      modelScope(),
+                      modelKey(harnessId, providerId, modelId)
+                    )}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
-                    chatMode
-                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                    rendererRecovery.reorderModelFavoriteFor(
+                      modelScope(),
+                      draggedKey,
+                      targetKey,
+                      position
+                    )}
                   onModelChange={updateSettings}
                   onConnect={openAiAccountSetup}
                   onDismiss={() => (aiAccountPromptOpen = false)}
@@ -11762,6 +12043,20 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {/if}
+            {#if routineRecapVisible && assistantRoutineDraft}
+              <div class="conversation-gutter shrink-0 px-6 pb-2">
+                <div class="mx-auto max-w-3xl">
+                  <RoutineRecapCard
+                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
+                    howTo={assistantRoutineDraft.howTo}
+                    plan={assistantRoutineDraft.plan}
+                    saving={routineSaving}
+                    onSave={() => void confirmRoutineSave()}
+                    onKeepEditing={keepEditingRoutine}
+                  />
+                </div>
+              </div>
             {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
@@ -12128,19 +12423,21 @@
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}
-                      placeholder={activePlanningEntry === 'brainstorm'
-                        ? 'Add details to the Brainstorm discussion…'
-                        : activePlanningEntry === 'spec'
-                          ? 'Sr. Engineer is preparing the specification…'
-                          : assignmentFormulating
-                            ? 'Sr. Engineer is preparing the Assignment…'
-                            : specFormulating
-                              ? 'Formulating specification…'
-                              : delegatedWorkBusy
-                                ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                : busy
-                                  ? `${APP_NAME} is working   type to queue a message`
-                                  : 'Send a message...'}
+                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
+                        ? 'Describe how this routine should run…'
+                        : activePlanningEntry === 'brainstorm'
+                          ? 'Add details to the Brainstorm discussion…'
+                          : activePlanningEntry === 'spec'
+                            ? 'Sr. Engineer is preparing the specification…'
+                            : assignmentFormulating
+                              ? 'Sr. Engineer is preparing the Assignment…'
+                              : specFormulating
+                                ? 'Formulating specification…'
+                                : delegatedWorkBusy
+                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                  : busy
+                                    ? `${APP_NAME} is working   type to queue a message`
+                                    : 'Send a message...'}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}
@@ -12280,38 +12577,30 @@
                       historyMessages={composerHistoryTexts}
                       onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                       hidePermissionSelector={chatMode}
-                      favoriteModels={chatMode
-                        ? rendererRecovery.chatFavoriteModels
-                        : rendererRecovery.favoriteModels}
+                      favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
                       onToggleFavorite={(providerId, modelId, harnessId) =>
-                        chatMode
-                          ? rendererRecovery.toggleChatFavorite(
-                              modelKey(harnessId, providerId, modelId)
-                            )
-                          : rendererRecovery.toggleFavorite(
-                              modelKey(harnessId, providerId, modelId)
-                            )}
+                        rendererRecovery.toggleModelFavoriteFor(
+                          modelScope(),
+                          modelKey(harnessId, providerId, modelId)
+                        )}
                       onReorderFavorite={(draggedKey, targetKey, position) =>
-                        chatMode
-                          ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                          : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                      recentModels={chatMode
-                        ? rendererRecovery.chatRecentModels
-                        : rendererRecovery.recentModels}
+                        rendererRecovery.reorderModelFavoriteFor(
+                          modelScope(),
+                          draggedKey,
+                          targetKey,
+                          position
+                        )}
+                      recentModels={rendererRecovery.modelRecentsFor(modelScope())}
                       onRemoveRecent={(key) =>
-                        chatMode
-                          ? rendererRecovery.removeChatRecentModel(key)
-                          : rendererRecovery.removeRecentModel(key)}
+                        rendererRecovery.removeModelRecentFor(modelScope(), key)}
                       onModelUsed={(modelKey) =>
-                        chatMode
-                          ? rendererRecovery.addChatRecentModel(modelKey)
-                          : rendererRecovery.addRecentModel(modelKey)}
+                        rendererRecovery.addModelRecentFor(modelScope(), modelKey)}
                       imageDescriptorDefault={agentDefaults.imageDescriptor}
                       {imageDescriptorAskAgain}
                       onImageDescriptorDefaultChange={setImageDescriptorDefault}
                       onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
                     />
-                    {#if centeredComposer}
+                    {#if centeredComposer && !assistantMode}
                       <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
                         {#each suggestedPrompts as prompt (prompt)}
                           <button

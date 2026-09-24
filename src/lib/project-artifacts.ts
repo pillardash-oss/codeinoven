@@ -15,12 +15,35 @@ export const PROJECT_SPECS_DIRECTORY = 'specs'
  *  as its private, pre-authorized read/write route. */
 export const CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
 
+/** App-storage root directory used as the neutral working directory for
+ *  standalone (inbox) chats, so a chat session never runs against a real
+ *  project folder. */
+export const CHATS_CWD_DIR = 'chats-cwd'
+
+/** App-storage root directory used as the neutral working directory for
+ *  assistant-space routine tasks, so authoring a how-to never runs against a
+ *  real project folder either. */
+export const ASSISTANT_CWD_DIR = 'assistant-cwd'
+
 /** Legacy inbox-chat generated-image root kept readable for older threads. */
 export const LEGACY_CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'
 
 /** Storage-root-relative artifact directory of one chat thread. */
 export function chatThreadArtifactDirectory(threadId: string): string {
   return join(CHATS_ARTIFACTS_DIRECTORY, threadId)
+}
+
+/**
+ * Storage-root-relative workspace directory of one assistant task. A routine
+ * behaves like a project, so every task in it shares `assistant-cwd/<routineId>`;
+ * a routine-less task falls back to its own thread id so it still lives under
+ * the assistant root without colliding with any routine.
+ */
+export function assistantThreadWorkspaceDirectory(
+  threadId: string,
+  routineId?: string | null
+): string {
+  return join(ASSISTANT_CWD_DIR, routineId ?? threadId)
 }
 
 const PROJECT_GITIGNORE_BLOCK = `# ${APP_NAME} agent scratch space (context, reports, temp work)\n.cio/\n`

@@ -8,6 +8,11 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { Logger } from '../system/logger'
+import {
+  DRIVER_EVENTS_LOG_FILE,
+  PERMISSION_EVENTS_LOG_FILE,
+  dailyLogRelativePath
+} from '../system/log-paths'
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
 import {
@@ -37,6 +42,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
@@ -84,6 +90,10 @@ import type {
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
+import { RoutineRepo } from '../database/repositories/routine-repo'
+import { routineAuthoringContext } from '../../lib/routine-authoring'
+import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
+import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
 import { RANKING_RUBRIC_VERSION } from './turn-grader-prompt'
@@ -134,6 +144,7 @@ import {
 } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
@@ -268,13 +279,18 @@ import type {
   ModelRankingSnapshotRow,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
-  RankingJudgeConfig
+  RankingJudgeConfig,
+  RoutineAgents
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
+  isAssistantSetupThread,
+  isAssistantThread,
   isOrchestrationChildThread,
   isWorkflowCoordinatorThread,
+  routineHowToComplete,
   workerReportsToCoordinator
 } from '../../lib/types'
 import {
@@ -286,6 +302,12 @@ import { foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
+import { nextRoutineModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import {
+  MEMORY_AUDIENCE_SCOPES,
+  memoryAudienceForContainer,
+  memoryLocationForScopes
+} from '../../lib/memory/memory-scopes'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
 import {
@@ -342,7 +364,10 @@ import { generateId } from '../../lib/utils'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  ASSISTANT_CWD_DIR,
+  CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
+  assistantThreadWorkspaceDirectory,
   chatThreadArtifactDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
@@ -457,7 +482,6 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
-  CHATS_CWD_DIR,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
   DEFAULT_QUESTION_TIMEOUT_MS,
@@ -1081,6 +1105,19 @@ export class ChatEngine {
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
 
+  /**
+   * Resolves the model set an assistant task's routine runs on. Attached by the
+   * bootstrap, which owns the routine manager; absent means assistant tasks get
+   * no model fallback.
+   */
+  private assistantAgentsResolver: ((task: Thread) => RoutineAgents | undefined) | null = null
+  /**
+   * Records that an assistant task's turn settled with a final status, so the
+   * routine can note its last successful run when the run truly completes.
+   * Attached by the bootstrap, which owns the routine manager; absent means run
+   * outcomes are not tracked.
+   */
+  private assistantRunSettled: ((threadId: string, status: ThreadStatus) => void) | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -1240,6 +1277,8 @@ export class ChatEngine {
 
   private rankingSnapshotRepo: ModelRankingSnapshotRepo
 
+  private routineRepo: RoutineRepo
+
   /**
    * The app's TypeSafe (Jev) decision capability, attached during boot.
    *
@@ -1332,6 +1371,7 @@ export class ChatEngine {
     this.usageRepo = new HarnessUsageRepo(database)
     this.rankingRepo = new ModelRankingRepo(database)
     this.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
+    this.routineRepo = new RoutineRepo(database)
     this.projectManager = new ProjectManager(database)
     // Tagged composer references are resolved against the sending thread's
     // scope root, so this service needs the same scope authority every other
@@ -2269,7 +2309,9 @@ export class ChatEngine {
         )
       )
     } catch (error) {
-      if (await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error)) {
+      if (
+        await this.reconcileUnanswerableQuestion(pending, 'answered', safeAnswers, error, driver)
+      ) {
         return
       }
       throw error
@@ -2413,7 +2455,7 @@ export class ChatEngine {
         sessionId: context.sessionId,
         questions: secretRequestQuestions(entries)
       },
-      DEFAULT_QUESTION_TIMEOUT_MS
+      await this.pendingQuestionTimeoutMs()
     )
     const settled = new Promise<AgentSecretResolution>((resolve) => {
       pending.settleSecret = resolve
@@ -2546,7 +2588,9 @@ export class ChatEngine {
         driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
       )
     } catch (error) {
-      if (await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error)) {
+      if (
+        await this.reconcileUnanswerableQuestion(pending, 'dismissed', undefined, error, driver)
+      ) {
         return
       }
       throw error
@@ -2559,7 +2603,11 @@ export class ChatEngine {
    * `QuestionRequestGoneError` (the harness already dropped the request, for
    * example because the process holding it exited) closes it in place, and
    * `InactiveQuestionTurnError` (the owning turn process exited) resumes the
-   * session with the user's decision instead of losing it.
+   * session with the user's decision instead of losing it. A dropped request is
+   * only closed in place while its driver can still prove a live turn holds the
+   * reply: when it cannot, the answer has nowhere to go, so the persisted
+   * session is resumed with the decision rather than left idle on a card that
+   * can never reach the agent.
    *
    * Returns false for an unrelated error, which the caller keeps propagating.
    */
@@ -2567,13 +2615,18 @@ export class ChatEngine {
     pending: PendingQuestionInfo,
     resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
     answers: string[][] | undefined,
-    error: unknown
+    error: unknown,
+    driver: HarnessDriver
   ): Promise<boolean> {
     if (error instanceof InactiveQuestionTurnError) {
       await this.resumeAfterInactiveQuestion(pending, resolution, answers)
       return true
     }
     if (error instanceof QuestionRequestGoneError) {
+      if (!this.questionAnswerCanReachLiveTurn(pending, driver)) {
+        await this.resumeAfterInactiveQuestion(pending, resolution, answers)
+        return true
+      }
       this.finalizePendingQuestion(pending.request.requestId, resolution, answers)
       return true
     }
@@ -2609,8 +2662,25 @@ export class ChatEngine {
       undefined,
       undefined,
       'internal',
-      decision.presentation
+      // An answered question already persisted its own visible record
+      // (`persistQuestionAnswer`), so the resume turn stays hidden rather than
+      // duplicating the "Answered agent question" bubble. A dismissal has no
+      // such record, so its presentation still has to render.
+      resolution === 'answered' ? undefined : decision.presentation
     )
+  }
+
+  /**
+   * Whether an answer to a pending question can still reach a live turn. A
+   * driver that can prove it has no registered turn (codex, pi) means the reply
+   * would be written into a closed conversation; drivers without the probe are
+   * assumed to still hold one, preserving the existing finalize behavior.
+   */
+  private questionAnswerCanReachLiveTurn(
+    pending: PendingQuestionInfo,
+    driver: HarnessDriver
+  ): boolean {
+    return driver.hasActiveTurn ? driver.hasActiveTurn(pending.request.sessionId) : true
   }
 
   /** Whether the thread's Engineering lifecycle currently has an active stage
@@ -2674,7 +2744,9 @@ export class ChatEngine {
           // One question the harness can no longer accept must never fail the
           // whole pending-question list: settle it when it is simply gone, and
           // otherwise keep the card and let the next poll retry.
-          if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+          if (
+            !(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error, driver))
+          ) {
             Logger.error('Provider question auto-answer failed:', error)
           }
         }
@@ -3026,7 +3098,15 @@ export class ChatEngine {
     skipRuntime = false,
     allowManagement = false,
     brainstormInterview = false,
-    explicitUtilityInvocation = false
+    explicitUtilityInvocation = false,
+    /**
+     * A turn on a saved routine's task   a scheduled run or a user follow-up on
+     * the same thread. It carries the run grant (management is in scope) rather
+     * than the reuse contract, which reserves installing for an explicit
+     * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
+     * when the user typed @cio-utility on the same turn.
+     */
+    assistantRoutineTurn = false
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3102,9 +3182,11 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : explicitUtilityInvocation
-          ? CIO_UTILITY_SETUP_PROMPT
-          : CIO_UTILITY_REUSE_PROMPT
+        : assistantRoutineTurn
+          ? CIO_UTILITY_RUN_PROMPT
+          : explicitUtilityInvocation
+            ? CIO_UTILITY_SETUP_PROMPT
+            : CIO_UTILITY_REUSE_PROMPT
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3120,7 +3202,13 @@ export class ChatEngine {
       const request = {
         projectPath,
         providerId: settings.providerId,
-        resolvedUtilities
+        resolvedUtilities,
+        // Publish the app's own human-decision deadline to the transport, so a
+        // harness whose client has a shorter request timeout (OpenCode's MCP
+        // client) does not abandon a `cio_ask_secret` card mid-wait.
+        ...(gateway.directEndpoint
+          ? { gatewayRequestTimeoutMs: gateway.directEndpoint.timeoutMs }
+          : {})
       }
       const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
       if (overlay.gatewayAvailable === false) {
@@ -3282,7 +3370,16 @@ export class ChatEngine {
   ): Promise<void> {
     const previous = this.utilityTurns.get(sessionId)
     if (previous?.cleanupPromise) await previous.cleanupPromise
-    const allowManagement = await this.hasCioUtilityInvocation(projectId, threadId)
+    const steeringThread = await this.threadManager.getThread(projectId, threadId)
+    // A routine's how-to authoring thread keeps management for the whole
+    // authoring conversation, exactly like a turn where the user typed
+    // @cio-utility; a steer landing mid-conversation must not drop it. A run of
+    // a saved routine keeps it for the same reason: a steer must not drop the
+    // ability to supply a connection the run needs.
+    const allowManagement =
+      this.routineAuthoringHiddenContext(steeringThread) !== undefined ||
+      this.routineRunHiddenContext(steeringThread) !== undefined ||
+      (await this.hasCioUtilityInvocation(projectId, threadId))
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -3305,7 +3402,6 @@ export class ChatEngine {
     }
     let gateway: UtilityTurnGateway | undefined
     try {
-      const steeringThread = await this.threadManager.getThread(projectId, threadId)
       gateway = await this.utilityOrchestration.startTurn({
         harnessId: driver.id,
         projectId,
@@ -5852,20 +5948,28 @@ export class ChatEngine {
   ): Promise<string> {
     let behaviorDriver: HarnessDriver | undefined
     try {
-      const threadSettings =
-        settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      const threadSettings = settings ?? thread?.settings
       const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
       behaviorDriver = driver
       const config = await this.storage.getConfig()
+      // An assistant task does not inherit the engineering work-ethics prompt:
+      // the assistant is its own class and the app owns its standing behavior.
+      const behaviorPrompt =
+        executionScope === 'assistant'
+          ? await this.cioPrompt('assistant')
+          : config.agentBehaviorPrompt
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
       const workspaceScope: WorkspaceScopeMode =
-        executionScope === 'project-thread'
-          ? 'full'
-          : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
-            ? 'abbreviated'
-            : 'omitted'
+        executionScope === 'assistant'
+          ? 'assistant'
+          : executionScope === 'project-thread'
+            ? 'full'
+            : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
+              ? 'abbreviated'
+              : 'omitted'
       const assembled = await this.promptAssembler.getAssembledPromptWithLayers(
         projectId,
         threadId,
@@ -5884,12 +5988,13 @@ export class ChatEngine {
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
-        config.agentBehaviorPrompt,
+        behaviorPrompt,
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
         executionScope,
-        workspaceScope
+        workspaceScope,
+        thread?.routineId
       )
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
@@ -6279,6 +6384,56 @@ export class ChatEngine {
         completion: 'When this update is complete'
       })
     ].join('\n\n')
+  }
+
+  /**
+   * The how-to authoring contract for a turn in a routine that still has no
+   * how-to. The contract is a property of the thread, so the engine attaches it
+   * rather than the composer: a resend from the message editor, a steer, or a
+   * queued delivery reaches the agent with the same contract as a fresh
+   * composer send.
+   */
+  private routineAuthoringHiddenContext(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || routineHowToComplete(routine)) return undefined
+    return routineAuthoringContext(routine.name)
+  }
+
+  /**
+   * The self-provisioning contract for a turn on an assistant task whose routine
+   * already has its how-to   a real run (scheduled or "Run now"), or a follow-up
+   * on that task. The how-to is the instruction set; this contract covers a
+   * connection the routine needs that is not set up in this session: the agent
+   * supplies it itself and asks the user for what only the user can give,
+   * instead of ending the turn by pointing at the Connections tab.
+   *
+   * Derived from the thread every turn and never memoized, so it is the same
+   * whether the run is dispatched by the scheduler, a missed-run "Run now", or a
+   * user message on the task.
+   */
+  private routineRunHiddenContext(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || !routineHowToComplete(routine)) return undefined
+    return routineRunContext(routine)
+  }
+
+  /**
+   * The routine's saved how-to for the turn prompt of a task that runs it. The
+   * how-to is the routine's instruction set and changes only when the user edits
+   * the routine, so it belongs in the system prompt beside the contract rather
+   * than on each scheduled run's message, where every run appended another copy
+   * to the harness transcript. Putting it here also means a follow-up turn still
+   * carries the instruction set the contract refers to, even after a session
+   * rotation dropped the run messages from the native transcript.
+   */
+  private routineHowToInstruction(thread: Thread | null | undefined): string | undefined {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine || !routineHowToComplete(routine)) return undefined
+    const howTo = routine.howTo.trim()
+    return howTo.length > 0 ? howTo : undefined
   }
 
   /**
@@ -6878,6 +7033,11 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    // A steer lands inside the running turn, and that turn's SYSTEM PROMPT
+    // already carries the routine contract (authoring or run), because the
+    // engine composes it on every turn of a routine thread. Re-stating it in
+    // the steer message would only add a copy to the harness transcript, so the
+    // steer relies on the prompt it is already running under.
     const steerInputBudget = this.selectedModelInputBudget(
       thread.settings?.providerId,
       thread.settings?.modelId,
@@ -6932,11 +7092,13 @@ export class ChatEngine {
     // its referenced selections) as the memory signal for when the turn ends,
     // replacing the message that originally dispatched the turn.
     const previousPendingMemoryDecision = this.pendingMemoryDecisions.get(activeSessionId)
-    this.pendingMemoryDecisions.set(activeSessionId, {
-      userMessage: text,
-      settings: steerSettings,
-      references: validatedPromptReferences
-    })
+    if (!isAssistantSetupThread(thread)) {
+      this.pendingMemoryDecisions.set(activeSessionId, {
+        userMessage: text,
+        settings: steerSettings,
+        references: validatedPromptReferences
+      })
+    }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
@@ -7361,6 +7523,30 @@ export class ChatEngine {
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    // A run of a routine that already has its how-to: the how-to is the
+    // instruction set, and this contract tells the agent to supply any
+    // connection the run needs that is not set up, asking the user for what
+    // only the user can give. The app's own next-steps message is not a run, so
+    // it carries neither the contract nor management.
+    const routineRun = this.routineRunHiddenContext(targetThread)
+    const assistantTaskTurn =
+      routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
+    // The contract belongs to the thread, not to one send path. A scheduled run
+    // and a user follow-up on the same task are both the routine's assistant, so
+    // both carry the self-provisioning contract and the run grant; gating it on
+    // an internal origin left a follow-up with only the reuse contract, which
+    // reserves installing and dead-ends on "connect it yourself".
+    //
+    // The contracts are instructions for the agent's behavior on this thread, so
+    // they ride the SYSTEM PROMPT rather than the user message. Every harness
+    // rewrites that prompt each turn, while text appended to a user message is
+    // kept in the harness transcript and replayed once more on every later turn,
+    // which would accumulate one copy per turn for the life of the thread.
+    const routineInstruction = assistantTaskTurn
+      ? composeRoutineInstruction(this.routineHowToInstruction(targetThread), routineRun)
+      : origin === 'user'
+        ? this.routineAuthoringHiddenContext(targetThread)
+        : undefined
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
       if (workerDirective) {
@@ -7439,6 +7625,7 @@ export class ChatEngine {
     const shouldAutoTitle =
       targetThread?.status === 'created' &&
       targetThread.titleSource !== 'manual' &&
+      !(targetThread && isAssistantSetupThread(targetThread)) &&
       mirrorBeforePrompt.messages.length === 0
 
     // Persist the user message to the mirror immediately   before any slow
@@ -7532,6 +7719,9 @@ export class ChatEngine {
     )
     if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
+    // An assistant task is its own class: neither a project thread nor a chat.
+    // It carries the app-owned assistant prompt and its own lean harness agent.
+    const isAssistantTask = project.id === ASSISTANT_SPACE_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
     // A parked lifecycle (no circle actively running and no decision gate
     // pending) means the user is free to chat: their message must NOT be
@@ -7725,7 +7915,7 @@ export class ChatEngine {
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
     // running turn still carries its text and referenced selections.
-    if (origin === 'user') {
+    if (origin === 'user' && !(targetThread && isAssistantSetupThread(targetThread))) {
       this.pendingMemoryDecisions.set(sessionId, {
         userMessage: text,
         settings,
@@ -7869,12 +8059,25 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // The routine how-to authoring thread carries the utility gateway from the
+    // start: the agent has to research and install the skills, MCPs and plugins
+    // a routine needs while it writes the how-to, without the user first arming
+    // setup by hand. It grants the same contract as an explicit @cio-utility
+    // invocation, and it is derived from the thread on every turn rather than
+    // memoized, so it ends the moment the how-to is saved.
+    const assistantAuthoringTurn = this.routineAuthoringHiddenContext(targetThread) !== undefined
     // Once @cio-utility has been invoked in this thread (earlier or now), later
     // turns keep the setup + diagnostics contract reusable without repeating
     // the invocation. Other utilities were already freely invocable whenever
     // the gateway runs.
+    // An assistant task whose routine is saved keeps management too: a run (or a
+    // follow-up on the task) has to be able to supply a connection the routine
+    // needs instead of dead-ending on "connect it yourself".
     const utilitySetupAllowed =
-      utilitySetupRequested || (await this.hasCioUtilityInvocation(projectId, threadId))
+      utilitySetupRequested ||
+      assistantAuthoringTurn ||
+      assistantTaskTurn ||
+      (await this.hasCioUtilityInvocation(projectId, threadId))
     // A web-only chat skips the app gateway only when the harness can search
     // the web natively (claude-code, codex, cline, antigravity) or cannot host
     // the gateway at all. Pi has NO native web tools   the gateway is its only
@@ -7900,7 +8103,8 @@ export class ChatEngine {
         (driverHasNativeWebSearch || !driverCanPublishGateway),
       utilitySetupAllowed,
       activeBrainstormSession,
-      utilitySetupRequested
+      utilitySetupRequested || assistantAuthoringTurn,
+      assistantTaskTurn
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -7908,8 +8112,18 @@ export class ChatEngine {
     // Behavior and vision layers are branch-agnostic and needed both for the
     // system-prompt base estimate and the final composition below, so compute
     // them once before the history recap budget is derived.
-    const behaviorMode =
-      specAction === 'implement' ? 'implement' : planningSpecTurn ? 'brainstorm' : 'chat'
+    const behaviorMode = isAssistantTask
+      ? 'assistant'
+      : specAction === 'implement'
+        ? 'implement'
+        : planningSpecTurn
+          ? 'brainstorm'
+          : 'chat'
+    const behaviorScope: BehaviorExecutionScope = isChatThread
+      ? 'standalone-chat'
+      : isAssistantTask
+        ? 'assistant'
+        : 'project-thread'
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
       checkpointPromise,
       utilityInstructionsPromise,
@@ -7919,7 +8133,7 @@ export class ChatEngine {
         projectPath,
         behaviorMode,
         settings,
-        isChatThread ? 'standalone-chat' : 'project-thread',
+        behaviorScope,
         messageId
       ),
       this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId),
@@ -8002,6 +8216,7 @@ export class ChatEngine {
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
+          routineInstruction,
           historyRecap: ''
         })
       : composeTurnSystemPrompt({
@@ -8011,6 +8226,7 @@ export class ChatEngine {
           assignmentCoordinatorSystemPrompt,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
+          routineInstruction,
           behaviorMode,
           historyRecap: ''
         })
@@ -8222,6 +8438,7 @@ export class ChatEngine {
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
+            routineInstruction,
             historyRecap
           }),
           allowedTools:
@@ -8317,6 +8534,7 @@ export class ChatEngine {
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
+            routineInstruction,
             behaviorMode,
             historyRecap
           }) || undefined,
@@ -8330,18 +8548,22 @@ export class ChatEngine {
             : undefined,
         agent: utilitySetupRequested
           ? leanAgentNameForMode('utility-setup')
-          : isChatThread
-            ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
-            : undefined,
+          : isAssistantTask
+            ? leanAgentNameForMode('assistant')
+            : isChatThread
+              ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+              : undefined,
         userMessageId: messageId
       })
-      if (utilitySetupRequested || isChatThread) {
+      if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
           utilitySetupRequested
             ? 'utility-setup'
-            : chatFileSystemEnabled
-              ? 'file-system-chat'
-              : 'inbox-chat',
+            : isAssistantTask
+              ? 'assistant'
+              : chatFileSystemEnabled
+                ? 'file-system-chat'
+                : 'inbox-chat',
           sessionId,
           driverId
         )
@@ -10262,7 +10484,7 @@ export class ChatEngine {
     parentSessionId?: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.titleSource === 'manual') return
+    if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
@@ -15881,7 +16103,7 @@ export class ChatEngine {
         const pendingRetry = this.retryScheduler?.getPendingRetry(sessionId)
         if (pendingRetry?.retryAt !== undefined && pendingRetry.retryAt > Date.now() + 60_000) {
           lastError = new Error(
-            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${new Date(pendingRetry.retryAt).toLocaleTimeString()}; run the audit again after that window.`
+            `The Auditor's provider hit its usage limit before the audit could finish. The provider resets at ${formatTime(pendingRetry.retryAt)}; run the audit again after that window.`
           )
           break
         }
@@ -19639,6 +19861,17 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
+    // A routine behaves like a project, so every task in it works inside its own
+    // `assistant-cwd/<routineId>/` root and keeps its artifacts there. A
+    // routine-less task gets `assistant-cwd/<threadId>/` so it still lives under
+    // the assistant root without colliding with any routine. The file tree
+    // resolves the very same directory through `assistantThreadWorkspaceDirectory`.
+    if (projectId === ASSISTANT_SPACE_ID) {
+      const assistantDirectory = assistantThreadWorkspaceDirectory(threadId, thread.routineId)
+      await this.storage.ensureDirectory(assistantDirectory)
+      return this.storage.resolve(assistantDirectory)
+    }
+
     // The scope resolver is authoritative for threads in a scope; a stale
     // persisted directory never wins, and unhealthy managed scopes fail
     // closed instead of silently operating on the project root.
@@ -19662,9 +19895,16 @@ export class ChatEngine {
     if (!project) throw new Error(`Project not found: ${projectId}`)
 
     let projectPath = project.path
-    if (!projectPath && project.id === INBOX_PROJECT_ID && project.hidden) {
+    if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
+    }
+    // The assistant space is hidden too, and its tasks are conversations rather
+    // than files in a project. Its root is a neutral app-storage directory so a
+    // session never runs against a real project folder.
+    if (!projectPath && project.hidden && project.id === ASSISTANT_SPACE_ID) {
+      await this.storage.ensureDirectory(ASSISTANT_CWD_DIR)
+      projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
@@ -19817,17 +20057,55 @@ export class ChatEngine {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
   }
 
+  /**
+   * The configured human-decision timer, shared by questions and secret
+   * requests. Read per request so a Settings change applies to the next card
+   * rather than only after a restart.
+   */
+  private async pendingQuestionTimeoutMs(): Promise<number> {
+    const config = await this.storage.getConfig()
+    return config.questionTimeoutMs
+  }
+
+  /**
+   * Close an abandoned secret card and settle the gateway call waiting on it.
+   * Nothing can answer a secret on the user's behalf, so the only correct
+   * outcome for an expired card is a dismissal the agent can react to: leaving
+   * the call open would strand the harness turn on a card nobody will fill in.
+   */
+  private expireSecretQuestion(pending: PendingQuestionInfo): void {
+    if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
+    pending.timer = undefined
+    this.finalizePendingQuestion(pending.request.requestId, 'dismissed')
+  }
+
   private schedulePendingQuestion(pending: PendingQuestionInfo): void {
     if (pending.timer) clearTimeout(pending.timer)
-    // Creating a Brainstorm version and supplying a secret are both human
-    // decisions, never a timer default.
+    // Creating a Brainstorm version is a human decision with no safe default at
+    // all, so that card never expires. A secret request does run on the timer:
+    // nothing can invent a value the user never supplied, but an abandoned card
+    // must still close so the waiting tool call is settled.
     if (
-      pending.request.questions.some(
-        (question) => isBrainstormDocumentQuestion(question.prompt) || isSecretQuestion(question)
-      )
+      pending.request.questions.some((question) => isBrainstormDocumentQuestion(question.prompt))
     ) {
       pending.timer = undefined
       pending.request.expiresAt = undefined
+      return
+    }
+
+    // A secret request runs an absolute countdown from the moment its card
+    // appeared. It deliberately skips the activity pause that questions use:
+    // the user usually steps away from the app to obtain the value, and a card
+    // that only counted down while they were elsewhere would expire exactly
+    // when they are fetching it. Nothing can invent a secret, so the deadline
+    // closes the card rather than answering it.
+    if (pending.request.questions.some(isSecretQuestion)) {
+      const secretExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
+      pending.request.expiresAt = secretExpiresAt
+      pending.timer = setTimeout(
+        () => this.expireSecretQuestion(pending),
+        Math.max(0, secretExpiresAt - Date.now())
+      )
       return
     }
 
@@ -20024,7 +20302,9 @@ export class ChatEngine {
           driver.replyToQuestion(session.projectPath, event.sessionId, event.requestId, answers)
         )
       } catch (error) {
-        if (!(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error))) {
+        if (
+          !(await this.reconcileUnanswerableQuestion(pending, 'answered', answers, error, driver))
+        ) {
           throw error
         }
       }
@@ -21126,7 +21406,7 @@ export class ChatEngine {
 
     try {
       await this.storage.appendRaw(
-        'logs/driver-events.jsonl',
+        dailyLogRelativePath(DRIVER_EVENTS_LOG_FILE),
         `${JSON.stringify({
           timestamp: Date.now(),
           eventType: event.type,
@@ -21436,6 +21716,70 @@ export class ChatEngine {
     void scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 
+  /**
+   * Register the resolver that supplies an assistant task's routine model set.
+   * A scheduled assistant run that hits a provider failure falls over to the
+   * routine's next model instead of waiting out the failed provider's reset.
+   */
+  attachAssistantAgentsResolver(resolver: (task: Thread) => RoutineAgents | undefined): void {
+    this.assistantAgentsResolver = resolver
+  }
+
+  /**
+   * Wire the assistant run-outcome recorder. Fired when a turn on an assistant
+   * task settles with its final thread status, so the routine manager can stamp
+   * the task's last successful run once the run actually completes.
+   */
+  attachAssistantRunSettledRecorder(
+    recorder: ((threadId: string, status: ThreadStatus) => void) | null
+  ): void {
+    this.assistantRunSettled = recorder
+  }
+
+  /**
+   * Create the fresh thread one assistant run executes on.
+   *
+   * Every scheduled fire and every manual "Run now" gets its own thread: a run
+   * never lands in the task's own conversation, so the task's history stays the
+   * user's and a run's transcript carries only that execution. The run thread
+   * inherits the task's routine (so the engine keeps composing the routine's
+   * how-to and the run contract into its system prompt) and links back to the
+   * task through `assistantTaskId`. It is created with the settings the run
+   * will actually use, so opening the run shows the model it ran on.
+   */
+  async createAssistantRunThread(input: {
+    task: Thread
+    title: string
+    settings?: ThreadSettings
+  }): Promise<Thread> {
+    const { thread, finalize } = this.threadManager.prepareCreateThread(
+      {
+        projectId: ASSISTANT_SPACE_ID,
+        providerId: input.task.providerId,
+        title: input.title,
+        // A run's title is its time, never a prompt-derived label: it is the
+        // row's identity under the task, not a conversation title.
+        titleSource: 'manual',
+        workingDirectory: input.task.workingDirectory,
+        settings: input.settings ?? input.task.settings,
+        routineId: input.task.routineId,
+        assistantTaskId: input.task.id
+      },
+      {
+        onEvictionError: (error) =>
+          Logger.error('Assistant run thread eviction failed', {
+            taskId: input.task.id,
+            error: String(error)
+          })
+      }
+    )
+    await finalize()
+    // The sidebar nests a run under its task from this broadcast, so it must
+    // reach every renderer the moment the row exists.
+    broadcastThreadUpdate(thread)
+    return thread
+  }
+
   /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     scheduler.attachPing((config) => this.sendHeartbeatPing(config))
@@ -21627,6 +21971,12 @@ export class ChatEngine {
   ): Promise<boolean> {
     const scheduler = this.retryScheduler
     if (!scheduler) return false
+    const info = this.sessionRegistry.get(sessionId)
+    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
+    // An assistant task whose routine carries fallback models moves onto the
+    // next model and re-runs at once. The fallback exists so a failed model
+    // never stops the routine, so it is applied before any reset wait.
+    if (await this.tryAssistantModelFallback(info, sessionId, issue)) return true
     // A provider with an explicit retry deadline has declared that the issue
     // is safe to retry later. Known reset-based issues may also derive their
     // deadline from account telemetry; everything else stays manual unless it
@@ -21636,8 +21986,6 @@ export class ChatEngine {
     if (!canDeriveReset && !(issue.retryable && issue.retryAt !== undefined)) {
       return false
     }
-    const info = this.sessionRegistry.get(sessionId)
-    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
     const driver = this.driverForRuntime(info.driverId, info.accountId)
     if (!driver) return false
     let retryAt = issue.retryAt
@@ -21699,6 +22047,74 @@ export class ChatEngine {
       })
       return false
     }
+    return true
+  }
+
+  /**
+   * Move an assistant task whose routine carries fallback models onto the next
+   * one and re-run it immediately, instead of parking the thread for the failed
+   * provider's reset window.
+   *
+   * The model is persisted onto the thread before the resume, so the re-run
+   * reads it from the thread's own settings like any other turn. A current
+   * model that is not part of the routine's set is left untouched: that is the
+   * user's own pick, and a routine's fallbacks never override it. Returns true
+   * when a fallback was armed.
+   */
+  private async tryAssistantModelFallback(
+    info: SessionInfo,
+    sessionId: string,
+    issue: AgentProviderIssue
+  ): Promise<boolean> {
+    const resolver = this.assistantAgentsResolver
+    if (!resolver) return false
+    let thread: Thread | null
+    try {
+      thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    } catch (error) {
+      Logger.error('Assistant model fallback could not read the thread:', error)
+      return false
+    }
+    if (!thread || thread.archived) return false
+    // Only the thread's own live session may fall over. A provider failure is
+    // broadcast for every session ever bound to the thread, and advancing once
+    // per bound session would skip straight past the first fallback.
+    if (thread.sessionId !== sessionId) return false
+    const settings = thread.settings
+    if (!settings) return false
+    const next = nextRoutineModel(settings, resolver(thread))
+    if (!next) return false
+    try {
+      await this.threadManager.updateSettings(
+        info.projectId,
+        info.threadId,
+        settingsWithRoutineModel(settings, next)
+      )
+    } catch (error) {
+      Logger.error('Assistant model fallback could not be persisted:', error)
+      return false
+    }
+    Logger.info('Assistant task falling back to the next routine model', {
+      projectId: info.projectId,
+      threadId: info.threadId,
+      harnessId: next.harnessId,
+      providerId: next.providerId,
+      modelId: next.modelId,
+      issueKind: issue.kind
+    })
+    // Fire-and-forget: the resume re-enters this engine's own send pipeline,
+    // and its first statement awaits, so the failing turn unwinds first.
+    void this.continueScheduledThread({
+      sessionId,
+      projectId: info.projectId,
+      threadId: info.threadId,
+      harnessId: next.harnessId,
+      issueKind: issue.kind,
+      issueMessage: issue.message,
+      ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
+    }).catch((error) => {
+      Logger.error('Assistant model fallback resume failed:', error)
+    })
     return true
   }
 
@@ -21956,7 +22372,14 @@ export class ChatEngine {
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    const scratchPaths = [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+    // Assistant tasks are routine-scoped rather than project- or chat-scoped:
+    // their workspace is the routine's own `assistant-cwd/<routineId>/` root
+    // (`info.projectPath`), so they never fall back to a chats artifact
+    // directory for pre-authorized writes.
+    const isAssistant = info.projectId === ASSISTANT_SPACE_ID
+    const scratchPaths = isAssistant
+      ? []
+      : [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
@@ -22164,7 +22587,7 @@ export class ChatEngine {
   ): Promise<void> {
     try {
       await this.storage.appendRaw(
-        'logs/permission-events.jsonl',
+        dailyLogRelativePath(PERMISSION_EVENTS_LOG_FILE),
         `${JSON.stringify({
           requestId: pending.request.id,
           sessionId: pending.request.sessionId,
@@ -22915,6 +23338,13 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      // A settled turn on an assistant task is reported to the routine scheduler,
+      // which knows whether it dispatched a run on that task and stamps its last
+      // successful run. Harmless for a user's own chat: the scheduler ignores a
+      // thread no run was dispatched on.
+      if (this.assistantRunSettled && finishedThread && isAssistantThread(finishedThread)) {
+        this.assistantRunSettled(finishedThread.id, finalStatus)
+      }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
           await this.notifyCoordinatorOfAssignmentAuditFeedback(finishedThread, lastAssistant)
@@ -25606,7 +26036,12 @@ export class ChatEngine {
     settings: ThreadSettings,
     references: PromptReference[]
   ): Promise<void> {
-    const current = await this.memoryService.current(projectId, threadId)
+    // A routine's "Getting started" thread is an authoring conversation, not a
+    // run: its exchanges must never be mined for memory.
+    const ownerThread = await this.threadManager.getThread(projectId, threadId)
+    if (ownerThread && isAssistantSetupThread(ownerThread)) return
+    const routineId = ownerThread?.routineId
+    const current = await this.memoryService.current(projectId, threadId, routineId)
     if (current.enabled) {
       // Deterministic extraction gate (A-06): skip the auxiliary model call when
       // no durable candidate is detected, the conversation is debounced, or the
@@ -25677,7 +26112,7 @@ export class ChatEngine {
                 content: decision.content,
                 category: decision.category,
                 priority: decision.priority,
-                scope: decision.scope,
+                scopes: [decision.scope],
                 modelKeys:
                   decision.category === 'models'
                     ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -25766,7 +26201,7 @@ export class ChatEngine {
               content: decision.content,
               category: decision.category,
               priority: decision.priority,
-              scope: decision.scope,
+              scopes: [decision.scope],
               modelKeys:
                 decision.category === 'models'
                   ? [modelKey(driver.id, settings.providerId, settings.modelId)]
@@ -25899,10 +26334,8 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings
   ): Promise<StructuredMemoryProposal> {
-    const allowedScopes: MemoryScope[] =
-      projectId === INBOX_PROJECT_ID
-        ? ['global', 'chat', 'thread']
-        : ['global', 'projects', 'project', 'thread']
+    const audience = memoryAudienceForContainer(projectId)
+    const allowedScopes: MemoryScope[] = [...MEMORY_AUDIENCE_SCOPES[audience]]
     const proposalSchema: Record<string, unknown> = {
       ...PROPOSE_MEMORY_SCHEMA,
       properties: {
@@ -25915,9 +26348,11 @@ export class ChatEngine {
       }
     }
     const scopeInstruction =
-      projectId === INBOX_PROJECT_ID
-        ? 'This is a standalone chat. Use scope global only for preferences shared across both projects and chats, chats for preferences applying to every standalone chat, or thread only for this chat.'
-        : 'This is a project thread. Use scope global for preferences shared across both projects and chats, projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
+      audience === 'chat'
+        ? 'This is a standalone chat. Use scope chat for preferences applying to every standalone chat, or thread only for this chat.'
+        : audience === 'assistant'
+          ? "This is an assistant task. Use scope assistant for preferences applying to every assistant task, routine for preferences applying to this routine's tasks, or task only for this task."
+          : 'This is a project thread. Use scope projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
     const decisionSystemPrompt = [
       'Evaluate one completed exchange and decide whether it contains durable, user-authored information worth proposing for persistent memory. Judge the user intent, never summarize, and never write memory unless the exchange qualifies.',
       'Step 1, decide whether the user stated something lasting: a standing preference, a reusable rule or convention, an identity fact, or a behavioral instruction that must keep applying after this task ends. Step 2, only when Step 1 concluded lasting, write the memory and set propose to true.',
@@ -25931,7 +26366,7 @@ export class ChatEngine {
       'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
       'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
       'A complaint or correction can still be durable when it states an explicit recurring rule. Do not reject a durable rule merely because the user is frustrated.',
-      'Scope words such as global, project, thread, chat, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
+      'Scope words such as project, thread, chat, routine, task, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
       'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
       'Choose category from behavioral, project-rule, identity, preference, or models. Use models when the durable preference is specifically about how one or more AI models behave; the application will associate it with the model used for this completed turn. Choose priority from critical, high, medium, or low.',
       scopeInstruction
@@ -26155,26 +26590,36 @@ export class ChatEngine {
     projectId: string,
     threadId: string
   ): Promise<Record<string, unknown>> {
-    const current = await this.memoryService.current(projectId, threadId)
+    const ownerThread = await this.threadManager.getThread(projectId, threadId)
+    if (ownerThread && isAssistantSetupThread(ownerThread)) {
+      return {
+        status: 'memory_unavailable',
+        message:
+          "Memory is not collected on a routine's getting-started thread. Save the how-to first, then propose memory on a task."
+      }
+    }
+    const routineId = ownerThread?.routineId
+    const current = await this.memoryService.current(projectId, threadId, routineId)
     if (!current.enabled) {
       return {
         status: 'memory_disabled',
         message: 'Persistent memory is disabled. No proposal was created.'
       }
     }
-    if (projectId === INBOX_PROJECT_ID && !['global', 'chat', 'thread'].includes(input.scope)) {
-      throw new TypeError('Standalone chats support only global, chats, or thread memory')
-    }
-    if (projectId !== INBOX_PROJECT_ID && input.scope === 'chat') {
-      throw new TypeError('Chats-scoped memory is available only in standalone chats')
+    const audience = memoryAudienceForContainer(projectId)
+    const allowedScopes = MEMORY_AUDIENCE_SCOPES[audience]
+    if (
+      input.scopes.length === 0 ||
+      !input.scopes.every((scope) => allowedScopes.includes(scope))
+    ) {
+      throw new TypeError(`This context supports only ${allowedScopes.join(', ')} memory`)
     }
 
-    const queueProjectId =
-      input.scope === 'global' || input.scope === 'projects'
-        ? undefined
-        : input.scope === 'chat'
-          ? INBOX_PROJECT_ID
-          : projectId
+    const queueProjectId = memoryLocationForScopes(input.scopes, {
+      projectId,
+      threadId,
+      routineId
+    }).projectId
     const normalizedContent = input.content.trim().toLowerCase()
     const remembered = current.entries.find(
       (entry) => entry.content.trim().toLowerCase() === normalizedContent
@@ -26183,7 +26628,7 @@ export class ChatEngine {
       return {
         status: 'already_remembered',
         memoryId: remembered.id,
-        scope: remembered.scope,
+        scopes: remembered.scopes,
         message: 'This information is already in persistent memory.'
       }
     }
@@ -26199,7 +26644,7 @@ export class ChatEngine {
       return {
         status: 'already_pending',
         proposalId: pending.id,
-        scope: pending.scope,
+        scopes: pending.scopes,
         message: 'This memory proposal is already awaiting user approval.'
       }
     }
@@ -26207,16 +26652,17 @@ export class ChatEngine {
     const proposal = await this.memoryService.createProposal(input.label, input.content, {
       category: input.category,
       priority: input.priority,
-      scope: input.scope,
+      scopes: input.scopes,
       modelKeys: input.modelKeys,
-      projectId: input.scope === 'project' || input.scope === 'thread' ? projectId : undefined,
-      threadId: input.scope === 'thread' ? threadId : undefined
+      projectId,
+      threadId,
+      routineId
     })
     broadcastMemoryProposal(projectId, threadId)
     return {
       status: 'pending_approval',
       proposalId: proposal.id,
-      scope: proposal.scope,
+      scopes: proposal.scopes,
       message:
         'Memory proposal created. The application will request approval separately; do not mention this internal workflow in the task response.'
     }

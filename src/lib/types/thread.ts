@@ -2,6 +2,8 @@ import type { ScopeSlice } from './scope'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
+import type { RoutineSchedule } from './schedule'
+import { ASSISTANT_SPACE_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
 export const DEFAULT_THREAD_TITLE = 'New Thread'
@@ -117,6 +119,41 @@ export interface Thread {
   /** Reject renderer-originated prompts while permitting internal orchestration turns. */
   userInputLocked?: boolean
 
+  // ─── Assistant task fields (assistant space only) ────────────────────────
+  /** Routine this assistant task belongs to, when it is grouped. */
+  routineId?: string
+  /** Custom icon key shown in the task row's provider-icon slot. */
+  assistantIconType?: string
+  /** Custom image filename shown in the task row's provider-icon slot. */
+  assistantIcon?: string
+  /** Per-task schedule override; falls back to the routine schedule when undefined. */
+  scheduleOverride?: RoutineSchedule | null
+  /** Epoch ms of the last scheduled run fired on this task. */
+  lastRunAt?: number
+  /**
+   * Epoch ms a run was last dispatched on this task, scheduled or manual. Kept
+   * apart from `lastRunAt` (the scheduler's slot claim, which a missed slot also
+   * writes) so the panel's "last run" never reports a slot that never ran.
+   */
+  lastDispatchedAt?: number
+  /** Epoch ms of the last run that finished successfully (a `completed` turn). */
+  lastSuccessAt?: number
+  /**
+   * The routine's seed task: the "Getting started" conversation where the
+   * how-to is authored. It carries a fixed title and runs no auxiliary work
+   * (auto-title, memory extraction), so its first exchange stays a pure
+   * planning chat rather than a task run.
+   */
+  assistantGettingStarted?: boolean
+  /**
+   * The assistant task this thread is a run of. Every scheduled fire and every
+   * manual "Run now" executes on a fresh thread that carries this link, so a
+   * run never piles into the task's own conversation. Absent on a task; a
+   * thread with this set is a run, is never scheduled itself, and is listed
+   * under its task (see `isAssistantRunThread`).
+   */
+  assistantTaskId?: string
+
   createdAt: number
   updatedAt: number
   lastActivity: number
@@ -135,6 +172,28 @@ export interface ThreadNote {
   body: string
   createdAt: number
   updatedAt: number
+}
+
+/** A thread that lives in the assistant space (a routine task). */
+export function isAssistantThread(thread: Thread): boolean {
+  return thread.projectId === ASSISTANT_SPACE_ID
+}
+
+/**
+ * Whether a thread is a routine's "Getting started" authoring thread. Auxiliary
+ * work   prompt-derived titles and memory extraction   is suppressed on it.
+ */
+export function isAssistantSetupThread(thread: Pick<Thread, 'assistantGettingStarted'>): boolean {
+  return thread.assistantGettingStarted === true
+}
+
+/**
+ * Whether a thread is one run of an assistant task rather than a task itself.
+ * A run hangs off its task through `assistantTaskId`, is never scheduled, and
+ * is listed under that task instead of in the task list.
+ */
+export function isAssistantRunThread(thread: Pick<Thread, 'assistantTaskId'>): boolean {
+  return thread.assistantTaskId !== undefined
 }
 
 /**
@@ -279,6 +338,13 @@ export interface CreateThreadInput {
   achievementRole?: Thread['achievementRole']
   auditorThreadId?: string
   userInputLocked?: boolean
+  routineId?: string
+  assistantIconType?: string
+  assistantIcon?: string
+  scheduleOverride?: RoutineSchedule | null
+  assistantGettingStarted?: boolean
+  /** Set when creating a run thread: the assistant task it runs. */
+  assistantTaskId?: string
 }
 
 /** Where a thread search match was found. */

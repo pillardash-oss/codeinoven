@@ -6,6 +6,7 @@ import { basename } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
+import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
@@ -322,7 +323,10 @@ export class PtyService {
 
   private async recordEvent(event: Record<string, unknown>): Promise<void> {
     try {
-      await this.storage.appendRaw('logs/pty-events.jsonl', `${JSON.stringify(event)}\n`)
+      await this.storage.appendRaw(
+        dailyLogRelativePath(PTY_EVENTS_LOG_FILE),
+        `${JSON.stringify(event)}\n`
+      )
     } catch (error) {
       Logger.error('PTY provenance write failed:', error)
     }

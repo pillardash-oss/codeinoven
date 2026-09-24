@@ -41,6 +41,18 @@
   interface Props {
     projectId: string
     projectName: string
+    /** Label beside the root icon; empty when the root names itself with the
+     *  icon alone (a routine root). */
+    projectLabel?: string
+    /** Root icon image for the tree header (a routine's own icon), or null for
+     *  the generic mark. */
+    projectIconUrl?: string | null
+    /** True when the tree's root is a routine, which draws the routine default
+     *  mark when the routine has no icon of its own. */
+    routineRoot?: boolean
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. */
+    projectAccentColor?: string | null
     projectState: ProjectFilesState
     onWidthChange: (width: number, persist: boolean) => void
     selectedPath: string | null
@@ -63,6 +75,10 @@
   let {
     projectId,
     projectName,
+    projectLabel = projectName,
+    projectIconUrl = null,
+    routineRoot = false,
+    projectAccentColor = null,
     projectState,
     onWidthChange,
     selectedPath,
@@ -207,7 +223,7 @@
             query,
             'all',
             workspaceState.activeScopeBucketIdFor(projectId),
-            projectState.chatThreadId ?? undefined
+            projectState.mountThreadId ?? undefined
           )
         ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return
@@ -1071,6 +1087,10 @@
 >
   <ProjectFileExplorerHeader
     {projectName}
+    {projectLabel}
+    {projectIconUrl}
+    {routineRoot}
+    {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}
     {dropActive}

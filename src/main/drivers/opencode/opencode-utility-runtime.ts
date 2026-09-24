@@ -7,6 +7,7 @@ import type { BaseUrlProviderService } from '../../providers/base-url-provider-s
 import { hasNativeProviderCatalog } from '../../agents/native-provider-config-service'
 import type { SecretVault } from '../../storage/secret-vault'
 import { leanAgentConfigMap } from '../../opencode/opencode-agent-definitions'
+import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import { STANDARD_THINKING_VARIANTS } from './opencode-models'
 import { recordValue, utilityKey } from './opencode-values'
 
@@ -62,7 +63,15 @@ export async function prepareOpenCodeUtilityRuntime(
         type: 'local',
         command: [config.command, ...(config.args ?? [])],
         environment: { ...(config.environment ?? {}) },
-        enabled: true
+        enabled: true,
+        // OpenCode's MCP client request timeout defaults to 60 seconds, which
+        // is shorter than the app's own human-decision deadline: a
+        // `cio_ask_secret` card still on screen would be abandoned mid-wait.
+        // The app-owned gateway is the one server whose calls can be paced by
+        // a human, so only it is raised, and only to the published deadline.
+        ...(utility.id.startsWith(GATEWAY_UTILITY_ID_PREFIX) && request.gatewayRequestTimeoutMs
+          ? { timeout: request.gatewayRequestTimeoutMs }
+          : {})
       }
       continue
     }

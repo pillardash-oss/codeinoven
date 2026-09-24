@@ -4,23 +4,21 @@ const SCHEME = 'appfile'
 
 /** Build an `appfile://` URL for a project-relative file so the renderer can
  *  preview it with a real `src` (iframe/img) instead of a base64 IPC dump.
- *  When `chatThreadId` is set, the file resolves inside that chat thread's
- *  own `chats-artifacts/<threadId>` artifact directory instead of a project.
+ *  When `mountThreadId` is set, the file resolves inside that conversation's own
+ *  workspace directory (a chat's `chats-artifacts/<threadId>`, an assistant
+ *  task's `assistant-cwd/<routineId ?? threadId>`) instead of a project root.
  *  `version`, when provided, is appended as a `?v=` query so a changed URL
  *  re-creates the preview element and re-reads the file from disk (the main
  *  process ignores the query). */
 export function projectFilePreviewUrl(
   projectId: string,
   relativePath: string,
-  chatThreadId?: string,
+  mountThreadId?: string,
   version?: number
 ): string {
-  const encoded = toPosixPath(relativePath)
-    .split('/')
-    .map(encodeURIComponent)
-    .join('/')
-  const base = chatThreadId
-    ? `${SCHEME}://chat/${chatThreadId}/${encoded}`
+  const encoded = toPosixPath(relativePath).split('/').map(encodeURIComponent).join('/')
+  const base = mountThreadId
+    ? `${SCHEME}://thread/${projectId}/${mountThreadId}/${encoded}`
     : `${SCHEME}://project/${projectId}/${encoded}`
   return version === undefined ? base : `${base}?v=${version}`
 }

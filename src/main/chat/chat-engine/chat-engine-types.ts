@@ -64,7 +64,8 @@ export interface AgentMemoryProposalInput {
   content: string
   category: MemoryCategory
   priority: MemoryPriority
-  scope: MemoryScope
+  /** The audiences/place the memory would apply to. */
+  scopes: MemoryScope[]
   modelKeys?: string[]
 }
 

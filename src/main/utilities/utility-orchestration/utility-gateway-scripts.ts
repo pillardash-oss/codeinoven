@@ -4,6 +4,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
+import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
@@ -129,7 +130,7 @@ export function gatewayUtility(
 ): ResolvedUtility {
   const now = Date.now()
   const utility: UtilityDefinitionFor<'mcp'> = {
-    id: `cio:utility-gateway:${request.threadId}`,
+    id: `${GATEWAY_UTILITY_ID_PREFIX}${request.threadId}`,
     kind: 'mcp',
     name: 'CodeInOven utilities',
     description: 'Search, activate, and invoke scoped app-owned utilities on demand.',

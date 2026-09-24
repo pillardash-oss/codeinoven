@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { Thread } from '$shared/types'
   import { pinnedFold, type PinnedSectionKey } from '$lib/stores/pinned-fold.svelte'
@@ -14,13 +15,20 @@
     threads: Thread[]
     activeThreadId: string | null
     /** Resolves the row icon for a thread (project icon, type icon, …). */
-    getRowIcon: (t: Thread) => string | null
+    getRowIcon?: (t: Thread) => string | null
     onOpen: (t: Thread) => void
     onRename: (t: Thread, newName: string) => Promise<void>
     onTogglePin: (t: Thread) => void
     onDelete: (t: Thread) => Promise<void>
     onFork: (t: Thread) => void
     onMovePinnedThread?: (id: string, targetId: string, position: 'before' | 'after') => void
+    /**
+     * Row renderer for a pinned thread. Defaults to the standard compact
+     * `ThreadRow`, so the project sidebar keeps its rows while a sidebar with
+     * its own row component (Assistant tasks) supplies it here and still gets
+     * the same pinned section: one header, one fold state, one row list.
+     */
+    row?: Snippet<[Thread]>
   }
 
   let {
@@ -28,13 +36,14 @@
     label,
     threads,
     activeThreadId,
-    getRowIcon,
+    getRowIcon = () => null,
     onOpen,
     onRename,
     onTogglePin,
     onDelete,
     onFork,
-    onMovePinnedThread
+    onMovePinnedThread,
+    row
   }: Props = $props()
 
   const folded = $derived(pinnedFold.isFolded(sectionKey))
@@ -61,18 +70,22 @@
     {#if !folded}
       <div class="space-y-px" role="list">
         {#each threads as thread (thread.id)}
-          <ThreadRow
-            {thread}
-            compact
-            projectIconUrl={getRowIcon(thread)}
-            selected={activeThreadId === thread.id}
-            {onOpen}
-            {onRename}
-            {onTogglePin}
-            {onDelete}
-            {onFork}
-            onMoveThread={onMovePinnedThread}
-          />
+          {#if row}
+            {@render row(thread)}
+          {:else}
+            <ThreadRow
+              {thread}
+              compact
+              projectIconUrl={getRowIcon(thread)}
+              selected={activeThreadId === thread.id}
+              {onOpen}
+              {onRename}
+              {onTogglePin}
+              {onDelete}
+              {onFork}
+              onMoveThread={onMovePinnedThread}
+            />
+          {/if}
         {/each}
       </div>
     {/if}

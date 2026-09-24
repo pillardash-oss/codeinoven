@@ -1,5 +1,5 @@
-import { lstat, realpath, readFile } from 'fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'path'
+import { lstat, realpath } from 'fs/promises'
+import { dirname, isAbsolute, resolve } from 'path'
 import type {
   ChangeTrackingMode,
   PermissionLevel,
@@ -7,7 +7,15 @@ import type {
   Thread,
   ThreadStatus
 } from '../../lib/types'
-import { atomicWrite, getConfigRoot } from '../../lib/utils'
+import { atomicWrite } from '../../lib/utils'
+import {
+  MAIN_LOG_FILE,
+  PERMISSION_EVENTS_LOG_FILE,
+  flatLogRelativePath,
+  logDayName,
+  logRelativePathInDay
+} from './log-paths'
+import { readLogFileTail } from './log-reader'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
@@ -298,9 +306,10 @@ export class DiagnosticsService {
       DEFAULT_PERMISSION_EVENT_LIMIT
     )
 
+    const day = logDayName(options.now?.() ?? new Date())
     const [rawLogs, rawPermissionEvents] = await Promise.all([
-      this.readRawSafely('logs/main.jsonl', warnings, 'main logs'),
-      this.readRawSafely('logs/permission-events.jsonl', warnings, 'permission events')
+      this.readLogTailSafely(MAIN_LOG_FILE, day, warnings, 'main logs'),
+      this.readLogTailSafely(PERMISSION_EVENTS_LOG_FILE, day, warnings, 'permission events')
     ])
 
     const logs = takeRecent(
@@ -346,19 +355,24 @@ export class DiagnosticsService {
     return safeDestination
   }
 
-  private async readRawSafely(
-    relativePath: string,
+  /**
+   * Read the newest bytes of one sink for a day. A log tree written before the
+   * day split kept every sink flat under `logs/`, so that file is read when the
+   * day folder has no copy (and such a flat file can already be tens of
+   * megabytes). Only the tail is parsed: a report keeps a bounded number of
+   * entries, so the newest bytes are all it can use.
+   */
+  private async readLogTailSafely(
+    fileName: string,
+    day: string,
     warnings: string[],
     label: string
   ): Promise<string | null> {
-    try {
-      return await readFile(join(getConfigRoot(), relativePath), 'utf-8')
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        warnings.push(`Unable to read ${label}`)
-        return null
-      }
-      throw error
-    }
+    const daily = await readLogFileTail(logRelativePathInDay(day, fileName))
+    if (daily) return daily.content
+    const legacy = await readLogFileTail(flatLogRelativePath(fileName))
+    if (legacy) return legacy.content
+    warnings.push(`Unable to read ${label}`)
+    return null
   }
 }

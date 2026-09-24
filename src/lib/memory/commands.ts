@@ -9,7 +9,8 @@ export interface MemoryCommand {
   content?: string
   category?: MemoryCategory
   priority?: MemoryPriority
-  scope?: MemoryScope
+  /** The audiences the new entry applies to; empty means every audience. */
+  scopes?: MemoryScope[]
   projectId?: string
   query?: string
   entryId?: string
@@ -41,12 +42,15 @@ const PRIORITY_KEYWORDS: Record<string, MemoryPriority> = {
 }
 
 const SCOPE_KEYWORDS: Record<string, MemoryScope> = {
-  global: 'global',
   projects: 'projects',
   project: 'project',
   thread: 'thread',
   chat: 'chat',
-  chats: 'chat'
+  chats: 'chat',
+  assistant: 'assistant',
+  assistants: 'assistant',
+  routine: 'routine',
+  task: 'task'
 }
 
 /**
@@ -54,7 +58,7 @@ const SCOPE_KEYWORDS: Record<string, MemoryScope> = {
  * Format: /memory <action> [options] [label] [content]
  *
  * Actions:
- *   /memory add [--category X] [--priority X] [--scope X] <label> <content>
+ *   /memory add [--category X] [--priority X] [--scope X,Y] <label> <content>
  *   /memory list [--category X] [--priority X]
  *   /memory remove <entry-id-or-label>
  *   /memory edit <entry-id-or-label> <new-content>
@@ -172,7 +176,7 @@ export function parseMemoryCommand(input: string): ParseResult {
         content: positional.slice(1).join(' '),
         category: opts.category,
         priority: opts.priority,
-        scope: opts.scope
+        scopes: opts.scopes
       }
     }
   }
@@ -184,14 +188,14 @@ interface ParsedFlags {
   positional: string[]
   category?: MemoryCategory
   priority?: MemoryPriority
-  scope?: MemoryScope
+  scopes?: MemoryScope[]
 }
 
 function parseFlags(parts: string[]): ParsedFlags {
   const positional: string[] = []
   let category: MemoryCategory | undefined
   let priority: MemoryPriority | undefined
-  let scope: MemoryScope | undefined
+  let scopes: MemoryScope[] | undefined
 
   let i = 0
   while (i < parts.length) {
@@ -202,7 +206,10 @@ function parseFlags(parts: string[]): ParsedFlags {
       priority = PRIORITY_KEYWORDS[parts[i + 1].toLowerCase()]
       i += 2
     } else if (parts[i] === '--scope' && i + 1 < parts.length) {
-      scope = SCOPE_KEYWORDS[parts[i + 1].toLowerCase()]
+      scopes = parts[i + 1]
+        .split(',')
+        .map((value) => SCOPE_KEYWORDS[value.trim().toLowerCase()])
+        .filter((value): value is MemoryScope => value !== undefined)
       i += 2
     } else {
       positional.push(parts[i])
@@ -210,7 +217,7 @@ function parseFlags(parts: string[]): ParsedFlags {
     }
   }
 
-  return { positional, category, priority, scope }
+  return { positional, category, priority, scopes }
 }
 
 /** Generate help text for /memory commands. */
@@ -221,7 +228,7 @@ export function getMemoryHelpText(): string {
     '`/memory add <label> <content>`   Add a new memory entry',
     '  Options: `--category behavioral|project-rule|identity|preference|models`',
     '           `--priority critical|high|medium|low`',
-    '           `--scope global|project`',
+    '           `--scope projects,chat,assistant|project|thread|routine|task`',
     '',
     '`/memory list`   List all memory entries',
     '  Options: `--category <category>` `--priority <priority>`',

@@ -125,14 +125,59 @@ export function captureResponseSelection(): ResponseSelectionCandidate | null {
   return { text, messageId, range, startOffset, endOffset, x, y }
 }
 
-/** Publish the live highlight ranges to the CSS Custom Highlight registry. */
-export function applyResponseHighlights(ranges: ReadonlyMap<string, Range>): void {
+/**
+ * Whether a live range still describes the annotation it was built for.
+ *
+ * A range survives a re-render only while its text nodes stay in the document:
+ * Svelte replaces nodes when a block is rebuilt (the newest answer moving out of
+ * the working trace into its final-answer block, history windowing mounting a
+ * message, markdown re-rendering once its images or citations resolve), and a
+ * range pointing at those detached nodes paints nothing and measures a zero
+ * rect. Text drift is checked too, because an in-place text update keeps the
+ * node connected while the stored offsets no longer describe it.
+ */
+export function responseRangeIsCurrent(
+  range: Range | null | undefined,
+  reference: ResponseReferenceAnchor
+): boolean {
+  if (!range) return false
+  if (!range.startContainer.isConnected || !range.endContainer.isConnected) return false
+  return range.toString().trim() === reference.text.trim()
+}
+
+/**
+ * Publish the live highlight ranges to the CSS Custom Highlight registry.
+ *
+ * The registry is document-global and keyed by one name, so ownership is
+ * tracked: only the view that published the current highlight may clear it.
+ * Without that, a conversation view being torn down (a thread switch, a side
+ * chat panel closing) wiped the highlight a sibling view had just published for
+ * its own thread, leaving the annotations unhighlighted until something else
+ * re-published them.
+ */
+let highlightPublisher: object | null = null
+
+export function applyResponseHighlights(
+  ranges: ReadonlyMap<string, Range>,
+  publisher: object
+): void {
   if (typeof Highlight === 'undefined' || !CSS.highlights) return
   if (ranges.size === 0) {
-    CSS.highlights.delete(RESPONSE_HIGHLIGHT_NAME)
+    if (highlightPublisher === publisher) {
+      CSS.highlights.delete(RESPONSE_HIGHLIGHT_NAME)
+      highlightPublisher = null
+    }
     return
   }
   CSS.highlights.set(RESPONSE_HIGHLIGHT_NAME, new Highlight(...ranges.values()))
+  highlightPublisher = publisher
+}
+
+/** Drop this view's highlight, leaving any other view's registration intact. */
+export function releaseResponseHighlights(publisher: object): void {
+  if (highlightPublisher !== publisher) return
+  CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
+  highlightPublisher = null
 }
 
 /**

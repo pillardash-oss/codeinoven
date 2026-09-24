@@ -56,6 +56,10 @@ export const IPC_EVENT_CONTRACT = {
    * working spinner with no live output.
    */
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
+  /** Assistant routines changed (created, updated, deleted, reordered). */
+  'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
+  /** The set of pending missed scheduled runs changed. */
+  'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
   /** Transient in-app toast (error/info, optional navigation action). */

@@ -7,7 +7,6 @@ import {
   threadKey,
   type ThreadMessagesEntry
 } from './thread-messages-merge'
-
 /** Frame-aligned stream notification cadence: deltas paint within one frame
  *  of arrival so the reveal trail stays fed and the stream never looks stalled. */
 const STREAM_NOTIFICATION_DELAY_MS = 16
@@ -44,9 +43,31 @@ export class ThreadMessagesCache {
   #revealGens = new Map<string, number>()
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #revealPending = new Map<string, { entry: ThreadMessagesEntry; merged: AgentMessage[] }>()
+  /** Keys whose pending stream batch must also republish the structure map. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #streamStructuralKeys = new Set<string>()
 
   /** Reactive cache keyed by `projectId:threadId`. */
   threads = new SvelteMap<string, ThreadMessagesEntry>()
+
+  /**
+   * Per-thread message arrays re-published ONLY when the transcript's shape
+   * changes: messages added or removed, an id or timestamp rewritten, a part
+   * appearing, or an entry flag that the turn index reads. A streamed text delta
+   * mutates a part in place and bumps the content revision without touching this
+   * map.
+   *
+   * That split is the difference between one transcript pass per structural
+   * change and one per streamed frame. `threads` still changes on every publish,
+   * so anything that renders message *content* keeps using `messages()`; readers
+   * that only care about identity, role, and timestamps (the turn index, the
+   * history list, the mounted window) use this and the stream stops waking them.
+   *
+   * The array published here is the live one, so its message objects are shared
+   * and mutated in place by a delta. Read it for shape only   never hold a part
+   * object from it across a publish.
+   */
+  structureMessages = new SvelteMap<string, AgentMessage[]>()
 
   /** Active session IDs per thread, used to filter streaming events. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -72,6 +93,7 @@ export class ThreadMessagesCache {
       }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
+      this.structureMessages.set(key, entry.messages)
     }
     return entry
   }
@@ -211,7 +233,7 @@ export class ThreadMessagesCache {
   mergePage(projectId: string, threadId: string, pageMessages: AgentMessage[]): void {
     const entry = this.entry(projectId, threadId)
     const merged = mergePageMessages(entry.messages, pageMessages)
-    this.#applyLoadedMessages(projectId, threadId, entry, merged)
+    this.#applyLoadedMessages(projectId, threadId, entry, merged.messages, merged.structural)
   }
 
   /**
@@ -230,7 +252,8 @@ export class ThreadMessagesCache {
     projectId: string,
     threadId: string,
     entry: ThreadMessagesEntry,
-    merged: AgentMessage[]
+    merged: AgentMessage[],
+    structural = true
   ): void {
     const key = threadKey(projectId, threadId)
     // Incremental/small sets and any merge into an already-loaded thread apply
@@ -245,7 +268,7 @@ export class ThreadMessagesCache {
       this.#cancelReveal(key)
       entry.messages = merged
       entry.loaded = true
-      this.notify(projectId, threadId)
+      this.notify(projectId, threadId, structural)
       return
     }
     this.#cancelReveal(key)
@@ -259,7 +282,7 @@ export class ThreadMessagesCache {
       if (this.#revealGens.get(key) !== generation) return
       // Tail-first: the newest, most-visible messages render before older ones.
       entry.messages = merged.slice(merged.length - revealed)
-      this.notify(projectId, threadId)
+      this.notify(projectId, threadId, structural)
       if (revealed >= merged.length) {
         this.#revealTimers.delete(key)
         this.#revealPending.delete(key)
@@ -318,6 +341,7 @@ export class ThreadMessagesCache {
     this.#sessionIds.delete(key)
     this.#streamDirtyKeys.delete(key)
     this.threads.delete(key)
+    this.structureMessages.delete(key)
   }
 
   matchesSession(projectId: string, threadId: string, sessionId: string): boolean {
@@ -332,32 +356,47 @@ export class ThreadMessagesCache {
     return undefined
   }
 
-  notifyStreaming(projectId: string, threadId: string): void {
-    this.#streamDirtyKeys.add(threadKey(projectId, threadId))
+  /**
+   * Publish a streamed content change on the next frame.
+   *
+   * `structural` must be true whenever the change could alter the transcript's
+   * shape (a message or part appearing, a timestamp moving). The ordinary delta
+   * path   text appended to a part that already exists   passes false, which is
+   * what keeps the turn index and the history list off the streaming cadence.
+   */
+  notifyStreaming(projectId: string, threadId: string, structural = false): void {
+    const key = threadKey(projectId, threadId)
+    this.#streamDirtyKeys.add(key)
+    if (structural) this.#streamStructuralKeys.add(key)
     if (this.#streamNotifyTimer !== undefined) return
     this.#streamNotifyTimer = setTimeout(() => {
       this.#streamNotifyTimer = undefined
       const dirtyKeys = [...this.#streamDirtyKeys]
+      const structuralKeys = this.#streamStructuralKeys
       this.#streamDirtyKeys.clear()
-      for (const key of dirtyKeys) this.#publish(key)
+      this.#streamStructuralKeys.clear()
+      for (const key of dirtyKeys) this.#publish(key, structuralKeys.has(key))
     }, STREAM_NOTIFICATION_DELAY_MS)
   }
 
-  notify(projectId: string, threadId: string): void {
+  notify(projectId: string, threadId: string, structural = true): void {
     const key = threadKey(projectId, threadId)
     this.#streamDirtyKeys.delete(key)
-    this.#publish(key)
+    this.#publish(key, structural)
   }
 
-  #notifyByKey(key: string): void {
+  #notifyByKey(key: string, structural = true): void {
     this.#streamDirtyKeys.delete(key)
-    this.#publish(key)
+    this.#publish(key, structural)
   }
 
-  #publish(key: string): void {
+  #publish(key: string, structural = false): void {
     const entry = this.#threads.get(key)
     if (!entry) return
     entry.revision += 1
     this.threads.set(key, { ...entry })
+    // Every structural mutation path replaces `entry.messages` with a fresh
+    // array, so publishing the reference is enough to invalidate shape readers.
+    if (structural) this.structureMessages.set(key, entry.messages)
   }
 }

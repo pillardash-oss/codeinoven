@@ -31,6 +31,7 @@ export type MainView =
   | 'projects'
   | 'projects-scope'
   | 'chats'
+  | 'assistant'
   | 'scope'
   | 'threads'
   | 'settings'
@@ -105,7 +106,7 @@ export interface RendererRecoverySnapshot {
   /** Last content view (Projects/Chats/Threads) — the shell returns here when
    *  leaving Settings or Scope. Persisted so a restart made while on a Settings
    *  page or the Scope view still returns to the previous content view. */
-  lastContentView: 'projects' | 'chats' | 'threads'
+  lastContentView: 'projects' | 'chats' | 'threads' | 'assistant'
   /** Last non-Settings view — the Settings back button returns here. */
   lastViewBeforeSettings: MainView
   selectedProjectId: string | null
@@ -125,6 +126,11 @@ export interface RendererRecoverySnapshot {
   chatFavoriteModels: string[]
   /** Chats-tab recently used models, most recent first. */
   chatRecentModels: string[]
+  /** Assistant-task favorites, kept separate so a model picked for a routine
+   *  task never reshapes the Chats or project model lists. */
+  assistantFavoriteModels: string[]
+  /** Assistant-task recently used models, most recent first. */
+  assistantRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
 }
@@ -139,6 +145,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects',
   'projects-scope',
   'chats',
+  'assistant',
   'scope',
   'threads',
   'settings',
@@ -189,6 +196,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     recentModels: [],
     chatFavoriteModels: [],
     chatRecentModels: [],
+    assistantFavoriteModels: [],
+    assistantRecentModels: [],
     auditModelKey: undefined
   }
 }
@@ -303,8 +312,10 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
-function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
-  if (value === 'projects' || value === 'chats' || value === 'threads') return value
+function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' | 'assistant' {
+  if (value === 'projects' || value === 'chats' || value === 'threads' || value === 'assistant') {
+    return value
+  }
   return 'projects'
 }
 
@@ -313,6 +324,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects' ||
     value === 'projects-scope' ||
     value === 'chats' ||
+    value === 'assistant' ||
     value === 'scope' ||
     value === 'threads'
   ) {
@@ -508,6 +520,8 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       recentModels: parseFavoriteModels(parsed.recentModels),
       chatFavoriteModels: parseFavoriteModels(parsed.chatFavoriteModels),
       chatRecentModels: parseFavoriteModels(parsed.chatRecentModels),
+      assistantFavoriteModels: parseFavoriteModels(parsed.assistantFavoriteModels),
+      assistantRecentModels: parseFavoriteModels(parsed.assistantRecentModels),
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey

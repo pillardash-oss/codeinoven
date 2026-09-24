@@ -69,3 +69,35 @@ export function orchestrationDescendants(threads: Thread[], coordinatorThreadId:
   visit(coordinatorThreadId)
   return descendants
 }
+
+/**
+ * Every run thread of an assistant task, deepest first. A run is a child of the
+ * task it executed, exactly as a worker is a child of its coordinator: the
+ * lineage is used so deleting a task sweeps the runs it produced instead of
+ * leaving orphan rows that no surface can reach.
+ *
+ * Deliberately separate from {@link orchestrationDescendants}: a run is not part
+ * of an orchestration workflow group, so it must never be attributed a
+ * coordinator's checkpoint work or grouped into an instance-transfer unit.
+ */
+export function assistantRunDescendants(threads: Thread[], taskThreadId: string): Thread[] {
+  const byTask = new Map<string, Thread[]>()
+  for (const thread of threads) {
+    if (!thread.assistantTaskId) continue
+    const runs = byTask.get(thread.assistantTaskId) ?? []
+    runs.push(thread)
+    byTask.set(thread.assistantTaskId, runs)
+  }
+  const descendants: Thread[] = []
+  const visit = (taskId: string): void => {
+    const runs = (byTask.get(taskId) ?? []).sort(
+      (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+    )
+    for (const run of runs) {
+      visit(run.id)
+      descendants.push(run)
+    }
+  }
+  visit(taskThreadId)
+  return descendants
+}

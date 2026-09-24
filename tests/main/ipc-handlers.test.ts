@@ -137,7 +137,8 @@ describe('validateAppConfigPatch', () => {
           label: 'Style',
           content: 'Prefer small contextual commits.',
           enabled: true,
-          updatedAt: 1
+          updatedAt: 1,
+          scopes: ['projects', 'chat']
         }
       ]
     }
@@ -202,7 +203,7 @@ describe('validateAppConfigPatch', () => {
             frequency: 1,
             lastReinforced: expect.any(Number),
             priority: 'medium',
-            scope: 'global',
+            scopes: ['projects', 'chat'],
             source: 'manual'
           })
         ]

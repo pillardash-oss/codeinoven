@@ -12,6 +12,33 @@ const APP_CUA_DRIVER_BEHAVIOR_CLAUSE = ` or computer use tool "${APP_CUA_DRIVER_
  */
 export const AGENT_BEHAVIOR_FILENAME = 'prompts/work-ethics.md'
 
+/**
+ * The skills discipline every agent shares, whatever class it runs as.
+ *
+ * It lives here rather than inside the work-ethics prompt so a class that is
+ * not engineering (the assistant) can carry it verbatim without inheriting
+ * implementation rules that do not apply to it. The work-ethics prompt indents
+ * it into its own numbered list.
+ */
+export const SKILLS_SECTION_BODY = `- Before you plan or edit anything, take stock of the skills available to you. Read the skill names and descriptions your context provides, count them, and note which of them cover the work ahead. Do this once at the start of the task instead of trusting recall.
+- Keep that survey to yourself. Do not open a reply with a skill list or a count unless the user asks for one.
+- Skills come in two kinds. Model-invoked skills appear in your context and you must find and load them yourself. User-invoked skills are hidden from your context and only run when the user calls them by name, so never assume one is active.
+- Treat every skill description as the condition that makes that skill apply, and treat a matched condition as an order rather than a hint. Most descriptions name a task. Others name a standing condition or a moment instead, with wording such as "must always apply" or "when writing for a human". Both kinds are instructions to you.
+- A skill whose trigger is a moment still needs a tool call at that moment. The survey you took at the start of the task is not a substitute for it. Whenever a trigger moment arrives, re-scan the skill names and descriptions for a match you have not acted on yet, then load that SKILL.md with your file read tool before you continue.
+- A skill often needs something before it can run: an API key, a token, an account, a local binary. Check what it asks for as soon as you load it. When it names a value you do not have, request that value with the app's secret tool (${ASK_SECRET_TOOL_NAME}) before you do anything else with the skill: one entry per value, named exactly as the skill's own variable, with the link the skill gives for getting it. When the skill came from the app's utility list, pass that capability's id so the app stores the value as its credential.
+- A dismissal is not an answer. When the result reports that the user dismissed the request, ask once more for the same values in the same turn, and add one line saying why the skill needs them. Treat the second dismissal as the user telling you they do not want that skill used: stop asking, drop the skill for the rest of the turn, and take a route that does not need those values. Say which fallback you took and what it costs the user, in one line, at the point you switch.
+- An alternative is an answer. When the result reports that the user replied with an instruction instead of a value, do not ask for those values again this turn: the app has already reused whatever the device holds for the names you asked for. Follow the instruction, continue with what was reused, and treat the names it lists as unresolved as genuinely missing rather than something to request twice.
+- Never quietly swap in a substitute for an unmet skill requirement, such as a keyless service or a hand-rolled curl call. Until a second dismissal clears the way, a missing value means you request it first and name it in the same reply.
+- Composing anything a human reads is one of those moments. Before you write a user-facing reply, summary, report, or document, re-scan for the skills that govern that output, and load them before you write your first word. Style, tone, and communication skills count exactly like technology skills, and the final report counts most because it is the last thing the user sees. Writing it first and skipping the skill because the turn is nearly over is a failure, not a shortcut.`
+
+/** Indent every non-blank line, so a shared section sits inside the list it belongs to. */
+function indentLines(text: string, indent: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line.trim().length > 0 ? `${indent}${line}` : line))
+    .join('\n')
+}
+
 export const DEFAULT_AGENT_BEHAVIOR_PROMPT = `Agent behavior for implementation work:
 
 Unless the user explicitly overrides these rules, follow this work ethic:
@@ -28,16 +55,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - If you revise an earlier conclusion in this conversation, re-verify it first by re-reading the actual code or rerunning the actual command   never reverse a diagnosis on reasoning alone, and never contradict your own prior finding without citing the new evidence that changed it.
 
 2. Skills
-   - Before you plan or edit anything, take stock of the skills available to you. Read the skill names and descriptions your context provides, count them, and note which of them cover the work ahead. Do this once at the start of the task instead of trusting recall.
-   - Keep that survey to yourself. Do not open a reply with a skill list or a count unless the user asks for one.
-   - Skills come in two kinds. Model-invoked skills appear in your context and you must find and load them yourself. User-invoked skills are hidden from your context and only run when the user calls them by name, so never assume one is active.
-   - Treat every skill description as the condition that makes that skill apply, and treat a matched condition as an order rather than a hint. Most descriptions name a task. Others name a standing condition or a moment instead, with wording such as "must always apply" or "when writing for a human". Both kinds are instructions to you.
-   - A skill whose trigger is a moment still needs a tool call at that moment. The survey you took at the start of the task is not a substitute for it. Whenever a trigger moment arrives, re-scan the skill names and descriptions for a match you have not acted on yet, then load that SKILL.md with your file read tool before you continue.
-   - A skill often needs something before it can run: an API key, a token, an account, a local binary. Check what it asks for as soon as you load it. When it names a value you do not have, request that value with the app's secret tool (${ASK_SECRET_TOOL_NAME}) before you do anything else with the skill: one entry per value, named exactly as the skill's own variable, with the link the skill gives for getting it. When the skill came from the app's utility list, pass that capability's id so the app stores the value as its credential.
-   - A dismissal is not an answer. When the result reports that the user dismissed the request, ask once more for the same values in the same turn, and add one line saying why the skill needs them. Treat the second dismissal as the user telling you they do not want that skill used: stop asking, drop the skill for the rest of the turn, and take a route that does not need those values. Say which fallback you took and what it costs the user, in one line, at the point you switch.
-   - An alternative is an answer. When the result reports that the user replied with an instruction instead of a value, do not ask for those values again this turn: the app has already reused whatever the device holds for the names you asked for. Follow the instruction, continue with what was reused, and treat the names it lists as unresolved as genuinely missing rather than something to request twice.
-   - Never quietly swap in a substitute for an unmet skill requirement, such as a keyless service or a hand-rolled curl call. Until a second dismissal clears the way, a missing value means you request it first and name it in the same reply.
-   - Composing anything a human reads is one of those moments. Before you write a user-facing reply, summary, report, or document, re-scan for the skills that govern that output, and load them before you write your first word. Style, tone, and communication skills count exactly like technology skills, and the final report counts most because it is the last thing the user sees. Writing it first and skipping the skill because the turn is nearly over is a failure, not a shortcut.
+${indentLines(SKILLS_SECTION_BODY, '   ')}
 
 3. Progress
    - Keep the progress.md for the specific work current.

@@ -13,7 +13,7 @@ import type {
   MemorySource,
   SpecContextReference
 } from '../../lib/types'
-import { INBOX_PROJECT_ID } from '../../lib/types'
+import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import {
   DEFERRED_EXTRACTIONS_FILENAME,
@@ -44,15 +44,18 @@ import type {
   AuxiliaryUsageTotals
 } from './memory/memory-auxiliary-usage'
 import { parseMemoryMd, serializeMemoryMd } from './memory/memory-markdown'
+import { memoryScopeKey } from '../../lib/memory/memory-scopes'
 import {
-  assertEntryLocation,
   entryAppliesToContext,
+  entryMatchesContext,
   groupByCategory,
-  locationForScope
+  locationForScopes,
+  normalizeEntriesForLocation
 } from './memory/memory-location'
 import {
   dedupeEntriesById,
   dedupeKey,
+  entryBelongsToAudience,
   entryBelongsToExportKind,
   importDestinationFor
 } from './memory/memory-export'
@@ -60,13 +63,14 @@ import {
   SECRET_PATTERNS,
   VALID_CATEGORIES,
   VALID_PRIORITIES,
-  VALID_SCOPES,
   VALID_SOURCES,
   enumValue,
   isRecord,
   optionalEntityId,
+  normalizeStoredProposal,
   text,
   validateMemoryConfig,
+  validateMemoryScopes,
   validateModelKeys
 } from './memory/memory-validation'
 
@@ -135,7 +139,16 @@ export class MemoryService {
     await this.storage.writeRaw(this.memoryFilePath(projectId, threadId), text)
   }
 
-  async current(projectId?: string, threadId?: string): Promise<MemoryConfig> {
+  /**
+   * Every memory entry an agent turn in this context receives.
+   *
+   * The audience comes from the container (a project thread, a chat, or an
+   * assistant task), and `routineId` narrows assistant turns to their own
+   * routine's memory. Entries are filtered here rather than at format time so a
+   * caller that inspects `entries` (duplicate detection, proposals) sees exactly
+   * what the agent would.
+   */
+  async current(projectId?: string, threadId?: string, routineId?: string): Promise<MemoryConfig> {
     const config = await this.storage.read<AppConfig>('config.json')
     const isChat = projectId === 'inbox'
 
@@ -153,7 +166,9 @@ export class MemoryService {
     return {
       enabled: isChat ? (config?.memory?.chatEnabled ?? true) : (config?.memory?.enabled ?? true),
       chatEnabled: config?.memory?.chatEnabled ?? true,
-      entries
+      entries: dedupeEntriesById(entries).filter((entry) =>
+        entryMatchesContext(entry, projectId, threadId, routineId)
+      )
     }
   }
 
@@ -217,32 +232,41 @@ export class MemoryService {
   /** Save memory entries from form-based editing. */
   async saveEntries(entries: MemoryEntry[], projectId?: string, threadId?: string): Promise<void> {
     const validated = validateMemoryConfig({ enabled: true, entries }).entries
-    for (const entry of validated) assertEntryLocation(entry, projectId, threadId)
-    await this.writeMemoryMd(serializeMemoryMd(validated), projectId, threadId)
+    await this.writeMemoryMd(
+      serializeMemoryMd(normalizeEntriesForLocation(validated, projectId, threadId)),
+      projectId,
+      threadId
+    )
   }
 
   /**
    * Gather every memory entry that belongs to an export scope.
    *
-   * - `projects`: global + projects-scoped root entries, every per-project file
-   *   and every project thread file.
-   * - `chats`: global-scoped root entries, the chat file and every chat thread file.
+   * - `projects`: every entry whose scope set reaches projects (root entries,
+   *   per-project files, project thread files).
+   * - `chats`: entries reaching chats (root entries, the chat file, chat threads).
+   * - `assistant`: entries reaching assistants (root entries, the assistant
+   *   container file with its routine memory, assistant task files).
    * - `both`: everything.
    * - `project`: only the given project's own file and its thread files.
    */
   async exportEntries(kind: MemoryExportKind, projectId?: string): Promise<MemoryEntry[]> {
     const entries: MemoryEntry[] = []
+    const root = await this.getEntries()
     if (kind === 'both') {
-      entries.push(...(await this.getEntries()))
+      entries.push(...root)
       entries.push(...(await this.collectProjectMemory()))
       entries.push(...(await this.collectChatMemory()))
+      entries.push(...(await this.collectAssistantMemory()))
     } else if (kind === 'projects') {
-      entries.push(...(await this.getEntries()))
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'projects')))
       entries.push(...(await this.collectProjectMemory()))
     } else if (kind === 'chats') {
-      const root = await this.getEntries()
-      entries.push(...root.filter((entry) => entry.scope === 'global'))
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'chat')))
       entries.push(...(await this.collectChatMemory()))
+    } else if (kind === 'assistant') {
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'assistant')))
+      entries.push(...(await this.collectAssistantMemory()))
     } else if (kind === 'project') {
       const safeProjectId = optionalEntityId(projectId, 'Project ID')
       if (!safeProjectId) {
@@ -284,6 +308,22 @@ export class MemoryService {
   }
 
   /**
+   * Assistant memory: the hidden container's own file (which holds both
+   * assistant-wide entries and each routine's entries) plus every task thread.
+   */
+  private async collectAssistantMemory(): Promise<MemoryEntry[]> {
+    const entries: MemoryEntry[] = []
+    entries.push(...(await this.getEntries(ASSISTANT_SPACE_ID)))
+    const threadIds = await this.storage.listDirectories(
+      join(MEMORY_PROJECTS_DIR, ASSISTANT_SPACE_ID, THREADS_DIR)
+    )
+    for (const threadId of threadIds) {
+      entries.push(...(await this.getEntries(ASSISTANT_SPACE_ID, threadId)))
+    }
+    return entries
+  }
+
+  /**
    * Merge imported entries into the appropriate storage files.
    *
    * Entries are routed by their own scope/projectId/threadId, filtered by the
@@ -315,11 +355,11 @@ export class MemoryService {
       }
       const key = `${destination.projectId ?? ''}\0${destination.threadId ?? ''}`
       const group = destinations.get(key) ?? { location: destination, entries: [] }
-      group.entries.push({
-        ...rawEntry,
-        projectId: destination.projectId,
-        threadId: destination.threadId
-      })
+      // Stamp the ids the scope set implies, so an imported entry never carries
+      // a project, thread, or routine id that its scopes do not use.
+      group.entries.push(
+        ...normalizeEntriesForLocation([rawEntry], destination.projectId, destination.threadId)
+      )
       destinations.set(key, group)
     }
 
@@ -356,14 +396,31 @@ export class MemoryService {
     return { added, skipped }
   }
 
-  async formatCurrent(projectId?: string, threadId?: string, modelKey?: string): Promise<string> {
-    return this.format(await this.current(projectId, threadId), projectId, threadId, modelKey)
+  async formatCurrent(
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string,
+    routineId?: string
+  ): Promise<string> {
+    return this.format(
+      await this.current(projectId, threadId, routineId),
+      projectId,
+      threadId,
+      modelKey,
+      routineId
+    )
   }
 
-  format(config: MemoryConfig, projectId?: string, threadId?: string, modelKey?: string): string {
+  format(
+    config: MemoryConfig,
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string,
+    routineId?: string
+  ): string {
     if (!config.enabled) return ''
     const entries = config.entries.filter((entry) =>
-      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey) : false
+      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey, routineId) : false
     )
     if (entries.length === 0) return ''
 
@@ -405,13 +462,15 @@ export class MemoryService {
   async snapshotCurrent(
     projectId?: string,
     threadId?: string,
-    modelKey?: string
+    modelKey?: string,
+    routineId?: string
   ): Promise<SpecContextReference[]> {
-    const config = await this.current(projectId, threadId)
+    const config = await this.current(projectId, threadId, routineId)
     if (!config.enabled) return []
     return config.entries
       .filter(
-        (entry) => entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
+        (entry) =>
+          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey, routineId)
       )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
@@ -440,11 +499,12 @@ export class MemoryService {
     options: {
       category?: MemoryCategory
       priority?: MemoryPriority
-      scope?: MemoryScope
+      scopes?: MemoryScope[]
       source?: MemorySource
       modelKeys?: string[]
       projectId?: string
       threadId?: string
+      routineId?: string
     } = {}
   ): Promise<MemoryEntry> {
     const safeLabel = text(label, 'Memory label', 1, MEMORY_LIMITS.maxLabelCharacters)
@@ -454,13 +514,18 @@ export class MemoryService {
     }
     const category = enumValue(options.category, VALID_CATEGORIES, 'preference', 'Memory category')
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Memory priority')
-    const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Memory scope')
+    const scopes = validateMemoryScopes(options.scopes, {}, 'Memory scopes')
     const source = enumValue(options.source, VALID_SOURCES, 'manual', 'Memory source')
     const modelKeys = validateModelKeys(options.modelKeys, 'Memory model keys')
     if (category === 'models' && modelKeys.length === 0) {
       throw new TypeError('Model memories require at least one model')
     }
-    const location = locationForScope(scope, options.projectId, options.threadId)
+    const location = locationForScopes(
+      scopes,
+      options.projectId,
+      options.threadId,
+      options.routineId
+    )
     const now = Date.now()
     const entry: MemoryEntry = {
       id: `memory-${now}-${createHash('sha256').update(safeLabel).digest('hex').slice(0, 8)}`,
@@ -471,21 +536,18 @@ export class MemoryService {
       updatedAt: now,
       category,
       priority,
-      scope,
+      scopes,
       source,
       frequency: 1,
       lastReinforced: now,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      routineId: location.entryRoutineId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
 
     const entries = await this.getEntries(location.projectId, location.threadId)
-    const duplicate = entries.find(
-      (existing) =>
-        existing.scope === scope &&
-        existing.content.trim().toLowerCase() === safeContent.toLowerCase()
-    )
+    const duplicate = entries.find((existing) => dedupeKey(existing) === dedupeKey(entry))
     if (duplicate) return duplicate
     if (entries.length >= MEMORY_LIMITS.maxEntries) {
       throw new TypeError(`Memory supports at most ${MEMORY_LIMITS.maxEntries} entries`)
@@ -541,13 +603,13 @@ export class MemoryService {
     try {
       const parsed = await this.storage.read<unknown>(this.getProposalsPath(projectId))
       if (!Array.isArray(parsed)) return []
-      return parsed.filter(
-        (p): p is MemoryProposal =>
-          isRecord(p) &&
-          typeof p.id === 'string' &&
-          typeof p.status === 'string' &&
-          ['pending', 'approved', 'rejected'].includes(p.status)
-      )
+      // Proposals are stored as raw JSON, so a file written before scope sets
+      // existed still has the legacy single `scope`. Normalizing here keeps
+      // every consumer (including the renderer over IPC) on the scope-set
+      // contract instead of handing it an undefined `scopes`.
+      return parsed
+        .map((proposal) => normalizeStoredProposal(proposal))
+        .filter((proposal): proposal is MemoryProposal => proposal !== null)
     } catch {
       return []
     }
@@ -564,10 +626,11 @@ export class MemoryService {
     options: {
       category?: MemoryCategory
       priority?: MemoryPriority
-      scope?: MemoryScope
+      scopes?: MemoryScope[]
       modelKeys?: string[]
       projectId?: string
       threadId?: string
+      routineId?: string
     } = {}
   ): Promise<MemoryProposal> {
     const safeLabel = text(label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters)
@@ -582,21 +645,27 @@ export class MemoryService {
       'Proposal category'
     )
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
-    const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Proposal scope')
+    const scopes = validateMemoryScopes(options.scopes, {}, 'Proposal scopes')
     const modelKeys = validateModelKeys(options.modelKeys, 'Proposal model keys')
     if (category === 'models' && modelKeys.length === 0) {
       throw new TypeError('Model proposals require at least one model')
     }
-    const location = locationForScope(scope, options.projectId, options.threadId)
+    const location = locationForScopes(
+      scopes,
+      options.projectId,
+      options.threadId,
+      options.routineId
+    )
     const queueProjectId = location.projectId
     const proposals = await this.readProposals(queueProjectId)
     const activeProposals = proposals.filter(
       (p) => p.status === 'pending' && p.expiresAt > Date.now()
     )
+    const normalizedContent = safeContent.trim().toLowerCase()
     const duplicate = activeProposals.find(
       (proposal) =>
-        proposal.scope === scope &&
-        proposal.content.trim().toLowerCase() === safeContent.toLowerCase()
+        memoryScopeKey(proposal.scopes) === memoryScopeKey(scopes) &&
+        proposal.content.trim().toLowerCase() === normalizedContent
     )
     if (duplicate) return duplicate
     if (activeProposals.length >= MEMORY_LIMITS.maxProposals) {
@@ -610,9 +679,10 @@ export class MemoryService {
       content: safeContent,
       category,
       priority,
-      scope,
+      scopes,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      routineId: location.entryRoutineId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
       createdAt: now,
       expiresAt: now + MEMORY_LIMITS.proposalExpiryMs,
@@ -633,11 +703,12 @@ export class MemoryService {
     const entry = await this.addEntry(proposal.label, proposal.content, {
       category: proposal.category,
       priority: proposal.priority,
-      scope: proposal.scope,
+      scopes: proposal.scopes,
       source: 'auto-detected',
       modelKeys: proposal.modelKeys,
       projectId: proposal.projectId,
-      threadId: proposal.threadId
+      threadId: proposal.threadId,
+      routineId: proposal.routineId
     })
     proposal.status = 'approved'
     await this.writeProposals(proposals, projectId)

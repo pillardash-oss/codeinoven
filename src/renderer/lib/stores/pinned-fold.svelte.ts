@@ -3,14 +3,16 @@ import { APP_SLUG } from '$shared/brand'
 const STORAGE_KEY = `${APP_SLUG}.pinnedFold.v1`
 
 /** Sidebar sections whose pinned block can be folded. */
-export type PinnedSectionKey = 'threads' | 'projects-threads' | 'projects-projects' | 'chats'
+export type PinnedSectionKey =
+  'threads' | 'projects-threads' | 'projects-projects' | 'chats' | 'assistant'
 
 function loadFolded(): Record<PinnedSectionKey, boolean> {
   const defaults: Record<PinnedSectionKey, boolean> = {
     threads: false,
     'projects-threads': false,
     'projects-projects': false,
-    chats: false
+    chats: false,
+    assistant: false
   }
   if (typeof window === 'undefined') return defaults
   try {

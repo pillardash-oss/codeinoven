@@ -5,7 +5,7 @@ import type {
   ProjectFileInfo,
   ProjectFileTransferMode
 } from '$shared/types'
-import { INBOX_PROJECT_ID } from '$shared/types'
+import { usesThreadWorkspaceMount } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -62,31 +62,32 @@ class ProjectFilesWorkspace {
 
   /** The scope bucket the project's file operations must target right now.
    *  This value is sent to the main process, so it must stay a real scope
-   *  bucket id. A mounted chat artifact directory is threaded separately via
+   *  bucket id. A mounted conversation workspace is threaded separately via
    *  `threadArg`; only cache keys below use the mount-aware key. */
   private scopeFor(projectId: string): string {
     return workspaceState.activeScopeBucketIdFor(projectId)
   }
 
-  /** Internal cache/invalidation key that also distinguishes which chat
-   *  artifact mount (if any) the cached listings belong to. Never sent over
+  /** Internal cache/invalidation key that also distinguishes which conversation
+   *  workspace mount (if any) the cached listings belong to. Never sent over
    *  IPC, so the `thread:` prefix is safe here. */
   private mountKeyFor(projectId: string): string {
-    const threadId = this.projects[projectId]?.chatThreadId ?? null
-    if (threadId && projectId === INBOX_PROJECT_ID) return `thread:${threadId}`
+    const threadId = this.projects[projectId]?.mountThreadId ?? null
+    if (threadId && usesThreadWorkspaceMount(projectId)) return `thread:${threadId}`
     return this.scopeFor(projectId)
   }
 
-  /** Register the inbox thread whose artifact directory the file tree is
-   *  mounted on. Switching threads (or unmounting) changes the effective
+  /** Register the conversation whose own workspace directory the file tree is
+   *  mounted on (a chat's artifact directory or an assistant task's working
+   *  directory). Switching threads (or unmounting) changes the effective
    *  scope, so every cached listing is dropped and re-read. */
-  setChatThread(projectId: string, threadId: string | null): void {
-    this.ensureState(projectId).chatThreadId = threadId
+  setThreadMount(projectId: string, threadId: string | null): void {
+    this.ensureState(projectId).mountThreadId = threadId
   }
 
   /** Optional trailing thread-mount argument for `projectFiles:*` invokes. */
   private threadArg(projectId: string): string | undefined {
-    return this.projects[projectId]?.chatThreadId ?? undefined
+    return this.projects[projectId]?.mountThreadId ?? undefined
   }
 
   ensureState(projectId: string): ProjectFilesState {

@@ -29,6 +29,7 @@ export interface LeanOpenCodeAgent {
 export type LeanAgentMode =
   | 'inbox-chat'
   | 'file-system-chat'
+  | 'assistant'
   | 'ephemeral'
   | 'image-description'
   | 'pr-compose'
@@ -109,6 +110,28 @@ const brainstormPermission: Record<string, AgentPermissionValue> = {
     '.cio/specs/*/versions/**': ALLOW,
     '.cio/specs/*/prototypes/**': ALLOW
   }
+}
+
+/**
+ * Assistant: a routine run owns its whole job, so it keeps the workspace tools
+ * inside its routine directory, the web for research, and the skills every
+ * agent shares. It is deliberately NOT an engineering agent   no sub-agent
+ * delegation, and the risk of any single call stays with the app's permission
+ * policy rather than the deny matrix.
+ */
+const assistantPermission: Record<string, AgentPermissionValue> = {
+  ...baseDeny,
+  read: ALLOW,
+  edit: ALLOW,
+  glob: ALLOW,
+  grep: ALLOW,
+  list: ALLOW,
+  bash: ALLOW,
+  todowrite: ALLOW,
+  webfetch: ALLOW,
+  websearch: ALLOW,
+  skill: ALLOW,
+  question: ALLOW
 }
 
 const leanAgents: readonly LeanOpenCodeAgent[] = [
@@ -198,6 +221,19 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
       'Never modify source files, run commands, or implement.'
     ].join(' '),
     permission: brainstormPermission
+  },
+  {
+    name: 'cio-assistant',
+    description: `Routine runner for the ${APP_NAME} Assistant view; owns the job end to end.`,
+    mode: 'primary',
+    prompt: [
+      `You are the ${APP_NAME} assistant, running a standing routine.`,
+      "The routine's how-to in the system prompt is your instruction set: follow it, and treat an ambiguous line the way the user would recognise the routine having run.",
+      'Own the outcome. When the routine needs something this session does not have, obtain it: search the app utility library, research the official source when the library carries nothing, install what is compatible, and ask the user for the parts only they can supply.',
+      'Ask through the tools, never through prose, and work on the routine and nothing else.',
+      'Report what actually happened, including what failed, and never imply you checked something you did not.'
+    ].join(' '),
+    permission: assistantPermission
   }
 ]
 
@@ -216,6 +252,7 @@ export function leanAgentDefinition(name: string): LeanOpenCodeAgent | undefined
 const modeToAgentName: Record<LeanAgentMode, string> = {
   'inbox-chat': 'cio-chat',
   'file-system-chat': 'cio-chat-fs',
+  assistant: 'cio-assistant',
   ephemeral: 'cio-eph',
   'image-description': 'cio-img-desc',
   'pr-compose': 'cio-pr-compose',

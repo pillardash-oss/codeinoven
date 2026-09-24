@@ -3,6 +3,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Logger } from '../../src/main/system/logger'
+import { logDayName } from '../../src/main/system/log-paths'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
@@ -138,8 +139,8 @@ describe('lifecycle   Logger flush on shutdown', () => {
   it('flushes pending writes before the shutdown pipeline resolves', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'lifecycle-logger-'))
     temporaryPaths.push(directory)
-    const logPath = join(directory, 'shutdown.jsonl')
-    Logger.initialize(logPath)
+    Logger.initialize(directory)
+    const logPath = join(directory, logDayName(), 'main.jsonl')
 
     Logger.info('shutdown test   before flush')
     await Logger.flush()

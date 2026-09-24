@@ -731,6 +731,7 @@ export class Database {
       this.migrateThreadIndependentAuditColumns(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
+      this.migrateThreadAssistantColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
@@ -739,6 +740,10 @@ export class Database {
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
       this.migrateAssignmentSpecNullable(connection)
       this.migrateThreadPinnedAt(connection)
+      this.migrateRoutinePinned(connection)
+      this.migrateRoutineAgentsAndPause(connection)
+      this.migrateRoutineDescription(connection)
+      this.migrateRoutineReporting(connection)
     })()
   }
 
@@ -764,6 +769,87 @@ export class Database {
           WHERE pinned = 1 AND pinned_at IS NULL`
       )
       .run()
+  }
+
+  /**
+   * Add the routine pin columns to databases created before routines could be
+   * pinned, then backfill a pin timestamp for any pinned row (matching the
+   * thread pin behaviour). Fresh databases already carry both columns, and the
+   * guarded `ALTER TABLE` makes this idempotent.
+   */
+  private migrateRoutinePinned(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('pinned')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!columns.has('pinned_at')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN pinned_at INTEGER')
+    }
+    connection
+      .prepare(
+        `UPDATE routines
+            SET pinned_at = COALESCE(updated_at, created_at)
+          WHERE pinned = 1 AND pinned_at IS NULL`
+      )
+      .run()
+  }
+
+  /**
+   * Add the routine model-set and pause columns to databases created before a
+   * routine could carry a primary/fallback model set or be paused. Fresh
+   * databases already carry both, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineAgentsAndPause(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('agents')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN agents TEXT')
+    }
+    if (!columns.has('paused')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
+    }
+  }
+
+  /**
+   * Add the routine description column to databases created before a routine
+   * could carry the user's own note about what it is for. Fresh databases
+   * already carry it, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineDescription(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('description')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN description TEXT')
+    }
+  }
+
+  /**
+   * Add the routine reporting columns to databases created before a routine
+   * could record where its output goes and how urgent it is. Fresh databases
+   * already carry both, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineReporting(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('delivery')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN delivery TEXT')
+    }
+    if (!columns.has('priority')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
+    }
   }
 
   /**
@@ -1042,6 +1128,57 @@ export class Database {
     if (!columns.has('draft_json')) {
       connection.exec('ALTER TABLE threads ADD COLUMN draft_json TEXT')
     }
+  }
+
+  /** Existing databases predate assistant-space task columns: routine grouping,
+   *  custom row icon, per-task schedule override, and last-run timestamp. */
+  private migrateThreadAssistantColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('routine_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN routine_id TEXT')
+    }
+    if (!columns.has('assistant_icon_type')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_icon_type TEXT')
+    }
+    if (!columns.has('assistant_icon')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_icon TEXT')
+    }
+    if (!columns.has('schedule_override')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN schedule_override TEXT')
+    }
+    if (!columns.has('last_run_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_run_at INTEGER')
+    }
+    if (!columns.has('last_dispatched_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_dispatched_at INTEGER')
+    }
+    if (!columns.has('last_success_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_success_at INTEGER')
+    }
+    if (!columns.has('assistant_getting_started')) {
+      connection.exec(
+        'ALTER TABLE threads ADD COLUMN assistant_getting_started INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+    // Each run of a task executes on its own thread; this column links a run
+    // back to the task it belongs to. Tasks predating it read back as tasks.
+    if (!columns.has('assistant_task_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_task_id TEXT')
+    }
+    // A routine's how-to ("Getting started") thread is pinned for its whole
+    // life: pinning is what keeps it out of automatic eviction. It still renders
+    // nested inside its routine (AssistantSidebar keeps a pinned how-to thread
+    // in place), so the pin is retention, not a move to the Pinned section. Rows
+    // created before that rule are pinned once here, and the guard makes the
+    // statement a no-op on every later boot.
+    connection.exec(
+      'UPDATE threads SET pinned = 1, pinned_at = COALESCE(pinned_at, updated_at) ' +
+        'WHERE assistant_getting_started = 1 AND pinned = 0'
+    )
   }
 
   /** Existing databases predate the per-message generation duration used by

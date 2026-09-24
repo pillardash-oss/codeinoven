@@ -18,6 +18,7 @@ import { ThreadMessagesCache } from './thread-messages-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
   containsNewestTurnPrompt,
+  EMPTY_MESSAGES,
   threadKey,
   THREAD_MESSAGE_PRELOAD_WINDOW,
   type ThreadMessagesEntry
@@ -63,6 +64,19 @@ class ThreadMessagesStore {
   /** Current message list for a thread, safe to use in deriveds/effects. */
   messages(projectId: string, threadId: string): AgentMessage[] {
     return this.cache.messages(projectId, threadId)
+  }
+
+  /**
+   * The thread's transcript as of its last structural change: the same message
+   * objects, but a reference that only moves when messages are added, removed,
+   * or reshaped. A streamed delta does not touch it.
+   *
+   * Read it for identity, role, and timestamps only. The message objects are
+   * shared with the live cache, so a part's text read through this array can
+   * change under you without the reference moving.
+   */
+  structureMessages(projectId: string, threadId: string): AgentMessage[] {
+    return this.cache.structureMessages.get(threadKey(projectId, threadId)) ?? EMPTY_MESSAGES
   }
 
   /** Changes whenever this thread's cached transcript is published. */
@@ -176,7 +190,17 @@ class ThreadMessagesStore {
       this.cache.notify(projectId, conversationId)
       try {
         const serverMessages = await invoke('agent:loadTemporaryChatMessages', conversationId)
-        this.reconcile(projectId, conversationId, serverMessages)
+        // A side chat owns no durable mirror: this renderer cache IS its visible
+        // trail, and it is discarded only when the chat expires. The harness
+        // transcript is not a reliable authority over that trail   a side chat
+        // whose process was evicted, or whose native transcript is unavailable,
+        // reports an empty (or user-only) history, and the thread reconcile
+        // would then delete every cached answer from the view, leaving the user
+        // staring at their own message. Merge additively instead: a snapshot may
+        // add or refresh messages, never erase the answers already on screen.
+        // Deliberate removals do not come through here   they arrive as the kept
+        // conversation through `applyKept`.
+        this.mergePage(projectId, conversationId, serverMessages)
         entry.hasOlder = false
         entry.loaded = true
       } catch (err) {

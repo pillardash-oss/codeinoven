@@ -13,14 +13,20 @@
 
 import { app } from 'electron'
 import { join } from 'path'
-import { chatThreadArtifactDirectory } from '../../lib/project-artifacts'
-import { ensureDir, getConfigRoot } from '../../lib/utils'
+import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
+import { getConfigRoot } from '../../lib/utils'
+import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { assistantRunTitle } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
-import { setNotificationService, setPowerWakeService } from '../chat/thread-events'
+import {
+  broadcastThreadUpdate,
+  setNotificationService,
+  setPowerWakeService
+} from '../chat/thread-events'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -68,6 +74,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { DirectoryPreviewService },
     { ForeignRunService },
     { ThreadTransferService },
+    { RoutineManager },
+    { RoutineSchedulerService },
+    { broadcastMissedRunsChanged },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -91,6 +100,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../preview/directory-preview-service'),
     import('../chat/foreign-run-service'),
     import('../chat/thread-transfer-service'),
+    import('../../lib/engines/routine-manager'),
+    import('../scheduler/routine-scheduler-service'),
+    import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
     import('../git/github-auth-service')
@@ -107,16 +119,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),
-    {
-      // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
-      // directory; resolution creates it on demand so an empty thread still has
-      // a browsable root.
-      resolve: async (threadId: string) => {
-        const root = storage.resolve(chatThreadArtifactDirectory(threadId))
-        await ensureDir(root)
-        return root
-      }
-    }
+    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // directory and assistant file trees on the task's
+    // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
+    // demand so an empty conversation still has a browsable root.
+    createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
   state.computerUsePipService = new ComputerUsePipService(storage)
@@ -176,6 +183,83 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.retryScheduler = new RetrySchedulerService(storage)
   state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
+  state.routineManager = new RoutineManager(database)
+  const routineManager = state.routineManager
+  state.routineScheduler = new RoutineSchedulerService(storage, {
+    routines: routineManager,
+    onTaskChanged: (task) => broadcastThreadUpdate(task),
+    // Every run executes on a fresh thread: a scheduled fire and a manual
+    // "Run now" both create one, so a run never lands in the task's own
+    // conversation. Only a routine's Getting started thread hosts authoring.
+    createRunThread: (task, routine) => {
+      const chatEngine = state.chatEngine
+      if (!chatEngine) throw new Error('The chat engine is not available')
+      // A scheduled run needs a bound model; a task that was never configured
+      // is skipped rather than fired with guessed settings.
+      if (!task.settings) throw new Error('This task has no model configured yet.')
+      // The routine's primary model wins over whatever the thread was last set
+      // to, so the models the user picked for the routine are the models its
+      // runs actually use. A routine without a model set keeps the thread's own.
+      const primary = routinePrimaryModel(routine?.agents)
+      const runSettings = primary ? settingsWithRoutineModel(task.settings, primary) : task.settings
+      return chatEngine.createAssistantRunThread({
+        task,
+        settings: runSettings,
+        title: assistantRunTitle(Date.now())
+      })
+    },
+    dispatch: (run, task) => {
+      const chatEngine = state.chatEngine
+      if (!chatEngine) {
+        Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
+        return
+      }
+      const prompt =
+        task.title.trim().length > 0
+          ? `Run this scheduled task now: ${task.title}`
+          : 'Run this scheduled task now.'
+      const runSettings = run.settings ?? task.settings
+      if (!runSettings) {
+        Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })
+        return
+      }
+      // The routine's how-to is NOT passed as prompt context: the engine composes
+      // it into the run's system prompt from the routine itself
+      // (`routineHowToInstruction`), which the run thread carries through its
+      // inherited `routineId`, so it is restated every turn instead of being
+      // appended to this message and kept in the harness transcript.
+      return chatEngine.sendPrompt(
+        run.projectId,
+        run.id,
+        runSettings,
+        prompt,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal',
+        undefined,
+        undefined,
+        true
+      )
+    }
+  })
+  state.routineScheduler.attachChangeListener(() => {
+    broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
+  })
+  // Scheduled assistant runs fall over to the routine's next model when the
+  // current one fails, instead of waiting out the failed provider's reset.
+  state.chatEngine.attachAssistantAgentsResolver((task) =>
+    state.routineManager?.resolveTaskAgents(task)
+  )
+  // A settled turn on an assistant task is reported to the routine scheduler,
+  // which knows whether it dispatched a run on that task and stamps the last
+  // successful run once the run's turn actually completes.
+  state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
+    state.routineScheduler?.settleRun(threadId, status)
+  })
   state.speechService = new SpeechService(
     {
       catalogPath: app.isPackaged
@@ -289,6 +373,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     powerWakeService: state.powerWakeService,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
+    routineManager: state.routineManager ?? undefined,
+    routineScheduler: state.routineScheduler ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation: context.threadCreation,
@@ -473,6 +559,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       await state.heartbeatScheduler?.start()
     } catch (error) {
       Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await state.routineScheduler?.start()
+    } catch (error) {
+      Logger.error('Routine scheduler startup failed (non-fatal):', error)
     }
 
     try {

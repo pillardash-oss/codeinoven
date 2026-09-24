@@ -6,8 +6,7 @@ import type {
 } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
-/** One line per decision, appended where every other app audit trail lives. */
-const AUDIT_PATH = 'logs/typesafe-decisions.jsonl'
+import { TYPESAFE_DECISIONS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
 
 /** One recorded decision. */
 export interface TypesafeAuditRecord {
@@ -39,6 +38,9 @@ export interface TypesafeAuditRecord {
 /**
  * Append-only record of what the capability decided.
  *
+ * Each record is one line in the day folder's `typesafe-decisions.jsonl`, next
+ * to every other app audit trail (see `src/main/system/log-paths.ts`).
+ *
  * A typed, persisted answer is what makes an auxiliary judgment reviewable
  * later: the raw probabilities are kept alongside the thresholds they were
  * measured against, so a decision can be re-scored without asking the service
@@ -50,7 +52,10 @@ export class TypesafeAuditLog {
 
   async append(record: TypesafeAuditRecord): Promise<void> {
     try {
-      await this.storage.appendRaw(AUDIT_PATH, `${JSON.stringify(record)}\n`)
+      await this.storage.appendRaw(
+        dailyLogRelativePath(TYPESAFE_DECISIONS_LOG_FILE),
+        `${JSON.stringify(record)}\n`
+      )
     } catch (error) {
       // Best effort by design: a seam's own work must not fail because one
       // audit line could not be written.

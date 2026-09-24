@@ -51,6 +51,11 @@
   --color-thread-unread: var(--color-success);
   --color-thread-error: var(--color-danger);
   --color-thread-done: var(--color-muted);
+  /* Missed scheduled run (Assistant View). A dedicated yellow-family tone
+     tuned from the suggested #ffe300 so it stays readable on light surfaces;
+     never the amber --color-warning (#d97706). Light value #a16207 gives
+     ~4.9:1 on #ffffff (AA for normal text). */
+  --color-missed: #a16207;
 
   /* Borders */
   --color-border: #e2e1dc;
@@ -117,6 +122,9 @@
   --color-chat-success: #34d399;
   --color-thread-working-paused: var(--color-warning);
   --color-thread-spec: #a78bfa;
+  /* Missed run on dark: #fcd34d gives ~13.6:1 on #0b0b0d, clearly brighter
+     and more yellow than the amber warning so the two read apart. */
+  --color-missed: #fcd34d;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */

@@ -8,6 +8,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { formatDateTime } from '$shared/date-time-format'
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -21,6 +22,11 @@
     /** Whether this thread's in-flight turn belongs to another CodeInOven
      *  instance, which is where its live output and stop control are. */
     isForeignRun?: boolean
+    /**
+     * Force-hide the Project/Repository rows. Assistant tasks live in the
+     * hidden assistant container, so its internal project is noise here.
+     */
+    hideProject?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
@@ -41,6 +47,7 @@
     isWorking = false,
     isRetryPaused = false,
     isForeignRun = false,
+    hideProject = false,
     stageLabel = '',
     threadState = 'read'
   }: Props = $props()
@@ -51,7 +58,7 @@
   )
 
   /** While the sidebar is scoped to one project, Project/Repository are redundant. */
-  let hideProjectInfo = $derived(Boolean(scopeState.sidebarContext))
+  let showProjectInfo = $derived(!hideProject && !scopeState.sidebarContext)
 
   /** Git remote origin URL for the thread's project, resolved lazily on hover. */
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
@@ -74,13 +81,6 @@
       void projectRemotes.ensure(project.id, project.path)
     }
   })
-
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    })
-  }
 </script>
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
@@ -107,7 +107,7 @@
       </dd>
     </div>
   {/if}
-  {#if project && !hideProjectInfo}
+  {#if project && showProjectInfo}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Project</dt>
       <dd class="min-w-0 break-words text-muted">{project.name}</dd>
@@ -121,11 +121,11 @@
   {/if}
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Created</dt>
-    <dd class="text-muted">{formatDate(thread.createdAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.createdAt)}</dd>
   </div>
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
-    <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.updatedAt)}</dd>
   </div>
   {#if isForeignRun}
     <div class="flex gap-2">

@@ -2,6 +2,7 @@
   import {
     ChevronLeft,
     ChevronRight,
+    Clock,
     CornerDownRight,
     Eye,
     EyeOff,
@@ -10,10 +11,12 @@
     ShieldCheck,
     X
   } from '@lucide/svelte'
+  import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -55,6 +58,19 @@
   let filledCount = $derived(values.filter((value) => value.trim().length > 0).length)
   let allFilled = $derived(filledCount === total)
   let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+  // The request carries its own deadline, so the countdown is the same one the
+  // main process is running: the card closes when it reaches zero. Time is an
+  // external system, so it is subscribed to rather than tracked in an effect.
+  const subscribeToClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, 1_000)
+    return () => window.clearInterval(timer)
+  })
+  let remainingMs = $derived.by(() => {
+    if (request.expiresAt === undefined) return null
+    subscribeToClock()
+    return Math.max(0, request.expiresAt - Date.now())
+  })
+  let remainingLabel = $derived(remainingMs === null ? 'No deadline' : formatRemaining(remainingMs))
   /** Every variable this request asks for, so reuse is stated before it happens. */
   let requestedVariables = $derived(
     request.questions.flatMap((entry) =>
@@ -155,6 +171,14 @@
     </div>
 
     <div class="flex shrink-0 items-center gap-1">
+      <span
+        class="mr-1 flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted"
+        aria-label={`Time remaining: ${remainingLabel}`}
+        title="The card closes when the time runs out; ask the agent again for a new one"
+      >
+        <Clock size={12} />
+        {remainingLabel}
+      </span>
       {#if total > 1}
         <button
           class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"

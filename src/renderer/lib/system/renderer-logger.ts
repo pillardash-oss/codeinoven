@@ -18,7 +18,8 @@ const MAX_STACK_CHARS = 16000
  * installs window-level handlers for uncaught exceptions, unhandled promise
  * rejections, and `console.error` output, and forwards them through the
  * `renderer:log` IPC bridge to the main-process durable Logger where they land
- * in `error.log` / `main.jsonl` next to main-process records.
+ * in the current day folder's `error.log` / `main.jsonl` next to main-process
+ * records.
  *
  * The bridge is fire-and-forget: forwarding never throws and never blocks the
  * renderer, so a logging failure can never hide or worsen the original error.
