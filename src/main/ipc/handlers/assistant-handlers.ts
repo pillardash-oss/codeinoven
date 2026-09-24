@@ -4,6 +4,11 @@ import { requireString } from './shared'
 import { ROUTINE_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../../lib/routine-agents'
 import {
+  ROUTINE_DELIVERY_CHANNEL_IDS,
+  ROUTINE_IMPACT_IDS,
+  ROUTINE_TIMELINESS_IDS
+} from '../../../lib/routine-reporting'
+import {
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
@@ -13,11 +18,19 @@ import type {
   CreateRoutineInput,
   RoutineAgents,
   RoutineConnection,
+  RoutineDelivery,
+  RoutineDeliveryChannel,
+  RoutineImpact,
+  RoutinePriority,
   RoutineSchedule,
+  RoutineTimeliness,
   UpdateRoutineInput
 } from '../../../lib/types'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
+const DELIVERY_CHANNELS = new Set<string>(ROUTINE_DELIVERY_CHANNEL_IDS)
+const TIMELINESS_BRACKETS = new Set<string>(ROUTINE_TIMELINESS_IDS)
+const IMPACT_BRACKETS = new Set<string>(ROUTINE_IMPACT_IDS)
 const MAX_ROUTINE_NAME = 200
 const MAX_ROUTINE_DESCRIPTION = 2000
 const MAX_HOW_TO = 100_000
@@ -25,6 +38,8 @@ const MAX_CONNECTIONS = 64
 const MAX_CONNECTION_SETUP = 4_000
 const MAX_TIMES = 24
 const MAX_FALLBACKS = 12
+const MAX_DELIVERY_TARGET = 300
+const MAX_DELIVERY_NOTE = 1_000
 
 /** Parse one `HH:mm` value, returning null when malformed. */
 function parseTime(value: unknown): string | null {
@@ -128,6 +143,54 @@ function sanitizeAgents(value: unknown): RoutineAgents | null {
   return { ...(primary ? { primary } : {}), fallbacks }
 }
 
+/**
+ * Validate an untrusted delivery value into a RoutineDelivery, or null to clear
+ * it. The channel must be one the app knows, so a routine is never handed a
+ * delivery nothing can honour. A target is capped, and dropped for the in-app
+ * channel, which has no destination to name.
+ */
+function sanitizeDelivery(value: unknown): RoutineDelivery | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') throw new TypeError('Routine delivery must be an object or null')
+  const record = value as Record<string, unknown>
+  const channel = typeof record.channel === 'string' ? record.channel.trim() : ''
+  if (!DELIVERY_CHANNELS.has(channel)) {
+    throw new TypeError('Routine delivery channel is invalid')
+  }
+  const typed = channel as RoutineDeliveryChannel
+  const target =
+    typeof record.target === 'string' ? record.target.trim().slice(0, MAX_DELIVERY_TARGET) : ''
+  const note =
+    typeof record.note === 'string' ? record.note.trim().slice(0, MAX_DELIVERY_NOTE) : ''
+  return {
+    channel: typed,
+    ...(target && typed !== 'in-app' ? { target } : {}),
+    ...(note ? { note } : {})
+  }
+}
+
+/**
+ * Validate an untrusted priority value into a RoutinePriority, or null to clear
+ * it. Both brackets must resolve, so a routine never carries half an urgency.
+ */
+function sanitizePriority(value: unknown): RoutinePriority | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') throw new TypeError('Routine priority must be an object or null')
+  const record = value as Record<string, unknown>
+  const timeliness = typeof record.timeliness === 'string' ? record.timeliness.trim() : ''
+  const impact = typeof record.impact === 'string' ? record.impact.trim() : ''
+  if (!TIMELINESS_BRACKETS.has(timeliness)) {
+    throw new TypeError('Routine timeliness bracket is invalid')
+  }
+  if (!IMPACT_BRACKETS.has(impact)) {
+    throw new TypeError('Routine impact bracket is invalid')
+  }
+  return {
+    timeliness: timeliness as RoutineTimeliness,
+    impact: impact as RoutineImpact
+  }
+}
+
 function validateCreateInput(value: unknown): CreateRoutineInput {
   if (typeof value !== 'object' || value === null) throw new TypeError('Invalid routine input')
   const record = value as Record<string, unknown>
@@ -144,6 +207,12 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
       ? { connections: sanitizeConnections(record.connections) }
       : {}),
     ...(record.agents !== undefined ? { agents: sanitizeAgents(record.agents) ?? undefined } : {}),
+    ...(record.delivery !== undefined
+      ? { delivery: sanitizeDelivery(record.delivery) ?? undefined }
+      : {}),
+    ...(record.priority !== undefined
+      ? { priority: sanitizePriority(record.priority) ?? undefined }
+      : {}),
     ...(typeof record.paused === 'boolean' ? { paused: record.paused } : {})
   }
 }
@@ -188,6 +257,8 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
     const agents = sanitizeAgents(record.agents)
     if (agents) patch.agents = agents
   }
+  if (record.delivery !== undefined) patch.delivery = sanitizeDelivery(record.delivery)
+  if (record.priority !== undefined) patch.priority = sanitizePriority(record.priority)
   if (typeof record.paused === 'boolean') patch.paused = record.paused
   return patch
 }

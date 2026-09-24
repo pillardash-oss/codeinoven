@@ -1,5 +1,13 @@
 import type { Database } from '../database'
-import type { Routine, RoutineAgents, RoutineConnection, RoutineSchedule } from '../../../lib/types'
+import type {
+  Routine,
+  RoutineAgents,
+  RoutineConnection,
+  RoutineDelivery,
+  RoutinePriority,
+  RoutineSchedule
+} from '../../../lib/types'
+import { normalizePlanDelivery, normalizePlanPriority } from '../../../lib/routine-reporting'
 
 interface RoutineRow {
   id: string
@@ -12,6 +20,8 @@ interface RoutineRow {
   how_to: string
   how_to_updated_at: number | null
   connections: string
+  delivery: string | null
+  priority: string | null
   agents: string | null
   paused: number
   pinned: number
@@ -68,6 +78,29 @@ function parseAgents(raw: string | null): RoutineAgents | undefined {
   }
 }
 
+/**
+ * Read the stored delivery, validated through the shared normaliser so a row
+ * written by an older build cannot surface a channel the app no longer knows.
+ */
+function parseDelivery(raw: string | null): RoutineDelivery | undefined {
+  if (!raw) return undefined
+  try {
+    return normalizePlanDelivery(JSON.parse(raw)) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Read the stored priority, validated through the shared normaliser. */
+function parsePriority(raw: string | null): RoutinePriority | undefined {
+  if (!raw) return undefined
+  try {
+    return normalizePlanPriority(JSON.parse(raw)) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Whether a persisted value is a usable model selection. */
 function isModelSelection(value: unknown): value is RoutineAgents['fallbacks'][number] {
   if (typeof value !== 'object' || value === null) return false
@@ -91,6 +124,8 @@ function rowToRoutine(row: RoutineRow): Routine {
     howTo: row.how_to ?? '',
     howToUpdatedAt: row.how_to_updated_at ?? undefined,
     connections: parseConnections(row.connections),
+    delivery: parseDelivery(row.delivery ?? null),
+    priority: parsePriority(row.priority ?? null),
     agents: parseAgents(row.agents ?? null),
     paused: row.paused === 1,
     pinned: row.pinned === 1,
@@ -108,8 +143,9 @@ export class RoutineRepo {
     this.db.run(
       `INSERT INTO routines(
         id, name, description, color, icon, icon_type, schedule, how_to, how_to_updated_at,
-        connections, agents, paused, pinned, pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        connections, delivery, priority, agents, paused, pinned, pinned_at, sort_order,
+        created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
@@ -120,6 +156,8 @@ export class RoutineRepo {
         how_to = excluded.how_to,
         how_to_updated_at = excluded.how_to_updated_at,
         connections = excluded.connections,
+        delivery = excluded.delivery,
+        priority = excluded.priority,
         agents = excluded.agents,
         paused = excluded.paused,
         pinned = excluded.pinned,
@@ -137,6 +175,8 @@ export class RoutineRepo {
       routine.howTo ?? '',
       routine.howToUpdatedAt ?? null,
       JSON.stringify(routine.connections ?? []),
+      routine.delivery ? JSON.stringify(routine.delivery) : null,
+      routine.priority ? JSON.stringify(routine.priority) : null,
       routine.agents ? JSON.stringify(routine.agents) : null,
       routine.paused ? 1 : 0,
       routine.pinned ? 1 : 0,

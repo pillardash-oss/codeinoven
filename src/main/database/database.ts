@@ -743,6 +743,7 @@ export class Database {
       this.migrateRoutinePinned(connection)
       this.migrateRoutineAgentsAndPause(connection)
       this.migrateRoutineDescription(connection)
+      this.migrateRoutineReporting(connection)
     })()
   }
 
@@ -829,6 +830,25 @@ export class Database {
     )
     if (!columns.has('description')) {
       connection.exec('ALTER TABLE routines ADD COLUMN description TEXT')
+    }
+  }
+
+  /**
+   * Add the routine reporting columns to databases created before a routine
+   * could record where its output goes and how urgent it is. Fresh databases
+   * already carry both, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateRoutineReporting(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('delivery')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN delivery TEXT')
+    }
+    if (!columns.has('priority')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
     }
   }
 

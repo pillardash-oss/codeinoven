@@ -400,13 +400,16 @@ prompt"; the user-facing term is how-to.
   `assistant:howToThread` (which finds the routine's thread even while hidden,
   because archived rows never reach the hydrated thread list) and opens it.
 - The authoring contract asks the agent to agree on the instructions, the
-  schedule, and the connections, then present a short **recap** plus **two**
-  fenced blocks: the how-to itself (tag `how-to`) and a machine-readable plan
-  (tag `routine`) holding one JSON object. The plan is validated against the
-  schedule and connections schemas in `src/lib/routine-plan.ts`
-  (`ROUTINE_SCHEDULE_JSON_SCHEMA`, `ROUTINE_CONNECTION_JSON_SCHEMA`,
-  `ROUTINE_PLAN_JSON_SCHEMA`), and the agent is shown the plan schema in the
-  contract.
+  schedule, the connections, and how the routine reports back, then present a
+  short **recap** plus **two** fenced blocks: the how-to itself (tag `how-to`)
+  and a machine-readable plan (tag `routine`) holding one JSON object. The plan
+  is validated against the schedule, connections, delivery and priority schemas
+  in `src/lib/routine-plan.ts` (`ROUTINE_SCHEDULE_JSON_SCHEMA`,
+  `ROUTINE_CONNECTION_JSON_SCHEMA`, `ROUTINE_PLAN_JSON_SCHEMA`) and
+  `src/lib/routine-reporting.ts` (`ROUTINE_DELIVERY_JSON_SCHEMA`,
+  `ROUTINE_PRIORITY_JSON_SCHEMA`), and the agent is shown the plan schema in the
+  contract. Delivery and priority are optional, so a draft that omits them still
+  commits; see [Reporting](#reporting).
 - A connection the agent could not install itself carries a `setup` prompt in its
   plan entry: a ready-to-run instruction for the utility setup agent naming what
   the capability is, where it comes from, and what the user must supply. It is
@@ -636,6 +639,9 @@ value and editable where the user must.
   seeds two empty fallback rows; more can be added and any row removed, so the
   set can shrink back to the primary alone. The agent points the user here in its
   post-save next-steps list.
+- **Reporting** — where the routine's output goes and how urgent it is, shown as
+  one line in **All** and edited in the **Routine** tab. See
+  [Reporting](#reporting).
 
 ### How the model set is used at run time
 
@@ -662,6 +668,81 @@ The model set is not decoration; it decides which model a run executes on.
   panel scans every thread that carries the routine's id, so a run's own thread
   is what reports a failed or interrupted execution. Every entry opens its
   thread: the run that had the problem, or the task for a schedule-level miss.
+
+## Reporting
+
+A routine that produces something for the user to read has to say where that
+output goes and how urgent it is, or the run finishes with the report buried in a
+transcript nobody opened. Both are agreed during authoring and stored on the
+routine (`Routine.delivery`, `Routine.priority`). The vocabulary, labels, JSON
+schemas and tolerant normalisers live in `src/lib/routine-reporting.ts`, so the
+contracts, the panel and the validators cannot drift apart.
+
+### Delivery
+
+`RoutineDelivery` names a channel and, when the channel takes one, the concrete
+destination. The channels are `in-app`, `slack`, `telegram`, `whatsapp`,
+`signal`, `email`, and `other`. **In-app is the only channel wired up today**: it
+means a normal thread notification inside CodeInOven, surfaced in the
+notification panel's **Assistants** tab, and the app delivers it by the run
+thread simply existing. Every other channel is *external*, and picking one is
+also a statement that the routine needs a connection: the authoring contract
+tells the agent to add that channel to the plan's `connections` and set it up
+like any other, and the panel warns (and the All tab's summary row marks) a
+delivery whose channel has no ready connection. An action-only routine that
+reports nothing has no delivery, and the contract says so explicitly instead of
+inventing a channel.
+
+### Priority
+
+Urgency is deliberately **two independent brackets**, because "urgent" is two
+different questions:
+
+- `timeliness` is time-based: `now`, `today`, `tomorrow`, `this-week`,
+  `whenever`.
+- `impact` is scope-based: `just-me`, `team`, `company`, `critical`. `critical`
+  is the bracket for something that affects more than the user alone and cannot
+  wait.
+
+`RoutinePriority` stores both, and both are required together: a half-resolved
+pair is rejected rather than silently defaulted, in the plan normaliser and again
+at the IPC boundary (`sanitizePriority`). A run may refine the bracket it
+actually falls into, because the agent often only learns the real urgency from
+what it found; the routine's value is the agreed default, not a fixed label.
+
+### Where the ask happens
+
+`routineAuthoringContext` (`src/lib/routine-authoring.ts`) asks for both, in the
+reporting order that matters: whether the routine reports to the user at all,
+which channel, which destination, and then both priority brackets, with the
+choices listed and their meanings spelled out. The agent may decide the brackets
+itself when the user would rather not, but it must say which it picked and why,
+and it must leave `delivery` out entirely for an action-only routine. The plan
+schema (`ROUTINE_PLAN_JSON_SCHEMA`) carries `delivery` and `priority` alongside
+`schedule` and `connections`, and both are optional, so an older or narrower
+draft still commits.
+
+### Where the answer is used
+
+`routineRunContext` (`src/lib/routine-run.ts`) turns the stored agreement into the
+run's instruction: an in-app routine is told to write the report as the message
+itself and lead with what needs attention, an external one is told to deliver
+through its channel and to supply that connection itself rather than drop the
+report, and both are told the agreed brackets and to move them when what they
+found differs. A routine with a report but no agreed priority is told to decide
+both brackets from what it found. An action-only routine gets neither line, so
+the reporting contract never leaks into a run that has nothing to report.
+
+### Editing by hand
+
+The **Routine** tab's Reporting card edits both halves with the app's dropdown
+idiom (`src/renderer/lib/components/ui/EnumSelect.svelte`, composed on the same
+`bits-ui` dropdown `MemoryScopeSelect` uses), each option carrying a one-line
+hint so the choice is understandable rather than only recognisable. Choosing a
+channel keeps an already-typed destination and note; the in-app channel drops the
+destination because it has none. Both halves can be cleared, which is what a
+routine that stops reporting (or stops carrying a default urgency) needs, and
+clearing is a real `null` patch rather than an empty object.
 
 ## Fork hand-off
 

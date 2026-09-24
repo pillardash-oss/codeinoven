@@ -1,4 +1,11 @@
 import { parseTimeOfDay, type RoutineSchedule, type ScheduleCadence } from './types'
+import {
+  normalizePlanDelivery,
+  normalizePlanPriority,
+  ROUTINE_DELIVERY_JSON_SCHEMA,
+  ROUTINE_PRIORITY_JSON_SCHEMA
+} from './routine-reporting'
+import type { RoutineDelivery, RoutinePriority } from './types'
 
 /**
  * The machine-readable routine plan the authoring agent emits, and the JSON
@@ -30,10 +37,15 @@ export interface RoutinePlanConnection {
   setup?: string
 }
 
-/** The validated plan: the schedule to apply and the connections to link. */
+/** The validated plan: the schedule to apply, the connections to link, and how
+ *  the routine reports back to the user. */
 export interface RoutinePlan {
   schedule: RoutineSchedule | null
   connections: RoutinePlanConnection[]
+  /** Where the routine's output goes; absent for an action-only routine. */
+  delivery: RoutineDelivery | null
+  /** The routine's default urgency; absent to let each run decide. */
+  priority: RoutinePriority | null
 }
 
 const SCHEDULE_CADENCES: readonly ScheduleCadence[] = [
@@ -137,7 +149,9 @@ export const ROUTINE_PLAN_JSON_SCHEMA: Record<string, unknown> = {
       type: 'array',
       items: ROUTINE_CONNECTION_JSON_SCHEMA,
       description: 'Every service the routine needs. An empty array means it needs none.'
-    }
+    },
+    delivery: ROUTINE_DELIVERY_JSON_SCHEMA,
+    priority: ROUTINE_PRIORITY_JSON_SCHEMA
   },
   required: ['schedule', 'connections']
 }
@@ -228,15 +242,18 @@ export function normalizePlanConnections(value: unknown): RoutinePlanConnection[
 
 /**
  * Validate one decoded plan value against the plan schema. Returns the plan, or
- * null when it carries neither a usable schedule nor a connection, so a stray
- * JSON object never reads as a routine plan.
+ * null when it carries nothing the app can act on   no usable schedule, no
+ * connection, and no reporting agreement   so a stray JSON object never reads
+ * as a routine plan.
  */
 export function parseRoutinePlanValue(value: unknown): RoutinePlan | null {
   if (!isRecord(value)) return null
   const schedule = normalizePlanSchedule(value.schedule)
   const connections = normalizePlanConnections(value.connections)
-  if (!schedule && connections.length === 0) return null
-  return { schedule, connections }
+  const delivery = normalizePlanDelivery(value.delivery)
+  const priority = normalizePlanPriority(value.priority)
+  if (!schedule && connections.length === 0 && !delivery && !priority) return null
+  return { schedule, connections, delivery, priority }
 }
 
 /** Parse a JSON plan body (the `routine` fence) against the plan schema. */

@@ -2,6 +2,49 @@ import type { AgentModelSelection } from './common'
 import type { RoutineSchedule } from './schedule'
 
 /**
+ * A channel a routine can deliver its output to. `in-app` is a normal thread
+ * notification inside CodeInOven and is the only channel wired up today; every
+ * other channel needs a connection the routine must have first.
+ */
+export type RoutineDeliveryChannel =
+  | 'in-app'
+  | 'telegram'
+  | 'whatsapp'
+  | 'signal'
+  | 'slack'
+  | 'email'
+  | 'other'
+
+/** Where a routine's output goes, and to which concrete destination. */
+export interface RoutineDelivery {
+  /** The channel the user agreed on. */
+  channel: RoutineDeliveryChannel
+  /**
+   * The concrete destination the user named: a chat, a channel, an address.
+   * Absent for `in-app`, which has no destination to name.
+   */
+  target?: string
+  /** The agent's own note on how delivery works for this routine. */
+  note?: string
+}
+
+/** Time-based priority bracket: how soon the output matters. */
+export type RoutineTimeliness = 'now' | 'today' | 'tomorrow' | 'this-week' | 'whenever'
+
+/** Scope-based priority bracket: how far the output's impact reaches. */
+export type RoutineImpact = 'just-me' | 'team' | 'company' | 'critical'
+
+/**
+ * A routine's urgency on two independent brackets. `timeliness` is time-based
+ * (how soon it matters) and `impact` is scope-based (how far it reaches), so
+ * "urgent" is never a single answer.
+ */
+export interface RoutinePriority {
+  timeliness: RoutineTimeliness
+  impact: RoutineImpact
+}
+
+/**
  * A Routine is the top-level assistant grouping ("Triage CodeInOven PRs daily,
  * 9am and 5pm"). It owns the agent-authored how-to that every task inside it
  * reuses, a default schedule that tasks may override, and the set of
@@ -35,6 +78,16 @@ export interface Routine {
   howToUpdatedAt?: number
   /** Connections picked from the app-level utility library. */
   connections: RoutineConnection[]
+  /**
+   * Where the routine's output is delivered. Absent for a routine that reports
+   * nothing to the user (an action-only routine).
+   */
+  delivery?: RoutineDelivery
+  /**
+   * The routine's agreed default urgency. Each run may refine it, since the
+   * agent often only learns the real bracket from what it found.
+   */
+  priority?: RoutinePriority
   /**
    * The models this routine runs on: one primary and zero or more fallbacks,
    * each with its own thinking level and account. A routine is Incomplete
@@ -107,6 +160,8 @@ export interface CreateRoutineInput {
   schedule?: RoutineSchedule | null
   howTo?: string
   connections?: RoutineConnection[]
+  delivery?: RoutineDelivery
+  priority?: RoutinePriority
   agents?: RoutineAgents
   paused?: boolean
 }
@@ -123,6 +178,10 @@ export interface UpdateRoutineInput {
   schedule?: RoutineSchedule | null
   howTo?: string
   connections?: RoutineConnection[]
+  /** `null` clears the delivery, for a routine that reports nothing. */
+  delivery?: RoutineDelivery | null
+  /** `null` clears the priority default, leaving it to each run. */
+  priority?: RoutinePriority | null
   agents?: RoutineAgents
   paused?: boolean
 }

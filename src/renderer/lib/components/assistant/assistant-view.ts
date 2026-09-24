@@ -14,6 +14,10 @@ import {
   type UtilityDefinition
 } from '$shared/types'
 import {
+  normalizePlanDelivery,
+  normalizePlanPriority
+} from '$shared/routine-reporting'
+import {
   parseRoutinePlanJson,
   type RoutinePlan,
   type RoutinePlanConnection
@@ -559,6 +563,9 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
   const times: string[] = []
   const weekdays: number[] = []
   const connections: RoutinePlanConnection[] = []
+  let delivery: RoutinePlan['delivery'] = null
+  let timeliness = ''
+  let impact = ''
   let sawAnything = false
 
   for (const rawLine of body.split('\n')) {
@@ -603,6 +610,29 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
       sawAnything = true
       continue
     }
+    if (['delivery', 'channel', 'deliver', 'deliver-to', 'notify', 'notification'].includes(key)) {
+      // The value may name a destination too ("slack #eng-alerts"). The channel
+      // is the first token; the rest, when the channel takes one, is the target.
+      const [head, ...rest] = value.split(/[\s,]+/)
+      const target = rest.join(' ').trim()
+      const candidate = normalizePlanDelivery({
+        channel: head ?? '',
+        ...(target ? { target } : {})
+      })
+      if (candidate) delivery = candidate
+      sawAnything = true
+      continue
+    }
+    if (['timeliness', 'urgency', 'when'].includes(key)) {
+      timeliness = value
+      sawAnything = true
+      continue
+    }
+    if (['impact', 'scope', 'magnitude', 'reach'].includes(key)) {
+      impact = value
+      sawAnything = true
+      continue
+    }
   }
 
   if (!sawAnything) return null
@@ -610,7 +640,9 @@ export function parseRoutinePlan(body: string): RoutinePlanDraft | null {
     schedule: buildPlanSchedule(cadence, times, weekdays),
     connections: [
       ...new Map(connections.map((entry) => [entry.name.toLowerCase(), entry])).values()
-    ]
+    ],
+    delivery,
+    priority: normalizePlanPriority({ timeliness, impact })
   }
 }
 

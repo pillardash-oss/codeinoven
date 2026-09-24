@@ -489,7 +489,9 @@ describe('routine plan schema', () => {
       parseRoutinePlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
     ).toEqual({
       schedule: { cadence: 'once', times: [], onceAt: 1_700_000_000_000 },
-      connections: []
+      connections: [],
+      delivery: null,
+      priority: null
     })
   })
 
@@ -516,7 +518,12 @@ describe('routine plan schema', () => {
       properties: Record<string, unknown>
     }
     expect(schema.required).toEqual(['schedule', 'connections'])
-    expect(Object.keys(schema.properties)).toEqual(['schedule', 'connections'])
+    expect(Object.keys(schema.properties)).toEqual([
+      'schedule',
+      'connections',
+      'delivery',
+      'priority'
+    ])
   })
 })
 

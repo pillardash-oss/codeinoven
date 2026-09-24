@@ -17,6 +17,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -39,9 +40,21 @@
     type Routine,
     type RoutineAgents,
     type RoutineConnection,
+    type RoutineDeliveryChannel,
+    type RoutineImpact,
+    type RoutineTimeliness,
     type Thread,
     type UtilityCatalog
   } from '$shared/types'
+  import {
+    isExternalDeliveryChannel,
+    routineDeliveryChannelLabel,
+    routineDeliveryLabel,
+    routinePriorityLabel,
+    ROUTINE_DELIVERY_OPTIONS,
+    ROUTINE_IMPACT_OPTIONS,
+    ROUTINE_TIMELINESS_OPTIONS
+  } from '$shared/routine-reporting'
   import {
     parseHowToSections,
     resolveConnections,
@@ -49,6 +62,11 @@
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
+  import {
+    buildConnectionLibrary,
+    connectionNamesOverlap,
+    type ConnectionLibraryEntry
+  } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
@@ -56,7 +74,6 @@
   import UtilityEditorModal, {
     type UtilityEditorTarget
   } from '$lib/components/settings/UtilityEditorModal.svelte'
-  import { buildConnectionLibrary, type ConnectionLibraryEntry } from './connection-library'
 
   interface Props {
     projectId: string
@@ -210,6 +227,86 @@
     void persistRoutine({ agents }, 'Could not save the routine models')
   }
 
+  // ─── Reporting: where the output goes, and how urgent it is ────────────────
+
+  /** The delivery channels, with a hint saying whether the choice needs a connection. */
+  const deliveryChoices = ROUTINE_DELIVERY_OPTIONS.map((option) => ({
+    id: option.id,
+    label: option.label,
+    hint: option.external
+      ? 'Needs a connection this routine must have'
+      : 'A normal thread notification inside CodeInOven'
+  }))
+
+  /**
+   * Pick the delivery channel. The destination and any note are carried over, so
+   * switching channel does not silently discard what the user already told the
+   * agent; the in-app channel drops the destination because it has none.
+   */
+  function setDeliveryChannel(channel: RoutineDeliveryChannel): void {
+    if (!routine) return
+    const current = routine.delivery
+    const target = current?.target?.trim()
+    void persistRoutine(
+      {
+        delivery: {
+          channel,
+          ...(target && channel !== 'in-app' ? { target } : {}),
+          ...(current?.note ? { note: current.note } : {})
+        }
+      },
+      'Could not save the delivery channel'
+    )
+  }
+
+  /** Commit the typed destination. The input is uncontrolled, so this is the only write. */
+  function commitDeliveryTarget(raw: string): void {
+    if (!routine) return
+    const delivery = routine.delivery
+    if (!delivery || delivery.channel === 'in-app') return
+    const target = raw.trim()
+    if (target === (delivery.target ?? '')) return
+    void persistRoutine(
+      {
+        delivery: {
+          channel: delivery.channel,
+          ...(target ? { target } : {}),
+          ...(delivery.note ? { note: delivery.note } : {})
+        }
+      },
+      'Could not save the delivery destination'
+    )
+  }
+
+  function clearDelivery(): void {
+    void persistRoutine({ delivery: null }, 'Could not clear the delivery channel')
+  }
+
+  /**
+   * Set one priority bracket, keeping the other. When the routine has no
+   * priority yet the other bracket starts from the middle of its scale, and the
+   * panel immediately shows the pair that was actually saved.
+   */
+  function setPriorityTimeliness(timeliness: RoutineTimeliness): void {
+    if (!routine) return
+    void persistRoutine(
+      { priority: { timeliness, impact: routine.priority?.impact ?? 'team' } },
+      'Could not save the priority'
+    )
+  }
+
+  function setPriorityImpact(impact: RoutineImpact): void {
+    if (!routine) return
+    void persistRoutine(
+      { priority: { timeliness: routine.priority?.timeliness ?? 'today', impact } },
+      'Could not save the priority'
+    )
+  }
+
+  function clearPriority(): void {
+    void persistRoutine({ priority: null }, 'Could not clear the priority')
+  }
+
   const connectionViews = $derived(
     resolveConnections(routine?.connections ?? [], catalog, capabilities)
   )
@@ -221,6 +318,30 @@
   const connectionProblems = $derived(
     connectionViews.filter((view) => view.status !== 'ready').length
   )
+
+  /**
+   * Whether the agreed delivery can actually be honoured: an external channel
+   * needs a ready connection whose name matches it. The in-app channel always
+   * works, since the app surfaces the run thread itself.
+   */
+  const deliveryReady = $derived.by(() => {
+    const delivery = routine?.delivery
+    if (!delivery || !isExternalDeliveryChannel(delivery.channel)) return true
+    const channel = routineDeliveryChannelLabel(delivery.channel)
+    return connectionViews.some(
+      (view) => view.status === 'ready' && connectionNamesOverlap(view.connection.label, channel)
+    )
+  })
+
+  /** The reporting half of the routine as one line, for the All tab's brief. */
+  const reportingBrief = $derived.by(() => {
+    if (!routine) return 'Nothing agreed yet.'
+    const parts: string[] = []
+    if (routine.delivery) parts.push(routineDeliveryLabel(routine.delivery))
+    if (routine.priority) parts.push(routinePriorityLabel(routine.priority))
+    if (parts.length === 0) return 'Nothing agreed yet. Ask the agent, or set it here.'
+    return parts.join(' \u00b7 ')
+  })
 
   function addConnection(entry: ConnectionLibraryEntry): void {
     if (!routine) return
@@ -673,6 +794,13 @@
           })}
 
           {@render summaryRow({
+            title: 'Reporting',
+            detail: reportingBrief,
+            target: 'routine',
+            warn: !deliveryReady
+          })}
+
+          {@render summaryRow({
             title: 'Issues',
             detail:
               issueCount === 0
@@ -703,6 +831,106 @@
           <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
             Schedule: {describeSchedule(routine.schedule)}
           </p>
+
+          <div class="mb-1 flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[0.75rem] text-foreground">Reporting</span>
+              {#if !deliveryReady}
+                <span
+                  class="flex items-center"
+                  style="color: var(--color-warning)"
+                  role="img"
+                  aria-label="The delivery channel needs a connection"
+                  title="The delivery channel needs a connection"
+                >
+                  <AlertTriangle size={11} strokeWidth={2} />
+                </span>
+              {/if}
+            </div>
+            <p class="text-[0.625rem] leading-relaxed text-dimmed">
+              Where this routine's output goes, and how urgent it is. Agree it with the agent, or set
+              it here.
+            </p>
+
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center gap-1.5">
+                <EnumSelect
+                  options={deliveryChoices}
+                  value={routine.delivery?.channel ?? null}
+                  onChange={setDeliveryChannel}
+                  placeholder="Delivery channel"
+                  ariaLabel="Delivery channel"
+                  title="Where this routine's output is delivered"
+                  class="flex-1"
+                />
+                {#if routine.delivery}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    title="Clear the delivery channel"
+                    aria-label="Clear the delivery channel"
+                    onclick={clearDelivery}
+                  >
+                    Clear
+                  </button>
+                {/if}
+              </div>
+
+              {#if routine.delivery && routine.delivery.channel !== 'in-app'}
+                <input
+                  type="text"
+                  class="w-full rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                  placeholder="Destination: a chat, a channel, an address"
+                  aria-label="Delivery destination"
+                  title="The concrete destination, for example #eng-alerts"
+                  value={routine.delivery.target ?? ''}
+                  onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur()
+                  }}
+                />
+              {/if}
+
+              {#if routine.delivery && !deliveryReady}
+                <p class="text-[0.625rem] leading-relaxed" style="color: var(--color-warning)">
+                  {routineDeliveryChannelLabel(routine.delivery.channel)} is not connected yet. Add it
+                  on the Connections tab; until then runs deliver in CodeInOven.
+                </p>
+              {/if}
+            </div>
+
+            <div class="flex items-center gap-1.5">
+              <EnumSelect
+                options={ROUTINE_TIMELINESS_OPTIONS}
+                value={routine.priority?.timeliness ?? null}
+                onChange={setPriorityTimeliness}
+                placeholder="Timeliness"
+                ariaLabel="Time-based priority"
+                title="How soon this routine's output matters"
+                class="flex-1"
+              />
+              <EnumSelect
+                options={ROUTINE_IMPACT_OPTIONS}
+                value={routine.priority?.impact ?? null}
+                onChange={setPriorityImpact}
+                placeholder="Impact"
+                ariaLabel="Scope-based priority"
+                title="How far this routine's output reaches"
+                class="flex-1"
+              />
+              {#if routine.priority}
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  title="Clear the priority"
+                  aria-label="Clear the priority"
+                  onclick={clearPriority}
+                >
+                  Clear
+                </button>
+              {/if}
+            </div>
+          </div>
           {#each sections as section (section.id)}
             {@const folded = collapsed.has(section.id) && editingId !== section.id}
             <div class="rounded-lg border border-border">

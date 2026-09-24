@@ -67,6 +67,8 @@ export class RoutineManager {
       howTo: input.howTo ?? '',
       howToUpdatedAt: input.howTo ? now : undefined,
       connections: input.connections ?? [],
+      delivery: input.delivery,
+      priority: input.priority,
       agents: input.agents,
       paused: input.paused ?? false,
       createdAt: now,
@@ -93,6 +95,8 @@ export class RoutineManager {
       howTo: input.howTo ?? existing.howTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
+      delivery: 'delivery' in input ? (input.delivery ?? undefined) : existing.delivery,
+      priority: 'priority' in input ? (input.priority ?? undefined) : existing.priority,
       agents: input.agents !== undefined ? input.agents : existing.agents,
       paused: input.paused !== undefined ? input.paused : existing.paused,
       updatedAt: now

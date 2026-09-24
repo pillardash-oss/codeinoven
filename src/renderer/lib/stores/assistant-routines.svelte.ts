@@ -2,12 +2,12 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   nextRunAt,
+  type CreateRoutineInput,
   type MissedRun,
   type Routine,
-  type RoutineAgents,
-  type RoutineConnection,
   type RoutineSchedule,
-  type Thread
+  type Thread,
+  type UpdateRoutineInput
 } from '$shared/types'
 
 /** Value compare for two resolved icon maps, so an unchanged refresh publishes
@@ -143,36 +143,13 @@ class AssistantRoutinesState {
     return this.missedRuns.some((run) => run.routineId === routineId)
   }
 
-  async createRoutine(input: {
-    name: string
-    description?: string
-    color?: string
-    iconType?: string
-    schedule?: RoutineSchedule | null
-    howTo?: string
-    connections?: RoutineConnection[]
-    agents?: RoutineAgents
-  }): Promise<Routine> {
+  async createRoutine(input: CreateRoutineInput): Promise<Routine> {
     const routine = await invoke('routine:create', input)
     await this.refresh()
     return routine
   }
 
-  async updateRoutine(
-    routineId: string,
-    input: {
-      name?: string
-      description?: string | null
-      color?: string | null
-      icon?: string | null
-      iconType?: string | null
-      schedule?: RoutineSchedule | null
-      howTo?: string
-      connections?: RoutineConnection[]
-      agents?: RoutineAgents
-      paused?: boolean
-    }
-  ): Promise<Routine> {
+  async updateRoutine(routineId: string, input: UpdateRoutineInput): Promise<Routine> {
     const routine = await invoke('routine:update', routineId, input)
     await this.refresh()
     return routine
