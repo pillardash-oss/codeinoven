@@ -21,8 +21,8 @@
     /** Identifies the screen this palette is showing. A host that swaps the
      *  content of one mounted palette (the app spotlight and its nested
      *  screens) changes it so the new screen starts clean: empty query, no
-     *  selected row. A palette that only opens and closes (Settings search, the
-     *  inline composer menus) has no screen to identify and leaves it out. */
+     *  selected row. A palette that only opens and closes has no screen to
+     *  identify and leaves it out. */
     screenKey?: string
     actions: readonly ActionDefinition[]
     onSelect: (selection: ActionSelection) => void | Promise<void>
