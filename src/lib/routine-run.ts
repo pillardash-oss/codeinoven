@@ -72,6 +72,7 @@ export function routineRunContext(
     `3. Install what you found with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after explaining plainly what it is and how you will set it up. Definitions must stay secret-free.`,
     `4. Collect any credential (API key, token, password) with ${ASK_SECRET_TOOL_NAME}   pass the installed id as utility_id and the variable the server expects as environment_variable. Never ask the user to paste a secret into chat.`,
     `5. Ask the user for any other choice or detail you need with ${CIO_ASK_USER_TOOL_NAME}; the user is here to supply it.`,
+    `6. When the capability needs an authorization only the user can grant (an OAuth sign-in, an app an admin must approve), walk them through it in plain numbered steps, then verify the connection works before you rely on it. Keep going until it works or the only step left is theirs.`,
     'Only when you genuinely cannot install it yourself should you tell the user which connection is missing and that they can set it up from the routine\u2019s Connections tab. Never end a turn by telling the user to connect something you could have installed.'
   ]
 

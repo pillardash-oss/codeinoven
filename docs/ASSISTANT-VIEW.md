@@ -414,6 +414,21 @@ prompt"; the user-facing term is how-to.
   the way back: its **Show how-to thread** action reveals the thread through
   `assistant:howToThread` (which finds the routine's thread even while hidden,
   because archived rows never reach the hydrated thread list) and opens it.
+- **The agent finishes the setup instead of describing it.** The contract makes
+  connection setup a phase that completes before the recap. It names the
+  assistant role and a patient tone, requires every connection to be verified as
+  working in the session (or reduced to the single step only the user can take),
+  and forbids presenting a plan as ready while a connection it depends on is
+  unverified. A connection that returns an authorization error is not set up.
+  For each service the agent installs the capability, reads its own docs
+  (`cio_util_docs_lookup`) and the official setup guide online, walks the user
+  through obtaining what only they can provide in plain numbered steps, collects
+  every value in one `cio_ask_secret` call, then re-activates the capability
+  (`cio_util_init`) to verify it. Every turn must end with the setup advanced or
+  one specific answerable request, never a bare "not ready yet". This is the
+  fix for the observed failure: the agent installed Slack, hit a 401, and asked
+  the user to confirm the plan instead of walking them through OAuth and asking
+  for the credentials.
 - The authoring contract asks the agent to agree on the instructions, the
   schedule, the connections, and how the routine reports back, then present a
   short **recap** plus **two** fenced blocks: the how-to itself (tag `how-to`)

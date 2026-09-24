@@ -163,4 +163,23 @@ describe('routineAuthoringContext', () => {
     // eight selections that no turn could resolve back into brackets.
     expect(contract).toContain('a combined list produces an answer nobody can resolve')
   })
+
+  it('finishes the connection setup before the recap and asks for credentials in the same turn', () => {
+    const contract = routineAuthoringContext('Slack latest info')
+    // The observed failure: the model installed Slack, hit a 401, and presented
+    // the plan for confirmation instead of walking the user through the setup.
+    expect(contract).toContain('patient and gentle')
+    expect(contract).toContain('A connection that returns an authorization error is not set up')
+    expect(contract).toContain(
+      'Never present a plan as ready while a connection it depends on is unverified'
+    )
+    expect(contract).toContain('Walk the user through obtaining what only they can provide')
+    expect(contract).toContain(
+      'Ask for a credential the moment a connection needs one, in that same turn'
+    )
+    expect(contract).toContain('Never end a turn with a status report or a bare "not ready yet"')
+    expect(contract).toContain('the connection actually works')
+    expect(contract).toContain('cio_util_init')
+    expect(contract).toContain('cio_util_docs_lookup')
+  })
 })
