@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProjectFileInfo } from '$shared/types'
+  import { formatDateTime } from '$shared/date-time-format'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -30,9 +31,9 @@
         {info.size === undefined ? ' ' : `${info.size.toLocaleString()} bytes`}
       </dd>
       <dt class="text-dimmed">Modified</dt>
-      <dd class="text-foreground">{new Date(info.modifiedAt ?? 0).toLocaleString()}</dd>
+      <dd class="text-foreground">{formatDateTime(info.modifiedAt ?? 0)}</dd>
       <dt class="text-dimmed">Created</dt>
-      <dd class="text-foreground">{new Date(info.createdAt).toLocaleString()}</dd>
+      <dd class="text-foreground">{formatDateTime(info.createdAt)}</dd>
     </dl>
   {/if}
 

@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -27,7 +28,9 @@ import {
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import {
+  ASSISTANT_CWD_DIR,
   CHATS_ARTIFACTS_DIRECTORY,
+  CHATS_CWD_DIR,
   featureArtifactDirectory,
   featureSlugFromTitle
 } from '../../lib/project-artifacts'
@@ -59,6 +62,7 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -70,6 +74,7 @@ const DEFAULT_CONFIG: AppConfig = {
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
+  maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
   sound: DEFAULT_SPEECH_SETTINGS
 }
@@ -118,7 +123,8 @@ export class StorageEngine {
     await ensureDir(this.resolve('workflows'))
     await ensureDir(this.resolve('blobs'))
     await ensureDir(this.resolve('logs'))
-    await ensureDir(this.resolve('chats-cwd'))
+    await ensureDir(this.resolve(CHATS_CWD_DIR))
+    await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
     await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))

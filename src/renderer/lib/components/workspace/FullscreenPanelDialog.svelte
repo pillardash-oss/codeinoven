@@ -11,17 +11,25 @@
      *  above 0 is the caller's promise that `tabIndicator` draws that many. */
     tabs: { id: string; title: string; indicatorCount?: number }[]
     activeTabId: string | null
-    newLabel: string
+    /** Label for the create button. Required only when `onNew` is set; a
+     *  surface whose tabs are sections of one panel passes neither. */
+    newLabel?: string
     minimizeLabel: string
-    icon: Snippet
+    /** Leading glyph for a tab that shows no indicator. Omit for a surface
+     *  whose tabs are plain sections and carry no icon. */
+    icon?: Snippet
     /** Per-tab overlay painted over the tab's own icon slot, used for the
      *  browser's live audio and capture indicators. Callers whose tabs never
      *  carry an indicator leave it, and `indicatorCount`, unset. */
     tabIndicator?: Snippet<[{ id: string; title: string }]>
-    onNew: () => void
+    /** Create a tab. Omit to hide the create button, for a surface whose tabs
+     *  are sections of one panel rather than open instances. */
+    onNew?: () => void
     onMinimize: () => void
     onSelect: (id: string) => void
-    onCloseTab: (id: string) => void
+    /** Close a tab. Omit to hide the per-tab close button, for a surface whose
+     *  tabs are sections of one panel and cannot be dismissed. */
+    onCloseTab?: (id: string) => void
     children: Snippet
     /** This surface displays the browser's native view inside itself.
      *
@@ -94,6 +102,11 @@
 
   Escape belongs to the surface's owner too, so it minimizes rather than
   dismissing (`escapeCloses={false}`).
+
+  The strip is not fixed to open instances. A surface whose tabs are sections of
+  one panel omits `onNew`, `onCloseTab` and `icon`, and the strip then reads as a
+  section switcher instead of a tab bar: the assistant routine panel is exactly
+  that case.
 -->
 <Modal
   open
@@ -131,20 +144,22 @@
                   class="shrink-0 {browserTabIndicatorSlotClass(indicatorCount)}"
                   aria-hidden="true"
                 ></span>
-              {:else}
+              {:else if icon}
                 {@render icon()}
               {/if}
               <span class="max-w-40 truncate">{tab.title}</span>
             </button>
-            <button
-              type="button"
-              class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-              aria-label={`Close ${tab.title}`}
-              title={`Close ${tab.title}`}
-              onclick={() => onCloseTab(tab.id)}
-            >
-              <X size={10} />
-            </button>
+            {#if onCloseTab}
+              <button
+                type="button"
+                class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                aria-label={`Close ${tab.title}`}
+                title={`Close ${tab.title}`}
+                onclick={() => onCloseTab(tab.id)}
+              >
+                <X size={10} />
+              </button>
+            {/if}
             {#if indicatorCount > 0 && tabIndicator}
               <!-- Painted over the tab's own icon slot, as a sibling of the
                    tab button, because a button cannot nest a button. The slot
@@ -160,15 +175,17 @@
         {/each}
       </div>
     </div>
-    <button
-      type="button"
-      class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={newLabel}
-      title={newLabel}
-      onclick={onNew}
-    >
-      <Plus size={14} />
-    </button>
+    {#if onNew}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label={newLabel}
+        title={newLabel}
+        onclick={onNew}
+      >
+        <Plus size={14} />
+      </button>
+    {/if}
     <button
       type="button"
       class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

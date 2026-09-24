@@ -548,8 +548,23 @@ class ContextSidebarState {
     this.tabContexts.closeCoordinator(projectId, threadId)
   }
 
-  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
-    this.tabContexts.openMemory(projectId, threadId, section)
+  /** Dock the assistant how-to panel for a routine (one panel per routine). */
+  openAssistantHowTo(
+    projectId: string,
+    threadId: string,
+    routineId: string | null,
+    title: string
+  ): void {
+    this.tabContexts.openAssistantHowTo(projectId, threadId, routineId, title)
+  }
+
+  openMemory(
+    projectId: string,
+    threadId: string,
+    section?: MemorySection,
+    routineId?: string
+  ): void {
+    this.tabContexts.openMemory(projectId, threadId, section, routineId)
   }
 
   toggleNotifications(): void {

@@ -15,6 +15,7 @@ import type {
   SessionAgentEvent
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
@@ -144,6 +145,10 @@ const PI_ABORT_ENFORCE_INTERVAL_MS = 500
 /** Bound on the post-abort `get_state` probe so a busy process cannot stall the
  *  stop behind the RPC client's full request timeout. */
 const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+/** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
+ *  own refresh after 15s and reports the failure, so this only bounds a process
+ *  that never exits. */
+const PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 20_000
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -336,7 +341,7 @@ export class PiDriver extends PersistentCliDriver {
     string,
     { provider: string; modelId: string; thinkingLevel: string }
   >()
-  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
+  /** Session-keyed turn handoff files carrying the gateway endpoint for the extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
   /**
    * Session-keyed endpoints published before the gateway extension was materialized.
@@ -345,7 +350,7 @@ export class PiDriver extends PersistentCliDriver {
    * held here and flushed by materializeCioCoreToolsExtension   otherwise every first
    * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
    */
-  private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
+  private pendingGatewayEndpoints = new Map<string, UtilityGatewayEndpoint>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   /**
@@ -579,6 +584,28 @@ export class PiDriver extends PersistentCliDriver {
       .sort()
       .join('|')
     return JSON.stringify([[...connected].sort(), overlayModels])
+  }
+
+  /**
+   * Force Pi's own model catalog to re-fetch from upstream (`pi update
+   * --models`) against THIS account's agent directory, so the discovery that
+   * follows reads catalogs that are fresh at the source instead of the store
+   * Pi already has. Pi throttles remote catalogs to once per provider every
+   * four hours unless the refresh is forced, which is exactly what the model
+   * picker's refresh button has to bypass.
+   *
+   * The CLI entry point is required here: the bundled RPC entry point
+   * hard-codes `--mode rpc` ahead of the arguments, and Pi's own parser then
+   * rejects the package command. Pi reports a non-zero exit when any provider
+   * fails, so a failed pass leaves the stored catalog untouched   the caller
+   * still gets whatever the store holds.
+   */
+  async refreshModelCatalog(): Promise<void> {
+    await runHarnessCommand('pi', ['update', '--models'], {
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      timeoutMs: PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS,
+      bundledEntry: 'cli'
+    })
   }
 
   private async discoverModels(
@@ -1239,7 +1266,7 @@ export class PiDriver extends PersistentCliDriver {
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
   ): Promise<void> {
     void _projectPath
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)

@@ -81,6 +81,12 @@ async function runSvelteCheck(
 }
 
 if (requestedPaths.length === 0) {
+  // svelte-check writes generated `.svelte.ts` shims into `.svelte-check` and
+  // leaves them behind. Those shims are picked up by the next run, so a shim
+  // left over from a source file that has since been deleted is still
+  // type-checked and reports errors for code that no longer exists. Start from
+  // a clean directory, exactly as the path-scoped runs below do.
+  await rm(join(projectRoot, '.svelte-check'), { force: true, recursive: true })
   process.exit(await runSvelteCheck(join(projectRoot, 'tsconfig.json')))
 }
 

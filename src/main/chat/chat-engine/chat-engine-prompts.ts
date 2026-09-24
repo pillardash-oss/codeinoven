@@ -616,7 +616,8 @@ export function formatOpenAnnotations(
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
  * planning or implementation instruction exactly once; mermaid and question
- * instructions are injected here only in `chat` mode, where no app layer exists.
+ * instructions are injected here for the conversational modes (`chat` and
+ * `assistant`), where no app layer supplies them.
  */
 export function composeTurnSystemPrompt(input: {
   chatPrompt: string
@@ -625,9 +626,20 @@ export function composeTurnSystemPrompt(input: {
   assignmentCoordinatorSystemPrompt: string
   behaviorPrompt: string
   utilityInstructions: string
-  behaviorMode: 'implement' | 'brainstorm' | 'chat'
+  /**
+   * The routine contract for this thread (how-to authoring, or a saved
+   * routine's run), when one applies. It rides the system prompt rather than
+   * the user message so every turn re-states it and no harness transcript
+   * accumulates a copy per turn.
+   */
+  routineInstruction?: string
+  behaviorMode: 'implement' | 'brainstorm' | 'chat' | 'assistant'
   historyRecap: string
 }): string {
+  // A chat and an assistant task are both non-engineering conversations, so
+  // both carry the mermaid rules and the question-tool instruction; a project
+  // thread gets them from its own application layer instead.
+  const conversational = input.behaviorMode === 'chat' || input.behaviorMode === 'assistant'
   return [
     input.chatPrompt,
     input.memoryInstruction,
@@ -635,8 +647,9 @@ export function composeTurnSystemPrompt(input: {
     input.assignmentCoordinatorSystemPrompt,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
-    input.behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
+    input.routineInstruction,
+    conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+    conversational ? QUESTION_TOOL_INSTRUCTION : undefined,
     input.historyRecap
   ]
     .filter(Boolean)
@@ -658,6 +671,8 @@ export function composeBrainstormSystemPrompt(input: {
   imageDescriptorNote: string
   behaviorPrompt: string
   utilityInstructions: string
+  /** The routine contract, when the planning turn belongs to a routine thread. */
+  routineInstruction?: string
   historyRecap: string
 }): string {
   const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
@@ -679,6 +694,7 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
+    input.routineInstruction,
     input.historyRecap
   ]
     .filter(Boolean)

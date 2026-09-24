@@ -101,7 +101,10 @@ const CREATE_THREAD_FIELDS = new Set([
   'workingDirectory',
   'settings',
   'titleSource',
-  'scopeBucketId'
+  'scopeBucketId',
+  'routineId',
+  'assistantGettingStarted',
+  'assistantTaskId'
 ])
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
@@ -337,6 +340,18 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   if (input.scopeBucketId !== undefined) {
     sanitized.scopeBucketId = validateEntityId(input.scopeBucketId, 'Scope bucket ID')
   }
+  if (input.routineId !== undefined) {
+    sanitized.routineId = validateEntityId(input.routineId, 'Routine ID')
+  }
+  if (input.assistantTaskId !== undefined) {
+    sanitized.assistantTaskId = validateEntityId(input.assistantTaskId, 'Assistant task ID')
+  }
+  if (input.assistantGettingStarted !== undefined) {
+    if (typeof input.assistantGettingStarted !== 'boolean') {
+      throw new TypeError('Assistant getting-started flag must be a boolean')
+    }
+    sanitized.assistantGettingStarted = input.assistantGettingStarted
+  }
   return sanitized
 }
 
@@ -347,7 +362,8 @@ const UPDATE_THREAD_FIELDS = new Set([
   'workingDirectory',
   'scopeBucketId',
   'lastActivity',
-  'read'
+  'read',
+  'assistantGettingStarted'
 ])
 
 export function validateThreadUpdateInput(
@@ -362,6 +378,7 @@ export function validateThreadUpdateInput(
     | 'scopeBucketId'
     | 'lastActivity'
     | 'read'
+    | 'assistantGettingStarted'
   >
 > {
   const input = assertRecord(value, 'Thread update input')
@@ -377,6 +394,7 @@ export function validateThreadUpdateInput(
       | 'scopeBucketId'
       | 'lastActivity'
       | 'read'
+      | 'assistantGettingStarted'
     >
   > = {}
 
@@ -410,6 +428,12 @@ export function validateThreadUpdateInput(
   }
   if (input.read !== undefined) {
     sanitized.read = validateBoolean(input.read, 'Read')
+  }
+  if (input.assistantGettingStarted !== undefined) {
+    sanitized.assistantGettingStarted = validateBoolean(
+      input.assistantGettingStarted,
+      'Assistant getting-started flag'
+    )
   }
 
   return sanitized

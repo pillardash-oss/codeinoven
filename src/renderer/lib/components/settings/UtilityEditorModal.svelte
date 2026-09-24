@@ -68,9 +68,15 @@
     onSaved?: (utility: UtilityDefinition) => void
     /** Fired after any successful mutation so the caller can reload. */
     onChanged?: () => void
+    /**
+     * Prefills the agent-assisted setup request. A connection the authoring
+     * agent could not install carries the prompt it recorded, so the user only
+     * has to pick a model and run the setup.
+     */
+    agentRequestSeed?: string
   }
 
-  let { open, target, onClose, onSaved, onChanged }: Props = $props()
+  let { open, target, onClose, onSaved, onChanged, agentRequestSeed = '' }: Props = $props()
 
   let saving = $state(false)
   let editorError = $state('')
@@ -512,6 +518,9 @@
     editorError = ''
     agentProjectId = thread?.projectId ?? ''
     agentSettings = thread?.settings ? { ...thread.settings } : null
+    // Seed the request from the connection the user is setting up, so the agent
+    // already knows what to install. A request the user typed wins.
+    if (agentRequestSeed && !agentRequest.trim()) agentRequest = agentRequestSeed
     if (!agentSettings) {
       editorError = 'Open a project thread and choose an agent model before starting agent setup.'
     }

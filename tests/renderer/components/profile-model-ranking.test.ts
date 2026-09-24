@@ -68,6 +68,21 @@ describe('ProfileSettingsTab model-ranking DOM presentation', () => {
     invokeMock.mockReset()
     invokeMock.mockImplementation(async (channel: string) => {
       if (channel === 'account:getLocalUsage') return analytics()
+      // The Usage page also renders the grading controls, so the queue and the
+      // grading model they read are answered here rather than left null.
+      if (channel === 'account:getRankingQueue') {
+        return {
+          awaiting: 0,
+          due: 0,
+          failed: 0,
+          judge: { kind: 'automatic', label: 'Automatic', complete: true },
+          run: null
+        }
+      }
+      if (channel === 'config:get') return { rankingJudge: { kind: 'automatic' } }
+      if (channel === 'typesafe:getStatus') return { hasKey: false }
+      if (channel === 'agent:listProviders') return []
+      if (channel === 'providerAccounts:list') return []
       return null
     })
   })

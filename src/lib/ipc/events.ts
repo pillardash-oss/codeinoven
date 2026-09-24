@@ -3,6 +3,7 @@ import type {
   ComputerUsePipFrame,
   ComputerUsePipState,
   CuaUpdateProgress,
+  LocalRankingGradeProgress,
   ProviderConnectionInfo,
   Thread,
   TypesafeStatus
@@ -55,6 +56,10 @@ export const IPC_EVENT_CONTRACT = {
    * working spinner with no live output.
    */
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
+  /** Assistant routines changed (created, updated, deleted, reordered). */
+  'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
+  /** The set of pending missed scheduled runs changed. */
+  'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
   /** Transient in-app toast (error/info, optional navigation action). */
@@ -119,6 +124,13 @@ export const IPC_EVENT_CONTRACT = {
   'typesafe:status': [] as unknown as [status: TypesafeStatus],
   /** Background pass over the skills CodeInOven installed (progress and result). */
   'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
+  /**
+   * Progress of a manual ranking grade run, pushed after every pass so a queue
+   * of conversations graded three at a time never looks like a hang. The run
+   * itself answers over `account:gradeRankingQueue`; this stream carries only
+   * the counters, so a pass never triggers a second read of the queue.
+   */
+  'account:rankingGradeProgress': [] as unknown as [progress: LocalRankingGradeProgress | null],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
   /**

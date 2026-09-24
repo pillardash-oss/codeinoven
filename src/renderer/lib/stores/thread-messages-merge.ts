@@ -127,20 +127,110 @@ export function mergeReconciledMessages(
   ])
 }
 
-/** Merge a bounded history page without discarding pages already loaded for the thread. */
+/** Whether two messages carry the same parts, by id and position. */
+function samePartIds(cached: AgentMessage, incoming: AgentMessage): boolean {
+  if (cached.parts.length !== incoming.parts.length) return false
+  for (let index = 0; index < cached.parts.length; index++) {
+    if (cached.parts[index]?.id !== incoming.parts[index]?.id) return false
+  }
+  return true
+}
+
+/** Linear merge of two lists that are each already ordered by `compareMessages`. */
+function mergeOrderedMessages(
+  local: readonly AgentMessage[],
+  additions: readonly AgentMessage[]
+): AgentMessage[] {
+  const merged: AgentMessage[] = []
+  let left = 0
+  let right = 0
+  while (left < local.length && right < additions.length) {
+    const fromLocal = local[left]
+    const fromAdditions = additions[right]
+    if (compareMessages(fromLocal, fromAdditions) <= 0) {
+      merged.push(fromLocal)
+      left += 1
+    } else {
+      merged.push(fromAdditions)
+      right += 1
+    }
+  }
+  for (; left < local.length; left++) merged.push(local[left])
+  for (; right < additions.length; right++) merged.push(additions[right])
+  return merged
+}
+
+/** Result of a page merge: the messages plus whether the transcript's shape
+ *  changed, which is what a structure-keyed reader needs to know. */
+export interface MergePageResult {
+  messages: AgentMessage[]
+  /**
+   * True when the merge changed message identity, order, or turn-level state
+   * (role, timestamps, part membership, or a user message's text). A part that
+   * only grew does not set it, so the transcript index can be reused across
+   * streamed refreshes.
+   */
+  structural: boolean
+}
+
+/**
+ * Merge a bounded history page without discarding pages already loaded for the
+ * thread.
+ *
+ * Both inputs are already ordered   a history page is a contiguous window of the
+ * server's ordered set, a refresh re-sends rows the cache already holds, and the
+ * local list is a previous result of this function   so the merge walks them
+ * instead of rebuilding a record of every message and re-sorting the union. That
+ * mattered: the old form ran `Object.fromEntries` + `Object.values` + a
+ * comparator sort over the whole transcript on every `thread:updated` refresh.
+ */
 export function mergePageMessages(
   local: AgentMessage[],
   pageMessages: AgentMessage[]
-): AgentMessage[] {
-  // This accumulator is deliberately plain data, not renderer state. A
-  // reactive map here would add proxy tracking to every history-page load and
-  // wake unrelated dependents while a live trace is streaming.
-  const mergedById: Record<string, AgentMessage> = Object.fromEntries(
-    local.map((message) => [message.id, message])
-  )
-  for (const message of pageMessages) {
-    const cached = mergedById[message.id]
-    mergedById[message.id] = cached ? mergeMessageSnapshot(cached, message) : message
+): MergePageResult {
+  if (pageMessages.length === 0) return { messages: local, structural: false }
+
+  const indexById = new Map<string, number>()
+  for (let index = 0; index < local.length; index++) {
+    indexById.set(local[index].id, index)
   }
-  return sortMessages(Object.values(mergedById))
+
+  let merged: AgentMessage[] | null = null
+  let structural = false
+  let reordered = false
+  const additions = new Map<string, AgentMessage>()
+
+  for (const message of pageMessages) {
+    const index = indexById.get(message.id)
+    if (index === undefined) {
+      additions.set(message.id, message)
+      structural = true
+      continue
+    }
+    const cached = local[index]
+    if (cached.createdAt !== message.createdAt) reordered = true
+    if (
+      cached.role !== message.role ||
+      cached.createdAt !== message.createdAt ||
+      cached.completedAt !== message.completedAt ||
+      !samePartIds(cached, message) ||
+      // User messages never stream, so a text difference on one is a real
+      // change of content rather than a part this turn is still growing.
+      (message.role === 'user' && messageText(cached) !== messageText(message))
+    ) {
+      structural = true
+    }
+    if (merged === null) merged = [...local]
+    merged[index] = mergeMessageSnapshot(cached, message)
+  }
+
+  const base = merged ?? local
+  if (additions.size === 0) {
+    if (!reordered) return { messages: base, structural }
+    return { messages: sortMessages(base), structural: true }
+  }
+  return {
+    messages: mergeOrderedMessages(base, sortMessages([...additions.values()])),
+    structural: true
+  }
 }

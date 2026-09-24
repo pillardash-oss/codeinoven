@@ -355,6 +355,33 @@ export class CheckpointManager {
     return Number.isInteger(owner) && owner > 0 ? owner : null
   }
 
+  /**
+   * Take ownership of an in-flight turn another process recorded, atomically.
+   *
+   * Restart recovery and a take-over pass can reconcile the same orphaned turn in
+   * two instances at the same moment, and both would then resume one harness
+   * session   spawning a second concurrent run that interleaves output and strips
+   * the original run of its tools. The claim is a conditional write on the shared
+   * ledger, so exactly one process can take a given orphaned turn: whoever's
+   * expected owner still matches wins, and every other claimant is told `false`
+   * and must leave the turn alone. Claiming a turn this process already owns is a
+   * no-op that reports `true`.
+   */
+  async claimActiveTurnOwner(
+    projectId: string,
+    threadId: string,
+    expectedOwnerPid: number
+  ): Promise<boolean> {
+    assertId(projectId)
+    assertId(threadId)
+    const outcome = this.db
+      .prepare(
+        'UPDATE active_turns SET owner_pid = ? WHERE project_id = ? AND thread_id = ? AND owner_pid = ?'
+      )
+      .run(process.pid, projectId, threadId, expectedOwnerPid)
+    return outcome.changes === 1
+  }
+
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
     const active = this.db.get<{ turn_id: string | null }>(
       'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',

@@ -9,7 +9,8 @@ import { DEFAULT_SCOPE_BUCKET_ID, activeThreadRowId } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
-import { rendererRecovery } from './renderer-recovery.svelte'
+import { rendererRecovery, type SelectedThreadReference } from './renderer-recovery.svelte'
+import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
 import { openComposerFocusWindow } from '$lib/focus/composer-focus'
@@ -100,6 +101,19 @@ class WorkspaceState {
   projectIdToEdit: string | null = $state(null)
   /** Globally ordered task visits, newest first, independent of project. */
   recentThreadVisits: string[] = $state(loadRecentThreadVisits())
+  /**
+   * The thread each content-view family (Projects, Chats, Assistant) was last
+   * showing. Switching views restores the family's own thread instead of a
+   * single global selection, so leaving Assistant for Projects never costs the
+   * project thread that was open, and vice versa. In-memory only: a restart
+   * re-selects from the recovery snapshot and the recent-visit list.
+   */
+  private contentViewThreadRefs: Record<ContentThreadFamily, SelectedThreadReference | null> =
+    $state({
+      projects: null,
+      chats: null,
+      assistant: null
+    })
 
   // ─── Terminal ──────────────────────────────────────────────────────────
   /** True only while a view that hosts a terminal panel is mounted. */
@@ -159,6 +173,25 @@ class WorkspaceState {
   loadUserMessageHistory: (() => Promise<void>) | null = null
   historyActions: HistoryMessageActions | null = $state(null)
 
+  /**
+   * Remember the thread a content-view family is showing. Called on every open
+   * so each view can restore its own thread when the shell returns to it.
+   */
+  rememberContentViewThread(thread: Thread): void {
+    const family = contentThreadFamily(thread)
+    const current = this.contentViewThreadRefs[family]
+    if (current?.projectId === thread.projectId && current.threadId === thread.id) return
+    this.contentViewThreadRefs = {
+      ...this.contentViewThreadRefs,
+      [family]: { projectId: thread.projectId, threadId: thread.id }
+    }
+  }
+
+  /** The thread a content-view family was last showing, if any. */
+  contentViewThreadRef(family: ContentThreadFamily): SelectedThreadReference | null {
+    return this.contentViewThreadRefs[family]
+  }
+
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
     // The chat composer owns keyboard focus after any thread switch. Open the
     // guard window so sidebar tools re-attaching around the switch (terminal
@@ -180,6 +213,7 @@ class WorkspaceState {
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
+    this.rememberContentViewThread(thread)
     this.sourceProcessCount = 0
     // A worker/auditor child opens the coordinator's sidebar context: its own
     // row is the Sr. Engineer, and that is where the coordinator panel is docked.
@@ -308,6 +342,35 @@ class WorkspaceState {
   consumeNewChatRequest(): boolean {
     if (this.consumedNewChatRequestCount === this.requestNewChatCount) return false
     this.consumedNewChatRequestCount = this.requestNewChatCount
+    return true
+  }
+
+  /** Incremented to signal Workspace to create an assistant task. */
+  requestAssistantTaskCount = $state(0)
+  private consumedAssistantTaskRequestCount = 0
+
+  requestAssistantTask(): void {
+    this.requestAssistantTaskCount++
+  }
+
+  consumeAssistantTaskRequest(): boolean {
+    if (this.consumedAssistantTaskRequestCount === this.requestAssistantTaskCount) return false
+    this.consumedAssistantTaskRequestCount = this.requestAssistantTaskCount
+    return true
+  }
+
+  /** Incremented to signal Workspace to start the new-routine flow. */
+  requestAssistantRoutineCount = $state(0)
+  private consumedAssistantRoutineRequestCount = 0
+
+  requestAssistantRoutine(): void {
+    this.requestAssistantRoutineCount++
+  }
+
+  consumeAssistantRoutineRequest(): boolean {
+    if (this.consumedAssistantRoutineRequestCount === this.requestAssistantRoutineCount)
+      return false
+    this.consumedAssistantRoutineRequestCount = this.requestAssistantRoutineCount
     return true
   }
 

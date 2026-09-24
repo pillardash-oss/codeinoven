@@ -5,7 +5,7 @@ import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
-import { INBOX_PROJECT_ID } from '$shared/types'
+import { INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '$shared/types'
 import type { ProjectFileEntry } from '$shared/types'
 import { fileUrlToPath } from '$lib/mime'
 
@@ -45,10 +45,11 @@ async function ensureProjectFilesReady(projectId: string, mountThreadId?: string
   projectFilesWorkspace.ensureState(projectId)
   if (activeThreadId !== threadId) contextSidebarState.activateThread(projectId, threadId)
   contextSidebarState.openFiles(projectId, threadId)
-  // Inbox chats browse their own per-thread artifact directory; the mount must
+  // Conversations browse their own app-owned workspace directory (a chat's
+  // artifact directory, an assistant task's working directory); the mount must
   // be registered before the root listing resolves through the thread root.
-  if (projectId === INBOX_PROJECT_ID) {
-    projectFilesWorkspace.setChatThread(projectId, mountThreadId ?? (threadId || null))
+  if (usesThreadWorkspaceMount(projectId)) {
+    projectFilesWorkspace.setThreadMount(projectId, mountThreadId ?? (threadId || null))
   }
   await projectFilesWorkspace.loadDirectory(projectId, '')
 }

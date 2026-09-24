@@ -13,7 +13,8 @@ const MAX_STACK_CHARS = 16000
  * rejections, console errors) used to be invisible on disk. This handler
  * receives a tightly-shaped `RendererLogEntry` from the renderer, bounds and
  * redacts it, and routes it through the existing durable `Logger` so client
- * errors land in `error.log` / `main.jsonl` alongside main-process records.
+ * errors land in the current day folder's `error.log` / `main.jsonl` alongside
+ * main-process records.
  *
  * The handler is registered before BrowserWindow navigation (hydration IPC) so
  * the bridge works from the very first renderer statement and is fire-and-forget:

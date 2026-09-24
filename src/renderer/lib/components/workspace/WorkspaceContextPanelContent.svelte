@@ -1,24 +1,26 @@
 <script lang="ts">
   import type { SvelteMap } from 'svelte/reactivity'
-  import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
-  import ActionsPanel from '$lib/components/actions/ActionsPanel.svelte'
+  import type { Thread } from '$shared/types'
+  // TerminalPanel and BrowserPanel stay static on purpose: both are also
+  // statically imported by the keep-mounted fullscreen and terminal-dock
+  // wrappers, so a dynamic import here cannot move them out of the eager
+  // closure. Deferring them means deferring those wrappers too, which is the
+  // native-view mount path, not a chunk split.
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
-  import DiffSidebarPanel from '$lib/components/files/DiffSidebarPanel.svelte'
-  import ProjectFilesPanel from '$lib/components/files/ProjectFilesPanel.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
-  import ThreadNotePanel from '$lib/components/threads/ThreadNotePanel.svelte'
-  import AchievementCoordinatorPanel from '$lib/components/threads/AchievementCoordinatorPanel.svelte'
-  import AssignmentCoordinatorPanel from '$lib/components/threads/AssignmentCoordinatorPanel.svelte'
-  import IndependentAuditCoordinatorPanel from '$lib/components/threads/IndependentAuditCoordinatorPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { INBOX_PROJECT_ID, type AgentPart, type Project } from '$shared/types'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
@@ -36,6 +38,10 @@
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Navigate to another top-level view (e.g. the Utilities page). */
+    navigate: (view: MainView) => void
+    /** Open an assistant task, so the workspace owns the selection. */
+    onOpenAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -49,13 +55,64 @@
     coordinator,
     onDismissCoordinator,
     onContinueInThread,
-    onOpenSubagent
+    onOpenSubagent,
+    navigate,
+    onOpenAssistantTask
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
   let gitPanelThreadId = $derived(
     activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''
   )
+
+  /** The thread whose own workspace the file tree mounts. Only a chat or an
+   *  assistant task has one; a real project always reads the project root. */
+  let filesThreadId = $derived(
+    activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : null
+  )
+
+  /**
+   * Identity of the file tree's root: its name, the label shown beside its icon,
+   * its icon, and its accent colour. A routine behaves like a project, and an
+   * assistant task's tree mounts on the routine's own workspace, so the routine's
+   * edited icon and colour stand in for the hidden assistant space's everywhere
+   * the root is drawn. A routine's name is often a whole sentence, so a routine
+   * root shows no label at all: the icon carries it, and the name is the icon's
+   * tooltip.
+   */
+  let filesRootIdentity = $derived.by(() => {
+    const routine = assistantRoutines.routineForTask(
+      filesThreadId === null
+        ? null
+        : (scopeState.allScopeThreads.find((candidate) => candidate.id === filesThreadId) ?? null)
+    )
+    if (routine) {
+      return {
+        name: routine.name,
+        label: '',
+        routine: true,
+        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
+        accentColor: routineAccentColor(routine)
+      }
+    }
+    // The notifications tab carries no project, so the fallback name reads the
+    // project id only from a tab that has one.
+    const tabProjectId =
+      activeContextTab && 'projectId' in activeContextTab ? activeContextTab.projectId : null
+    const name =
+      tabProjectId === INBOX_PROJECT_ID
+        ? 'Chat artifacts'
+        : (activeProject?.name ?? 'Project files')
+    return {
+      name,
+      label: name,
+      routine: false,
+      iconUrl: activeProject
+        ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
+        : null,
+      accentColor: null
+    }
+  })
 </script>
 
 {#if gitPanelProjectId}
@@ -74,23 +131,26 @@
 {#if activeContextTab}
   {#key activeContextTab.id}
     {#if activeContextTab.kind === 'files'}
-      <ProjectFilesPanel
-        projectId={activeContextTab.projectId}
-        projectName={activeContextTab.projectId === INBOX_PROJECT_ID
-          ? 'Chat artifacts'
-          : (activeProject?.name ?? 'Project files')}
-        projectIconUrl={activeProject
-          ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
-          : null}
-      />
+      {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
+        <ProjectFilesPanel
+          projectId={activeContextTab.projectId}
+          projectName={filesRootIdentity.name}
+          projectLabel={filesRootIdentity.label}
+          routineRoot={filesRootIdentity.routine}
+          projectIconUrl={filesRootIdentity.iconUrl}
+          projectAccentColor={filesRootIdentity.accentColor}
+        />
+      {/await}
     {:else if activeContextTab.kind === 'diff'}
-      <DiffSidebarPanel
-        projectId={activeContextTab.projectId}
-        threadId={activeContextTab.threadId}
-        checkpointId={activeContextTab.checkpointId}
-        revealPath={activeContextTab.revealPath}
-        revealNonce={activeContextTab.revealNonce}
-      />
+      {#await import('../files/DiffSidebarPanel.svelte') then { default: DiffSidebarPanel }}
+        <DiffSidebarPanel
+          projectId={activeContextTab.projectId}
+          threadId={activeContextTab.threadId}
+          checkpointId={activeContextTab.checkpointId}
+          revealPath={activeContextTab.revealPath}
+          revealNonce={activeContextTab.revealNonce}
+        />
+      {/await}
     {:else if activeContextTab.kind === 'terminal'}
       {#if terminalFullscreenTabId === activeContextTab.id}
         <div class="flex h-full items-center justify-center text-xs text-muted">
@@ -105,11 +165,13 @@
         />
       {/if}
     {:else if activeContextTab.kind === 'actions'}
-      <ActionsPanel
-        projectId={activeContextTab.projectId}
-        threadId={activeContextTab.threadId}
-        scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
-      />
+      {#await import('../actions/ActionsPanel.svelte') then { default: ActionsPanel }}
+        <ActionsPanel
+          projectId={activeContextTab.projectId}
+          threadId={activeContextTab.threadId}
+          scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+        />
+      {/await}
     {:else if activeContextTab.kind === 'browser'}
       {#if browserFullscreenTabId === activeContextTab.id}
         <div class="flex h-full items-center justify-center text-xs text-muted">
@@ -121,7 +183,9 @@
         <BrowserPanel tab={activeContextTab} />
       {/if}
     {:else if activeContextTab.kind === 'debugger'}
-      <AgentDebugPanel />
+      {#await import('../debug/AgentDebugPanel.svelte') then { default: AgentDebugPanel }}
+        <AgentDebugPanel />
+      {/await}
     {:else if activeContextTab.kind === 'sources'}
       {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
         <SourcesPanel
@@ -147,14 +211,31 @@
       {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
         <NotificationPanel />
       {/await}
+    {:else if activeContextTab.kind === 'assistant-how-to'}
+      {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
+        <HowToPanel
+          projectId={activeContextTab.projectId}
+          threadId={activeContextTab.threadId}
+          routineId={activeContextTab.routineId}
+          bind:panelTab={activeContextTab.panelTab}
+          {navigate}
+          onOpenTask={onOpenAssistantTask}
+        />
+      {/await}
     {:else if activeContextTab.kind === 'coordinator'}
       {#if coordinator}
         {#if coordinator.panel.component === 'assignment'}
-          <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+          {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
+            <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+          {/await}
         {:else if coordinator.panel.component === 'achievement'}
-          <AchievementCoordinatorPanel {...coordinator.panel.props} />
+          {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
+            <AchievementCoordinatorPanel {...coordinator.panel.props} />
+          {/await}
         {:else}
-          <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+          {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
+            <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+          {/await}
         {/if}
       {:else}
         <EmptyState
@@ -179,11 +260,14 @@
           variant="sidebar"
           projectId={activeContextTab.projectId}
           threadId={activeContextTab.threadId}
+          routineId={activeContextTab.routineId}
           bind:activeSection={activeContextTab.memorySection}
         />
       {/await}
     {:else if activeContextTab.kind === 'thread-note'}
-      <ThreadNotePanel tab={activeContextTab} />
+      {#await import('../threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+        <ThreadNotePanel tab={activeContextTab} />
+      {/await}
     {:else}
       {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
         <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />

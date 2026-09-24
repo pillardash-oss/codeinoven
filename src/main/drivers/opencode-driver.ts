@@ -31,6 +31,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { QuestionRequestGoneError } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -41,7 +42,7 @@ import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 import { mapOpenCodeEvent } from './opencode/opencode-events'
-import { errorFromResponse } from './opencode/opencode-issues'
+import { errorFromResponse, questionReplyFailure } from './opencode/opencode-issues'
 import { mapOpenCodeMessage } from './opencode/opencode-messages'
 import { mapOpenCodeProvider, parseOpenCodeModels } from './opencode/opencode-models'
 import { buildOpenCodePromptBody, buildOpenCodePromptParts } from './opencode/opencode-prompt'
@@ -1053,7 +1054,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       body: JSON.stringify({ answers })
     })
     if (!res.ok) {
-      throw await errorFromResponse(res, 'Failed to answer question')
+      throw await this.questionReplyError(res, 'Failed to answer question', sessionId, requestId)
     }
   }
 
@@ -1064,8 +1065,31 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       headers: this.headersFor(handle)
     })
     if (!res.ok) {
-      throw await errorFromResponse(res, 'Failed to dismiss question')
+      throw await this.questionReplyError(res, 'Failed to dismiss question', sessionId, requestId)
     }
+  }
+
+  /**
+   * Translate a failed question reply/reject into the error the chat engine
+   * understands. A question the server no longer holds (its owning
+   * `opencode serve` process is gone) becomes `QuestionRequestGoneError`, the
+   * same condition every other harness reports through its own bookkeeping, so
+   * the engine closes the stale card and clears the pending request instead of
+   * surfacing an IPC failure the user can never clear. Everything else keeps
+   * throwing the real transport error.
+   */
+  private async questionReplyError(
+    res: Response,
+    fallback: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<Error> {
+    const failure = await questionReplyFailure(res, fallback)
+    if (!failure.gone) return failure.error
+    Logger.dev(
+      `opencode no longer holds question ${requestId} for session ${sessionId}: ${failure.detail}`
+    )
+    return new QuestionRequestGoneError(sessionId, requestId, this.name)
   }
 
   /**

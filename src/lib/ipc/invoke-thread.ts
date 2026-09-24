@@ -227,6 +227,7 @@ export const invokeThreadContract = {
           | 'scopeBucketId'
           | 'lastActivity'
           | 'read'
+          | 'assistantGettingStarted'
         >
       >
     ],

@@ -10,6 +10,7 @@
     focusOwnsEnter,
     isFocusableTarget
   } from '$lib/modal-primary-action.svelte'
+  import { isWithinToastLayer } from '$lib/toast-layer'
 
   /**
    * The canonical modal.
@@ -119,7 +120,8 @@
     size?: ModalSize
     /** An exact panel width class, for a surface whose width does not come from
      *  the `size` ladder. Overrides it rather than stacking on top of it, so
-     *  only one `max-w-*` is ever on the panel. */
+     *  only one `max-w-*` is ever on the panel. Ignored by `fullscreen`, which
+     *  is never width-capped. */
     panelWidth?: string
     /** Draw the canonical header (title and close) and footer slot. Off for a
      *  surface that owns its own layout, such as a full screen editor or a
@@ -249,6 +251,13 @@
           if (!escapeCloses) event.preventDefault()
         }}
         onInteractOutside={(event) => {
+          // A toast is drawn above this modal (svelte-sonner stacks at
+          // `z-index: 999999999`) and stays interactive there, so a press that
+          // lands on one is not a backdrop press. Without this the pointerdown
+          // bubbled to the dismissible layer and dismissed the modal as well as
+          // the toast it was aimed at: pressing a toast's close button threw the
+          // full screen surface away behind it.
+          if (isWithinToastLayer(event.target)) event.preventDefault()
           if (!closeOnBackdrop) event.preventDefault()
         }}
         class="{PANEL_BASE} {layout} {widthClass} {panelClass}"

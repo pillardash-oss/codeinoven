@@ -49,6 +49,7 @@ import type {
   ThinkingLevel,
   ModelRankingSnapshotRow
 } from '../../../lib/types'
+import { isWorkflowCoordinatorThread } from '../../../lib/types'
 import { APP_NAME } from '../../../lib/brand'
 import { truncateToTokenBudget } from '../../../lib/prompt-budget'
 import { UTILITY_SEARCH_TOOL_NAME } from '../../../lib/gateway-tools'
@@ -175,7 +176,7 @@ export function coordinatorHandoffQueuePath(projectId: string, threadId: string)
 }
 
 export function isCoordinatorThread(thread: Thread | null): boolean {
-  return thread?.assignmentRole === 'coordinator' || thread?.achievementRole === 'coordinator'
+  return isWorkflowCoordinatorThread(thread)
 }
 
 export function queuedCoordinatorHandoffMessage(item: QueuedCoordinatorHandoff): AgentMessage {

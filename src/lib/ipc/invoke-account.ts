@@ -9,6 +9,12 @@ export const invokeAccountContract = {
     [input: import('../types').LocalUsageClearInput],
     import('../types').LocalUsageRecordCounts
   >,
+  'account:getRankingQueue': {} as Contract<[], import('../types').LocalRankingQueueStatus>,
+  'account:gradeRankingQueue': {} as Contract<
+    [scope: import('../types').LocalRankingGradeScope],
+    import('../types').LocalRankingGradeProgress
+  >,
+  'account:cancelRankingGrade': {} as Contract<[], void>,
   'memory:getLayers': {} as Contract<
     [projectId: string, threadId: string],
     import('../types').BehaviorLayer[]
@@ -31,11 +37,12 @@ export const invokeAccountContract = {
       options?: {
         category?: import('../types').MemoryCategory
         priority?: import('../types').MemoryPriority
-        scope?: import('../types').MemoryScope
+        scopes?: import('../types').MemoryScope[]
         source?: import('../types').MemorySource
         modelKeys?: string[]
         projectId?: string
         threadId?: string
+        routineId?: string
       }
     ],
     import('../types').MemoryEntry
@@ -71,10 +78,11 @@ export const invokeAccountContract = {
       options?: {
         category?: import('../types').MemoryCategory
         priority?: import('../types').MemoryPriority
-        scope?: import('../types').MemoryScope
+        scopes?: import('../types').MemoryScope[]
         modelKeys?: string[]
         projectId?: string
         threadId?: string
+        routineId?: string
       }
     ],
     import('../types').MemoryProposal

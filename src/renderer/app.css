@@ -51,6 +51,11 @@
   --color-thread-unread: var(--color-success);
   --color-thread-error: var(--color-danger);
   --color-thread-done: var(--color-muted);
+  /* Missed scheduled run (Assistant View). A dedicated yellow-family tone
+     tuned from the suggested #ffe300 so it stays readable on light surfaces;
+     never the amber --color-warning (#d97706). Light value #a16207 gives
+     ~4.9:1 on #ffffff (AA for normal text). */
+  --color-missed: #a16207;
 
   /* Borders */
   --color-border: #e2e1dc;
@@ -117,6 +122,9 @@
   --color-chat-success: #34d399;
   --color-thread-working-paused: var(--color-warning);
   --color-thread-spec: #a78bfa;
+  /* Missed run on dark: #fcd34d gives ~13.6:1 on #0b0b0d, clearly brighter
+     and more yellow than the amber warning so the two read apart. */
+  --color-missed: #fcd34d;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */
@@ -850,6 +858,20 @@ html body [data-sonner-toaster] {
   /* svelte-sonner hard-codes its own system font stack inline; keep toasts
      on the app font for uniformity (needs !important to beat the inline style). */
   font-family: var(--font-app) !important;
+}
+
+html body [data-sonner-toaster] {
+  /* A toast floats above every modal (svelte-sonner stacks itself at
+     `z-index: 999999999`, the modals sit at `z-60`), but a modal bits-ui
+     Dialog locks the whole page with `body { pointer-events: none }` while it
+     is open, and pointer events inherit. Without opting back in here, a toast
+     raised over a modal was painted yet dead to the mouse: its close button
+     did nothing, and the click fell through to the modal's overlay, which
+     dismissed the modal instead and left the toast stranded on screen.
+
+     `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
+     panel; `lib/toast-layer.ts` owns the selector both sides share. */
+  pointer-events: auto;
 }
 
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */

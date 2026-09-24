@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
   import {
+    ASSISTANT_SPACE_ID,
     INBOX_PROJECT_ID,
     type MemoryCategory,
     type MemoryEntry,
@@ -11,14 +12,17 @@
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
   import {
-    managedScopesFor,
+    defaultScopesForSurface,
+    entryVisibleOnSurface,
+    locationForScopeChange,
     planMemorySaveGroups,
-    scopeIdsForChange,
-    defaultScopeForSurface,
+    proposalVisibleOnSurface,
     MEMORY_SCOPE_OPTIONS,
     type MemoryLocation,
-    type MemoryPanelSurface
+    type MemoryPanelSurface,
+    type MemorySurfaceContext
   } from './memory-routing'
+  import { locationScopeOf, memoryScopeSummary } from '$shared/memory/memory-scopes'
   import { memoryScopeOptions } from './memory-scope-options.svelte'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
@@ -29,6 +33,9 @@
     variant?: 'settings' | 'sidebar'
     projectId?: string
     threadId?: string
+    /** The selected assistant task's routine, so routine-scoped memory knows
+     *  which routine it belongs to. */
+    routineId?: string
     memoryEnabled?: boolean
     chatMemoryEnabled?: boolean
     onMemoryEnabledChange?: (enabled: boolean) => Promise<void>
@@ -49,6 +56,7 @@
     variant = 'settings',
     projectId,
     threadId,
+    routineId,
     memoryEnabled,
     chatMemoryEnabled,
     onMemoryEnabledChange,
@@ -96,16 +104,37 @@
     low: 'Low'
   }
 
-  /** Which memory surface this panel is, which decides its scopes and files. */
+  /** Which memory surface this panel is, which decides its scopes and files.
+   *  Assistant tasks are conversations in the hidden assistant space, so they
+   *  get their own surface: the same scopes a project thread has, pinned to the
+   *  assistant space instead of a pickable project. */
   let surface = $derived<MemoryPanelSurface>(
     variant === 'settings'
       ? 'settings'
       : projectId === INBOX_PROJECT_ID
         ? 'sidebar-chats'
-        : 'sidebar-projects'
+        : projectId === ASSISTANT_SPACE_ID
+          ? 'sidebar-assistant'
+          : 'sidebar-projects'
   )
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
+
+  /** The routine the panel resolved for an assistant task. The rail passes it
+   *  with the tab, and every other entry point (a proposal toast, the sources
+   *  panel, a shortcut) leaves it out, in which case the panel reads it from
+   *  the task thread so routine memory is never silently hidden. */
+  let resolvedRoutineId = $state<string | undefined>(undefined)
+  let effectiveRoutineId = $derived(routineId ?? resolvedRoutineId)
+
+  /** What this panel is and where it sits, the single value every visibility
+   *  check (load, save, add) reads from. */
+  let surfaceContext = $derived<MemorySurfaceContext>({
+    surface,
+    projectId,
+    threadId,
+    routineId: effectiveRoutineId
+  })
 
   let projectMemoryEnabled = $derived(memoryEnabled ?? loadedProjectEnabled)
   let chatMemoryEnabledValue = $derived(chatMemoryEnabled ?? loadedChatEnabled)
@@ -118,10 +147,23 @@
 
   let headerDescription = $derived(
     variant === 'settings'
-      ? 'Choose whether each memory applies to projects, chats, or both.'
+      ? 'Choose whether each memory applies to projects, chats, or assistants.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
-        : 'Global, project, and thread preferences active in this conversation.'
+        : projectId === ASSISTANT_SPACE_ID
+          ? 'Assistant, routine, and task preferences active in this conversation.'
+          : 'Global, project, and thread preferences active in this conversation.'
+  )
+
+  /** The audience named in the "memory is disabled" notice. It names the config
+   *  switch that actually gates this surface, so the notice never blames a
+   *  toggle the panel is not showing. */
+  let memoryAudienceLabel = $derived(
+    surface === 'sidebar-chats'
+      ? 'chats'
+      : surface === 'sidebar-assistant'
+        ? 'assistant tasks'
+        : 'projects'
   )
 
   let currentSection = $derived(variant === 'settings' ? settingsSection : activeSection)
@@ -174,7 +216,7 @@
     if (variant === 'settings') {
       return {
         title: 'No global memories yet.',
-        body: 'Add a preference and choose whether it applies to projects, chats, or both.'
+        body: 'Add a preference and choose whether it applies to projects, chats, or assistants.'
       }
     }
     return {
@@ -183,50 +225,96 @@
     }
   })
 
+  /** What the panel state was read for: the surface, its container, and (on
+   *  the assistant surface) the task's routine, so a task regrouped into
+   *  another routine reloads even though its thread id stayed the same. */
+  function currentContextKey(): string {
+    return `${surface}:${projectId ?? ''}:${routineId ?? ''}`
+  }
+
   async function load(): Promise<void> {
     const request = ++loadRequest
-    const contextKey = `${surface}:${projectId ?? ''}`
+    const contextKey = currentContextKey()
     const thread = threadId ?? ''
     loading = true
     error = ''
     try {
+      // A routine entry is only visible through its own routine, so resolve the
+      // task's routine before filtering when the caller did not supply it.
+      if (surface === 'sidebar-assistant' && !routineId && projectId && threadId) {
+        resolvedRoutineId = (await invoke('thread:get', projectId, threadId))?.routineId
+      }
       const config = await invoke('config:get')
       loadedProjectEnabled = config.memory.enabled
       loadedChatEnabled = config.memory.chatEnabled
       let nextEntries: MemoryEntry[]
       let nextProposals: PendingProposal[]
       if (variant === 'settings') {
-        const [rootEntries, chatEntries, rootProposals, chatProposals] = await Promise.all([
+        const [
+          rootEntries,
+          chatEntries,
+          assistantEntries,
+          rootProposals,
+          chatProposals,
+          assistantProposals
+        ] = await Promise.all([
           invoke('memory:getEntries'),
           invoke('memory:getEntries', INBOX_PROJECT_ID),
+          invoke('memory:getEntries', ASSISTANT_SPACE_ID),
           invoke('memory:getPendingProposals'),
-          invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+          invoke('memory:getPendingProposals', INBOX_PROJECT_ID),
+          invoke('memory:getPendingProposals', ASSISTANT_SPACE_ID)
         ])
-        nextEntries = [
-          ...rootEntries.filter((entry) => entry.scope === 'global' || entry.scope === 'projects'),
-          ...chatEntries.filter((entry) => entry.scope === 'chat')
-        ]
+        nextEntries = [...rootEntries, ...chatEntries, ...assistantEntries].filter((entry) =>
+          entryVisibleOnSurface(entry, surfaceContext)
+        )
         nextProposals = [
-          ...rootProposals
-            .filter((proposal) => proposal.scope === 'global' || proposal.scope === 'projects')
-            .map((proposal) => ({ proposal })),
-          ...chatProposals
-            .filter((proposal) => proposal.scope === 'chat')
-            .map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
-        ]
+          ...rootProposals.map((proposal) => ({ proposal })),
+          ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID })),
+          ...assistantProposals.map((proposal) => ({
+            proposal,
+            queueProjectId: ASSISTANT_SPACE_ID
+          }))
+        ].filter((row) => proposalVisibleOnSurface(row.proposal, surfaceContext))
       } else if (projectId === INBOX_PROJECT_ID) {
-        const [chatEntries, threadEntries, chatProposals] = await Promise.all([
-          invoke('memory:getEntries', INBOX_PROJECT_ID),
-          invoke('memory:getEntries', INBOX_PROJECT_ID, threadId),
-          invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
-        ])
-        nextEntries = [
-          ...chatEntries.filter((entry) => entry.scope === 'chat'),
-          ...(threadId ? threadEntries.filter((entry) => entry.scope === 'thread') : [])
-        ]
-        nextProposals = chatProposals
-          .filter((proposal) => proposal.scope === 'chat')
-          .map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
+        const [rootEntries, chatEntries, threadEntries, rootProposals, chatProposals] =
+          await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getEntries', INBOX_PROJECT_ID),
+            threadId
+              ? invoke('memory:getEntries', INBOX_PROJECT_ID, threadId)
+              : Promise.resolve<MemoryEntry[]>([]),
+            invoke('memory:getPendingProposals'),
+            invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+          ])
+        nextEntries = [...rootEntries, ...chatEntries, ...threadEntries].filter((entry) =>
+          entryVisibleOnSurface(entry, surfaceContext)
+        )
+        nextProposals = [
+          ...rootProposals.map((proposal) => ({ proposal })),
+          ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
+        ].filter((row) => proposalVisibleOnSurface(row.proposal, surfaceContext))
+      } else if (projectId === ASSISTANT_SPACE_ID) {
+        const [rootEntries, assistantEntries, threadEntries, rootProposals, assistantProposals] =
+          await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getEntries', ASSISTANT_SPACE_ID),
+            threadId
+              ? invoke('memory:getEntries', ASSISTANT_SPACE_ID, threadId)
+              : Promise.resolve<MemoryEntry[]>([]),
+            invoke('memory:getPendingProposals'),
+            invoke('memory:getPendingProposals', ASSISTANT_SPACE_ID)
+          ])
+        nextEntries = [...rootEntries, ...assistantEntries, ...threadEntries].filter((entry) =>
+          entryVisibleOnSurface(entry, surfaceContext)
+        )
+        nextProposals = [
+          ...rootProposals.map((proposal) => ({ proposal })),
+          ...assistantProposals.map((proposal) => ({
+            proposal,
+            queueProjectId: ASSISTANT_SPACE_ID
+          }))
+        ].filter((row) => proposalVisibleOnSurface(row.proposal, surfaceContext))
       } else if (projectId && threadId) {
         const [rootEntries, projectEntries, threadEntries, rootProposals, projectProposals] =
           await Promise.all([
@@ -236,17 +324,13 @@
             invoke('memory:getPendingProposals'),
             invoke('memory:getPendingProposals', projectId)
           ])
-        nextEntries = [
-          ...rootEntries.filter((entry) => entry.scope === 'projects'),
-          ...projectEntries.filter((entry) => entry.scope === 'project'),
-          ...threadEntries.filter((entry) => entry.scope === 'thread')
-        ]
+        nextEntries = [...rootEntries, ...projectEntries, ...threadEntries].filter((entry) =>
+          entryVisibleOnSurface(entry, surfaceContext)
+        )
         nextProposals = [
-          ...rootProposals
-            .filter((proposal) => proposal.scope === 'projects')
-            .map((proposal) => ({ proposal })),
+          ...rootProposals.map((proposal) => ({ proposal })),
           ...projectProposals.map((proposal) => ({ proposal, queueProjectId: projectId }))
-        ]
+        ].filter((row) => proposalVisibleOnSurface(row.proposal, surfaceContext))
       } else {
         nextEntries = []
         nextProposals = []
@@ -273,7 +357,7 @@
     try {
       if (variant === 'settings' || (projectId && threadId)) {
         const fallback: MemoryLocation = variant === 'sidebar' ? { projectId, threadId } : {}
-        await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(surface))
+        await saveGrouped(entries, loadedEntries, fallback, surfaceContext)
         saved = true
         if (savedTimeout) clearTimeout(savedTimeout)
         savedTimeout = setTimeout(() => {
@@ -292,19 +376,19 @@
 
   /**
    * Write the panel's entries back to their per-file homes. Each entry is
-   * routed by its own scope (plus the panel's context as a fallback for
-   * staged entries). Entries the panel does not manage are preserved so a
-   * partial load can never wipe a sibling file's entries, and so is any
-   * managed-scope entry that landed on disk after this panel's own load
-   * (e.g. a global memory approved from another window)   only entries this
-   * panel actually loaded can be dropped by omission, which is what makes a
-   * deletion here take effect.
+   * routed by its own scope set (plus the panel's context as a fallback for
+   * staged entries). Entries the panel does not show on this surface are
+   * preserved so a partial load can never wipe a sibling file's entries, and so
+   * is any surface-visible entry that landed on disk after this panel's own
+   * load (e.g. a memory approved from another window). Only entries this panel
+   * actually loaded can be dropped by omission, which is what makes a deletion
+   * here take effect.
    */
   async function saveGrouped(
     panelEntries: MemoryEntry[],
     loadedBaseline: MemoryEntry[],
     fallback: MemoryLocation,
-    managedScopes: readonly MemoryScope[]
+    context: MemorySurfaceContext
   ): Promise<void> {
     const groups = planMemorySaveGroups(panelEntries, loadedBaseline, fallback)
     for (const group of groups) {
@@ -316,11 +400,11 @@
       const managedIds = new Set(group.managedEntries.map((entry) => entry.id))
       const newSinceLoad = existing.filter(
         (entry) =>
-          managedScopes.includes(entry.scope) &&
+          entryVisibleOnSurface(entry, context) &&
           !group.loadedIds.has(entry.id) &&
           !managedIds.has(entry.id)
       )
-      const preservedOther = existing.filter((entry) => !managedScopes.includes(entry.scope))
+      const preservedOther = existing.filter((entry) => !entryVisibleOnSurface(entry, context))
       await invoke(
         'memory:saveEntries',
         [...group.managedEntries, ...newSinceLoad, ...preservedOther],
@@ -337,7 +421,8 @@
     // then inserts the persisted entry at the top and expands it.
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
-    const entryScope = defaultScopeForSurface(surface)
+    const entryScopes = defaultScopesForSurface(surface)
+    const location = locationForScopeChange(entryScopes, {}, surfaceContext)
     const placeholderSuffix = Math.random().toString(36).slice(2, 6)
     const label = 'Untitled memory'
     const content = `New memory   ${Date.now()}-${placeholderSuffix}`
@@ -347,10 +432,11 @@
       const created = await invoke('memory:addEntry', label, content, {
         category: 'preference',
         priority: 'medium',
-        scope: entryScope,
+        scopes: entryScopes,
         source: 'manual',
-        projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
-        threadId: entryScope === 'thread' ? threadId : undefined
+        projectId: location.projectId,
+        threadId: location.threadId,
+        routineId: location.routineId
       })
       lastAddedId = created.id
       // Prepend and keep load baseline in sync so a following bulk Save
@@ -425,16 +511,19 @@
   ): void {
     entries = entries.map((entry, i) => {
       if (i !== index) return entry
-      if (field === 'scope') {
-        const scope = value as MemoryScope
+      if (field === 'scopes') {
+        const scopes = value as MemoryScope[]
+        const location = locationForScopeChange(
+          scopes,
+          { projectId: entry.projectId, threadId: entry.threadId, routineId: entry.routineId },
+          surfaceContext
+        )
         return {
           ...entry,
-          scope,
-          ...scopeIdsForChange(
-            scope,
-            { projectId: entry.projectId, threadId: entry.threadId },
-            variant === 'sidebar' ? { projectId, threadId } : {}
-          ),
+          scopes,
+          projectId: location.projectId,
+          threadId: location.threadId,
+          routineId: location.routineId,
           updatedAt: Date.now()
         }
       }
@@ -453,12 +542,12 @@
   }
 
   function threadsForEntry(entry: MemoryEntry): Thread[] {
-    if (entry.scope !== 'thread') return []
+    if (locationScopeOf(entry.scopes) !== 'thread') return []
     return memoryScopeOptions.threadsFor(entryThreadProjectId(entry))
   }
 
   function threadsLoadingForEntry(entry: MemoryEntry): boolean {
-    if (entry.scope !== 'thread') return false
+    if (locationScopeOf(entry.scopes) !== 'thread') return false
     return memoryScopeOptions.isLoading(entryThreadProjectId(entry))
   }
 
@@ -487,10 +576,14 @@
       const threadEntries = await invoke('memory:getEntries', project, thread)
       if (request !== loadRequest) return
       if (projectId !== project || threadId !== thread) return
-      // What this read replaces: the thread-scoped memory this project showed
-      // for the thread the user just left.
-      const isShownThreadMemory = (entry: MemoryEntry): boolean =>
-        entry.scope === 'thread' && entry.projectId === project
+      // What this read replaces: the conversation-scoped memory the panel
+      // showed for the thread the user just left, which is a project thread or
+      // an assistant task (both live in a thread file of the same container).
+      const isShownThreadMemory = (entry: MemoryEntry): boolean => {
+        const location = locationScopeOf(entry.scopes)
+        if (location !== 'thread' && location !== 'task') return false
+        return entry.threadId !== undefined && entry.threadId !== thread
+      }
       const sortByRecency = (list: MemoryEntry[]): MemoryEntry[] =>
         [...list].sort((a, b) => b.updatedAt - a.updatedAt)
       entries = sortByRecency([
@@ -510,7 +603,7 @@
   }
 
   $effect(() => {
-    const contextKey = `${surface}:${projectId ?? ''}`
+    const contextKey = currentContextKey()
     if (!contextKey) return
     const thread = threadId ?? ''
     // A thread switch inside one project changes that thread's memory and
@@ -529,7 +622,7 @@
     // once per entry is cheap and needs no local bookkeeping.
     if (projectId) void memoryScopeOptions.ensureThreads(projectId)
     for (const entry of entries) {
-      if (entry.scope !== 'thread') continue
+      if (locationScopeOf(entry.scopes) !== 'thread') continue
       void memoryScopeOptions.ensureThreads(entryThreadProjectId(entry))
     }
   })
@@ -579,8 +672,8 @@
       </div>
     {:else if !sidebarMemoryEnabled}
       <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
-        Persistent memory is disabled{surface === 'sidebar-chats' ? ' for chats' : ' for projects'}.
-        Entries can be managed here but are not sent to agents.
+        Persistent memory is disabled for {memoryAudienceLabel}. Entries can be managed here but are
+        not sent to agents.
       </p>
     {/if}
 
@@ -718,8 +811,9 @@
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
                     <p class="mt-1.5 text-[0.6875rem] capitalize text-dimmed">
-                      {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal
-                        .priority}
+                      {memoryScopeSummary(row.proposal.scopes)} · {categoryLabels[
+                        row.proposal.category
+                      ]} · {row.proposal.priority}
                     </p>
                   </div>
                   <div class="flex shrink-0 items-center gap-1">

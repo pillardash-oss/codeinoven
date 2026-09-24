@@ -10,6 +10,7 @@
   let { projectId, threadId }: Props = $props()
 
   const transfer = $derived(foreignRuns.transferState(projectId, threadId))
+  const workflow = $derived(foreignRuns.isWorkflow(projectId, threadId))
 
   function startTransfer(): void {
     void foreignRuns.transfer(projectId, threadId)
@@ -34,6 +35,12 @@
       Transfer the run to this instance to keep working in this window; the other window stops
       streaming and hands the thread over.
     </p>
+    {#if workflow}
+      <p class="text-xs leading-relaxed text-muted">
+        This run belongs to a coordinated workflow. Transferring moves the whole workflow, so the
+        Sr. Engineer and every worker land on this instance together.
+      </p>
+    {/if}
     {#if transfer.error}
       <p class="text-xs leading-relaxed text-danger" role="alert">{transfer.error}</p>
     {/if}

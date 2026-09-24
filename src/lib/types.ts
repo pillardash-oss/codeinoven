@@ -1,6 +1,8 @@
 // Domain barrels for the app-wide shared type module.
 export * from './types/common'
 export * from './types/project'
+export * from './types/schedule'
+export * from './types/routine'
 export * from './types/scope'
 export * from './types/scope-worktree'
 export * from './types/paths'

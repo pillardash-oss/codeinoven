@@ -32,7 +32,8 @@ import {
   type ThreadMessagePage,
   type UsageBearingMessage,
   type UserMessageSummary,
-  isOrchestrationChildThread
+  isOrchestrationChildThread,
+  isAssistantSetupThread
 } from '../types'
 import {
   REGULAR_BUCKET,
@@ -46,7 +47,7 @@ import {
   type ThreadListOptions
 } from './thread-manager-capacity'
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
-import { orchestrationDescendants } from './thread-manager-lineage'
+import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
 import { ThreadSearchService } from './thread-manager-search'
 import { ThreadTranscriptStore } from './thread-manager-transcripts'
@@ -250,7 +251,10 @@ export class ThreadManager {
       title: input.title,
       titleSource: input.titleSource ?? 'default',
       status: 'created',
-      pinned: false,
+      // A routine's how-to ("Getting started") thread is always pinned: pinning is
+      // what keeps it out of automatic eviction, and the invariant lives here so
+      // no caller can create it unpinned.
+      pinned: input.assistantGettingStarted === true,
       archived: false,
       read: true,
       settings: input.settings,
@@ -263,6 +267,21 @@ export class ThreadManager {
       achievementRole: input.achievementRole,
       auditorThreadId: input.auditorThreadId,
       userInputLocked: input.userInputLocked,
+      // Assistant-space fields must be part of the created row itself: the
+      // creation broadcast carries this object, so grouping a task after the
+      // fact would be wiped by the very next thread:updated payload.
+      routineId: input.routineId,
+      assistantIconType: input.assistantIconType,
+      assistantIcon: input.assistantIcon,
+      // Kept out of the row when absent: the repository stores only the true
+      // case, so the in-memory shape must match what a read returns.
+      ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
+      // A run thread carries the task it runs from creation: the creation
+      // broadcast is what the sidebar nests rows from.
+      ...(input.assistantTaskId ? { assistantTaskId: input.assistantTaskId } : {}),
+      // The repository stores an absent override as NULL and reads it back as
+      // `undefined`, so the in-memory row must use the same shape.
+      scheduleOverride: input.scheduleOverride ?? undefined,
       createdAt: now,
       updatedAt: now,
       lastActivity: now,
@@ -553,6 +572,12 @@ export class ThreadManager {
         | 'independentAuditInitialized'
         | 'activeAuditId'
         | 'activeAuditVersion'
+        | 'routineId'
+        | 'assistantIconType'
+        | 'assistantIcon'
+        | 'assistantGettingStarted'
+        | 'lastRunAt'
+        | 'scheduleOverride'
       >
     >
   ): Promise<Thread> {
@@ -587,6 +612,13 @@ export class ThreadManager {
         input.independentAuditInitialized ?? existing.independentAuditInitialized,
       activeAuditId: input.activeAuditId ?? existing.activeAuditId,
       activeAuditVersion: input.activeAuditVersion ?? existing.activeAuditVersion,
+      routineId: input.routineId ?? existing.routineId,
+      assistantIconType: input.assistantIconType ?? existing.assistantIconType,
+      assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
+      lastRunAt: input.lastRunAt ?? existing.lastRunAt,
+      scheduleOverride:
+        input.scheduleOverride !== undefined ? input.scheduleOverride : existing.scheduleOverride,
       scopeSortOrder:
         input.scopeBucketId !== undefined &&
         input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
@@ -635,7 +667,13 @@ export class ThreadManager {
     if (!thread) {
       throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
     }
-    const deletionOrder = [...orchestrationDescendants(projectThreads, threadId), thread]
+    // A task owns the runs it produced, exactly as a coordinator owns its
+    // workers: both are swept with the thread so no orphan row survives.
+    const deletionOrder = [
+      ...assistantRunDescendants(projectThreads, threadId),
+      ...orchestrationDescendants(projectThreads, threadId),
+      thread
+    ]
     const assignmentIds = await this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
@@ -985,6 +1023,11 @@ export class ThreadManager {
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+    // The how-to thread is pinned for its whole life: it is never evicted and
+    // the user can only hide it, so no surface may unpin it.
+    if (!pinned && isAssistantSetupThread(existing)) {
+      throw new Error('The how-to thread stays pinned. Hide it instead.')
+    }
 
     const pinnedAt = pinned ? Date.now() : undefined
     this.threadRepo.setPinned(threadId, pinned, pinnedAt)

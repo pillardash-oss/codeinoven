@@ -6,6 +6,7 @@ import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
@@ -471,9 +472,10 @@ void app
     // before any fallible startup work. The error
     // dialog tells the user to "export diagnostics after the app opens", which
     // only works if startup failures are actually persisted   so the log path
-    // must be known before `database.init()` can abort the startup chain.
-    mkdirSync(dirname(storage.resolve('logs/main.jsonl')), { recursive: true })
-    Logger.initialize(storage.resolve('logs/main.jsonl'))
+    // must be known before `database.init()` can abort the startup chain. The
+    // logger owns the per-day folder under it and creates it on first write.
+    mkdirSync(storage.resolve(LOGS_DIRECTORY), { recursive: true })
+    Logger.initialize(storage.resolve(LOGS_DIRECTORY))
     logConfiguredDataRoot()
     if (splashOutcome !== 'ready') {
       Logger.error('Splash did not reach visual readiness before startup continued', {

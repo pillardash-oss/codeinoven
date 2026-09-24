@@ -1,4 +1,15 @@
-import { Pencil, Pin, PinOff, GitFork, Kanban, StickyNote, Copy, Trash2 } from '@lucide/svelte'
+import {
+  Pencil,
+  Pin,
+  PinOff,
+  GitFork,
+  Kanban,
+  Send,
+  StickyNote,
+  Copy,
+  EyeOff,
+  Trash2
+} from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -17,6 +28,14 @@ export interface ThreadActionsMenuConfig {
   showChangeScope?: () => boolean
   showNotes?: () => boolean
   showCopyId?: () => boolean
+  /** Hand a thread off to a project. Assistant tasks only. */
+  onHandoff?: (thread: Thread) => void
+  showHandoff?: () => boolean
+  /** Whether the thread is a routine's how-to thread. Such a thread is pinned
+   *  for life and cannot be deleted, so its menu offers Hide and no destructive
+   *  item instead of Pin/Unpin and Delete. */
+  isHowToThread?: () => boolean
+  onHideHowTo?: (thread: Thread) => void
 }
 
 /** One dropdown, one set of modals   shared by the app header and every thread row so the
@@ -104,14 +123,35 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showScope = config.showChangeScope?.() ?? true
     const showNotesItem = config.showNotes?.() ?? false
     const showCopyIdItem = config.showCopyId?.() ?? false
+    const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
+    const howToThread = config.isHowToThread?.() ?? false
     return [
       { label: 'Rename', icon: Pencil, onClick: startRename },
-      {
-        label: thread.pinned ? 'Unpin' : 'Pin',
-        icon: thread.pinned ? PinOff : Pin,
-        onClick: () => void config.onTogglePin(thread)
-      },
+      ...(howToThread
+        ? [
+            {
+              label: 'Hide how-to thread',
+              icon: EyeOff,
+              onClick: () => config.onHideHowTo?.(thread)
+            }
+          ]
+        : [
+            {
+              label: thread.pinned ? 'Unpin' : 'Pin',
+              icon: thread.pinned ? PinOff : Pin,
+              onClick: () => void config.onTogglePin(thread)
+            }
+          ]),
       { label: 'Fork', icon: GitFork, onClick: () => void config.onFork(thread) },
+      ...(showHandoffItem
+        ? [
+            {
+              label: 'Hand off to project',
+              icon: Send,
+              onClick: () => config.onHandoff?.(thread)
+            }
+          ]
+        : []),
       ...(showScope
         ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }]
         : []),
@@ -127,8 +167,12 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       ...(showCopyIdItem
         ? [{ label: 'Copy thread id', icon: Copy, onClick: () => void copyThreadId() }]
         : []),
-      { label: '', divider: true },
-      { label: 'Delete', icon: Trash2, onClick: startDelete, danger: true }
+      // A how-to thread cannot be deleted: hiding is the only way to get it out
+      // of the list, and it can always be revealed again from the how-to panel.
+      ...(howToThread ? [] : [{ label: '', divider: true }]),
+      ...(howToThread
+        ? []
+        : [{ label: 'Delete', icon: Trash2, onClick: startDelete, danger: true }])
     ] as MenuItem[]
   })
 

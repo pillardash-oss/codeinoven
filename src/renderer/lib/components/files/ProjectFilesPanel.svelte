@@ -16,6 +16,7 @@
   } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { RoutineDefaultIcon } from '$lib/routine-icons'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
@@ -34,7 +35,7 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { FilesContextTab } from '$lib/stores/context-sidebar.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { projectFilesWorkspace, type ProjectFileTab } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -66,15 +67,33 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
     projectId: string
     projectName: string
+    /** Label shown as the tree's root name. Empty when the root names itself
+     *  with the icon alone, which is the case for a routine, whose name is
+     *  often a whole sentence. */
+    projectLabel?: string
     projectIconUrl?: string | null
+    /** True when the tree's root is a routine, so the root icon falls back to
+     *  the routine default mark instead of a generic folder. */
+    routineRoot?: boolean
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. An assistant task's tree mounts on its routine's own workspace,
+     *  so the parent passes that routine's colour here. */
+    projectAccentColor?: string | null
   }
 
-  let { projectId, projectName, projectIconUrl = null }: Props = $props()
+  let {
+    projectId,
+    projectName,
+    projectLabel = projectName,
+    projectIconUrl = null,
+    routineRoot = false,
+    projectAccentColor = null
+  }: Props = $props()
 
   let contextTab = $derived(
     contextSidebarState.sidebarActiveTab?.kind === 'files'
@@ -82,11 +101,13 @@
       : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
-  /** Inbox chats mount the file tree on the thread's own artifact directory;
-   *  real projects always use the project root regardless of the open thread. */
-  let chatThreadId = $derived(projectId === INBOX_PROJECT_ID ? activeThreadId : null)
+  /** A conversation's file tree mounts on the thread's own app-owned workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory); real projects always use the project root regardless of the
+   *  open thread. */
+  let mountThreadId = $derived(usesThreadWorkspaceMount(projectId) ? activeThreadId : null)
   $effect(() => {
-    projectFilesWorkspace.setChatThread(projectId, chatThreadId)
+    projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
   // This panel can be restored directly from persisted sidebar state before a
   // file action has had a chance to prepare the workspace store.
@@ -154,8 +175,22 @@
    * explorer's Conflicts button toggles it directly.
    */
   let conflictsOnly = $derived(gitState.conflictsMode)
-  let activePathIsConflicted = $derived(
-    activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
+  /**
+   * The tab whose conflicted file the user handed to the file editor from the
+   * merge editor's size notice. A conflicted working file belongs to the merge
+   * editor whenever one is open, so without this the escape hatch would route
+   * straight back into the surface that refused the file. The hand-over is held
+   * by the tab itself, so closing the file and opening it again brings the merge
+   * editor back.
+   */
+  let rawConflictTab = $state<ProjectFileTab | null>(null)
+  /** Whether the merge editor owns the active file's body. False while the file
+   *  is conflicted but the user asked for the raw source, which is the case the
+   *  file editor resolves by hand. */
+  let activeFileInMergeEditor = $derived(
+    activeTab?.origin === 'working' &&
+      conflictedPaths.includes(activeTab.path) &&
+      rawConflictTab !== activeTab
   )
   /** Undo/redo toolbar buttons apply to the plain file editor only: the
    *  editable source view with a session, not diffs, previews, the
@@ -163,7 +198,7 @@
   let canUndoRedo = $derived(
     activeSession !== null &&
       !deletedAtCheckpoint &&
-      !activePathIsConflicted &&
+      !activeFileInMergeEditor &&
       activeTab?.view === 'source'
   )
   /** Beautify is offered for the same editable source view as undo/redo, and
@@ -173,7 +208,7 @@
     activeTab !== null &&
       activeSession !== null &&
       !deletedAtCheckpoint &&
-      !activePathIsConflicted &&
+      !activeFileInMergeEditor &&
       !projectState.loadingPaths[activeTab.path] &&
       activeTab.view === 'source'
       ? fileBeautifyLabel(activeTab.path)
@@ -186,7 +221,7 @@
     activeTab !== null &&
       activeTab.view !== 'diff' &&
       !deletedAtCheckpoint &&
-      (activePathIsConflicted || (activeSession !== null && dirty))
+      (activeFileInMergeEditor || (activeSession !== null && dirty))
   )
   const previewFlags = $derived(filePreviewFlags(activeTab?.path ?? null))
   let markdown = $derived(previewFlags.markdown)
@@ -204,7 +239,7 @@
       ? projectFilePreviewUrl(
           projectId,
           activeTab.path,
-          chatThreadId ?? undefined,
+          mountThreadId ?? undefined,
           previewReloadToken
         )
       : null
@@ -223,7 +258,7 @@
       currentReloadToken: () =>
         activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
       scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId
+      mountThreadId
     })
   )
   let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
@@ -260,7 +295,7 @@
     return projectFilePreviewUrl(
       projectId,
       directory ? `${directory}/` : '',
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   })
   /** Sanitized page for the active HTML file, built from the live session draft
@@ -381,8 +416,21 @@
     await conflictController?.save()
   }
 
+  /**
+   * The merge editor's size notice hands the file over: the tab renders its raw
+   * source, and the file tree opens on the file so the hand-over is visible
+   * rather than implied. The editor's Save then writes the cleared content and
+   * stages the file through the ordinary conflicted-save reconcile.
+   */
+  async function openRawConflictSource(): Promise<void> {
+    const tab = activeTab
+    if (!tab || tab.origin !== 'working') return
+    rawConflictTab = tab
+    await projectFilesWorkspace.revealFile(projectId, tab.path)
+  }
+
   function runPanelSave(): void {
-    if (activePathIsConflicted) {
+    if (activeFileInMergeEditor) {
       void resolveActiveConflict()
       return
     }
@@ -395,7 +443,7 @@
    *  cannot stage a file whose progress the scratch file has not seen. */
   async function saveActiveFile(): Promise<void> {
     if (!activeTab) return
-    if (activePathIsConflicted) {
+    if (activeFileInMergeEditor) {
       if (conflictStep === 'draft') {
         await conflictController?.saveDraft()
         return
@@ -625,7 +673,7 @@
       projectId,
       activeTab.path,
       workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   }
 
@@ -747,13 +795,20 @@
           <button
             type="button"
             class="shrink-0"
-            title="Show project root"
+            title={routineRoot ? projectName : 'Show project root'}
             onclick={() => revealBreadcrumb(-1)}
           >
             {#if projectIconUrl}
               <img src={projectIconUrl} alt={projectName} class="h-4 w-4 shrink-0" />
+            {:else if routineRoot}
+              <RoutineDefaultIcon
+                size={14}
+                strokeWidth={1.8}
+                class="shrink-0"
+                style="color: {projectAccentColor ?? 'var(--color-primary)'}"
+              />
             {:else}
-              <span class="font-medium hover:text-foreground">{projectName}</span>
+              <span class="font-medium hover:text-foreground">{projectLabel}</span>
             {/if}
           </button>
           {#each breadcrumbParts as part, index (`${part}:${index}`)}
@@ -810,11 +865,11 @@
           {beautifyLabel}
           {showSaveButton}
           saveDisabled={deletedAtCheckpoint ||
-            (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
-            (activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving))}
-          saving={activePathIsConflicted ? conflictStatus.saving : Boolean(activeSession?.saving)}
-          saveLabel={activePathIsConflicted ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
-          saveTitle={activePathIsConflicted ? conflictSaveTitle : undefined}
+            (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
+            (activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving))}
+          saving={activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving)}
+          saveLabel={activeFileInMergeEditor ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
+          saveTitle={activeFileInMergeEditor ? conflictSaveTitle : undefined}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
           onInfo={() => void showActiveFileInfo()}
@@ -965,7 +1020,7 @@
             </button>
           </div>
         {/if}
-      {:else if activePathIsConflicted && activeTab}
+      {:else if activeFileInMergeEditor && activeTab}
         {#if !fullscreenOpen}
           <ConflictResolutionView
             {projectId}
@@ -974,6 +1029,7 @@
             onToggleWrap={() => wrapTextState.toggle()}
             onControllerChange={(next) => handleConflictController('sidebar', next)}
             onStatusChange={(next) => handleConflictStatus('sidebar', next)}
+            onOpenOriginal={() => void openRawConflictSource()}
           />
         {/if}
       {:else if activeSession || deletedAtCheckpoint}
@@ -1009,6 +1065,10 @@
         <ProjectFileExplorer
           {projectId}
           {projectName}
+          {projectLabel}
+          {projectIconUrl}
+          {routineRoot}
+          {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
             projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
@@ -1107,17 +1167,17 @@
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={deletedAtCheckpoint ||
-          (activePathIsConflicted ? !conflictSaveReady : !dirty) ||
-          (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-        title={activePathIsConflicted ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
+          (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
+          (activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving)}
+        title={activeFileInMergeEditor ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
         onclick={runPanelSave}
       >
-        {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
+        {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}
           <Loader2 size={11} class="animate-spin" />
         {:else}
           <Save size={11} />
         {/if}
-        {#if activePathIsConflicted}
+        {#if activeFileInMergeEditor}
           {conflictSaveText}
         {:else}Save{/if}
       </button>
@@ -1149,7 +1209,7 @@
   </div>
   <div class="relative flex min-h-0 min-w-0 flex-1">
     <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {#if activeTab && !activePathIsConflicted}
+      {#if activeTab && !activeFileInMergeEditor}
         <ProjectFilesPanelToolbar
           {activeTab}
           {checkpointDiff}
@@ -1246,7 +1306,7 @@
               alt={activeTab.path}
               kind={video ? 'video' : 'audio'}
             />
-          {:else if activePathIsConflicted && activeTab}
+          {:else if activeFileInMergeEditor && activeTab}
             <ConflictResolutionView
               {projectId}
               path={activeTab.path}
@@ -1254,6 +1314,7 @@
               onToggleWrap={() => wrapTextState.toggle()}
               onControllerChange={(next) => handleConflictController('fullscreen', next)}
               onStatusChange={(next) => handleConflictStatus('fullscreen', next)}
+              onOpenOriginal={() => void openRawConflictSource()}
             />
           {:else}
             <ProjectTextEditor
@@ -1287,6 +1348,10 @@
         <ProjectFileExplorer
           {projectId}
           {projectName}
+          {projectLabel}
+          {projectIconUrl}
+          {routineRoot}
+          {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
             projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}

@@ -22,6 +22,15 @@ import type { IpcHandlerContext } from './context'
 export function registerGitHandlers(ctx: IpcHandlerContext): void {
   const { threadManager, repositoryService, gitService, resolveProjectPath } = ctx
 
+  /**
+   * The configured byte cap on a conflicted file, read per call so a settings
+   * change applies without a restart. The merge editor refuses to open a file
+   * above it, and every conflict payload it hands back is bounded by the same
+   * number.
+   */
+  const conflictFileBytes = async (): Promise<number> =>
+    (await ctx.storage.getConfig()).maxConflictFileBytes
+
   ipcMain.handle('git:status', async (_, projectId: unknown, scopeBucketId?: unknown) =>
     gitService.getStatus(
       await resolveProjectPath(
@@ -85,8 +94,9 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
       content: unknown,
       stateJson: unknown,
       scopeBucketId?: unknown
-    ) =>
-      gitService.saveConflictDraft(
+    ) => {
+      const limit = await conflictFileBytes()
+      return gitService.saveConflictDraft(
         await resolveProjectPath(
           validateEntityId(projectId, 'Project ID'),
           scopeBucketId === undefined
@@ -94,9 +104,10 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
         validateGitRelativePath(relativePath),
-        validateConflictResolutionContent(content),
-        validateConflictResolutionContent(stateJson)
+        validateConflictResolutionContent(content, limit),
+        validateConflictResolutionContent(stateJson, limit)
       )
+    }
   )
   ipcMain.handle(
     'git:saveConflictResolution',
@@ -115,7 +126,7 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
         validateGitRelativePath(relativePath),
-        validateConflictResolutionContent(content)
+        validateConflictResolutionContent(content, await conflictFileBytes())
       )
   )
   ipcMain.handle(
@@ -469,23 +480,25 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
     'git:deleteCommit',
     async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const status = await gitService.deleteCommit(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateEntityId(target, 'Delete commit target')
+      const projectPath = await resolveProjectPath(
+        safeProjectId,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
-      const threads = await threadManager.listThreads(safeProjectId)
-      for (const thread of threads) {
-        if (thread.workingDirectory) {
-          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      const outcome = await gitInvocation(() =>
+        gitService.deleteCommit(projectPath, validateEntityId(target, 'Delete commit target'))
+      )
+      // A refusal leaves the checkout mid-rebase with HEAD detached, which is not
+      // a branch change: only a delete that went through moved history.
+      if (outcome.ok) {
+        const threads = await threadManager.listThreads(safeProjectId)
+        for (const thread of threads) {
+          if (thread.workingDirectory) {
+            const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+          }
         }
       }
-      return status
+      return outcome
     }
   )
   ipcMain.handle('git:getIdentity', async (_, projectId: unknown, scopeBucketId?: unknown) =>

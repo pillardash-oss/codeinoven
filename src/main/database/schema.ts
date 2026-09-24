@@ -120,6 +120,15 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
+  routine_id           TEXT,
+  assistant_icon_type  TEXT,
+  assistant_icon       TEXT,
+  schedule_override    TEXT,
+  last_run_at          INTEGER,
+  last_dispatched_at   INTEGER,
+  last_success_at      INTEGER,
+  assistant_getting_started INTEGER NOT NULL DEFAULT 0,
+  assistant_task_id    TEXT,
   drafting             INTEGER NOT NULL DEFAULT 0,
   draft_json           TEXT,
   created_at           INTEGER NOT NULL,
@@ -593,6 +602,22 @@ CREATE TABLE IF NOT EXISTS active_turns (
   PRIMARY KEY (project_id, thread_id)
 );
 
+-- ─── Workflow Owners ─────────────────────────────────────────────────
+-- A coordinated workflow   the Sr. Engineer coordinator and its worker and
+-- auditor children   is one unit of instance ownership, not a set of
+-- independent threads: one process drives it and the whole group moves
+-- together. owner_pid names that process, keyed by the coordinator thread
+-- exactly as assignment_workflow is, so a sibling instance can tell a
+-- workflow a live peer is running from one a departed process left behind.
+-- No row means nobody owns it, which every instance may then claim.
+CREATE TABLE IF NOT EXISTS workflow_owners (
+  project_id            TEXT NOT NULL,
+  coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  owner_pid             INTEGER,
+  updated_at            INTEGER NOT NULL,
+  PRIMARY KEY (project_id, coordinator_thread_id)
+);
+
 -- ─── Assignment Plans ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assignment_versions (
   assignment_id        TEXT NOT NULL,
@@ -838,6 +863,37 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
+/**
+ * Assistant routines: the top-level grouping for assistant tasks. A routine
+ * owns the agent-authored how-to, a default schedule, and its connection picks;
+ * tasks are threads in the assistant space that reference `routines.id`.
+ */
+export const ROUTINES_SQL = `
+-- ─── Assistant routines ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS routines (
+  id                  TEXT PRIMARY KEY NOT NULL,
+  name                TEXT NOT NULL,
+  description         TEXT,
+  color               TEXT,
+  icon                TEXT,
+  icon_type           TEXT,
+  schedule            TEXT,
+  how_to              TEXT NOT NULL DEFAULT '',
+  how_to_updated_at   INTEGER,
+  connections         TEXT NOT NULL DEFAULT '[]',
+  delivery            TEXT,
+  priority            TEXT,
+  agents              TEXT,
+  paused              INTEGER NOT NULL DEFAULT 0,
+  pinned              INTEGER NOT NULL DEFAULT 0,
+  pinned_at           INTEGER,
+  sort_order          INTEGER,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -852,5 +908,6 @@ export const DATABASE_SCHEMA_SQL = [
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
-  THREAD_NOTES_SQL
+  THREAD_NOTES_SQL,
+  ROUTINES_SQL
 ].join('\n')

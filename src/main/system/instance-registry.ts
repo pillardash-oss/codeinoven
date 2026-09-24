@@ -242,6 +242,22 @@ export class InstanceRegistry {
     return false
   }
 
+  /**
+   * Every process id currently registered and alive, this one included.
+   *
+   * A consumer that reacts to a sibling *disappearing* needs the whole set, not
+   * a boolean: with two siblings, the survivor that notices first must still
+   * adopt the departed work even though another sibling remains. `null` means
+   * the registry could not be read, which is never evidence that anyone exited.
+   */
+  liveInstancePids(): number[] | null {
+    try {
+      return this.liveEntries().map((entry) => entry.pid)
+    } catch {
+      return null
+    }
+  }
+
   private heartbeat(): void {
     try {
       this.writeEntry()

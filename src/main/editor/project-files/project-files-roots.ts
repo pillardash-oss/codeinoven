@@ -8,7 +8,7 @@
 import { realpathSync, statSync, type Stats } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { INBOX_PROJECT_ID } from '../../../lib/types'
+import { ASSISTANT_SPACE_ID, usesThreadWorkspaceMount } from '../../../lib/types'
 import type { Project, ProjectFileEntry } from '../../../lib/types'
 import {
   isWithinRoot,
@@ -35,29 +35,52 @@ export interface ProjectFilesChatArtifactRootLookup {
   resolve(threadId: string): Promise<string>
 }
 
+/** Resolves (and creates) one assistant task's `assistant-cwd/<routineId ??
+ *  threadId>` root. Assistant file trees mount here: the directory is the
+ *  task's own working directory, app-owned and shared by every task in the
+ *  same routine, so resolution must not depend on a project record either. */
+export interface ProjectFilesAssistantRootLookup {
+  resolve(threadId: string): Promise<string>
+}
+
+/** App-owned thread workspace roots, both resolved lazily and created on
+ *  demand so an empty conversation still has a browsable file tree. */
+export interface ProjectFilesThreadWorkspaceRoots {
+  chatArtifacts?: ProjectFilesChatArtifactRootLookup
+  assistant?: ProjectFilesAssistantRootLookup
+}
+
 export class ProjectFilesRootResolver {
   private readonly projectRoots = new Map<string, string>()
 
   constructor(
     private readonly projects: ProjectFilesProjectLookup,
     private readonly scopeRoots?: ProjectFilesScopeRootLookup,
-    private readonly chatArtifactRoots?: ProjectFilesChatArtifactRootLookup
+    private readonly threadWorkspaces: ProjectFilesThreadWorkspaceRoots = {}
   ) {}
 
   async projectRoot(projectId: string, scopeBucketId?: string, threadId?: string): Promise<string> {
-    // A chat thread's artifact directory is its own mount root: per-thread,
-    // app-owned, created on demand, and independent of any project record.
-    if (threadId !== undefined && projectId === INBOX_PROJECT_ID && this.chatArtifactRoots) {
-      const cacheKey = `${projectId}::thread:${threadId}`
-      const cached = this.projectRoots.get(cacheKey)
-      if (cached) return cached
-      const root = await realpath(await this.chatArtifactRoots.resolve(threadId))
-      const metadata = await lstat(root)
-      if (!metadata.isDirectory()) {
-        throw new Error('Chat artifact root is not a directory')
+    // App-owned thread workspaces are their own mount roots: per-conversation,
+    // created on demand, and independent of any project record. A thread mount
+    // outranks any scope bucket the caller passed along with it, because the
+    // conversation's own directory is the authoritative root for the call.
+    if (threadId !== undefined && usesThreadWorkspaceMount(projectId)) {
+      const lookup =
+        projectId === ASSISTANT_SPACE_ID
+          ? this.threadWorkspaces.assistant
+          : this.threadWorkspaces.chatArtifacts
+      if (lookup) {
+        const cacheKey = `${projectId}::thread:${threadId}`
+        const cached = this.projectRoots.get(cacheKey)
+        if (cached) return cached
+        const root = await realpath(await lookup.resolve(threadId))
+        const metadata = await lstat(root)
+        if (!metadata.isDirectory()) {
+          throw new Error('Thread workspace root is not a directory')
+        }
+        this.projectRoots.set(cacheKey, root)
+        return root
       }
-      this.projectRoots.set(cacheKey, root)
-      return root
     }
 
     const cacheKey = scopedKey(projectId, scopeBucketId)

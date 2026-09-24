@@ -14,13 +14,18 @@ import {
   validateHeartbeatCreateInput,
   validateHeartbeatPatchInput,
   validateLocalProfileAnalyticsRange,
-  validateLocalUsageClearInput
+  validateLocalUsageClearInput,
+  validateRankingGradeScope
 } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { Logger } from '../../system/logger'
+import { sendToRenderer } from '../renderer-delivery'
 import type {
   AgentRole,
   AppConfig,
+  LocalRankingGradeProgress,
+  LocalRankingJudgeView,
+  LocalRankingQueueStatus,
   LocalUsageClearInput,
   LocalUsageRecordCounts
 } from '../../../lib/types'
@@ -36,8 +41,58 @@ const RECORD_STORE_LABELS: Record<LocalUsageClearInput['store'], string> = {
   modelRankings: 'model ranking records'
 }
 
+/** Push ranking-grade progress to every window, the way other status streams do. */
+function broadcastRankingGradeProgress(progress: LocalRankingGradeProgress | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    sendToRenderer(win.webContents, 'account:rankingGradeProgress', progress)
+  }
+}
+
+/**
+ * The judge a manual run would use, described for the panel that offers it.
+ *
+ * A `model` pin that is missing any of its parts is reported as "No model
+ * chosen" rather than quietly presented as the automatic chain, because a
+ * settings page that claims a judge the engine cannot use is worse than one
+ * that says the choice needs finishing. Only a hand-edited config can reach that
+ * state: the write boundary rejects an incomplete pin.
+ */
+function rankingJudgeView(config: AppConfig): LocalRankingJudgeView {
+  const judge = config.rankingJudge ?? { kind: 'automatic' }
+  if (judge.kind === 'typesafe') return { kind: 'typesafe', label: 'TypeSafe (Jev)' }
+  if (judge.kind === 'model') {
+    const named = judge.harnessId && judge.providerId && judge.modelId
+    return {
+      kind: 'model',
+      label: named ? `${judge.harnessId} · ${judge.modelId}` : 'No model chosen'
+    }
+  }
+  return { kind: 'automatic', label: 'Automatic' }
+}
+
 export function registerConfigHandlers(ctx: IpcHandlerContext): void {
-  const { storage, options, harnessUsageRepo, modelRankingRepo, rankingSnapshotRepo } = ctx
+  const { storage, options, harnessUsageRepo, modelRankingRepo, rankingSnapshotRepo, chatEngine } =
+    ctx
+
+  /**
+   * One read of everything the grading panel shows: the queue, the judge, and
+   * the run in flight. Assembled in one place so the panel, the progress event
+   * and the run's return value can never describe the same queue differently.
+   */
+  async function rankingQueueStatus(): Promise<LocalRankingQueueStatus> {
+    const [counts, config] = await Promise.all([
+      Promise.resolve(rankingSnapshotRepo.queueCounts(Date.now())),
+      storage.getConfig()
+    ])
+    return {
+      awaiting: counts.awaiting,
+      due: counts.due,
+      failed: counts.failed,
+      judge: rankingJudgeView(config),
+      run: chatEngine?.rankingGradeRunStatus?.() ?? null
+    }
+  }
 
   // ─── Application config ────────────────────────────────────────────────
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
@@ -100,6 +155,38 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       cleared
     })
     return cleared
+  })
+
+  ipcMain.handle('account:getRankingQueue', () => rankingQueueStatus())
+
+  /**
+   * Grade the ranking queue on request.
+   *
+   * The run is bounded and paced by the engine; every pass pushes its counters
+   * so a queue graded three conversations at a time shows real progress instead
+   * of a spinner, and the call itself resolves with the run's own result. A run
+   * already in flight is joined rather than duplicated, so a double click cannot
+   * grade the same conversation twice.
+   */
+  ipcMain.handle('account:gradeRankingQueue', async (_, input: unknown) => {
+    const scope = validateRankingGradeScope(input)
+    if (!chatEngine?.gradeRankingQueueNow) {
+      throw new Error('Ranking grading is unavailable in this build')
+    }
+    Logger.info('Ranking queue grading requested', { scope })
+    const progress = await chatEngine.gradeRankingQueueNow(scope, broadcastRankingGradeProgress)
+    broadcastRankingGradeProgress(null)
+    Logger.info('Ranking queue grading finished', {
+      scope,
+      graded: progress.graded,
+      remaining: progress.remaining,
+      cancelled: progress.cancelled
+    })
+    return progress
+  })
+
+  ipcMain.handle('account:cancelRankingGrade', () => {
+    chatEngine?.cancelRankingGrade?.()
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())

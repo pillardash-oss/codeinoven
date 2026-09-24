@@ -51,8 +51,14 @@ export class ThreadMessagesEvents {
         msg.parts[partIndex] = mergeStreamedPart(msg.parts[partIndex], part)
       }
       entry.messages = [...entry.messages]
+      // Appending a part changes the transcript's shape; replacing an existing
+      // one only changes content, so the turn index can be reused.
+      this.cache.notifyStreaming(projectId, threadId, partIndex === -1)
+      return
     }
-    this.cache.notifyStreaming(projectId, threadId)
+    // `msgIndex === -1`: a brand-new assistant row. That is a shape change,
+    // unlike a text echo, which returned above without publishing anything.
+    this.cache.notifyStreaming(projectId, threadId, true)
   }
 
   /** Append streaming text to a specific part field. */
@@ -150,7 +156,9 @@ export class ThreadMessagesEvents {
       }
     }
     entry.messages = [...entry.messages]
-    this.cache.notifyStreaming(projectId, threadId)
+    // `completedAt` feeds the turn index (durations, turn completion) and the
+    // history list, so a completion is a structural change.
+    this.cache.notifyStreaming(projectId, threadId, true)
   }
 
   /** Apply provider account telemetry without creating a duplicate answer. */
@@ -182,6 +190,8 @@ export class ThreadMessagesEvents {
     if (credits) message.credits = credits
     if (bankedResets) message.bankedResets = bankedResets
     entry.messages = [...entry.messages]
+    // Usage telemetry moves no boundary the transcript index records, so it
+    // stays on the content revision.
     this.cache.notifyStreaming(projectId, threadId)
   }
 
@@ -230,23 +240,30 @@ export class ThreadMessagesEvents {
     }
 
     const entry = this.cache.entry(projectId, threadId)
-    const message = entry.messages.find((candidate) => candidate.id === update.messageId)
-    if (!message) return
+    // Brainstorm trace parts stream exactly like the main agent stream, so they
+    // go through the same in-place mutation and 16 ms publish batching. Routing
+    // each one through `mergePage` rebuilt a record of every cached message and
+    // re-sorted the whole transcript once per streamed chunk.
+    const msgIndex = entry.messages.findLastIndex((candidate) => candidate.id === update.messageId)
+    if (msgIndex === -1) return
+    const message = entry.messages[msgIndex]
     if (update.type === 'part.updated') {
-      const partIndex = message.parts.findIndex((part) => part.id === update.part.id)
-      const parts =
-        partIndex === -1
-          ? [...message.parts, update.part]
-          : message.parts.map((part, index) =>
-              index === partIndex ? mergeStreamedPart(part, update.part) : part
-            )
-      this.cache.mergePage(projectId, threadId, [{ ...message, parts }])
+      const partIndex = message.parts.findLastIndex((part) => part.id === update.part.id)
+      if (partIndex === -1) message.parts = [...message.parts, update.part]
+      else message.parts[partIndex] = mergeStreamedPart(message.parts[partIndex], update.part)
+      entry.messages = [...entry.messages]
+      this.cache.notifyStreaming(projectId, threadId, partIndex === -1)
       return
     }
-    const parts = message.parts.map((part) =>
-      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
-    )
-    this.cache.mergePage(projectId, threadId, [{ ...message, parts }])
+    const partIndex = message.parts.findLastIndex((part) => part.id === update.partId)
+    if (partIndex === -1) return
+    const updated = appendPartDelta(message.parts[partIndex], update.field, update.delta)
+    // A delta for a field this fold does not own leaves the part untouched;
+    // skip the re-render entirely.
+    if (updated === message.parts[partIndex]) return
+    message.parts[partIndex] = updated
+    entry.messages = [...entry.messages]
+    this.cache.notifyStreaming(projectId, threadId)
   }
 
   handle(event: AgentEvent): void {

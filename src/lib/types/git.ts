@@ -1,3 +1,24 @@
+/**
+ * Byte cap on a conflicted file the merge editor reads, writes and stages.
+ *
+ * The merge editor assembles three CodeMirror documents from one conflicted
+ * file, so the cap is a performance bound as much as a payload bound. A file
+ * above it is resolved by hand in the plain file editor, which is what the
+ * merge editor's size notice offers.
+ */
+export const DEFAULT_MAX_CONFLICT_FILE_BYTES = 1_572_864 // 1.5 MiB
+
+/** Smallest configurable conflicted-file cap (0.25 MiB). */
+export const MIN_MAX_CONFLICT_FILE_BYTES = 262_144
+
+/**
+ * Largest configurable conflicted-file cap (2 MiB), which is the plain file
+ * editor's own text cap (`MAX_TEXT_FILE_BYTES` in the main process). Capping
+ * the setting there keeps the escape hatch honest: every file the merge editor
+ * refuses can still be opened and resolved in the file editor.
+ */
+export const MAX_MAX_CONFLICT_FILE_BYTES = 2_097_152
+
 /** Explicit reconciliation strategies supported by `git pull`. */
 export type GitPullStrategy = 'merge' | 'rebase' | 'ff-only'
 

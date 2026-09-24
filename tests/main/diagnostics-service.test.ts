@@ -12,6 +12,11 @@ import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
 import { ThreadRepo } from '../../src/main/database/repositories/thread-repo'
+import {
+  MAIN_LOG_FILE,
+  PERMISSION_EVENTS_LOG_FILE,
+  logDayName
+} from '../../src/main/system/log-paths'
 
 const temporaryPaths: string[] = []
 const testDatabases: Database[] = []
@@ -83,8 +88,12 @@ describe('DiagnosticsService', () => {
     }
     new ProjectRepo(database).upsert(project)
     new ThreadRepo(database).upsert(thread)
+    // The report reads the folder of the day it was generated for.
+    const reportNow = '2026-07-26T12:00:00.000Z'
+    const dayDirectory = join(configRoot, 'logs', logDayName(new Date(reportNow)))
+    await mkdir(dayDirectory, { recursive: true })
     await writeFile(
-      join(configRoot, 'logs', 'main.jsonl'),
+      join(dayDirectory, MAIN_LOG_FILE),
       [
         JSON.stringify({
           timestamp: '2026-01-01T00:00:00.000Z',
@@ -101,7 +110,7 @@ describe('DiagnosticsService', () => {
       'utf-8'
     )
     await writeFile(
-      join(configRoot, 'logs', 'permission-events.jsonl'),
+      join(dayDirectory, PERMISSION_EVENTS_LOG_FILE),
       `${JSON.stringify({
         requestId: 'request-secret',
         sessionId: 'session-secret',
@@ -121,7 +130,7 @@ describe('DiagnosticsService', () => {
 
     const report = await new DiagnosticsService(database).createReport(metadata, {
       logLimit: 1,
-      now: () => new Date('2026-07-26T12:00:00.000Z')
+      now: () => new Date(reportNow)
     })
     const serialized = JSON.stringify(report)
 

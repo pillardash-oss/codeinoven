@@ -4,14 +4,12 @@ import { readdirSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { ThreadTransferResult } from '../../src/lib/types'
-import type { Database } from '../../src/main/database/database'
 import type { HandoffAck, HandoffRequest } from '../../src/main/system/instance-handoff-bus'
 import { InstanceHandoffBus } from '../../src/main/system/instance-handoff-bus'
 import {
   ThreadTransferService,
   type ThreadTransferEngine
 } from '../../src/main/chat/thread-transfer-service'
-import { createTestDb, destroyTestDb } from './database/test-helper'
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => process.cwd() },
@@ -21,7 +19,8 @@ vi.mock('electron', () => ({
 /**
  * The two-sided hand-off, both sides in this one process.
  *
- * `active_turns.owner_pid` is what a transfer reads and liveness is the injected
+ * The engine double resolves the transfer target   the thread itself, or the
+ * coordinator of the workflow it belongs to   and liveness is the injected
  * probe, so a sibling instance can be stood up as a second service speaking over
  * a second bus on one temporary handoff directory. Both sides then run the real
  * file protocol: a request routed by target pid, an ack routed by requester pid.
@@ -35,7 +34,6 @@ const PROJECT_ID = 'project1'
 const THREAD_ID = 'thread1'
 
 const directories: string[] = []
-const databases: Database[] = []
 const services: ThreadTransferService[] = []
 
 async function handoffDirectory(): Promise<string> {
@@ -44,36 +42,25 @@ async function handoffDirectory(): Promise<string> {
   return directory
 }
 
-async function testDatabase(): Promise<Database> {
-  const database = await createTestDb()
-  databases.push(database)
-  return database
-}
-
-/** Record an in-flight turn owned by `ownerPid`, the shape the transfer reads. */
-function recordTurn(database: Database, ownerPid: number): void {
-  database.run(
-    'INSERT OR REPLACE INTO active_turns (project_id, thread_id, turn_id, owner_pid) VALUES (?, ?, ?, ?)',
-    PROJECT_ID,
-    THREAD_ID,
-    'turn1',
-    ownerPid
-  )
-}
-
 interface EngineStub {
   engine: ThreadTransferEngine
+  resolve: ReturnType<typeof vi.fn>
   release: ReturnType<typeof vi.fn>
   adopt: ReturnType<typeof vi.fn>
 }
 
-/** A chat engine double: only the two transfer operations the service calls. */
+/** A chat engine double: only the transfer operations the service calls. */
 function engineStub(
   options: {
+    ownerPid?: number | null
     release?: { released: boolean; reason?: string } | Error
     adopt?: ThreadTransferResult | Error
   } = {}
 ): EngineStub {
+  const resolve = vi.fn(async () => ({
+    rootThreadId: THREAD_ID,
+    ownerPid: options.ownerPid ?? null
+  }))
   const release = vi.fn(async (): Promise<{ released: boolean; reason?: string }> => {
     if (options.release instanceof Error) throw options.release
     return options.release ?? { released: true }
@@ -83,7 +70,12 @@ function engineStub(
     return options.adopt ?? { ok: true }
   })
   return {
-    engine: { releaseThreadForTransfer: release, adoptTransferredThread: adopt },
+    engine: {
+      resolveTransferTarget: resolve,
+      releaseThreadForTransfer: release,
+      adoptTransferredThread: adopt
+    },
+    resolve,
     release,
     adopt
   }
@@ -109,17 +101,16 @@ async function harness(
   } = {}
 ): Promise<Harness> {
   const directory = await handoffDirectory()
-  const database = await testDatabase()
-  if (options.ownsTurn !== null) recordTurn(database, options.ownsTurn ?? OWNER_PID)
+  const ownerPid = options.ownsTurn === null ? null : (options.ownsTurn ?? OWNER_PID)
 
-  const adopterEngine = engineStub({ adopt: options.adopt })
+  const adopterEngine = engineStub({ ownerPid, adopt: options.adopt })
   const ownerEngine = engineStub({ release: options.release })
 
-  const adopter = new ThreadTransferService(database, adopterEngine.engine, {
+  const adopter = new ThreadTransferService(adopterEngine.engine, {
     bus: new InstanceHandoffBus(directory),
     isRunOwnerAlive: () => options.ownerAlive ?? true
   })
-  const owner = new ThreadTransferService(database, ownerEngine.engine, {
+  const owner = new ThreadTransferService(ownerEngine.engine, {
     bus: new InstanceHandoffBus(directory, OWNER_PID)
   })
   services.push(adopter, owner)
@@ -168,7 +159,6 @@ async function settle(): Promise<void> {
 
 afterEach(async () => {
   for (const service of services.splice(0)) service.dispose()
-  for (const database of databases.splice(0)) destroyTestDb(database)
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
@@ -223,8 +213,7 @@ describe('ThreadTransferService', () => {
   })
 
   it("carries the owner's refusal back to the asking instance", async () => {
-    const reason =
-      'This thread belongs to a coordinated workflow and cannot be moved while it runs.'
+    const reason = 'This workflow is waiting on the user and cannot be handed over.'
     const { adopter, adopterEngine, ownerEngine } = await harness({
       release: { released: false, reason }
     })

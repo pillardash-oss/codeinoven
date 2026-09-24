@@ -12,6 +12,13 @@ function isCompleted(checkpoint: TurnCheckpointSummary): boolean {
   return checkpoint.status !== 'active'
 }
 
+/**
+ * The completed checkpoint whose window contains this assistant message, or
+ * null. Called once per message whenever the transcript index is rebuilt, so it
+ * scans without allocating: skipping the active checkpoints inline replaces the
+ * per-call `checkpoints.filter(...)` copy the render path used to pay once per
+ * mounted message on every publish.
+ */
 export function checkpointForTurn(
   messages: readonly AgentMessage[],
   checkpoints: readonly TurnCheckpointSummary[],
@@ -20,9 +27,9 @@ export function checkpointForTurn(
   const assistant = messages[messageIndex]
   if (!assistant || assistant.role !== 'assistant') return null
 
-  const completed = checkpoints.filter(isCompleted)
   let owner: TurnCheckpointSummary | null = null
-  for (const checkpoint of completed) {
+  for (const checkpoint of checkpoints) {
+    if (!isCompleted(checkpoint)) continue
     const end = checkpoint.completedAt ?? checkpoint.createdAt
     if (
       assistant.createdAt >= checkpoint.createdAt - CHECKPOINT_START_TOLERANCE_MS &&

@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type {
   ResolvedUtility,
   UtilityDefinition,
-  UtilityDefinitionInput,
   UtilityDefinitionFor,
   McpUtilityConfig,
   UtilityKind,
@@ -48,7 +47,9 @@ import {
   type ImageDescriptorExecutor
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
+import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
+import { UTILITY_EVENTS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
 import type { AgentSecretResolution } from './agent-secret-service'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
@@ -87,6 +88,7 @@ import {
   requiredString,
   resolveEnvironmentReferences
 } from './utility-orchestration/utility-input'
+import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
@@ -171,7 +173,7 @@ export interface UtilityTurnGateway {
    * Pi hand { url, token } to their bridge through a session-keyed channel;
    * `null` when the direct path is not in use for this turn.
    */
-  directEndpoint: { url: string; token: string } | null
+  directEndpoint: UtilityGatewayEndpoint | null
   /**
    * Whether this turn carries the explicit-setup contract (utility management and
    * app diagnostics). A gateway fixes its tool set when the turn starts, so a
@@ -590,7 +592,11 @@ export class UtilityOrchestrationService {
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
-      directEndpoint: { url: bridgeUrl, token },
+      directEndpoint: {
+        url: bridgeUrl,
+        token,
+        timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
+      },
       managementEnabled: request.allowManagement === true,
       cleanup
     }
@@ -727,27 +733,7 @@ export class UtilityOrchestrationService {
     if (input['action'] !== 'install_bundle') {
       throw new TypeError('Utility management action is invalid')
     }
-    const bundle = recordValue(input['bundle'])
-    requiredString(bundle['name'], 'Utility bundle name', 120)
-    const entries = bundle['utilities']
-    if (!Array.isArray(entries) || entries.length === 0 || entries.length > 20) {
-      throw new TypeError('Utility bundle must contain between 1 and 20 utilities')
-    }
-    const definitions = entries.map((rawEntry, index) => {
-      const entry = recordValue(rawEntry)
-      if (entry['credentials'] !== undefined) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      const definition = recordValue(entry['definition'])
-      if (definition['kind'] !== 'skill' && definition['kind'] !== 'mcp') {
-        throw new TypeError(`Utility bundle entry ${index} must be a skill or MCP server`)
-      }
-      const credentials = definition['credentials']
-      if (credentials !== undefined && (!Array.isArray(credentials) || credentials.length > 0)) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
-    })
+    const definitions = normalizeBundleDefinitions(input['bundle'])
     const outcomes = await this.registry.installMany(definitions, { consolidate: true })
     state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
     // Hot reload: make what this turn just installed reachable by the next search
@@ -1168,7 +1154,7 @@ export class UtilityOrchestrationService {
       ...(fallback
         ? {
             message:
-              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search.'
+              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search. If none of them fits, research the official source online (your own web tools, or a web/search capability from this library) before concluding the capability cannot be supplied.'
           }
         : {})
     }
@@ -1604,15 +1590,48 @@ export class UtilityOrchestrationService {
     const environment = await this.credentialEnvironment(utility)
     if (utility.config.transport === 'stdio') {
       if (!utility.config.command) throw new Error('stdio MCP command is not configured')
-      return StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
-        ...utility.config.environment,
-        ...environment
-      })
+      try {
+        return await StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
+          ...utility.config.environment,
+          ...environment
+        })
+      } catch (error) {
+        throw this.mcpStartupFailure(utility, environment, error)
+      }
     }
     if (!utility.config.url) throw new Error('Remote MCP URL is not configured')
     return RemoteMcpClient.connect(
       utility.config.url,
       resolveEnvironmentReferences(utility.config.headers ?? {}, environment)
+    )
+  }
+
+  /**
+   * Turn a stdio MCP startup failure into something the agent can act on.
+   *
+   * A server that exits before it answers `initialize` usually died over missing setup, and
+   * the exit message alone does not say which utility or which credential. Naming both here
+   * is what stops a missing token from reading as a broken MCP server.
+   */
+  private mcpStartupFailure(
+    utility: UtilityDefinition,
+    environment: Record<string, string>,
+    error: unknown
+  ): Error {
+    const message = error instanceof Error ? error.message : String(error)
+    const missing = utility.credentials
+      .map((credential) => credential.environmentVariable)
+      .filter(
+        (name): name is string => typeof name === 'string' && name !== '' && !environment[name]
+      )
+    if (missing.length === 0) {
+      return new Error(`Utility \`${utility.name}\` could not start: ${message}`, { cause: error })
+    }
+    return new Error(
+      `Utility \`${utility.name}\` could not start: ${message}. Set its credential ${
+        missing.length > 1 ? 'variables' : 'variable'
+      } ${missing.map((name) => `\`${name}\``).join(', ')} in Utilities`,
+      { cause: error }
     )
   }
 
@@ -1635,7 +1654,7 @@ export class UtilityOrchestrationService {
     details: Record<string, unknown>
   ): Promise<void> {
     await this.storage.appendRaw(
-      'logs/utility-events.jsonl',
+      dailyLogRelativePath(UTILITY_EVENTS_LOG_FILE),
       `${JSON.stringify({
         timestamp: Date.now(),
         action,

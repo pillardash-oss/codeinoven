@@ -3,6 +3,7 @@ import type { AppConfig } from '../../src/lib/types'
 import type { StorageEngine } from '../../src/main/storage/storage-engine'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -68,6 +69,7 @@ function defaultConfig(): AppConfig {
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
     auxiliaryAgents: {},
+    rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
@@ -79,6 +81,7 @@ function defaultConfig(): AppConfig {
     defaultMergeMethod: 'squash',
     defaultPullStrategy: 'ask',
     maxDiffLines: 100,
+    maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }

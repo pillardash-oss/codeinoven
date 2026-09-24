@@ -25,6 +25,22 @@ export interface ScopeThreadsHost {
 }
 
 /**
+ * Shallow field compare for the `thread:updated` guard in `updateThread`.
+ * Nested values compare by reference, which is the right granularity here: a
+ * broadcast carrying a genuinely changed nested object must rebuild the list
+ * anyway, so only a fully unchanged row is worth short-circuiting.
+ */
+function threadSnapshotEqual(a: Thread, b: Thread): boolean {
+  if (a === b) return true
+  const keys = Object.keys(a) as Array<keyof Thread>
+  if (keys.length !== Object.keys(b).length) return false
+  for (const key of keys) {
+    if (a[key] !== b[key]) return false
+  }
+  return true
+}
+
+/**
  * Thread memory, hydration, and scope classification for the scope board.
  *
  * Owns `allScopeThreads`, the per-project hydration marks, the draft-staged
@@ -217,10 +233,18 @@ export class ScopeThreads {
   }
 
   updateThread(updated: Thread): void {
-    const exists = this.allScopeThreads.some((thread) => thread.id === updated.id)
-    this.allScopeThreads = exists
-      ? this.allScopeThreads.map((thread) => (thread.id === updated.id ? updated : thread))
-      : [updated, ...this.allScopeThreads]
+    const index = this.allScopeThreads.findIndex((thread) => thread.id === updated.id)
+    if (index === -1) {
+      this.allScopeThreads = [updated, ...this.allScopeThreads]
+    } else if (!threadSnapshotEqual(this.allScopeThreads[index], updated)) {
+      // `thread:updated` broadcasts arrive on every agent status tick. Rebuilding
+      // the whole list for a row whose fields did not change invalidates every
+      // consumer (the header activity badges rescan the entire list), so compare
+      // the incoming snapshot first and keep the existing array when it matches.
+      const next = this.allScopeThreads.slice()
+      next[index] = updated
+      this.allScopeThreads = next
+    }
     const context = this.host.currentSidebarContext()
     if (context?.threadId === updated.id) {
       this.host.updateSidebarContext({

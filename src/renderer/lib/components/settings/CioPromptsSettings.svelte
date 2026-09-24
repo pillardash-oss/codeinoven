@@ -31,6 +31,7 @@
     { id: 'chat', label: 'Chat' },
     { id: 'file-system-chat', label: 'File system' },
     { id: 'temporary-chat', label: 'Temporary' },
+    { id: 'assistant', label: 'Assistant' },
     { id: 'brainstorm', label: 'Brainstorm' },
     { id: 'engineer', label: 'Engineer' },
     { id: 'assignment', label: 'Assignment' },

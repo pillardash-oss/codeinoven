@@ -106,10 +106,6 @@ export const MAX_SPEC_INSTRUCTIONS_LENGTH = 200_000
  *  stays open, covering commands that finish writing files after Enter. */
 export const USER_TERMINAL_SETTLE_MS = 10_000
 
-/** Directory used as the working-directory root for standalone (inbox) chats,
- *  ensuring the agent never sees a real project directory. */
-export const CHATS_CWD_DIR = 'chats-cwd'
-
 export const COORDINATOR_HANDOFF_QUEUE_DIR = 'coordinator-handoff-queue'
 
 export const MAX_COORDINATOR_HANDOFFS = 50
@@ -132,6 +128,7 @@ export function attributionModeFor(
   fileSystemMode: boolean
 ): AttributionMode {
   if (executionScope === 'project-thread') return 'engineering'
+  if (executionScope === 'assistant') return 'assistant'
   if (executionScope === 'ephemeral') return 'ephemeral'
   return fileSystemMode ? 'file-system-chat' : 'inbox-chat'
 }

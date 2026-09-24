@@ -110,7 +110,7 @@ The public-facing cutover.
 - [ ] **Tag and release `v0.5.0`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.
 - [x] **Verify the auto-update feed** points at the OSS GitHub Releases (README/`electron-builder.yml` now reference `pillardash-oss`). Resolution of `latest.yml`/`latest-mac.yml` is only testable after the first release is published   pending.
 - [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing.
-- [ ] **Verify the download mirror** after a release: `curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq .version` reports the version just released, and an installer downloaded from the mirror hashes to the `sha256` in that manifest (commands in `docs/DOWNLOAD-MIRROR.md`).
+- [ ] **Verify the download mirror** after a release: `curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq .version` reports the version just released, the versionless installer URLs (`stable/codeinoven-arm64.dmg` and friends) serve the new bytes, and an installer downloaded from the mirror hashes to the `sha256` in that manifest (commands in `docs/DOWNLOAD-MIRROR.md`).
 - [ ] **Post-launch hygiene**: enable discussions, announce on X/Twitter and relevant communities, and pin a "first contribution" issue.
 - [x] **Document the security model publicly** (README privacy section already covers data & privacy; add a short "Security" note pointing to `SECURITY.md`).
 - [x] **Set expectations for response time** so you don't get worn out: `SECURITY.md` SLA, Discussions for questions, Issues triaged weekly.
