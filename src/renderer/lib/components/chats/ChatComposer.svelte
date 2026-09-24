@@ -53,7 +53,11 @@
     uniqueAttachments,
     type StartAfterSelection
   } from './chat-composer-attachments'
-  import { normalizeComposerMessage, type ComposerMentionEntry } from './composer-mentions'
+  import {
+    normalizeComposerMessage,
+    COMPOSER_BUILT_IN_TAGS,
+    type ComposerMentionEntry
+  } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -383,16 +387,12 @@
   })
 
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
-    ...(value.includes('@cio-utility')
-      ? [
-          {
-            iconSvg: codeInOvenIconSvg,
-            label: 'utility',
-            title: `${APP_NAME} utility`,
-            value: '@cio-utility'
-          }
-        ]
-      : []),
+    ...COMPOSER_BUILT_IN_TAGS.filter((tag) => value.includes(tag.token)).map((tag) => ({
+      iconSvg: codeInOvenIconSvg,
+      label: tag.chipLabel,
+      title: `${APP_NAME} ${tag.chipLabel}`,
+      value: tag.token
+    })),
     ...projectReferences.map((reference) => ({
       iconSvg: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
@@ -1129,13 +1129,14 @@
   function selectMention(mention: ComposerMentionEntry): void {
     mentions.open = false
     if (mention.type === 'utility') {
+      const token = `${mention.entry.token} `
       const inserted = richEditor.replaceTextBeforeCaret(
         /(^|\s)@[^\s@]*$/u,
-        (_match, prefix) => `${prefix}@cio-utility `
+        (_match, prefix) => `${prefix}${token}`
       )
       if (!inserted) {
         value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
-          return `${prefix}@cio-utility `
+          return `${prefix}${token}`
         })
         onValueChange?.(value)
       }

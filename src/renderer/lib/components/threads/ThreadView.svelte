@@ -1474,6 +1474,21 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven design session   the slash spelling of the @cio-design composer
+    // tag. The tag promotes the app-owned design capability to an active
+    // capability for the turn, so the agent starts designing instead of first
+    // looking for a tool that designs.
+    actions.push({
+      id: 'command:cio-design',
+      title: '/cio-design',
+      description: 'Start a design session: design an interface and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'design', 'designer', 'prototype', 'ui', 'landing', 'page', 'wireframe'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -5928,6 +5943,14 @@
     sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
   }
 
+  /** Open a design session   the slash spelling of the @cio-design composer tag.
+   *  The main process owns the design contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioDesignTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -6134,6 +6157,10 @@
       triggerCioUtilityTurn(args)
       return
     }
+    if (commandId === 'command:cio-design') {
+      triggerCioDesignTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6237,9 +6264,13 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility and capability skills) route
-    // through the same handler the composer's submit path uses.
-    if (action.id === 'command:cio-utility' || action.id.startsWith('cio-skill:')) {
+    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
+    // route through the same handler the composer's submit path uses.
+    if (
+      action.id === 'command:cio-utility' ||
+      action.id === 'command:cio-design' ||
+      action.id.startsWith('cio-skill:')
+    ) {
       await executeHarnessCommand(action.id, '')
       return
     }

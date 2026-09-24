@@ -19,6 +19,7 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
+import type { DesignSessionMode } from './cio-design-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -127,6 +128,13 @@ export interface UtilityTurnRequest {
   resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /**
+   * Whether this turn belongs to a design session the user opened with
+   * `@cio-design`. A session promotes the app-owned design capability to an
+   * active capability for the turn, so the playbook is already in context and
+   * its preview operation is callable without a search and an activation.
+   */
+  designSession?: DesignSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
@@ -515,6 +523,21 @@ export class UtilityOrchestrationService {
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
+    // A design session was opened by the user, so the design capability is active
+    // from the first token: the playbook travels with the turn and the preview
+    // operation is callable at once. Its instructions are resolved from live
+    // settings here for the same reason activation resolves them, because the
+    // seeded copy cannot know which CDN origins the user has approved.
+    if (request.designSession && request.designSession !== 'off') {
+      const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+      if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
+        const instructions = await this.designPlaybook()
+        always.push({
+          binding: design.binding,
+          utility: { ...design.utility, kind: 'skill', config: { instructions } }
+        })
+      }
+    }
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
     // The app-owned scope utility is advertised as a one-line pointer, never as
     // a schema: whether it is offered at all is the registry's call, so
@@ -1264,6 +1287,19 @@ export class UtilityOrchestrationService {
     }
   }
 
+  /**
+   * The design capability's playbook, with the external-asset paragraph rebuilt
+   * from the current settings policy.
+   *
+   * Resolved rather than seeded because the CDN allowlist is a user setting and
+   * the playbook states which hosts will actually load. Both paths that hand the
+   * playbook to a model   activation, and the promotion a `@cio-design` session
+   * performs at turn start   come through here, so they cannot disagree.
+   */
+  private async designPlaybook(): Promise<string> {
+    return designCapabilityDocs(prototypeCdnPolicyFromConfig(await this.storage.getConfig()))
+  }
+
   /** Build the capability payload (tools, operations, or instructions) that
    *  activation and cio_util_docs_lookup hand back to the model. Shared so a
    *  post-compaction docs re-dump is byte-identical to the original listing. */
@@ -1279,14 +1315,10 @@ export class UtilityOrchestrationService {
       return { tools: BROWSER_UTILITY_TOOLS }
     }
     if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // The playbook states the CDN policy the preview servers are enforcing,
-      // so it is rebuilt from settings at activation rather than seeded once
-      // and left to go stale. The operation catalog travels with it, because
-      // unlike the scope capability this one is invoked with typed fields.
+      // The operation catalog travels with the playbook, because unlike the scope
+      // capability this one is invoked with typed fields.
       return {
-        instructions: designCapabilityDocs(
-          prototypeCdnPolicyFromConfig(await this.storage.getConfig())
-        ),
+        instructions: await this.designPlaybook(),
         tools: DESIGN_UTILITY_TOOLS
       }
     }

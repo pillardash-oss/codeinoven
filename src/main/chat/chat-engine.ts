@@ -158,6 +158,12 @@ import {
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
+import {
+  CIO_DESIGN_CONTINUE_PROMPT,
+  CIO_DESIGN_TURN_PROMPT,
+  isCioDesignRequest,
+  type DesignSessionMode
+} from '../utilities/cio-design-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
@@ -1393,6 +1399,11 @@ export class ChatEngine {
    *  reusable by the agent in every later turn of that thread without
    *  repeating the invocation. */
   private cioUtilityThreads = new Map<string, true>()
+
+  /** Threads whose user has opened a design session with @cio-design (current
+   *  turn or history). A design is edited over many messages, so the session
+   *  keeps the design capability active until the user leaves the thread. */
+  private cioDesignThreads = new Map<string, true>()
 
   constructor(
     private storage: StorageEngine,
@@ -3054,6 +3065,25 @@ export class ChatEngine {
   }
 
   /**
+   * Whether a design session was opened in this thread, now or earlier, and
+   * whether this turn is the one that opened it. The same memo-and-rescan shape
+   * as the utility tag, so an edit or rollback that removes the tag takes the
+   * session with it.
+   */
+  private async designSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<DesignSessionMode> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioDesignThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioDesignRequest(message.content))
+    if (opened) this.cioDesignThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
    * Publish the plan and progress this thread is executing so a driver-owned
    * checkpoint can rebuild context from them when a transcript can no longer be
    * summarized. Best-effort: a thread with no plan publishes an empty snapshot,
@@ -3181,7 +3211,14 @@ export class ChatEngine {
      * is one. Binds the checkpoint capability to the turn so the agent can save
      * the interview state the app re-injects.
      */
-    authoringRoutineId: string | null = null
+    authoringRoutineId: string | null = null,
+    /**
+     * Whether this turn belongs to a design session the user opened with
+     * `@cio-design`. `start` is the turn that typed the tag, `continue` is every
+     * later turn of the same thread. Both promote the design capability to an
+     * active capability for the turn and add the matching session contract.
+     */
+    designSession: DesignSessionMode = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3233,6 +3270,7 @@ export class ChatEngine {
         resolveExecutingModelVisionCapable: () =>
           this.executingModelVisionCapable(projectId, settings),
         allowManagement,
+        designSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -3268,6 +3306,15 @@ export class ChatEngine {
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
             : CIO_UTILITY_REUSE_PROMPT
+      // The design contract is separate from the utility contract because it is
+      // not a setup grant: the capability it activates arrives with the turn
+      // request, and what this adds is how to run the session the user opened.
+      const designContract =
+        designSession === 'start'
+          ? CIO_DESIGN_TURN_PROMPT
+          : designSession === 'continue'
+            ? CIO_DESIGN_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3276,7 +3323,7 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, utilityContract, ...skillInstructions]
+        return [gateway.directInstructions, utilityContract, designContract, ...skillInstructions]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3298,7 +3345,7 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [utilityContract, designContract, ...skillInstructions].filter(Boolean).join('\n\n')
       }
       const environment = {
         ...(overlay.env ?? {}),
@@ -3333,7 +3380,7 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, utilityContract, ...skillInstructions]
+      return [gateway.instructions, utilityContract, designContract, ...skillInstructions]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -7423,6 +7470,7 @@ export class ChatEngine {
       })
     }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
+    if (isCioDesignRequest(text)) this.cioDesignThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -8382,6 +8430,13 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // A design session is user-started too, and it lasts for the thread: the
+    // turn that types @cio-design gets the session briefing and promotes the
+    // design capability to an active one, and every later turn keeps the
+    // capability and gets the continuation instead.
+    const designRequested = origin === 'user' && isCioDesignRequest(text)
+    if (designRequested) this.cioDesignThreads.set(threadId, true)
+    const designSession = await this.designSessionFor(projectId, threadId, designRequested)
     // The routine how-to authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
     // a routine needs while it writes the how-to, without the user first arming
@@ -8428,7 +8483,8 @@ export class ChatEngine {
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
       assistantTaskTurn,
-      assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null
+      assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
+      designSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)

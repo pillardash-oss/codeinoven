@@ -1,5 +1,9 @@
 import { SvelteMap } from 'svelte/reactivity'
-import { spaceOutProjectReferences } from '../chats/composer-mentions'
+import {
+  COMPOSER_BUILT_IN_TAGS,
+  spaceOutProjectReferences,
+  type ComposerBuiltInTag
+} from '../chats/composer-mentions'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -120,17 +124,17 @@ function inlineChipHtml(reference: PromptProjectReference): string {
   return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
 }
 
-function inlineUtilityChipHtml(): string {
+function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
   // selector can see the theme class on `<html>`: the mark's ink follows the
   // active theme (black on light, white on dark). The chip's
   // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
   const icon = getVendorIconSvg(APP_NAME)
-  const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
+  const safeTitle = escapeHtmlForChip(`${APP_NAME} ${tag.chipLabel}`)
   const iconHtml = icon
     ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
     : ''
-  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
+  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
 }
 
 export function inlineFileTagsForMessage(
@@ -138,10 +142,10 @@ export function inlineFileTagsForMessage(
 ): Array<{ token: string; html: string }> {
   const text = messageText(msg)
   const tags: Array<{ token: string; html: string }> = []
-  // The `@cio-utility` tag renders as a badge on the conversation screen too,
-  // mirroring the composer badge for the same token.
-  if (text.includes('@cio-utility')) {
-    tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
+  // A built-in tag renders as a badge on the conversation screen too, mirroring
+  // the composer badge for the same token.
+  for (const tag of COMPOSER_BUILT_IN_TAGS) {
+    if (text.includes(tag.token)) tags.push({ token: tag.token, html: inlineTagChipHtml(tag) })
   }
   if (!msg.projectReferences?.length) return tags
   // Only inline references that actually appear as `@path` in the stored text;

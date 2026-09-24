@@ -1,13 +1,50 @@
 import type { AssignmentTask, ProjectFileEntry, PromptProjectReference } from '$shared/types'
 import { isInsideUnclosedInlineCode, isQuotedMentionPosition } from '$shared/mention-context'
 
+/**
+ * One built-in `@` tag: a mention the composer offers, a badge it shows, a chip
+ * the conversation renders, and a slash command. One definition feeds all four,
+ * so a tag cannot exist on one surface and be missing from another.
+ */
+export interface ComposerBuiltInTag {
+  /** Tag id, matching the token without its `@`. */
+  id: 'cio-utility' | 'cio-design'
+  /** The exact token a user types. */
+  token: string
+  /** What the tag opens, shown under the name in the mention menu. */
+  kindLabel: string
+  /** One line on what the tag does, shown as the menu row's tooltip. */
+  description: string
+  /** Short label the composer badge and the conversation chip show. */
+  chipLabel: string
+  /** Words a mention query may match beyond the token itself. */
+  keywords: readonly string[]
+}
+
+export const COMPOSER_BUILT_IN_TAGS: readonly ComposerBuiltInTag[] = [
+  {
+    id: 'cio-utility',
+    token: '@cio-utility',
+    kindLabel: 'Built-in utility setup',
+    description:
+      'Set up a skill, MCP server, or plugin, or debug an app issue with a CodeInOven agent.',
+    chipLabel: 'utility',
+    keywords: ['utility', 'utilities', 'setup', 'install', 'skill', 'mcp', 'debug']
+  },
+  {
+    id: 'cio-design',
+    token: '@cio-design',
+    kindLabel: 'Built-in design session',
+    description: 'Design an interface as HTML and watch it render in the browser panel.',
+    chipLabel: 'design',
+    keywords: ['design', 'designer', 'prototype', 'landing', 'page', 'screen', 'ui', 'wireframe']
+  }
+]
+
 export type ComposerMentionEntry =
   | { type: 'project'; entry: ProjectFileEntry }
   | { type: 'task'; entry: AssignmentTask }
-  | {
-      type: 'utility'
-      entry: { id: 'cio-utility'; name: '@cio-utility'; description: string }
-    }
+  | { type: 'utility'; entry: ComposerBuiltInTag }
 
 const COMPOSER_MENTION_PATTERN = /(^|\s)@([^\s@]*)$/u
 
