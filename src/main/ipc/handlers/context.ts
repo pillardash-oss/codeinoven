@@ -107,6 +107,7 @@ export type IpcChatEngine = Pick<
   | 'abort'
   | 'recordUserFileSave'
   | 'sendPrompt'
+  | 'readRoutineCheckpoint'
 > &
   Partial<
     Pick<

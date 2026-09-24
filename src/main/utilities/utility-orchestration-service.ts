@@ -57,6 +57,12 @@ import {
   BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
+import {
+  ROUTINE_AUTHORING_UTILITY_ID,
+  ROUTINE_AUTHORING_OPERATIONS,
+  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
+  routineAuthoringUtility
+} from '../../lib/routine-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   matchesUtilityKinds,
@@ -117,6 +123,11 @@ export interface UtilityTurnRequest {
   allowManagement?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
+  /**
+   * Present only for a routine's Getting started interview; the callback owns
+   * the checkpoint path and replaces its content.
+   */
+  saveRoutineCheckpoint?: (markdown: string) => Promise<{ path: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -413,12 +424,19 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // This capability is bound to the live interview, never installed globally.
-    eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
+    // These capabilities are bound to the live interview, never installed globally.
+    eligible = eligible.filter(
+      ({ utility }) =>
+        utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
+        utility.id !== ROUTINE_AUTHORING_UTILITY_ID
+    )
     if (request.saveBrainstormNotes) {
       eligible.push(
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
+    }
+    if (request.saveRoutineCheckpoint) {
+      eligible.push(routineAuthoringUtility(request.harnessId, request.projectId, request.threadId))
     }
     if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
@@ -689,7 +707,7 @@ export class UtilityOrchestrationService {
   /**
    * Record one utility in its thread's bank the first time it is activated.
    * Transient per-turn capabilities (the gateway itself, interview-bound
-   * alignment) are never banked.
+   * alignment notes, and the getting-started checkpoint) are never banked.
    */
   private async registerThreadBankEntry(
     state: TurnState,
@@ -697,7 +715,8 @@ export class UtilityOrchestrationService {
   ): Promise<void> {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
-      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID
+      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
+      utility.id === ROUTINE_AUTHORING_UTILITY_ID
     ) {
       return
     }
@@ -1214,6 +1233,9 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
+    if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      return { tools: ROUTINE_AUTHORING_OPERATIONS }
+    }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
@@ -1349,6 +1371,18 @@ export class UtilityOrchestrationService {
         BRAINSTORM_ALIGNMENT_NOTE_LIMIT
       )
       result = await state.request.saveBrainstormNotes(markdown)
+    } else if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      if (operation !== 'save_checkpoint' || !state.request.saveRoutineCheckpoint) {
+        throw new Error(
+          'The getting-started checkpoint is only available while a routine\u2019s how-to is being written'
+        )
+      }
+      const markdown = requiredString(
+        operationInput['markdown'],
+        'markdown',
+        ROUTINE_AUTHORING_CHECKPOINT_LIMIT
+      )
+      result = await state.request.saveRoutineCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')

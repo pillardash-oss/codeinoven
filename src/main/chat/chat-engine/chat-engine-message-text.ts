@@ -176,11 +176,19 @@ export function formatConversationTranscript(
 
 /**
  * Preserve answered interview questions outside the rolling conversation
- * window used for Brainstorm generation. New app-owned records are exact;
- * provider question parts and older presentation messages keep pre-fix
- * sessions useful as well.
+ * window. New app-owned records are exact; provider question parts and older
+ * presentation messages keep pre-fix sessions useful as well.
+ *
+ * The newest entries win the character budget, so a long interview keeps what
+ * was agreed last and drops the oldest records first. `maxCharacters` lets one
+ * caller (Brainstorm generation) keep a large window and another (the routine
+ * Getting started interview, which re-injects this every turn) keep a smaller
+ * one.
  */
-export function formatBrainstormInterviewDecisions(messages: AgentMessage[]): string {
+export function formatInterviewDecisions(
+  messages: AgentMessage[],
+  maxCharacters: number = BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS
+): string {
   const entries: string[] = []
   const seen = new Set<string>()
   const add = (entry: string): void => {
@@ -218,13 +226,18 @@ export function formatBrainstormInterviewDecisions(messages: AgentMessage[]): st
     const entry = entries[index]
     if (!entry) continue
     const separatorLength = selected.length === 0 ? 0 : 2
-    if (characters + separatorLength + entry.length > BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS) {
+    if (characters + separatorLength + entry.length > maxCharacters) {
       continue
     }
     selected.push(entry)
     characters += separatorLength + entry.length
   }
   return selected.reverse().join('\n\n')
+}
+
+/** The Brainstorm call site's ledger: the generator's own generous window. */
+export function formatBrainstormInterviewDecisions(messages: AgentMessage[]): string {
+  return formatInterviewDecisions(messages)
 }
 
 /**

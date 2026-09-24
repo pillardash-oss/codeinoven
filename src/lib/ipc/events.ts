@@ -58,6 +58,11 @@ export const IPC_EVENT_CONTRACT = {
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
   /** Assistant routines changed (created, updated, deleted, reordered). */
   'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
+  /**
+   * A routine's Getting started checkpoint was saved. Only the routine id
+   * travels: the checkpoint itself is read on demand by the panel that shows it.
+   */
+  'routine:checkpointChanged': [] as unknown as [routineId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],

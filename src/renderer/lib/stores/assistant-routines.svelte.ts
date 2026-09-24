@@ -34,6 +34,13 @@ class AssistantRoutinesState {
   missedRuns: MissedRun[] = $state([])
   /** Custom icon data URLs for routines that store one, keyed by routine id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /**
+   * Getting started checkpoints by routine id: what the authoring interview has
+   * agreed so far. `null` means the interview has not saved one yet. Pushed by
+   * `routine:checkpointChanged` and read on demand by the how-to panel, so an
+   * open panel follows the interview instead of waiting to be reopened.
+   */
+  checkpoints: SvelteMap<string, string | null> = $state(new SvelteMap())
   /** Routine id -> stored icon filename. A mutation both broadcasts
    *  `routine:changed` and runs an explicit `refresh()`, so without this every
    *  mutation re-fetched each routine's icon over IPC twice. */
@@ -51,6 +58,9 @@ class AssistantRoutinesState {
       }),
       subscribe('assistant:missedRunsChanged', (runs) => {
         this.missedRuns = runs
+      }),
+      subscribe('routine:checkpointChanged', (routineId) => {
+        void this.refreshCheckpoint(routineId)
       })
     )
     void this.ensureSpace().catch(() => undefined)
@@ -196,6 +206,27 @@ class AssistantRoutinesState {
    */
   howToThread(routineId: string): Promise<Thread | null> {
     return invoke('assistant:howToThread', routineId)
+  }
+
+  /**
+   * The routine's Getting started checkpoint, or null while the interview has
+   * not saved one. Read-only: the authoring agent's own turn writes it.
+   */
+  gettingStartedCheckpoint(routineId: string): Promise<string | null> {
+    return invoke('routine:gettingStartedCheckpoint', routineId)
+  }
+
+  /**
+   * Load one routine's checkpoint into the store. Best-effort: a read that fails
+   * leaves the last known value in place rather than blanking a panel that is
+   * showing the interview's agreed state.
+   */
+  async refreshCheckpoint(routineId: string): Promise<void> {
+    try {
+      this.checkpoints.set(routineId, await this.gettingStartedCheckpoint(routineId))
+    } catch {
+      // Nothing to surface: the panel simply keeps what it already shows.
+    }
   }
 
   /** Hide or reveal a routine's how-to thread. It stays pinned either way. */

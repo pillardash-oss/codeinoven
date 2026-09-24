@@ -431,12 +431,42 @@ prompt"; the user-facing term is how-to.
   stored on the routine connection (`RoutineConnection.setup`) and prefills the
   **Set up** button in the panel's Connections tab, so the user only picks a
   model and runs the setup instead of describing the capability again.
-- The contract belongs to the thread, so the chat engine attaches it to the
-  hidden context of every user turn while the routine's how-to is missing
-  (`ChatEngine.routineAuthoringHiddenContext`, text in
+- The contract belongs to the thread, so the chat engine composes it into the
+  system prompt of every user turn while the routine's how-to is missing
+  (`ChatEngine.routineAuthoringInstruction`, text in
   `src/lib/routine-authoring.ts`). The composer does not assemble it. A turn
   that arrives from the message editor's resend, a steer, or a queued delivery
   therefore reaches the agent with the same contract as a fresh composer send.
+- **The interview keeps app-owned checkpoints.** A Getting started conversation
+  is an interview, so what it agreed cannot live only in the harness transcript:
+  a model or harness switch rotates the session and replays a budgeted recap, and
+  a compaction drops the oldest exchanges. Two app-owned records ride beside the
+  contract on every authoring turn instead, and both are instructions for that
+  turn's behavior, so they ride the system prompt and never accumulate in the
+  harness transcript:
+  - the **checkpoint** the agent keeps current, saved through the app-owned
+    `cio:routine-authoring` capability (`save_checkpoint { markdown }`, bound to
+    the live authoring turn and never banked or installed) and stored at
+    `routines/<routineId>/getting-started.md`
+    (`RoutineAuthoringCheckpoints`, `src/main/chat/routine-authoring-checkpoints.ts`);
+  - the **resolved decisions**: every answer the user actually submitted, read
+    back verbatim from the stored question cards (`formatInterviewDecisions`,
+    `src/main/chat/chat-engine/chat-engine-message-text.ts`), because the app's
+    record of an answer is exact even when it is not the shape the question
+    asked for.
+
+  Together they are what makes the interview survive a mid-way switch: a
+  replacement session starts from the app's record of the interview rather than
+  from transcript context alone, so it resumes instead of re-asking. The
+  contract spells out the consequence (never re-ask a resolved decision, never
+  re-offer its choices) and the ask itself: the two priority brackets are two
+  separate single-choice questions, because one question carrying both brackets
+  produces a combined answer no turn can resolve back into brackets.
+- The how-to panel shows that checkpoint under **Agreed so far** while the
+  how-to is incomplete, so the interview is auditable from the panel instead of
+  only from the thread. The main process broadcasts `routine:checkpointChanged`
+  (routine id only; the body is read on demand by `routine:gettingStartedCheckpoint`)
+  so an open panel follows the interview.
 - The agent then asks the user to confirm it never saves the routine itself
   and never tells the user to run a command. Confirming is one click on the
   **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
@@ -483,7 +513,7 @@ prompt"; the user-facing term is how-to.
 - The how-to authoring thread carries the CodeInOven utility gateway from the
   start: `sendPrompt` grants the same management contract an explicit
   `@cio-utility` invocation does whenever the thread is a routine whose how-to
-  is still missing (`routineAuthoringHiddenContext`), so the agent can search the
+  is still missing (`routineAuthoringInstruction`), so the agent can search the
   library with `cio_util_find`, research compatible skills/MCPs/plugins, and
   install them itself with `cio_util_manage` once the user agrees. The grant is
   derived from the thread every turn, never memoized, so it ends the moment the
@@ -734,7 +764,8 @@ what it found; the routine's value is the agreed default, not a fixed label.
 
 `routineAuthoringContext` (`src/lib/routine-authoring.ts`) asks for both, in the
 reporting order that matters: whether the routine reports to the user at all,
-which channel, which destination, and then both priority brackets, with the
+which channel, which destination, and then both priority brackets as two
+separate single-choice questions, with the
 choices listed and their meanings spelled out. The agent may decide the brackets
 itself when the user would rather not, but it must say which it picked and why,
 and it must leave `delivery` out entirely for an action-only routine. The plan

@@ -42,6 +42,12 @@ export const invokeAssistantContract = {
    */
   'assistant:howToThread': {} as Contract<[routineId: string], Thread | null>,
   /**
+   * The Getting started checkpoint the authoring agent keeps current, or null
+   * while the interview has not saved one. The panel shows it so the interview's
+   * agreed state is auditable without opening the thread.
+   */
+  'routine:gettingStartedCheckpoint': {} as Contract<[routineId: string], string | null>,
+  /**
    * Hide or reveal a routine's how-to thread. The thread stays pinned in both
    * states; archiving is only what takes it out of the sidebar's lists.
    */

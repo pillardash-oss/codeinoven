@@ -15,3 +15,13 @@ export function broadcastMissedRunsChanged(runs: MissedRun[]): void {
     sendToRenderer(win.webContents, 'assistant:missedRunsChanged', runs)
   }
 }
+
+/**
+ * Push one routine's new Getting started checkpoint, so an open how-to panel
+ * refreshes what the interview has agreed instead of waiting to be reopened.
+ */
+export function broadcastRoutineCheckpointChanged(routineId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'routine:checkpointChanged', routineId)
+  }
+}

@@ -15,6 +15,8 @@ import {
 } from '../system/log-paths'
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
+import { RoutineAuthoringCheckpoints } from './routine-authoring-checkpoints'
+import { broadcastRoutineCheckpointChanged } from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -95,7 +97,11 @@ import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { RoutineRepo } from '../database/repositories/routine-repo'
-import { routineAuthoringContext } from '../../lib/routine-authoring'
+import {
+  ROUTINE_AUTHORING_DECISION_LIMIT,
+  routineAuthoringContext,
+  routineAuthoringProgressContext
+} from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
@@ -477,6 +483,7 @@ import {
   formatBrainstormInterviewDecisions,
   formatConversationTranscript,
   formatHistoryRecap,
+  formatInterviewDecisions,
   formatProjectReferenceContext,
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
@@ -986,6 +993,13 @@ export class ChatEngine {
 
   private readonly brainstormAlignmentNotes: BrainstormAlignmentNotes
 
+  /**
+   * The app-owned Getting started checkpoints. One routine keeps one, and it is
+   * re-injected into every authoring turn beside the answers the user already
+   * submitted, so the interview survives a model or harness switch mid-way.
+   */
+  private readonly routineAuthoringCheckpoints: RoutineAuthoringCheckpoints
+
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
 
@@ -1432,6 +1446,7 @@ export class ChatEngine {
     this.accountRegistry = new HarnessAccountRegistry(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
+    this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
@@ -3131,7 +3146,13 @@ export class ChatEngine {
      * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
      * when the user typed @cio-utility on the same turn.
      */
-    assistantRoutineTurn = false
+    assistantRoutineTurn = false,
+    /**
+     * The routine whose Getting started interview this turn belongs to, when it
+     * is one. Binds the checkpoint capability to the turn so the agent can save
+     * the interview state the app re-injects.
+     */
+    authoringRoutineId: string | null = null
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3187,6 +3208,12 @@ export class ChatEngine {
           ? {
               saveBrainstormNotes: (markdown: string) =>
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
+        ...(authoringRoutineId
+          ? {
+              saveRoutineCheckpoint: (markdown: string) =>
+                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
             }
           : {}),
         budgetContext,
@@ -3402,9 +3429,14 @@ export class ChatEngine {
     // a saved routine keeps it for the same reason: a steer must not drop the
     // ability to supply a connection the run needs.
     const allowManagement =
-      this.routineAuthoringHiddenContext(steeringThread) !== undefined ||
+      this.isRoutineAuthoringThread(steeringThread) ||
       this.routineRunHiddenContext(steeringThread) !== undefined ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
+    // A steer landing mid-authoring keeps the checkpoint capability alive for
+    // the rest of the turn, so an answer the user steered with is still saved.
+    const authoringRoutineId = this.isRoutineAuthoringThread(steeringThread)
+      ? (steeringThread?.routineId ?? null)
+      : null
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -3449,6 +3481,12 @@ export class ChatEngine {
           ? {
               saveBrainstormNotes: (markdown: string) =>
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
+        ...(authoringRoutineId
+          ? {
+              saveRoutineCheckpoint: (markdown: string) =>
+                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
             }
           : {}),
         budgetContext,
@@ -6577,17 +6615,82 @@ export class ChatEngine {
   }
 
   /**
-   * The how-to authoring contract for a turn in a routine that still has no
-   * how-to. The contract is a property of the thread, so the engine attaches it
-   * rather than the composer: a resend from the message editor, a steer, or a
-   * queued delivery reaches the agent with the same contract as a fresh
-   * composer send.
+   * Whether a turn belongs to a routine's Getting started authoring interview:
+   * an assistant-space thread whose routine has no how-to yet. Derived from the
+   * thread every turn and never memoized, so the interview ends the moment the
+   * how-to is saved.
    */
-  private routineAuthoringHiddenContext(thread: Thread | null | undefined): string | undefined {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+  private isRoutineAuthoringThread(thread: Thread | null | undefined): boolean {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return false
     const routine = this.routineRepo.get(thread.routineId)
-    if (!routine || routineHowToComplete(routine)) return undefined
-    return routineAuthoringContext(routine.name)
+    return routine ? !routineHowToComplete(routine) : false
+  }
+
+  /**
+   * The how-to authoring contract for a turn in a routine that still has no
+   * how-to, with the interview's own app-owned state beside it: the checkpoint
+   * the agent keeps current and every answer the user already submitted.
+   *
+   * The contract is a property of the thread, so the engine composes it rather
+   * than the composer: a resend from the message editor, a steer, or a queued
+   * delivery reaches the agent with the same contract as a fresh composer send.
+   * It rides the system prompt instead of the user message because every
+   * harness rewrites that prompt each turn, while text appended to a user
+   * message is kept in the harness transcript and replayed once more on every
+   * later turn.
+   *
+   * Re-injecting the checkpoint and the decision ledger is what makes the
+   * interview survive a mid-way model or harness switch: the replacement session
+   * starts with the app's record of the interview instead of only a budgeted
+   * recap of the transcript, so it resumes the conversation instead of re-asking
+   * questions the user already answered.
+   */
+  private async routineAuthoringInstruction(
+    projectId: string,
+    threadId: string,
+    thread: Thread | null | undefined
+  ): Promise<string | undefined> {
+    if (!this.isRoutineAuthoringThread(thread) || !thread?.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine) return undefined
+    const [checkpoint, messages] = await Promise.all([
+      this.routineAuthoringCheckpoints.read(routine.id).catch((error: unknown): string | null => {
+        Logger.error('Getting started checkpoint could not be read:', error)
+        return null
+      }),
+      this.threadManager.loadMessageRecords(projectId, threadId)
+    ])
+    const decisions = formatInterviewDecisions(messages, ROUTINE_AUTHORING_DECISION_LIMIT)
+    return [
+      routineAuthoringContext(routine.name),
+      routineAuthoringProgressContext({ checkpoint, decisions })
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  /**
+   * Replace a routine's Getting started checkpoint. The capability that calls
+   * this is bound to the live authoring turn, so the write is app-owned and the
+   * agent never names a path. The open how-to panel is told afterwards, so what
+   * the interview has agreed is visible without reopening it.
+   */
+  private async saveRoutineCheckpoint(
+    routineId: string,
+    markdown: string
+  ): Promise<{ path: string }> {
+    const saved = await this.routineAuthoringCheckpoints.save(routineId, markdown)
+    broadcastRoutineCheckpointChanged(routineId)
+    return saved
+  }
+
+  /**
+   * One routine's Getting started checkpoint, for the how-to panel. Read-only:
+   * only the authoring agent writes it, and only through the capability bound to
+   * its own turn.
+   */
+  async readRoutineCheckpoint(routineId: string): Promise<string | null> {
+    return this.routineAuthoringCheckpoints.read(validateEntityId(routineId, 'Routine ID'))
   }
 
   /**
@@ -7736,7 +7839,7 @@ export class ChatEngine {
     const routineInstruction = assistantTaskTurn
       ? composeRoutineInstruction(this.routineHowToInstruction(targetThread), routineRun)
       : origin === 'user'
-        ? this.routineAuthoringHiddenContext(targetThread)
+        ? await this.routineAuthoringInstruction(projectId, threadId, targetThread)
         : undefined
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
@@ -8256,7 +8359,7 @@ export class ChatEngine {
     // setup by hand. It grants the same contract as an explicit @cio-utility
     // invocation, and it is derived from the thread on every turn rather than
     // memoized, so it ends the moment the how-to is saved.
-    const assistantAuthoringTurn = this.routineAuthoringHiddenContext(targetThread) !== undefined
+    const assistantAuthoringTurn = this.isRoutineAuthoringThread(targetThread)
     // Once @cio-utility has been invoked in this thread (earlier or now), later
     // turns keep the setup + diagnostics contract reusable without repeating
     // the invocation. Other utilities were already freely invocable whenever
@@ -8295,7 +8398,8 @@ export class ChatEngine {
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantTaskTurn
+      assistantTaskTurn,
+      assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
