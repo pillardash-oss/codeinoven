@@ -63,6 +63,7 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
   import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
@@ -1085,6 +1086,19 @@
       </div>
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
+    {:else if section === 'design'}
+      <div class="p-6 pb-24">
+        <div class="mb-6">
+          <h1 class="text-xl font-bold tracking-tight">Design</h1>
+          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          {#if error}
+            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+              {error}
+            </p>
+          {/if}
+        </div>
+        <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
+      </div>
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
     {:else if section === 'heartbeat'}

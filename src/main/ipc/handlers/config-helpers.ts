@@ -8,6 +8,13 @@ import {
   MAX_PROTOTYPE_CDN_ORIGINS,
   normalizePrototypeCdnOrigin
 } from '../../../lib/prototypes/prototype-cdn'
+import {
+  DESIGN_ASSIGNMENT_ID_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
+  MAX_DESIGN_ASSIGNMENTS,
+  isDesignAssignmentId
+} from '../../../lib/design-assignments'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
@@ -18,6 +25,8 @@ import type {
   AgentModelSelection,
   AppConfigPatch,
   AuxiliaryAgentConfig,
+  DesignAssignment,
+  DesignConfig,
   EditorId,
   HeartbeatConfig,
   LocalProfileAnalyticsRange,
@@ -125,6 +134,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
+  'design',
   'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
@@ -251,9 +261,68 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
   return auxiliaryAgents
 }
 
-const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
+/** Fields one design assignment may carry, and no others. */
+const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'instructions', 'selection'])
 
-/** Fields that describe the pinned model, and therefore apply to `model` only. */
+/**
+ * Validate the user's design assignments.
+ *
+ * Every row must name the model that does the work: an assignment without a
+ * complete harness, provider and model would be routed somewhere the user never
+ * chose, so it is rejected at the boundary instead of being stored inert.
+ * Ids are unique because an agent resolves an assignment by id, and two rows
+ * sharing one would make the call ambiguous.
+ */
+function validateDesignConfig(value: unknown): DesignConfig {
+  if (!isRecord(value)) throw new TypeError('Design settings must be an object')
+  for (const field of Object.keys(value)) {
+    if (field !== 'assignments') throw new TypeError(`Unsupported design settings field: ${field}`)
+  }
+  const assignments = value.assignments
+  if (!Array.isArray(assignments)) {
+    throw new TypeError('Design assignments must be an array')
+  }
+  if (assignments.length > MAX_DESIGN_ASSIGNMENTS) {
+    throw new TypeError(`Design assignments accept at most ${MAX_DESIGN_ASSIGNMENTS} rows`)
+  }
+  const seen = new Set<string>()
+  const validated: DesignAssignment[] = assignments.map((entry: unknown, index: number) => {
+    const label = `Design assignment ${index + 1}`
+    if (!isRecord(entry)) throw new TypeError(`${label} must be an object`)
+    for (const field of Object.keys(entry)) {
+      if (!DESIGN_ASSIGNMENT_FIELDS.has(field)) {
+        throw new TypeError(`Unsupported ${label} field: ${field}`)
+      }
+    }
+    const id = requireString(entry.id, `${label} ID`)
+    if (id.length > DESIGN_ASSIGNMENT_ID_MAX_LENGTH || !isDesignAssignmentId(id)) {
+      throw new TypeError(`${label} ID must be a short lowercase handle like "image-generation"`)
+    }
+    if (seen.has(id)) throw new TypeError(`Design assignments repeat the ID "${id}"`)
+    seen.add(id)
+    const name = requireString(entry.label, `${label} name`)
+    if (name.length > DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH) {
+      throw new TypeError(`${label} name is too long`)
+    }
+    const instructions = entry.instructions
+    if (
+      instructions !== undefined &&
+      (typeof instructions !== 'string' ||
+        instructions.length > DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH)
+    ) {
+      throw new TypeError(`${label} guidance is too long`)
+    }
+    return {
+      id,
+      label: name,
+      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
+      selection: validateAgentModelSelection(entry.selection, `${label} model`)
+    }
+  })
+  return { assignments: validated }
+}
+
+const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
 const RANKING_JUDGE_MODEL_FIELDS = [
   'harnessId',
   'providerId',
@@ -614,6 +683,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('auxiliaryAgents' in value) {
     patch.auxiliaryAgents = validateAuxiliaryAgents(value.auxiliaryAgents)
+  }
+
+  if ('design' in value) {
+    patch.design = validateDesignConfig(value.design)
   }
 
   if ('rankingJudge' in value) {

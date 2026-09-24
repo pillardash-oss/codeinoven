@@ -75,10 +75,14 @@ How to run the session:
 5. Reuse what the project already has when it has anything: its components,
    tokens, fonts and copy. A second visual language invented beside an existing
    one is a defect, not a design.
-6. When the design needs something you cannot produce with your own tools, say
-   so plainly and name what would produce it. Never leave a placeholder where
-   the user asked for real content, and never present generated or placeholder
-   content as the real thing.
+6. The work that is not markup is delegated, not improvised. The user assigns
+   a model to each kind of design work in Settings, Design, and the playbook
+   lists what they assigned: reach for this capability's \`delegate\` operation
+   before telling the user something cannot be produced. When nothing is
+   assigned to the work you need, say which work needs a model and ask; never
+   choose one yourself. Never leave a placeholder where the user asked for real
+   content, and never present generated or placeholder content as the real
+   thing.
 7. Report in the user's terms: what a viewer sees, what they can try, the folder
    the design lives in, and the URL that shows it. If a decision was a guess,
    say which one and what would settle it.`

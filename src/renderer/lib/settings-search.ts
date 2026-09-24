@@ -7,6 +7,7 @@ import {
   Keyboard,
   MessageSquareCode,
   MonitorUp,
+  Palette,
   Plug,
   Puzzle,
   Router,
@@ -70,6 +71,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
     icon: UsersRound
+  },
+  {
+    id: 'design',
+    section: 'design',
+    title: 'Design',
+    description: 'The model that does each kind of design work: images, copy, video.',
+    keywords: ['design', 'assignments', 'image generation', 'copy', 'video', 'delegate'],
+    icon: Palette
   },
   {
     id: 'cio-prompts',

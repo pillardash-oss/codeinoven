@@ -177,10 +177,15 @@ import { refreshCustomProviderModels } from '../providers/base-url-model-refresh
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
+import {
+  createDesignAssignmentExecutor,
+  type DesignAssignmentRunRequest,
+  type DesignAssignmentRunResult
+} from '../design/design-assignment-executor'
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
-  DesignPreviewExecutor,
+  DesignCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
   UtilityResultAttribution,
@@ -1476,6 +1481,16 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
+    // Design work the user routed to a model of their own choosing. The config
+    // is read per call, so re-assigning a model applies to the next delegation
+    // rather than the next app run, and the app never substitutes a model.
+    this.utilityOrchestration.setDesignAssignmentExecutor(
+      createDesignAssignmentExecutor({
+        database,
+        designConfig: async () => (await this.storage.getConfig()).design,
+        run: (request) => this.runDesignAssignment(request)
+      })
+    )
     // Secret collection is an app-owned gateway tool, so the tool call has to be
     // able to wait for the user: the engine registers the card and settles a
     // promise when it is submitted or dismissed.
@@ -1660,7 +1675,7 @@ export class ChatEngine {
    * operation. The chat engine owns the turn's project and thread, so it is the
    * app surface that hands the executor those two ids.
    */
-  setDesignPreviewExecutor(executor: DesignPreviewExecutor | null): void {
+  setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     this.utilityOrchestration.setDesignPreviewExecutor(executor)
   }
 
@@ -10985,6 +11000,63 @@ export class ChatEngine {
         assignmentMode: false,
         loopMode: false
       }
+    }
+  }
+
+  /**
+   * Run one delegated prompt on the model the user assigned to a named piece of
+   * design work.
+   *
+   * This is the same disposable one-shot lane the auxiliary roles use: the
+   * assigned harness, a session that carries only the assigned model as its
+   * candidate, no tools, and minimal reasoning unless the user chose a level.
+   * The assignment is never overridden, never upgraded to a stronger model and
+   * never failed over to another provider: a design assignment is a model the
+   * user picked, so a model that fails is reported as a failure rather than
+   * quietly replaced.
+   */
+  private async runDesignAssignment(
+    request: DesignAssignmentRunRequest
+  ): Promise<DesignAssignmentRunResult> {
+    const selection = request.selection
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
+    const { driver, projectPath } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      account.id
+    )
+    const result = await driver.provideCheapModel(projectPath, {
+      settings: {
+        harnessId: selection.harnessId,
+        accountId: account.id,
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        thinkingLevel: selection.thinkingLevel ?? 'minimal',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      },
+      purpose: `Design assignment: ${request.label}`,
+      prompt: request.prompt,
+      candidates: [{ providerId: selection.providerId, modelId: selection.modelId }]
+    })
+    const text = result.text?.trim()
+    if (!text) {
+      const failure = result.attempts.at(-1)?.failure
+      throw new Error(
+        `The model assigned to "${request.label}" (${selection.harnessId}/${selection.providerId}/${selection.modelId}) returned nothing.${failure ? ` ${failure}` : ' Check that the assigned model is available on that account, or assign a different model in Settings, Design.'}`
+      )
+    }
+    return {
+      text,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId
     }
   }
 

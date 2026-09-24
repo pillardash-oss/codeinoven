@@ -44,6 +44,7 @@ import {
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
+import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
@@ -63,6 +64,7 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  design: { assignments: [] },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -168,6 +170,14 @@ export class StorageEngine {
         ...(config?.agentDefaults ?? {})
       },
       auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
+      // Assignments are read straight off the config file, so the array is
+      // filtered here too: only a complete selection on a valid id survives, and
+      // a hand-edited entry can never reach a model the user did not name.
+      design: {
+        assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
+          .filter(isUsableDesignAssignment)
+          .slice(0, MAX_DESIGN_ASSIGNMENTS)
+      },
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),

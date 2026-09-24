@@ -8,12 +8,14 @@ import {
  * Presentation and contract for the app-owned design capability
  * (`cio:design`, `src/lib/utility-ids.ts`).
  *
- * The capability is knowledge plus one app operation. The knowledge is the
- * design pass below and the two facts a design turn cannot guess from the
- * repository: where a design should be written, and which external hosts will
- * actually load once it is served. The operation is `preview`, which serves the
- * design folder on the app's own loopback origin and opens it in the project's
- * browser tab (see `src/main/preview/design-preview-executor.ts`).
+ * The capability is knowledge plus app operations. The knowledge is the design
+ * pass below and the facts a design turn cannot guess from the repository: where
+ * a design should be written, which external hosts will load once it is served,
+ * and which models the user assigned to the design work. The operations are
+ * `preview`, which serves the design folder on the app's own loopback origin and
+ * opens it in the project's browser tab (`src/main/preview/design-preview-executor.ts`),
+ * and `delegate`, which runs one prompt on a model the user assigned rather than
+ * on one the agent picked (`src/main/design/design-assignment-executor.ts`).
  *
  * That shape is deliberate. The content security policy of the engineering
  * prototype phase and the open posture of the design preview differ, and both
@@ -61,6 +63,17 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
 }
 
 /**
+ * The delegation paragraph: the assignments the user set up, or the fact that
+ * nothing is delegated yet. Either way the agent is told that picking a model is
+ * the user's decision and never its own.
+ */
+function delegationGuidance(assignments: string): string {
+  return assignments.length === 0
+    ? 'Nothing is delegated in this project yet: the user has not assigned a model to any design work. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
+    : `The user assigned: ${assignments}. Delegate that work before telling the user it cannot be produced. When you need something that is not in that list, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design.`
+}
+
+/**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
  * external-asset paragraph with the live policy, so this copy is a default
@@ -73,10 +86,11 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
 
 /**
  * The playbook handed back when the capability is activated. Kept as a function
- * because the external-asset paragraph is the live CDN policy, and a stale copy
- * of that list is exactly the failure the policy module exists to prevent.
+ * because the external-asset paragraph is the live CDN policy and the delegation
+ * section is the user's live assignments; a stale copy of either is the drift
+ * both resolvers exist to prevent.
  */
-export function designCapabilityDocs(policy: PrototypeCdnPolicy): string {
+export function designCapabilityDocs(policy: PrototypeCdnPolicy, assignments: string = ''): string {
   return `# Design studio
 
 Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
@@ -104,6 +118,17 @@ The reply carries the URL, so you can also put it in your final message. The tab
 ## Checking your own work
 
 Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, \`snapshot\` lists the visible text and controls, and \`console\` reports runtime errors and failed requests. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
+
+## Delegating to the models the user assigned
+
+Design work usually needs more than markup: a generated image, copy that sounds like the product, a script, a voice-over, a video. The user assigns a model to each kind of work in Settings, Design, and operation \`delegate\` runs that exact model:
+
+- \`assignment\`, the work to delegate, by its handle or by its title.
+- \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
+
+${delegationGuidance(assignments)}
+
+Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
 
 ## External assets
 

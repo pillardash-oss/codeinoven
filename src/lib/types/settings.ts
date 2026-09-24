@@ -1,4 +1,5 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
+import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 
 export interface WorkflowStage {
@@ -200,6 +201,30 @@ export const DEFAULT_IN_APP_NOTIFICATION_SOUND: InAppNotificationSoundSettings =
   issue: true
 }
 
+/**
+ * One named piece of design work and the model the user assigned to it.
+ *
+ * The model is the user's choice and is never chosen by the app or by an agent
+ * working in a design session: an assignment with no model is inert rather than
+ * routed somewhere plausible.
+ */
+export interface DesignAssignment {
+  /** Stable handle an agent names in a tool call, e.g. `image-generation`. */
+  id: string
+  /** Human name shown in settings, e.g. `Image generation`. */
+  label: string
+  /** Standing guidance handed to the assigned model with every call. */
+  instructions?: string
+  /** The model that does this work. */
+  selection: AgentModelSelection
+}
+
+/** Design work the user routed to a model of their own choosing. */
+export interface DesignConfig {
+  /** User-authored assignments. Empty means nothing is delegated anywhere. */
+  assignments: DesignAssignment[]
+}
+
 export interface AppConfig {
   theme: ThemePreference
   /** Font family id used across the app UI. */
@@ -232,6 +257,8 @@ export interface AppConfig {
   agentDefaults: AgentDefaultsConfig
   /** Model each harness uses for auxiliary work, keyed by the harness a thread runs on. */
   auxiliaryAgents: AuxiliaryAgentConfig
+  /** Model the user assigned to each named design assignment (images, copy, video). */
+  design: DesignConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
   rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
@@ -305,6 +332,7 @@ export type AppConfigPatch = Partial<
     | 'memory'
     | 'agentDefaults'
     | 'auxiliaryAgents'
+    | 'design'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'

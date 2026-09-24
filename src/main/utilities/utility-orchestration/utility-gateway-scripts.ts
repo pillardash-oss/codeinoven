@@ -126,10 +126,11 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
 /**
  * Operations of the app-owned design capability (`cio:design`).
  *
- * One operation, because showing the design is the only thing the app has to do
- * that the agent cannot do with its own tools. Looking at the result is
- * deliberately not repeated here: the browser capability already owns
- * screenshots, viewports and console reads, and the docs point at it.
+ * Two, and both are things the agent cannot do with its own tools: show the
+ * design on the app's own origin, and run the model the user assigned to a piece
+ * of design work. Looking at the result is deliberately not repeated here: the
+ * browser capability already owns screenshots, viewports and console reads, and
+ * the docs point at it.
  */
 export const DESIGN_UTILITY_TOOLS: McpTool[] = [
   {
@@ -154,6 +155,28 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
             'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
         }
       },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'delegate',
+    description:
+      'Run one prompt on the model the user assigned to a named piece of design work (for example image generation, long-form copy, video). The assigned model did not see this conversation, so the prompt has to carry every detail it needs. Delegate whenever the user has assigned the work; never choose a model yourself and never stand in for one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignment: {
+          type: 'string',
+          description:
+            'The design work to delegate, named by its handle or its title. The playbook lists the assignments the user set up.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'The complete brief for the assigned model: the subject, the tone, the format, and every constraint, written as if to a stranger who has seen nothing of this work.'
+        }
+      },
+      required: ['assignment', 'prompt'],
       additionalProperties: false
     }
   }

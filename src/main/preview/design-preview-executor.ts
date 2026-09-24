@@ -4,7 +4,7 @@ import { requireLocalProject } from '../../lib/project-artifacts'
 import { DESIGN_OUTPUT_ROOT } from '../../lib/design-skill'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
-import type { DesignPreviewExecutor } from '../utilities/utility-orchestration-service'
+import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
 
 /** Ceilings on the path fields, so a hand-written call cannot inflate a log line. */
@@ -94,7 +94,7 @@ async function existsAsFile(path: string): Promise<boolean> {
  */
 export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
-): DesignPreviewExecutor {
+): DesignCapabilityExecutor {
   // Which project and thread pairs already have a preview tab, so a design that
   // changes twenty times reloads one tab instead of opening twenty. The browser
   // is still the authority: if it let the tab go, the navigate below fails and

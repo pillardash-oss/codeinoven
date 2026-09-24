@@ -33,6 +33,7 @@ import {
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
+import { designAssignmentCatalogue } from '../../lib/design-assignments'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -217,11 +218,12 @@ export type BrowserUtilityExecutor = (
 
 /**
  * Runs one gateway invocation of the app-owned design capability for the turn
- * that made it. The app supplies it because serving a folder and owning the
- * thread's browser tab are both app concerns: the executor composes the
- * loopback directory preview with the in-app browser.
+ * that made it. The app supplies one of these per operation group, because the
+ * two halves have different owners: `preview` composes the loopback directory
+ * preview with the in-app browser, and `delegate` runs a prompt on the model the
+ * user assigned to that design work.
  */
-export type DesignPreviewExecutor = (
+export type DesignCapabilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
@@ -320,7 +322,8 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
-  private designPreviewExecutor: DesignPreviewExecutor | null = null
+  private designPreviewExecutor: DesignCapabilityExecutor | null = null
+  private designAssignmentExecutor: DesignCapabilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -390,8 +393,19 @@ export class UtilityOrchestrationService {
    * the ability to serve the folder it produced and show it in the thread's
    * browser tab.
    */
-  setDesignPreviewExecutor(executor: DesignPreviewExecutor | null): void {
+  setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `delegate` operation,
+   * which runs one prompt on the model the user assigned to a piece of design
+   * work. The chat engine supplies it because it owns drivers, accounts and the
+   * resolved project path, and because the assignment is a user decision the
+   * app must never make on the agent's behalf.
+   */
+  setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designAssignmentExecutor = executor
   }
 
   /**
@@ -618,7 +632,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus one operation, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, and a \`preview\` operation that serves that folder and opens it in this thread's browser tab. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus two operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, and a \`delegate\` operation that runs the model the user assigned to a named piece of design work. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1289,15 +1303,21 @@ export class UtilityOrchestrationService {
 
   /**
    * The design capability's playbook, with the external-asset paragraph rebuilt
-   * from the current settings policy.
+   * from the current settings policy and the delegation section rebuilt from the
+   * user's current assignments.
    *
-   * Resolved rather than seeded because the CDN allowlist is a user setting and
-   * the playbook states which hosts will actually load. Both paths that hand the
+   * Resolved rather than seeded because both facts are user settings: the CDN
+   * allowlist decides which hosts will actually load, and the assignments decide
+   * which models a design turn is allowed to delegate to. All paths that hand the
    * playbook to a model   activation, and the promotion a `@cio-design` session
    * performs at turn start   come through here, so they cannot disagree.
    */
   private async designPlaybook(): Promise<string> {
-    return designCapabilityDocs(prototypeCdnPolicyFromConfig(await this.storage.getConfig()))
+    const config = await this.storage.getConfig()
+    return designCapabilityDocs(
+      prototypeCdnPolicyFromConfig(config),
+      designAssignmentCatalogue(config.design)
+    )
   }
 
   /** Build the capability payload (tools, operations, or instructions) that
@@ -1473,8 +1493,17 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      const executor = this.designPreviewExecutor
-      if (!executor) throw new Error('The design preview is unavailable')
+      // One capability, two operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned.
+      const executor =
+        operation === 'delegate' ? this.designAssignmentExecutor : this.designPreviewExecutor
+      if (!executor) {
+        throw new Error(
+          operation === 'delegate'
+            ? 'The design delegation is unavailable'
+            : 'The design preview is unavailable'
+        )
+      }
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId
