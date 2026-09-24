@@ -1,6 +1,7 @@
 import { mergeSubagentParts } from '$lib/working-trace-parts'
 import { isTodoToolPart } from '$lib/agent-todos'
-import type { AgentMessage, AgentPart, AuditReport } from '$shared/types'
+import { checkpointForTurn } from '$lib/threads/checkpoint-matching'
+import type { AgentMessage, AgentPart, AuditReport, TurnCheckpointSummary } from '$shared/types'
 
 /**
  * Pure turn-partitioning rules for the conversation transcript.
@@ -70,6 +71,106 @@ export function appendWorkingPart(
   }
   const resolved = resolvedSubagentPart(part, messages)
   if (resolved) parts.push(resolved)
+}
+
+/**
+ * Every per-message question the transcript render path asks, answered once per
+ * transcript pass so the render path can read it by index.
+ *
+ * Each field is a function of message identity, role, and timestamps   never of
+ * a part's text   which is what makes the index survive a streamed delta: a
+ * delta replaces the text inside a part object that already exists, so the turn
+ * boundaries, checkpoint windows, and part ownership recorded here stay true.
+ * The caller rebuilds it when the message structure changes and reuses it
+ * otherwise, so a long transcript costs one pass per structural change instead
+ * of a rescan per mounted message on every streamed publish.
+ *
+ * Deliberately holds no part objects: a delta swaps the part object inside its
+ * message, so a cached reference would silently go stale. Ids only.
+ */
+export interface TranscriptIndex {
+  /** Part id -> the earliest message index that carries it. */
+  partIndexById: Map<string, number>
+  /** Last message index of the turn that contains this index. */
+  turnEnd: number[]
+  /** Whether the message at this index opens a turn. */
+  isTurnStart: boolean[]
+  /** Whether the message at this index closes a turn. */
+  isTurnEnd: boolean[]
+  /** Duration of the turn that ends at this index, or null. */
+  duration: (number | null)[]
+  /** Final text part id of the turn ending at this index, or ''. */
+  finalTextId: string[]
+  /** The checkpoint behind the assistant message at this index, or null. */
+  checkpoint: (TurnCheckpointSummary | null)[]
+  /** Whether the turn that opens at this index has completed. */
+  turnCompleted: boolean[]
+}
+
+/** Duration of a completed assistant message's turn, or null while unfinished. */
+function turnDurationAt(messages: readonly AgentMessage[], messageIndex: number): number | null {
+  const assistant = messages[messageIndex]
+  if (assistant?.role !== 'assistant' || !assistant.completedAt) return null
+  let startIndex = messageIndex - 1
+  while (startIndex >= 0) {
+    const message = messages[startIndex]
+    if (!message) break
+    if (message.role === 'assistant' || isActivityOnlyUserMessage(message)) {
+      startIndex--
+      continue
+    }
+    break
+  }
+  const prompt = messages[startIndex]
+  if (prompt?.role !== 'user' || !prompt.createdAt) return null
+  return assistant.completedAt - prompt.createdAt
+}
+
+/** Build the index for one transcript in a single pass. */
+export function buildTranscriptIndex(
+  messages: readonly AgentMessage[],
+  checkpoints: readonly TurnCheckpointSummary[]
+): TranscriptIndex {
+  const count = messages.length
+  const partIndexById = new Map<string, number>()
+  const turnEnd: number[] = new Array(count)
+  const isTurnStart: boolean[] = new Array(count)
+  const isTurnEnd: boolean[] = new Array(count)
+  const duration: (number | null)[] = new Array(count)
+  const finalTextId: string[] = new Array(count)
+  const checkpoint: (TurnCheckpointSummary | null)[] = new Array(count)
+  const turnCompleted: boolean[] = new Array(count)
+
+  for (let index = 0; index < count; index++) {
+    const message = messages[index]
+    if (!message) continue
+    for (const part of message.parts) {
+      if (!partIndexById.has(part.id)) partIndexById.set(part.id, index)
+    }
+  }
+
+  for (let index = 0; index < count; index++) {
+    const opens = isTurnStartIndex(messages, index)
+    const closes = isTurnEndIndex(messages, index)
+    isTurnStart[index] = opens
+    isTurnEnd[index] = closes
+    turnEnd[index] = turnSpanEndIndex(messages, index)
+    duration[index] = turnDurationAt(messages, index)
+    finalTextId[index] = closes ? (getTurnFinalText(messages, index)?.id ?? '') : ''
+    checkpoint[index] = checkpointForTurn(messages, checkpoints, index)
+    turnCompleted[index] = opens ? isTurnCompleted(messages, index) : false
+  }
+
+  return {
+    partIndexById,
+    turnEnd,
+    isTurnStart,
+    isTurnEnd,
+    duration,
+    finalTextId,
+    checkpoint,
+    turnCompleted
+  }
 }
 
 /**
@@ -288,27 +389,25 @@ export function hasRenderableWorkingParts(parts: readonly AgentPart[]): boolean 
  * and preserving the preferred list's order (see `mergeWorkingParts`).
  */
 export function streamWorkingPartsForTurn(
-  messages: readonly AgentMessage[],
   streamParts: readonly AgentPart[],
+  index: TranscriptIndex,
   startMsgIndex: number
 ): AgentPart[] {
-  const turnEndIndex = turnSpanEndIndex(messages, startMsgIndex)
-  const finalText = getTurnFinalText(messages, turnEndIndex)
+  const turnEndIndex = index.turnEnd[startMsgIndex] ?? -1
+  const finalTextId = turnEndIndex >= 0 ? (index.finalTextId[turnEndIndex] ?? '') : ''
   // The durable stream log is thread-wide and its turn tags are not a safe
   // scope: a steered continuation keeps the original turn's anchor, and log
   // segments written before turn binding fold into the latest turn. Drop
   // every durable part the mirror already persisted BEFORE this turn started
   // so earlier traces can never bleed into the newest one; parts not yet in
   // the mirror (the current turn's in-flight work) are exactly the gap this
-  // list exists to fill.
-  const priorPartIds = new Set<string>()
-  for (let i = 0; i < startMsgIndex; i++) {
-    for (const part of messages[i]?.parts ?? []) priorPartIds.add(part.id)
-  }
+  // list exists to fill. `partIndexById` answers that question by index lookup
+  //   the previous form walked every earlier message on every render.
   return streamParts.filter((part) => {
     if (part.type === 'question' || isTodoToolPart(part)) return false
-    if (part.type === 'text' && finalText?.id === part.id) return false
-    return !priorPartIds.has(part.id)
+    if (part.type === 'text' && finalTextId !== '' && finalTextId === part.id) return false
+    const carriedAt = index.partIndexById.get(part.id)
+    return carriedAt === undefined || carriedAt >= startMsgIndex
   })
 }
 

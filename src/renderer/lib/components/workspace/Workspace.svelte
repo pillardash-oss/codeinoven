@@ -328,13 +328,26 @@
       drive sort order regardless of whether the user is typing or dictating. */
   let draftThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
-    for (const t of allThreads) {
-      if (t.archived) continue
-      if (
-        rendererRecovery.hasDraftContent(t.projectId, t.id) ||
-        speechController.isCapturingThread(t.id)
-      )
-        keys.add(threadVisitKey(t))
+    // Only threads that actually hold unsent content belong here, and the draft
+    // store is the authority on which those are. Scanning every thread instead
+    // asked `hasDraftContent` about each one, which materialized an empty draft
+    // entry (six arrays) per thread and subscribed to a draft slot per thread,
+    // on every keystroke.
+    for (const ref of rendererRecovery.listDraftThreadRefs()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
+    }
+    for (const ref of rendererRecovery.queuedMessageThreads()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
+    }
+    // An active voice capture counts as draft activity too, so the row leaves
+    // the "visited" order while the mic is open. Only one scope captures at a
+    // time, so the thread scan below costs nothing with the mic closed.
+    if (speechController.capturingScope) {
+      for (const t of allThreads) {
+        if (!t.archived && speechController.isCapturingThread(t.id)) {
+          keys.add(threadVisitKey(t))
+        }
+      }
     }
     return keys
   })

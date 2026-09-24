@@ -266,13 +266,12 @@
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
   import {
     auditReportForTurn,
+    buildTranscriptIndex,
     getTurnFinalText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
     isTurnCompleted,
-    isTurnEndIndex,
-    isTurnStartIndex,
     lastTurnStartIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
@@ -467,6 +466,26 @@
    *  moment they land   never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
 
+  let checkpoints = $state<TurnCheckpointSummary[]>([])
+  /**
+   * The transcript as of its last structural change: identity, role, and
+   * timestamps, without subscribing to streamed content. A delta replaces text
+   * inside an existing part without moving this reference, so everything that
+   * only needs the shape of the conversation   which window is mounted, where
+   * the last turn starts, what the user has already asked   reads this instead
+   * of the live `messages` array and stops recomputing at the stream cadence.
+   */
+  let structureMessages = $derived(
+    hasController ? messages : threadMessages.structureMessages(thread.projectId, thread.id)
+  )
+  /**
+   * Every per-message turn question, answered once per structural change. The
+   * transcript asks these once per mounted message per render; reading them from
+   * here turns that into an array lookup and keeps a long transcript from being
+   * rescanned on every streamed frame.
+   */
+  let transcriptIndex = $derived(buildTranscriptIndex(structureMessages, checkpoints))
+
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
     'Review the codebase and list the top improvement opportunities',
@@ -519,11 +538,11 @@
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
   const latestTurnInfo = $derived.by(() => {
-    const startIndex = lastTurnStartIndex(messages)
+    const startIndex = lastTurnStartIndex(structureMessages)
     if (startIndex === -1) return { startIndex: -1, active: false }
     let endIndex = startIndex
-    while (endIndex + 1 < messages.length) {
-      const next = messages[endIndex + 1]
+    while (endIndex + 1 < structureMessages.length) {
+      const next = structureMessages[endIndex + 1]
       if (!next) break
       if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
         endIndex += 1
@@ -532,9 +551,9 @@
       break
     }
     const trailingUserOnly =
-      endIndex < messages.length - 1 &&
-      messages.slice(endIndex + 1).every((message) => message.role === 'user')
-    const turnCompleted = messages[endIndex]?.completedAt !== undefined
+      endIndex < structureMessages.length - 1 &&
+      structureMessages.slice(endIndex + 1).every((message) => message.role === 'user')
+    const turnCompleted = structureMessages[endIndex]?.completedAt !== undefined
     const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
@@ -551,9 +570,11 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. */
+   *  would only produce an empty recall step. Keyed on the structure snapshot   
+   *  a user message's text only ever changes through a merge that reports
+   *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
-    mergedUserMessageSummaries(messages, fullUserMessageHistory)
+    mergedUserMessageSummaries(structureMessages, fullUserMessageHistory)
       .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
@@ -589,8 +610,8 @@
     if (!conversationBusy || brainstormReportRefreshing) return null
     const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
     if (!userMessageId) return null
-    const userMessageIndex = messages.findIndex((message) => message.id === userMessageId)
-    const userMessage = messages[userMessageIndex]
+    const userMessageIndex = structureMessages.findIndex((message) => message.id === userMessageId)
+    const userMessage = structureMessages[userMessageIndex]
     if (
       userMessageIndex === -1 ||
       !userMessage ||
@@ -599,7 +620,7 @@
     ) {
       return null
     }
-    const assistantMirrored = messages
+    const assistantMirrored = structureMessages
       .slice(userMessageIndex + 1)
       .some((message) => message.role === 'assistant')
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
@@ -1911,7 +1932,6 @@
       }
     }
   })
-  let checkpoints = $state<TurnCheckpointSummary[]>([])
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
@@ -3759,28 +3779,6 @@
 
   /** For the final assistant message of a turn, return the total duration from
    *  the user's prompt to the agent's final output. */
-  function getCurrentTurnDuration(msgIndex: number): number | null {
-    const assistantMsg = messages[msgIndex]
-    if (assistantMsg?.role !== 'assistant' || !assistantMsg.completedAt) return null
-    let turnStartIndex = msgIndex - 1
-    while (turnStartIndex >= 0) {
-      const message = messages[turnStartIndex]
-      if (!message) break
-      if (message.role === 'assistant') {
-        turnStartIndex--
-        continue
-      }
-      if (message.role === 'user' && isActivityOnlyUserMessage(message)) {
-        turnStartIndex--
-        continue
-      }
-      break
-    }
-    const userMsg = messages[turnStartIndex]
-    if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
-    return assistantMsg.completedAt - userMsg.createdAt
-  }
-
   /** When the agent started working on the turn whose trace opens at msgIndex.
    *  Activity-only user messages between the prompt and the first assistant
    *  message are skipped so the trace timer starts at the real prompt. */
@@ -6411,20 +6409,6 @@
       return
     }
     pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
-  }
-
-  function checkpointForTurn(messageIndex: number): TurnCheckpointSummary | null {
-    const assistant = messages[messageIndex]
-    if (!assistant || assistant.role !== 'assistant') return null
-
-    // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
-    // (completedAt). Every message of that turn   including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction
-    // falls inside this window, so match the card by time instead of walking
-    // back to a "user" message (whose role/shape varies with what the agent
-    // did mid-turn). Choosing the most recent window resolves
-    // interrupted-then-resumed turns to the resumed checkpoint.
-    return CheckpointMatching.checkpointForTurn(messages, checkpoints, messageIndex)
   }
 
   /** True when `messageIndex` is the final assistant message of `checkpoint`'s
@@ -11129,8 +11113,8 @@
               {/if}
             {:else}
               <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(messages, absIndex)}
-              {@const isTurnEnd = isTurnEndIndex(messages, absIndex)}
+              {@const isTurnStart = transcriptIndex.isTurnStart[absIndex] ?? false}
+              {@const isTurnEnd = transcriptIndex.isTurnEnd[absIndex] ?? false}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg, providers)}
               {@const modelLabel = messageModelLabel(msg, allModels)}
@@ -11143,8 +11127,8 @@
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(absIndex)}
-              {@const turnCheckpoint = checkpointForTurn(absIndex)}
+              {@const turnDuration = transcriptIndex.duration[absIndex] ?? null}
+              {@const turnCheckpoint = transcriptIndex.checkpoint[absIndex] ?? null}
               {@const turnAuditReport =
                 isAssignmentAuditorThread && isTurnEnd
                   ? auditReportForTurn(messages, auditVersions, absIndex)
@@ -11153,7 +11137,7 @@
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(messages, absIndex)}
+                    {@const turnDone = transcriptIndex.turnCompleted[absIndex] ?? false}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
@@ -11163,7 +11147,7 @@
                     {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(messages, streamParts, absIndex)}
+                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
                         ? // The durable log is the turn's stream order, so it orders the
