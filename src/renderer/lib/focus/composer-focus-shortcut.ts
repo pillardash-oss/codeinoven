@@ -23,10 +23,17 @@ export function initComposerFocusShortcut(): () => void {
   })
 
   const onKeydown = (event: KeyboardEvent): void => {
-    // The gesture is owned by the `chat-focus-composer` binding: a user who
-    // unbinds or remaps it disables the double-tap without a reload.
+    // The gesture is owned by the `chat-focus-composer` binding, so a user who
+    // remaps or unbinds it changes it here without a reload.
     if (!keymapState.isDoubleModifierShortcut('chat-focus-composer')) {
+      // Remapped to a regular chord (or unbound): match that chord directly.
+      // The tap detector plays no part, because a bare modifier press is never
+      // the binding, and a stale pending tap must not survive the edit.
       detector.reset()
+      if (!keymapState.matches('chat-focus-composer', event)) return
+      if (isOverlayOpen()) return
+      event.preventDefault()
+      focusVisibleComposer()
       return
     }
     if (!detector.handleKeydown(event)) return
