@@ -38,7 +38,7 @@ import {
   transcribeCapture,
   type SpeechArtifactSelection
 } from './speech-controller-artifacts'
-import { playSpeechCue } from './speech-controller-cues'
+import { playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
 import { SpeechPlaybackEngine } from './speech-controller-playback.svelte'
 import {
   nextVoiceSendLevel,
@@ -169,6 +169,9 @@ class SpeechController {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalKeydown, true)
       window.addEventListener('cio:soundChanged', this.handleSoundChanged)
+      // Open the cue output once, at startup, so no audio device is opened at
+      // the moment a recording captures the microphone (see the cue module).
+      prepareSpeechCues()
       void this.loadSettings()
     }
   }
