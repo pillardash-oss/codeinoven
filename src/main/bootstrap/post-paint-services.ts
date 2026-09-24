@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { assistantRunTitle } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -306,6 +307,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     () => state.mainWindow?.webContents ?? null
   )
   state.prototypePreviewService = new PrototypePreviewService()
+  try {
+    state.prototypePreviewService.setCdnPolicy(
+      prototypeCdnPolicyFromConfig(await storage.getConfig())
+    )
+  } catch {
+    // The strict policy stands until the config can be read.
+  }
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
@@ -377,6 +385,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     githubAuthService,
     skillUpdates: skillUpdateService,
     directoryPreviewService: state.directoryPreviewService,
+    prototypePreviewService: state.prototypePreviewService ?? undefined,
     powerWakeService: state.powerWakeService,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,

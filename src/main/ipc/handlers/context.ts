@@ -16,6 +16,7 @@ import type {
 import type { SyncPeerService } from '../../git/sync-peer-service'
 import type { ProjectFilesService } from '../../editor/project-files-service'
 import type { DirectoryPreviewService } from '../../preview/directory-preview-service'
+import type { PrototypePreviewService } from '../../prototypes/prototype-preview-service'
 import type { CheckpointManager } from '../../storage/checkpoint-manager'
 import type { ThreadCreationCoordinator } from '../../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../../chat/thread-deletion-coordinator'
@@ -57,6 +58,8 @@ export interface RegisterIpcHandlersOptions {
   projectFilesService?: ProjectFilesService
   /** Loopback static servers behind the file tree's "Open in browser" action. */
   directoryPreviewService?: DirectoryPreviewService
+  /** Prototype preview server, so a CDN settings change applies to the next preview. */
+  prototypePreviewService?: PrototypePreviewService
   powerWakeService?: PowerWakeService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService

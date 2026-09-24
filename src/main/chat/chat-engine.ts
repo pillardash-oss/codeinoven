@@ -359,6 +359,10 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
+import {
+  prototypeCdnInstruction,
+  prototypeCdnPolicyFromConfig
+} from '../../lib/prototypes/prototype-cdn'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
@@ -14710,6 +14714,12 @@ export class ChatEngine {
         : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+      // The preview server is serving the same approved origins, so the turn is
+      // told exactly which external hosts will load and which will not.
+      const prototypeCdnGuidance =
+        prototypeBatches.length > 0
+          ? prototypeCdnInstruction(prototypeCdnPolicyFromConfig(await this.storage.getConfig()))
+          : ''
       const revisionRelativePath = toPosixPath(
         join(
           featureArtifactDirectory(featureSlug),
@@ -14724,7 +14734,7 @@ export class ChatEngine {
         ...(prototypeBatches.length > 0
           ? [
               '',
-              'Prototype work was explicitly requested. Generate dependency-free HTML/CSS/JavaScript without installing packages. Reuse the existing project stack only when it is already available without setup.',
+              prototypeCdnGuidance,
               ...prototypeBatches
                 .flat()
                 .map(

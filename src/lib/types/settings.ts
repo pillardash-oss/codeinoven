@@ -266,6 +266,13 @@ export interface AppConfig {
   maxConflictFileBytes: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
+  /**
+   * Let prototype previews load fonts, styles, and scripts from the approved
+   * CDNs. Off confines every prototype to assets inlined in its own folder.
+   */
+  allowPrototypeExternalCdn: boolean
+  /** Extra CDN origins the user approved, merged after the app's own list. */
+  prototypeCdnAllowlist: string[]
   /** Quieter in-app alert played with the toast while the app is focused. */
   inAppNotificationSound: InAppNotificationSoundSettings
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
@@ -312,6 +319,8 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'allowPrototypeExternalCdn'
+    | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'
     | 'sound'
   >

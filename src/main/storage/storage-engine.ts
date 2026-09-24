@@ -43,6 +43,7 @@ import {
   normalizeWorkerNames
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
@@ -76,6 +77,8 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
+  prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: DEFAULT_SPEECH_SETTINGS
 }
@@ -174,6 +177,11 @@ export class StorageEngine {
         ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
         ...(config?.inAppNotificationSound ?? {})
       },
+      prototypeCdnAllowlist: Array.isArray(config?.prototypeCdnAllowlist)
+        ? config.prototypeCdnAllowlist.filter(
+            (origin): origin is string => typeof origin === 'string'
+          )
+        : DEFAULT_CONFIG.prototypeCdnAllowlist,
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),

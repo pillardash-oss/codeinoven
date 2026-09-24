@@ -95,6 +95,8 @@ const defaultConfig: AppConfig = {
   slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: true,
+  prototypeCdnAllowlist: [],
   inAppNotificationSound: { success: true, issue: true },
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },

@@ -200,8 +200,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-browser',
     title: 'Browser',
-    description: 'Open localhost links in CIO’s browser.',
-    keywords: ['localhost', 'links'],
+    description:
+      'Open localhost links in CIO’s browser, and approve the CDNs prototype previews may load.',
+    keywords: ['localhost', 'links', 'prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
     icon: SlidersHorizontal
   },
   {

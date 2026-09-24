@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
@@ -37,6 +38,8 @@ export const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
+  prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }

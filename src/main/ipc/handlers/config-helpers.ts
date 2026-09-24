@@ -4,6 +4,10 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
+import {
+  MAX_PROTOTYPE_CDN_ORIGINS,
+  normalizePrototypeCdnOrigin
+} from '../../../lib/prototypes/prototype-cdn'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
@@ -135,6 +139,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxDiffLines',
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
+  'allowPrototypeExternalCdn',
+  'prototypeCdnAllowlist',
   'inAppNotificationSound',
   'sound'
 ])
@@ -449,6 +455,39 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
     }
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
+  }
+
+  if ('allowPrototypeExternalCdn' in value) {
+    if (typeof value.allowPrototypeExternalCdn !== 'boolean') {
+      throw new TypeError('Prototype external CDN must be a boolean')
+    }
+    patch.allowPrototypeExternalCdn = value.allowPrototypeExternalCdn
+  }
+
+  if ('prototypeCdnAllowlist' in value) {
+    const allowlist = value.prototypeCdnAllowlist
+    if (!Array.isArray(allowlist)) {
+      throw new TypeError('Prototype CDN allowlist must be an array')
+    }
+    if (allowlist.length > MAX_PROTOTYPE_CDN_ORIGINS) {
+      throw new TypeError(
+        `Prototype CDN allowlist accepts at most ${MAX_PROTOTYPE_CDN_ORIGINS} origins`
+      )
+    }
+    // Stored normalized and deduplicated, so a rejected spelling never reaches
+    // the config file and the same origin cannot be approved twice.
+    const origins: string[] = []
+    for (const entry of allowlist) {
+      if (typeof entry !== 'string') {
+        throw new TypeError('Prototype CDN origins must be strings')
+      }
+      const origin = normalizePrototypeCdnOrigin(entry)
+      if (!origin) {
+        throw new TypeError(`Not a usable HTTPS CDN origin: ${entry.trim()}`)
+      }
+      if (!origins.includes(origin)) origins.push(origin)
+    }
+    patch.prototypeCdnAllowlist = origins
   }
 
   if ('inAppNotificationSound' in value) {

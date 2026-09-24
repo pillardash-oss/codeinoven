@@ -63,6 +63,7 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
@@ -833,6 +834,7 @@
                 disabled={!settingsReady}
               />
             </div>
+            <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
           </div>
 
           <!-- Power -->
