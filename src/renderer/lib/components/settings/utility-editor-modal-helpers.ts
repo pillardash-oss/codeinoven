@@ -303,6 +303,12 @@ export function buildBindings(
     }))
 }
 
+/**
+ * The secret the user is writing. `credential.id` is the identity of the
+ * credential being replaced, so a form that keeps editing the first credential
+ * cannot silently rewrite another one: leave the id empty to register a new
+ * credential, whose id is derived from its variable name instead.
+ */
 export function buildCredential(
   draft: UtilityDraft,
   credential: CredentialDraft

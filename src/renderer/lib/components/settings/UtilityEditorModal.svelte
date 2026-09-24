@@ -20,6 +20,7 @@
     Thread,
     ThreadSettings,
     UtilityBundleInstallRequest,
+    UtilityCredentialMetadata,
     UtilityDefinition,
     UtilityDefinitionInput,
     UtilityDefinitionPatch,
@@ -84,11 +85,15 @@
   let pluginManifest = $state('')
   let deleteTarget = $state<UtilityEditorTarget | null>(null)
   let draft = $state<UtilityDraft>(emptyDraft())
-  let credentialId = $state('')
-  let credentialLabel = $state('')
+  /** Credential the secret form writes to; `null` adds a brand-new secret. */
+  let credentialTargetId = $state<string | null>(null)
   let credentialValue = $state('')
-  let credentialRequired = $state(false)
   let credentialEnvironmentVariable = $state('')
+  /** Set while the confirmation dialog for removing a stored secret is open. */
+  let credentialDeleteTarget = $state<{
+    utilityId: string
+    credential: UtilityCredentialMetadata
+  } | null>(null)
   let projects = $state<Project[]>([])
   let threads = $state<Thread[]>([])
   let projectIconUrls = $state<Record<string, string>>({})
@@ -182,8 +187,12 @@
   let selectedScopeProject = $derived(
     projectOptions.find((project) => project.id === draft.projectId) ?? null
   )
-  let editedUtility = $derived(
-    draft.id ? utilities.find((utility) => utility.id === draft.id) : undefined
+  /** Secrets the utility being edited already declares, in registry order. */
+  let editedCredentials = $derived(
+    (draft.id ? utilities.find((utility) => utility.id === draft.id)?.credentials : undefined) ?? []
+  )
+  let credentialTarget = $derived(
+    editedCredentials.find((credential) => credential.id === credentialTargetId) ?? null
   )
 
   let title = $derived.by(() => {
@@ -194,12 +203,22 @@
     return 'Add capability'
   })
 
-  function resetCredential(): void {
-    credentialId = ''
-    credentialLabel = ''
+  /** Aim the secret form at one stored credential, keeping its identity. */
+  function targetCredential(credential: UtilityCredentialMetadata): void {
+    credentialTargetId = credential.id
+    credentialEnvironmentVariable = credential.environmentVariable ?? credential.id
     credentialValue = ''
-    credentialRequired = false
+  }
+
+  /** Aim the secret form at a credential that does not exist yet. */
+  function addCredential(): void {
+    credentialTargetId = null
     credentialEnvironmentVariable = ''
+    credentialValue = ''
+  }
+
+  function resetCredential(): void {
+    addCredential()
   }
 
   function selectAllHarnesses(): void {
@@ -241,12 +260,7 @@
     draft = utilityToDraft(utility)
     resetCredential()
     const storedCredential = utility.credentials[0]
-    if (storedCredential) {
-      credentialId = storedCredential.id
-      credentialLabel = storedCredential.label
-      credentialRequired = storedCredential.required
-      credentialEnvironmentVariable = storedCredential.environmentVariable ?? ''
-    }
+    if (storedCredential) targetCredential(storedCredential)
     editorError = ''
     setupPreset = null
   }
@@ -406,12 +420,17 @@
     onClose()
   }
 
+  /**
+   * The secret the form currently describes. The id comes from the credential
+   * the user selected and never from the variable name they typed, so writing a
+   * second secret can no longer overwrite the first one's stored value.
+   */
   function credentialDraft(): CredentialDraft {
     return {
-      id: credentialId,
-      label: credentialLabel,
+      id: credentialTarget?.id ?? '',
+      label: credentialTarget?.label ?? '',
       value: credentialValue,
-      required: credentialRequired,
+      required: credentialTarget?.required ?? false,
       environmentVariable: credentialEnvironmentVariable
     }
   }
@@ -461,15 +480,31 @@
     }
   }
 
-  async function removeCredential(utilityId: string, id: string): Promise<void> {
+  /** Removing a stored secret destroys it, so it always confirms first. */
+  function requestCredentialRemoval(utilityId: string, credentialId: string): void {
+    const credential = editedCredentials.find((entry) => entry.id === credentialId)
+    if (credential) credentialDeleteTarget = { utilityId, credential }
+  }
+
+  async function removeCredential(): Promise<void> {
+    const target = credentialDeleteTarget
+    if (!target) return
+    saving = true
     editorError = ''
     try {
-      const updated = await invoke('utilities:removeCredential', utilityId, id)
+      const updated = await invoke(
+        'utilities:removeCredential',
+        target.utilityId,
+        target.credential.id
+      )
       utilities = utilities.map((utility) => (utility.id === updated.id ? updated : utility))
+      credentialDeleteTarget = null
       openRegistryEdit(updated)
     } catch (removeError) {
       editorError =
         removeError instanceof Error ? removeError.message : 'The credential could not be removed.'
+    } finally {
+      saving = false
     }
   }
 
@@ -755,14 +790,17 @@
 
         <UtilityEditorModalConfigFields bind:draft {isNative} />
 
-        {#if !isNative && !isAppOwned && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
+        {#if !isNative && !isAppOwned && (draft.kind === 'mcp' || draft.kind === 'web_search' || draft.kind === 'web_fetch')}
           <UtilityEditorModalCredentialFields
             {draft}
             {utilities}
             {secureStorageAvailable}
-            bind:credentialEnvironmentVariable
-            bind:credentialValue
-            onRemoveCredential={(utilityId, id) => void removeCredential(utilityId, id)}
+            targetId={credentialTargetId}
+            bind:environmentVariable={credentialEnvironmentVariable}
+            bind:value={credentialValue}
+            onSelectCredential={targetCredential}
+            onAddCredential={addCredential}
+            onRemoveCredential={requestCredentialRemoval}
           />
         {/if}
 
@@ -796,6 +834,25 @@
     {/snippet}
   </Modal>
 {/if}
+
+<ConfirmDialog
+  open={credentialDeleteTarget !== null}
+  title="Remove stored secret"
+  confirmLabel="Remove"
+  busy={saving}
+  onCancel={() => (credentialDeleteTarget = null)}
+  onConfirm={removeCredential}
+>
+  <p>
+    Remove
+    <strong class="text-foreground">{credentialDeleteTarget?.credential.label}</strong>? Its value
+    is deleted from encrypted device storage, so the capability stops receiving
+    <span class="font-mono">
+      {credentialDeleteTarget?.credential.environmentVariable ??
+        credentialDeleteTarget?.credential.id}
+    </span>.
+  </p>
+</ConfirmDialog>
 
 <ConfirmDialog
   open={deleteTarget !== null}
