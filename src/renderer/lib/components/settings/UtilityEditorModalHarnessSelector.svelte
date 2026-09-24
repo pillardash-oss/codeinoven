@@ -6,11 +6,20 @@
   interface Props {
     bindings: BindingDraft[]
     availableHarnesses: Array<{ id: string; name: string }>
+    /** Inerts the chips while a save is in flight, so a stray Cmd/Ctrl+Enter
+     *  cannot retarget the draft as the form is being written. */
+    disabled?: boolean
     onSelectAll: () => void
     onToggleHarness: (harnessId: string) => void
   }
 
-  let { bindings, availableHarnesses, onSelectAll, onToggleHarness }: Props = $props()
+  let {
+    bindings,
+    availableHarnesses,
+    disabled = false,
+    onSelectAll,
+    onToggleHarness
+  }: Props = $props()
 
   const allSelected = $derived(
     bindings.some((binding) => binding.harnessId === ALL_HARNESSES_BINDING_ID)
@@ -35,6 +44,7 @@
         : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
       aria-pressed={allSelected}
       title="Apply to all current and future harnesses"
+      {disabled}
       onclick={onSelectAll}
     >
       All
@@ -49,6 +59,7 @@
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
           aria-pressed={isSelected(harness.id)}
+          {disabled}
           onclick={() => onToggleHarness(harness.id)}
         >
           <AgentIcon agentId={harness.id} label={harness.name} size={16} />

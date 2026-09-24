@@ -654,6 +654,7 @@
           <UtilityEditorModalHarnessSelector
             bindings={draft.bindings}
             {availableHarnesses}
+            disabled={saving}
             onSelectAll={selectAllHarnesses}
             onToggleHarness={toggleHarness}
           />
