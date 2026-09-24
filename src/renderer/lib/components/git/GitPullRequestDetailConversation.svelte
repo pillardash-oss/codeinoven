@@ -167,15 +167,19 @@
   {#if replyEntry?.key === entry.key}
     <!--
       An open composer takes the whole row: the reaction picker belongs beside
-      the reply button, not beside a box several times its height.
+      the reply button, not beside a box several times its height. The wrapper is
+      what makes that true   the row is a flex container, so a bare composer
+      would shrink to the width of its own placeholder.
     -->
-    <PrReplyBox
-      recipient={githubDisplayLogin(entry.author)}
-      hint="Posts a new comment quoting @{githubDisplayLogin(entry.author)}"
-      {busy}
-      onSubmit={submitReply}
-      onCancel={() => (replyEntry = null)}
-    />
+    <div class="min-w-0 flex-1">
+      <PrReplyBox
+        recipient={githubDisplayLogin(entry.author)}
+        hint="Posts a new comment quoting @{githubDisplayLogin(entry.author)}"
+        {busy}
+        onSubmit={submitReply}
+        onCancel={() => (replyEntry = null)}
+      />
+    </div>
   {:else}
     <button
       type="button"
