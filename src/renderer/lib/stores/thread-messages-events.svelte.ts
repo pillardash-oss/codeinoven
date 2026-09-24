@@ -101,7 +101,9 @@ export class ThreadMessagesEvents {
     contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits'],
-    bankedResets?: AgentMessage['bankedResets']
+    bankedResets?: AgentMessage['bankedResets'],
+    harnessId?: string,
+    providerId?: string
   ): void {
     if (!this.cache.matchesSession(projectId, threadId, sessionId)) return
     this.cache.flushReveal(threadKey(projectId, threadId))
@@ -118,6 +120,11 @@ export class ThreadMessagesEvents {
     if (rateLimits) doneMsg.rateLimits = rateLimits
     if (credits) doneMsg.credits = credits
     if (bankedResets) doneMsg.bankedResets = bankedResets
+    // Provenance the engine stamped on the event. This row was created from a
+    // streamed part, which carries none of its own, and the persisted mirror
+    // only reaches the cache once the turn has ended.
+    if (harnessId !== undefined) doneMsg.harnessId = harnessId
+    if (providerId !== undefined) doneMsg.providerId = providerId
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -174,7 +181,9 @@ export class ThreadMessagesEvents {
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits'],
-    bankedResets?: AgentMessage['bankedResets']
+    bankedResets?: AgentMessage['bankedResets'],
+    harnessId?: string,
+    providerId?: string
   ): void {
     if (!this.cache.matchesSession(projectId, threadId, sessionId)) return
     this.cache.flushReveal(threadKey(projectId, threadId))
@@ -189,6 +198,8 @@ export class ThreadMessagesEvents {
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
     if (bankedResets) message.bankedResets = bankedResets
+    if (harnessId !== undefined) message.harnessId = harnessId
+    if (providerId !== undefined) message.providerId = providerId
     entry.messages = [...entry.messages]
     // Usage telemetry moves no boundary the transcript index records, so it
     // stays on the content revision.
@@ -353,7 +364,9 @@ export class ThreadMessagesEvents {
           event.contextEstimated,
           event.rateLimits,
           event.credits,
-          event.bankedResets
+          event.bankedResets,
+          event.harnessId,
+          event.providerId
         )
         break
       case 'usage.updated':
@@ -369,7 +382,9 @@ export class ThreadMessagesEvents {
           event.cost,
           event.rateLimits,
           event.credits,
-          event.bankedResets
+          event.bankedResets,
+          event.harnessId,
+          event.providerId
         )
         break
       case 'session.status':

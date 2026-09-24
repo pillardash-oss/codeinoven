@@ -20793,6 +20793,14 @@ export class ChatEngine {
     }
     if (eventOwner && (event.type === 'message.completed' || event.type === 'usage.updated')) {
       const selection = this.sessionModelIds.get(event.sessionId)
+      // Attribute the event to the session's own harness and provider. A live
+      // streamed assistant row is built from part events, which carry no
+      // provenance, so without this stamp the row stays unattributed until the
+      // turn lands in the persisted mirror. The context meter only counts usage
+      // reported by the thread's current harness and provider, so an
+      // unattributed row is invisible to it for the whole run.
+      event.harnessId ??= driverId
+      if (selection) event.providerId ??= selection.providerId
       if (event.contextWindow === undefined && selection) {
         const contextWindow = this.modelContextWindow(
           eventOwner.projectId,

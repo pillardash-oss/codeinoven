@@ -727,7 +727,9 @@ class ThreadMessagesStore {
     contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits'],
-    bankedResets?: AgentMessage['bankedResets']
+    bankedResets?: AgentMessage['bankedResets'],
+    harnessId?: string,
+    providerId?: string
   ): void {
     this.events.markCompleted(
       projectId,
@@ -742,7 +744,9 @@ class ThreadMessagesStore {
       contextEstimated,
       rateLimits,
       credits,
-      bankedResets
+      bankedResets,
+      harnessId,
+      providerId
     )
   }
 
@@ -759,7 +763,9 @@ class ThreadMessagesStore {
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits'],
-    bankedResets?: AgentMessage['bankedResets']
+    bankedResets?: AgentMessage['bankedResets'],
+    harnessId?: string,
+    providerId?: string
   ): void {
     this.events.updateUsage(
       projectId,
@@ -773,7 +779,9 @@ class ThreadMessagesStore {
       cost,
       rateLimits,
       credits,
-      bankedResets
+      bankedResets,
+      harnessId,
+      providerId
     )
   }
 
