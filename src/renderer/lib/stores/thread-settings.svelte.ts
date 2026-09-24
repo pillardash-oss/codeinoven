@@ -110,21 +110,23 @@ export const assistantSettings = new ThreadSettingsStore(
 )
 
 /**
- * The effective settings for a chat: the chat's own last-used settings.
- * Chats keep their own storage (model, thinking level, File System, permiss-
- * ions), so a new chat always inherits the previous chat's configuration —
- * never the project view's model or thinking level.
+ * The effective settings for a chat: the chat's own last-used settings once a
+ * chat has picked a model, else the model the project work last ran on, so a
+ * fresh chat starts on the model already in use.
+ *
+ * Chats keep their own storage (model, thinking level, File System, permissions),
+ * so a new chat inherits the previous chat's configuration rather than the
+ * project view's, and only the model identity is borrowed from the project
+ * (harness, account, provider, model). A chat never inherits the project's File
+ * System mode or permission level, because that would unlock access nobody
+ * granted a chat.
  *
  * Web-only chats stay pinned to auto review. Once the user turns on File
  * System, the permission picker unlocks up to Full Access, so that level is
  * carried through here instead of being clobbered back to auto review.
  */
-export function chatEffectiveSettings(): ThreadSettings {
-  const chat = chatSettings.lastUsed
-  return {
-    ...chat,
-    permissionLevel: chat.fileSystemMode ? chat.permissionLevel : ('auto_review' as const)
-  }
+export function chatEffectiveSettings(projectFallback: ThreadSettings): ThreadSettings {
+  return effectiveSettings(chatSettings.lastUsed, CHAT_DEFAULT_SETTINGS, projectFallback)
 }
 
 /**
@@ -132,17 +134,27 @@ export function chatEffectiveSettings(): ThreadSettings {
  * assistant's own last-used settings once it has run on a model, else the model
  * the project work last ran on.
  *
- * Only the model identity is borrowed from the project (harness, account,
- * provider, model). An assistant task never inherits the project's File System
- * mode or permission level: borrowing those would hand a routine's task file
- * access nobody granted it. Like a chat, a task stays pinned to auto review
- * until File System is turned on for the assistant itself.
+ * The same borrowing rule as a chat applies: only the model identity comes from
+ * the project (harness, account, provider, model), never its File System mode or
+ * permission level, since that would hand a routine's task access nobody granted
+ * it. A task stays pinned to auto review until File System is turned on for the
+ * assistant itself.
  */
 export function assistantEffectiveSettings(projectFallback: ThreadSettings): ThreadSettings {
-  const assistant = assistantSettings.lastUsed
-  const seed = assistant.modelId
-    ? assistant
-    : withModelFrom(ASSISTANT_DEFAULT_SETTINGS, projectFallback)
+  return effectiveSettings(assistantSettings.lastUsed, ASSISTANT_DEFAULT_SETTINGS, projectFallback)
+}
+
+/**
+ * The settings a conversation family starts on when it has not picked a model
+ * yet: its own last-used settings once it has one, else the model the project
+ * work last ran on.
+ */
+function effectiveSettings(
+  own: ThreadSettings,
+  defaults: ThreadSettings,
+  projectFallback: ThreadSettings
+): ThreadSettings {
+  const seed = own.modelId ? own : withModelFrom(defaults, projectFallback)
   return {
     ...seed,
     permissionLevel: seed.fileSystemMode ? seed.permissionLevel : ('auto_review' as const)
@@ -173,13 +185,13 @@ export function settingsStoreFor(scope: ModelScope): ThreadSettingsStore {
 
 /**
  * The settings a conversation of this family starts on when it has none of its
- * own. Projects seed from the last project thread; chats from the last chat;
- * assistant tasks from the assistant's own memory, falling back to the model the
- * project work last ran on.
+ * own. Projects seed from the last project thread; chats from the last chat, else
+ * from the model the project work last ran on; assistant tasks from the
+ * assistant's own memory, else from that same project model.
  */
 export function defaultSettingsFor(scope: ModelScope): ThreadSettings {
   if (scope === 'assistant') return assistantEffectiveSettings(threadSettings.lastUsed)
-  if (scope === 'chat') return chatEffectiveSettings()
+  if (scope === 'chat') return chatEffectiveSettings(threadSettings.lastUsed)
   return threadSettings.lastUsed
 }
 

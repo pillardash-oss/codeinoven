@@ -18,7 +18,11 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
-  import { chatEffectiveSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    chatEffectiveSettings,
+    chatSettings,
+    threadSettings
+  } from '$lib/stores/thread-settings.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { routineHowToComplete } from '$shared/types'
   import {
@@ -93,9 +97,9 @@
       ? (providerCatalog.cached(chatInboxId) ?? providerCatalog.allCached())
       : providerCatalog.allCached()
   )
-  /** Effective chat settings   the chat's own model when one has been picked,
+  /** Effective chat settings: the chat's own model once one has been picked,
    *  else the last project model so a fresh chat starts on the model in use. */
-  let chatComposerSettings = $derived(chatEffectiveSettings())
+  let chatComposerSettings = $derived(chatEffectiveSettings(threadSettings.lastUsed))
 
   /** Harness display name for the chat setup card, straight from the registry. */
   let chatHarnessName = $derived(

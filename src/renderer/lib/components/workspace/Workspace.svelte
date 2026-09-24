@@ -2973,7 +2973,7 @@
         providerId: 'pi',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: '',
-        settings: chatEffectiveSettings()
+        settings: chatEffectiveSettings(threadSettings.lastUsed)
       })
       upsertThreadInList(thread)
       chatDraft.message = msg
