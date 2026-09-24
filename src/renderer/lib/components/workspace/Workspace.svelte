@@ -2072,6 +2072,11 @@
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
+    // The sidebar only exists while the workspace is on screen. Revealing into a
+    // hidden workspace (Settings/Scope) measures a DOM the user cannot see, and
+    // every background thread update would pay for it. When the workspace comes
+    // back, `active` flips and this effect re-runs to restore the reveal.
+    if (!active) return
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads
@@ -2104,6 +2109,10 @@
     }
     if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
     if (isScopeBoardView) return
+    // Steady state: this effect re-runs on every thread update. A row that is
+    // still in view needs no reveal, and the reveal loop costs a DOM query plus
+    // up to twelve animation frames, so check visibility first.
+    if (isThreadRowVisible(thread.id)) return
     revealThreadInSidebar(thread.id)
   })
 
@@ -2143,12 +2152,12 @@
 
   async function loadData(): Promise<void> {
     try {
-      // Assistant View hydrates in the same pass as every other view. The hidden
-      // assistant container is created by the main process before navigation, so
-      // its project record is already in `project:list`; nothing here awaits the
-      // post-paint feature graph, which used to serialize the entire first
-      // usable frame (project/thread hydration included) behind it.
-      assistantRoutines.initialize()
+      // Assistant View is a secondary surface and never hydrates in this pass:
+      // its routines and missed runs are deferred to post-paint (see the finally
+      // block), so nothing about the assistant competes with the first usable
+      // frame. The hidden assistant container itself is created by the main
+      // process before navigation, so its project record is already in
+      // `project:list`.
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
         invoke('thread:listRecentPerProject')
@@ -2270,6 +2279,12 @@
     } finally {
       loading = false
       void invoke('app:rendererReady').catch(() => undefined)
+      // Assistant View hydrates only after the main project view has landed.
+      // Deferred work runs once the shell has painted and the renderer is idle,
+      // so routine/missed-run reads can never occupy the startup frame or race
+      // the project and thread hydration for the main process. Idempotent: a
+      // second call is a no-op, and re-scheduling replaces the pending task.
+      scheduleDeferredWork('assistant:hydrate', () => assistantRoutines.initialize())
     }
   }
 

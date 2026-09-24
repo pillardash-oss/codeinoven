@@ -10,6 +10,16 @@ import {
   type Thread
 } from '$shared/types'
 
+/** Value compare for two resolved icon maps, so an unchanged refresh publishes
+ *  nothing and leaves icon consumers untouched. */
+function mapsEqual(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
+  if (a.size !== b.size) return false
+  for (const [key, value] of a) {
+    if (b.get(key) !== value) return false
+  }
+  return true
+}
+
 /**
  * AssistantRoutines   the renderer's live view of assistant routines and the
  * pending missed scheduled runs.
@@ -24,6 +34,10 @@ class AssistantRoutinesState {
   missedRuns: MissedRun[] = $state([])
   /** Custom icon data URLs for routines that store one, keyed by routine id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /** Routine id -> stored icon filename. A mutation both broadcasts
+   *  `routine:changed` and runs an explicit `refresh()`, so without this every
+   *  mutation re-fetched each routine's icon over IPC twice. */
+  private iconSignatures = new Map<string, string>()
   private initialized = false
   private disposers: Array<() => void> = []
 
@@ -57,23 +71,37 @@ class AssistantRoutinesState {
 
   /**
    * Load custom icon data URLs for the routines that declare one. Batched into
-   * one pass so a routine mutation never triggers a per-row IPC storm.
+   * one pass so a routine mutation never triggers a per-row IPC storm, and
+   * diffed against the stored icon filename so a routine whose icon did not
+   * change is served from the previous result instead of a second IPC round.
    */
   private async refreshIcons(): Promise<void> {
     const next = new SvelteMap<string, string>()
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const signatures = new Map<string, string>()
     await Promise.all(
-      this.routines
-        .filter((routine) => routine.icon)
-        .map(async (routine) => {
-          try {
-            const url = await invoke('routine:getIcon', routine.id)
-            if (url) next.set(routine.id, url)
-          } catch {
-            // Icon loading is best-effort; the row falls back to its SVG/Workflow icon.
-          }
-        })
+      this.routines.map(async (routine) => {
+        const signature = routine.icon ?? ''
+        signatures.set(routine.id, signature)
+        if (!signature) return
+        const cached =
+          this.iconSignatures.get(routine.id) === signature
+            ? this.iconUrls.get(routine.id)
+            : undefined
+        if (cached !== undefined) {
+          next.set(routine.id, cached)
+          return
+        }
+        try {
+          const url = await invoke('routine:getIcon', routine.id)
+          if (url) next.set(routine.id, url)
+        } catch {
+          // Icon loading is best-effort; the row falls back to its SVG/Workflow icon.
+        }
+      })
     )
-    this.iconUrls = next
+    this.iconSignatures = signatures
+    if (!mapsEqual(this.iconUrls, next)) this.iconUrls = next
   }
 
   async refreshMissedRuns(): Promise<void> {

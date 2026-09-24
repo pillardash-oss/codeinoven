@@ -85,6 +85,51 @@
   let deleteBusy = $state(false)
 
   const EMPTY_RUNS: readonly Thread[] = []
+  const EMPTY_TASKS: readonly Thread[] = []
+
+  /** Every routine's tasks, most recent first, built once per tasks change.
+   *  The sidebar reads a routine's task list from this map instead of re-running
+   *  a filter + sort for each of the five call sites per routine per render. */
+  const tasksByRoutine = $derived.by(() => {
+    const map = new SvelteMap<string, Thread[]>()
+    for (const task of tasks) {
+      if (!task.routineId) continue
+      const list = map.get(task.routineId) ?? []
+      list.push(task)
+      map.set(task.routineId, list)
+    }
+    for (const list of map.values()) list.sort((a, b) => b.lastActivity - a.lastActivity)
+    return map
+  })
+
+  /** The subset of each routine's tasks that render nested under it (a
+   *  user-pinned task leaves for the Pinned section above). */
+  const nestedTasksByRoutine = $derived.by(() => {
+    const map = new SvelteMap<string, Thread[]>()
+    for (const [routineId, list] of tasksByRoutine) {
+      map.set(
+        routineId,
+        list.filter((task) => !task.pinned || isAssistantSetupThread(task))
+      )
+    }
+    return map
+  })
+
+  /** Threads with a pending missed run, and the routines those runs belong to,
+   *  as sets so a row never scans the whole missed-run list. */
+  const missedThreadIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    for (const run of assistantRoutines.missedRuns) ids.add(run.threadId)
+    return ids
+  })
+
+  const missedRoutineIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    for (const run of assistantRoutines.missedRuns) {
+      if (run.routineId) ids.add(run.routineId)
+    }
+    return ids
+  })
 
   /** Pinned routines first, then manual sort order, then most recently updated. */
   const orderedRoutines = $derived(
@@ -130,10 +175,8 @@
   }
 
   /** Every task of a routine, pinned ones included, most recent first. */
-  function routineTasks(routineId: string): Thread[] {
-    return tasks
-      .filter((task) => task.routineId === routineId)
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+  function routineTasks(routineId: string): readonly Thread[] {
+    return tasksByRoutine.get(routineId) ?? EMPTY_TASKS
   }
 
   /** One task's runs, newest first (empty while it has never run). */
@@ -165,8 +208,8 @@
    * for the Pinned section above, but a pinned how-to thread stays here: its pin
    * is retention, not a request to move it out of its routine.
    */
-  function nestedRoutineTasks(routineId: string): Thread[] {
-    return routineTasks(routineId).filter((task) => !task.pinned || isAssistantSetupThread(task))
+  function nestedRoutineTasks(routineId: string): readonly Thread[] {
+    return nestedTasksByRoutine.get(routineId) ?? EMPTY_TASKS
   }
 
   /** The accent colour a flat (pinned) row should tint its icon with. */
@@ -205,7 +248,7 @@
     routineSearchQueries.delete(routine.id)
   }
 
-  function filteredRoutineTasks(routine: Routine): Thread[] {
+  function filteredRoutineTasks(routine: Routine): readonly Thread[] {
     const query = (routineSearchQueries.get(routine.id) ?? '').trim().toLowerCase()
     const list = nestedRoutineTasks(routine.id)
     if (!routineSearchOpen.has(routine.id) || query.length === 0) return list
@@ -234,7 +277,7 @@
     {task}
     {color}
     active={task.id === selectedThreadId}
-    missed={assistantRoutines.missedForTask(task.id).length > 0}
+    missed={missedThreadIds.has(task.id)}
     nextRunAt={assistantRoutines.nextRunForTask(task)}
     runWorking={taskRunWorking(task.id)}
     onSelect={select}
@@ -338,7 +381,7 @@
             {routine}
             expanded={expanded.has(routine.id) || searching || holdsSelected}
             working={routineWorking(routine.id)}
-            missed={assistantRoutines.hasMissedForRoutine(routine.id)}
+            missed={missedRoutineIds.has(routine.id)}
             taskCount={routineTaskList.length}
             iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
             nextRunAt={routineNextRun(routine.id)}

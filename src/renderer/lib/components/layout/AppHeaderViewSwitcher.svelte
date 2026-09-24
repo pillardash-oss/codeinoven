@@ -59,6 +59,9 @@
     const working = threads.filter(
       (thread) => !thread.archived && threadWorkingForIndicator(thread, now)
     )
+    // The working predicate reads the agent-run store, so evaluate it once per
+    // thread instead of once in the filter above and again in the loop below.
+    const workingIds = new Set(working.map((thread) => thread.id))
     const counts = {
       workingProjects: 0,
       workingChats: 0,
@@ -72,8 +75,7 @@
     for (const thread of threads) {
       if (thread.archived || isOrchestrationChildThread(thread)) continue
       const isChat = thread.projectId === INBOX_PROJECT_ID
-      const isWorking =
-        threadWorkingForIndicator(thread, now) || coordinatorHasActiveDelegates(thread, working)
+      const isWorking = workingIds.has(thread.id) || coordinatorHasActiveDelegates(thread, working)
       if (isWorking) {
         if (isChat) counts.workingChats += 1
         else counts.workingProjects += 1
