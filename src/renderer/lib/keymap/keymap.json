@@ -63,14 +63,16 @@
         },
         {
           "id": "nav-history-back",
-          "keys": ["mod", "[", "alt", "arrowleft"],
+          "keys": ["mod", "["],
+          "platformKeys": { "other": ["alt", "arrowleft"] },
           "label": "Go back",
           "description": "Navigates to the previous view or location, mirroring the header's back button. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
           "scenario": "Anywhere in the app."
         },
         {
           "id": "nav-history-forward",
-          "keys": ["mod", "]", "alt", "arrowright"],
+          "keys": ["mod", "]"],
+          "platformKeys": { "other": ["alt", "arrowright"] },
           "label": "Go forward",
           "description": "Navigates to the next view or location, mirroring the header's forward button. Cmd+] on macOS, Alt+Right on Windows and Linux.",
           "scenario": "Anywhere in the app."
@@ -499,9 +501,10 @@
         },
         {
           "id": "terminal-word-hop",
-          "keys": ["alt", "arrowleft", "arrowright", "ctrl", "arrowleft", "arrowright"],
+          "keys": ["alt", "arrowleft", "arrowright"],
+          "platformKeys": { "other": ["ctrl", "arrowleft", "arrowright"] },
           "label": "Word backward / forward",
-          "description": "Moves the cursor by whole words in plain shells.",
+          "description": "Moves the cursor by whole words in plain shells: Option+Arrow on macOS, Ctrl+Arrow on Windows and Linux.",
           "scenario": "Terminal focused in a shell prompt (not on the alternate screen)."
         },
         {

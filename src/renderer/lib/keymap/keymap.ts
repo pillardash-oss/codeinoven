@@ -17,9 +17,20 @@ import { isMacPlatform } from '$lib/shortcut-display'
 export interface KeymapShortcut {
   id: string
   keys: string[]
+  /** Key tokens that replace `keys` on the matching platform, for actions
+   *  whose modifier differs per OS (Option on macOS vs Ctrl/Alt elsewhere).
+   *  `mac` covers macOS; `other` covers Windows and Linux. Omitted platforms
+   *  fall back to `keys`. */
+  platformKeys?: PlatformKeyOverrides
   label: string
   description: string
   scenario: string
+}
+
+/** Per-platform replacement key tokens; see {@link KeymapShortcut.platformKeys}. */
+export interface PlatformKeyOverrides {
+  mac?: string[]
+  other?: string[]
 }
 
 export interface KeymapCategory {
@@ -300,16 +311,20 @@ export function formatKeyCombo(keys: readonly string[], isMac = isMacPlatform())
   return keymapKeyGroups(keys, isMac).join(' / ')
 }
 
-const KEYMAP_BY_ID: Map<string, readonly string[]> = new Map(
+const KEYMAP_BY_ID: Map<string, KeymapShortcut> = new Map(
   KEYMAP.categories.flatMap((category) =>
-    category.shortcuts.map((shortcut) => [shortcut.id, shortcut.keys] as const)
+    category.shortcuts.map((shortcut) => [shortcut.id, shortcut] as const)
   )
 )
 
-/** Key tokens for a keymap entry id, e.g. 'nav-new-thread' → ['mod', 'n'].
- *  Returns an empty array for unknown ids so call sites can render nothing. */
-export function keymapKeys(id: string): readonly string[] {
-  return KEYMAP_BY_ID.get(id) ?? []
+/** Key tokens for a keymap entry id, resolved for the current platform, e.g.
+ *  'nav-new-thread' → ['mod', 'n']. Returns an empty array for unknown ids so
+ *  call sites can render nothing. */
+export function keymapKeys(id: string, isMac = isMacPlatform()): readonly string[] {
+  const shortcut = KEYMAP_BY_ID.get(id)
+  if (!shortcut) return []
+  const platformKeys = isMac ? shortcut.platformKeys?.mac : shortcut.platformKeys?.other
+  return platformKeys ?? shortcut.keys
 }
 
 /** Parse a user override value into registry key tokens. Accepts a
