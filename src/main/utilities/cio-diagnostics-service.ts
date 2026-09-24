@@ -1,12 +1,25 @@
-import { readFile } from 'fs/promises'
-import { join } from 'path'
 import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { AgentMessage, Thread } from '../../lib/types'
-import { getConfigRoot } from '../../lib/utils'
+import {
+  ERROR_LOG_FILE,
+  LOGS_DIRECTORY,
+  MAIN_LOG_FILE,
+  PERMISSION_EVENTS_LOG_FILE,
+  flatLogRelativePath,
+  logDayName,
+  logRelativePathInDay,
+  parseLogFilePath
+} from '../system/log-paths'
+import {
+  MAX_LOG_READ_BYTES,
+  listLogDayFolders,
+  logPathKind,
+  readLogFileTail
+} from '../system/log-reader'
 
 /** Bounded, redacted, read-only app diagnostics for an explicit @cio-utility turn. */
 
@@ -15,7 +28,6 @@ const MAX_LOG_ENTRY_LENGTH = 2_000
 const MAX_LOG_ENTRIES = 200
 const MAX_MESSAGES = 120
 const MAX_THREAD_LIST_RESULTS = 20
-const MAX_LOG_BYTES = 1_000_000
 const MAX_QUERY_ROWS = 200
 const MAX_QUERY_VALUE_LENGTH = 2_000
 const MAX_QUERY_SQL_LENGTH = 4_000
@@ -23,7 +35,7 @@ const MAX_QUERY_PARAMS = 32
 const MAX_SCHEMA_TABLES = 80
 
 /** Log files an agent may inspect during an explicit diagnostics turn. */
-const READABLE_LOG_FILES = ['logs/main.jsonl', 'logs/error.log', 'logs/permission-events.jsonl']
+const READABLE_LOG_FILES = [MAIN_LOG_FILE, ERROR_LOG_FILE, PERMISSION_EVENTS_LOG_FILE]
 
 /** Schema PRAGMA statements an agent may run to learn the app schema. */
 const READABLE_PRAGMAS = new Set([
@@ -321,34 +333,38 @@ export class CioDiagnosticsService {
       .filter((message): message is DiagnosticMessage => message !== null)
   }
 
-  /** Read recent entries from one allow-listed log file. */
+  /**
+   * Read recent entries from one allow-listed log file of one day folder.
+   *
+   * `file` may be a bare name (the current day), a day-qualified name
+   * (`logs/2026-09-23/error.log`), or the pre-split flat path of an install
+   * that predates the day layout. Reading outside today is explicit on purpose:
+   * when the requested day has no folder the error names the days that exist,
+   * so an agent never has to guess what is on disk.
+   */
   async readLog(
     file: string,
     options: { level?: string; limit?: number } = {}
   ): Promise<DiagnosticLogResult> {
-    const normalized = `logs/${file.replace(/^logs\//u, '').replace(/^\/+/u, '')}`
-    if (!READABLE_LOG_FILES.includes(normalized)) {
-      throw new Error(`Log file not readable: ${file}. Allowed: ${READABLE_LOG_FILES.join(', ')}`)
+    const parsed = parseLogFilePath(file)
+    if (!parsed || !READABLE_LOG_FILES.includes(parsed.fileName)) {
+      throw new Error(
+        `Log file not readable: ${file}. Allowed: ${READABLE_LOG_FILES.map((name) => `logs/<YYYY-MM-DD>/${name}`).join(', ')}`
+      )
     }
     const boundedLimit = Math.max(1, Math.min(MAX_LOG_ENTRIES, Math.trunc(options.limit ?? 100)))
-    let raw: string
-    try {
-      raw = await readFile(join(getConfigRoot(), normalized), 'utf-8')
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return { file: normalized, entries: [], truncated: false }
-      }
-      throw error
-    }
+    const relativePath = await this.resolveReadableLogPath(parsed.day, parsed.fileName)
+    const read = await readLogFileTail(relativePath)
+    if (!read) return { file: relativePath, entries: [], truncated: false }
     // Only the tail is ever needed for debugging; cap the parse window.
-    const tail = raw.length > MAX_LOG_BYTES ? raw.slice(-MAX_LOG_BYTES) : raw
-    if (normalized.endsWith('.jsonl')) {
+    const tail = read.content
+    if (relativePath.endsWith('.jsonl')) {
       let entries: DiagnosticLogEntry[] = []
       for (const line of tail.split(/\r?\n/u)) {
         if (!line.trim()) continue
         try {
-          const parsed: unknown = JSON.parse(line)
-          const entry = summarizeJsonLogRecord(normalized, parsed)
+          const parsedLine: unknown = JSON.parse(line)
+          const entry = summarizeJsonLogRecord(relativePath, parsedLine)
           if (entry) entries.push(entry)
         } catch {
           // A partial final append must not break the remaining entries.
@@ -359,21 +375,46 @@ export class CioDiagnosticsService {
         entries = entries.filter((entry) => entry.level === level)
       }
       return {
-        file: normalized,
+        file: relativePath,
         entries: entries.slice(-boundedLimit),
-        truncated: raw.length > MAX_LOG_BYTES
+        truncated: read.bytes > MAX_LOG_READ_BYTES
       }
     }
-    let lines = summarizePlainTextLog(normalized, tail)
+    let lines = summarizePlainTextLog(relativePath, tail)
     if (options.level) {
       const level = options.level.toLocaleLowerCase()
       lines = lines.filter((line) => (line.message.match(/\[(\w+)\]/u)?.[1] ?? '') === level)
     }
     return {
-      file: normalized,
+      file: relativePath,
       entries: lines.slice(-boundedLimit),
-      truncated: raw.length > MAX_LOG_BYTES
+      truncated: read.bytes > MAX_LOG_READ_BYTES
     }
+  }
+
+  /**
+   * Turn a requested day (or none, meaning today) into a path that exists.
+   * A bare file name falls back to the pre-split flat file when today's folder
+   * has not been written yet; an explicit day that has no folder fails loudly
+   * with the days that do exist. A day folder that exists without this sink in
+   * it is a legitimate empty result, not an error.
+   */
+  private async resolveReadableLogPath(day: string | null, fileName: string): Promise<string> {
+    if (day === null) {
+      const today = logRelativePathInDay(logDayName(), fileName)
+      if ((await logPathKind(today)) === 'file') return today
+      const legacy = flatLogRelativePath(fileName)
+      return (await logPathKind(legacy)) === 'file' ? legacy : today
+    }
+    const requested = logRelativePathInDay(day, fileName)
+    if ((await logPathKind(requested)) === 'file') return requested
+    if ((await logPathKind(`${LOGS_DIRECTORY}/${day}`)) === 'directory') return requested
+    const days = await listLogDayFolders()
+    throw new Error(
+      days.length === 0
+        ? `No logs for ${day}: no day folders exist under logs/ yet.`
+        : `No logs for ${day}. Days on disk: ${days.join(', ')}`
+    )
   }
 
   /**

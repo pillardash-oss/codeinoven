@@ -351,6 +351,7 @@ Accessibility is part of the design system, not an afterthought:
 
 - `console.*` is **forbidden** anywhere in the codebase.
 - Use the `Logger` class (`src/main/system/logger.ts`). Dev-only output goes through `Logger.dev`.
+- **Durable logs are partitioned by local day.** Every sink lives in `logs/<YYYY-MM-DD>/` under the config root (`logs/2026-09-24/main.jsonl`), so one incident reads one folder instead of one ever-growing file. Build the path through `dailyLogRelativePath` in `src/main/system/log-paths.ts` on every append   never hardcode a flat `logs/<file>` path in a writer, and never resolve a day once at startup. Readers go through `src/main/system/log-reader.ts` (bounded day listing plus a tail-capped read) and still understand a pre-split flat `logs/<file>` path.
 
 ### 4.3 Verification commands (scoped, never repo-wide)
 

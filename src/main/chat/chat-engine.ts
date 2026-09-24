@@ -8,6 +8,11 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { Logger } from '../system/logger'
+import {
+  DRIVER_EVENTS_LOG_FILE,
+  PERMISSION_EVENTS_LOG_FILE,
+  dailyLogRelativePath
+} from '../system/log-paths'
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
 import {
@@ -21401,7 +21406,7 @@ export class ChatEngine {
 
     try {
       await this.storage.appendRaw(
-        'logs/driver-events.jsonl',
+        dailyLogRelativePath(DRIVER_EVENTS_LOG_FILE),
         `${JSON.stringify({
           timestamp: Date.now(),
           eventType: event.type,
@@ -22582,7 +22587,7 @@ export class ChatEngine {
   ): Promise<void> {
     try {
       await this.storage.appendRaw(
-        'logs/permission-events.jsonl',
+        dailyLogRelativePath(PERMISSION_EVENTS_LOG_FILE),
         `${JSON.stringify({
           requestId: pending.request.id,
           sessionId: pending.request.sessionId,

@@ -49,6 +49,7 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
+import { UTILITY_EVENTS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
 import type { AgentSecretResolution } from './agent-secret-service'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
@@ -1653,7 +1654,7 @@ export class UtilityOrchestrationService {
     details: Record<string, unknown>
   ): Promise<void> {
     await this.storage.appendRaw(
-      'logs/utility-events.jsonl',
+      dailyLogRelativePath(UTILITY_EVENTS_LOG_FILE),
       `${JSON.stringify({
         timestamp: Date.now(),
         action,

@@ -230,7 +230,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -264,7 +264,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         file: {
           type: 'string',
           description:
-            'For read_log: one of logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.'
+            'For read_log: main.jsonl, error.log, or permission-events.jsonl for the current day, or a day-qualified path such as logs/2026-09-23/error.log. Logs are split into one folder per local day.'
         },
         table: {
           type: 'string',

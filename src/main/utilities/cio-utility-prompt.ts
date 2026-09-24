@@ -18,7 +18,7 @@ const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
  * Versioned application-owned setup knowledge. This is deliberately source code rather
  * than a discoverable skill so its API contract cannot drift independently of the app.
  */
-export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 8)
+export const CIO_UTILITY_SETUP_PROMPT = `CodeInOven utility contract (version 9)
 
 The user explicitly invoked @cio-utility. You work in two roles, resolved from
 the user's request:
@@ -70,8 +70,13 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
 - search_threads: {"action":"search_threads","query":"<title substring>"}
   Lists up to 20 matching threads across all projects.
 - read_log: {"action":"read_log","file":"logs/error.log","level":"error","limit":100}
-  Allowed files: logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.
-  Returns bounded, redacted recent entries. Start with error.log, then main.jsonl.
+  Logs are split into one folder per local day. A bare file name reads today's
+  folder (logs/<YYYY-MM-DD>/<file>); pass the day explicitly to read an earlier
+  one, e.g. logs/2026-09-23/error.log. Allowed files: main.jsonl, error.log,
+  permission-events.jsonl. A day with no folder on disk fails with the list of
+  days that exist, so never guess a date twice. Returns bounded, redacted recent
+  entries. Start with error.log, then main.jsonl, and read the previous day when
+  the incident predates the current folder.
 - list_schema: {"action":"list_schema"} or {"action":"list_schema","table":"threads"}
   Lists app SQLite tables with their columns, types, and primary keys. Pass
   table to narrow the report by exact name or substring.
