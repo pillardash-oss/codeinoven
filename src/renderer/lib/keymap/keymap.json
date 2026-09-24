@@ -62,6 +62,34 @@
           "scenario": "Anywhere in the app."
         },
         {
+          "id": "nav-history-back",
+          "keys": ["mod", "[", "alt", "arrowleft"],
+          "label": "Go back",
+          "description": "Navigates to the previous view or location, mirroring the header's back button. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-history-forward",
+          "keys": ["mod", "]", "alt", "arrowright"],
+          "label": "Go forward",
+          "description": "Navigates to the next view or location, mirroring the header's forward button. Cmd+] on macOS, Alt+Right on Windows and Linux.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-settings-back",
+          "keys": ["escape"],
+          "label": "Leave Settings",
+          "description": "Closes the Settings page and returns to the view you came from. Escape is ignored while a modal, palette, or the settings search is open.",
+          "scenario": "Settings view open."
+        },
+        {
+          "id": "nav-find",
+          "keys": ["mod", "f"],
+          "label": "Find in focused surface",
+          "description": "Opens find in whatever surface is focused: the file tree filter, the file editor, the git panel, the spec studio, deployment logs, or the conversation.",
+          "scenario": "Anywhere in the app."
+        },
+        {
           "id": "nav-new-project",
           "keys": ["mod", "shift", "n"],
           "label": "New project",

@@ -11,6 +11,7 @@
 
 import { isOverlayOpen } from '$lib/overlay-close.svelte'
 import { isMacPlatform } from '$lib/shortcut-display'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { getVoiceRecordingShortcut } from '$lib/speech/voice-shortcut'
 import { focusVisibleComposer } from './composer-focus-registry'
 import { PrimaryModifierTapDetector } from './primary-modifier-tap'
@@ -22,6 +23,12 @@ export function initComposerFocusShortcut(): () => void {
   })
 
   const onKeydown = (event: KeyboardEvent): void => {
+    // The gesture is owned by the `chat-focus-composer` binding: a user who
+    // unbinds or remaps it disables the double-tap without a reload.
+    if (!keymapState.isDoubleModifierShortcut('chat-focus-composer')) {
+      detector.reset()
+      return
+    }
     if (!detector.handleKeydown(event)) return
     // A modal surface (modal, sheet, palette, media preview, full screen
     // browser or terminal) runs its own focus trap, so focus must not be yanked

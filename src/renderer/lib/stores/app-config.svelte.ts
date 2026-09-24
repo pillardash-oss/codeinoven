@@ -1,5 +1,6 @@
 import { DEFAULT_IN_APP_NOTIFICATION_SOUND } from '$shared/types'
 import type { AppConfig, GitPullPreference, InAppNotificationSoundSettings } from '$shared/types'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
 const DEFAULT_MAX_DIFF_LINES = 100
@@ -86,6 +87,9 @@ export const appConfigState = {
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
+    // The persisted keybindings overwrite the registry defaults, so every
+    // handler that asks keymapState for an id picks up the user's binding.
+    keymapState.setOverrides(config.keybindings)
     applyAppearance()
   }
 }

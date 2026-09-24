@@ -23,7 +23,7 @@
     SquareTerminal,
     StickyNote
   } from '@lucide/svelte'
-  import { keymapKeys } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
@@ -1855,7 +1855,7 @@
                 icon: Plus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
-                shortcut: keymapKeys('nav-new-thread'),
+                shortcut: keymapState.keysFor('nav-new-thread'),
                 run: () => void createThreadInProject(activeProject)
               } satisfies ViewActionItem
             ]
@@ -1886,7 +1886,7 @@
           icon: SquarePen,
           ariaLabel: 'New chat',
           title: 'New chat',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: startNewChat
         }
       ]
@@ -1915,7 +1915,7 @@
           icon: Plus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: () => newThreadInScopeContext()
         },
         {
@@ -1951,7 +1951,7 @@
           icon: Clock1,
           ariaLabel: 'New task',
           title: 'New task',
-          shortcut: keymapKeys('assistant-new-task'),
+          shortcut: keymapState.keysFor('assistant-new-task'),
           run: () => void createAssistantTaskFromShortcut()
         }
       ]

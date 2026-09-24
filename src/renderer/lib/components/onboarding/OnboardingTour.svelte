@@ -18,6 +18,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     step: number
@@ -197,7 +198,7 @@
 <svelte:window
   onresize={measureTarget}
   onkeydown={(event: KeyboardEvent) => {
-    if (event.key === 'Escape') onFinish()
+    if (keymapState.matches('ui-close-modal', event)) onFinish()
   }}
 />
 

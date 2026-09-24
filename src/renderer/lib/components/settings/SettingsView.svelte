@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import {
     FONT_FAMILY_OPTIONS,
@@ -189,7 +190,7 @@
   }
 
   const escHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+    if (keymapState.matches('nav-settings-back', e)) {
       // The settings spotlight owns Escape while it is open, and so does any
       // open overlay (modal, palette): Escape closes only the topmost surface,
       // never the settings page underneath. bits-ui palettes preventDefault the

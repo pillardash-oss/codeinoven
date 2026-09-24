@@ -39,6 +39,7 @@
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
@@ -1020,7 +1021,7 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (keymapState.matches('ui-modal-primary-action', e)) {
       // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
       // in focus; when no modal claims the chord, composers (chat send, git
@@ -1035,7 +1036,7 @@
         return
       }
     }
-    if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
+    if (keymapState.matches('nav-close-surface', e)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
       // the key still reaches the renderer (the main process preventDefaults
@@ -1049,13 +1050,13 @@
       handleCloseShortcut()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    if (keymapState.matches('nav-find', e)) {
       e.preventDefault()
       if (e.repeat) return
       handleFind()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+    if (keymapState.matches('nav-toggle-right-sidebar', e)) {
       // Cmd/Ctrl+Shift+S toggles the right sidebar. Which panel it shows is
       // decided inside Workspace, which owns what the on-screen thread actually
       // offers (file tree, git, terminal, sources...), so the chord only
@@ -1067,7 +1068,7 @@
       workspaceState.requestToggleContextSidebar()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
+    if (keymapState.matches('nav-toggle-left-sidebar', e)) {
       // On the plain workspace (no studio, no conflict being resolved, no dirty
       // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
       // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
@@ -1093,13 +1094,13 @@
       sidebarState.toggle()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', e)) {
       e.preventDefault()
       if (e.repeat) return
       toggleCommandPalette()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    if (keymapState.matches('nav-settings', e)) {
       e.preventDefault()
       navigate('settings')
     }
@@ -1108,16 +1109,15 @@
     // remap side buttons to on macOS, since there's no native OS-level
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
-    if (
-      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
-    ) {
+    if (keymapState.matches('nav-history-back', e) || keymapState.matches('nav-history-forward', e)) {
       e.preventDefault()
       if (e.repeat) return
-      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      if (keymapState.matches('nav-history-back', e)) void goBack()
       else void goForward()
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+    if (
+      keymapState.matches('nav-new-project', e) || keymapState.matches('assistant-new-routine', e)
+    ) {
       e.preventDefault()
       if (e.repeat) return
       // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
@@ -1132,7 +1132,7 @@
       openNewProjectSpotlight()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+    if (keymapState.matches('nav-new-thread', e) || keymapState.matches('assistant-new-task', e)) {
       e.preventDefault()
       if (e.repeat) return
 
