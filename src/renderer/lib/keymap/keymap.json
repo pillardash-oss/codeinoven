@@ -41,6 +41,13 @@
           "scenario": "Anywhere in the app."
         },
         {
+          "id": "nav-assistant",
+          "keys": ["mod", "9"],
+          "label": "Assistant view",
+          "description": "Opens the Assistant view with its routines and tasks.",
+          "scenario": "Anywhere in the app."
+        },
+        {
           "id": "nav-settings",
           "keys": ["mod", ","],
           "label": "Settings",

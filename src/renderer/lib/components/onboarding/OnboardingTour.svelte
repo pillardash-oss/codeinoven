@@ -53,7 +53,7 @@
       selector: '[data-onboarding="view-switcher"]',
       eyebrow: 'View switcher',
       title: 'One dropdown, every view',
-      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), and Chats is for work that does not need a project (${viewKey('0')}).`
+      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), Chats is for work that does not need a project (${viewKey('0')}), and Assistant holds routines and tasks (${viewKey('9')}).`
     },
     {
       step: 2,

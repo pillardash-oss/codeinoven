@@ -134,7 +134,7 @@
    *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
    *  Cmd/Ctrl+0-4 switch
    *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
-   *  4 scope. */
+   *  4 scope, 9 assistant. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.repeat || event.isComposing) return
     const modifier = event.metaKey || event.ctrlKey
@@ -146,7 +146,7 @@
       threadActionsMenu.startDelete()
       return
     }
-    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4' || key === '5') {
+    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4' || key === '9') {
       event.preventDefault()
       if (key === '0') void navigation.navigateToView('chats')
       else if (key === '1') void navigation.navigateToView('projects')

@@ -247,7 +247,7 @@ export class AppHeaderNavigationController {
         id: 'assistant',
         label: 'Assistant',
         icon: BotMessageSquare,
-        keys: ['mod', '5'],
+        keys: ['mod', '9'],
         select: () => void this.onPrimaryNavClick('assistant')
       }
     ]
