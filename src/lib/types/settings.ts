@@ -179,6 +179,27 @@ export interface MemoryImportPreview {
   entries: MemoryEntry[]
 }
 
+/**
+ * Which in-app (toast) alerts play a sound while the app is focused.
+ *
+ * While the app is in the background the same notifications deliver an OS card
+ * and the louder off-app alert, which is not configurable. When the app is in
+ * front the user only sees the toast, so this quieter alert announces the exact
+ * same events. The two groups are independent: a user may keep just one.
+ */
+export interface InAppNotificationSoundSettings {
+  /** Agent finished, chat finished, or a specification is ready to review. */
+  success: boolean
+  /** An agent needs attention or a run failed. */
+  issue: boolean
+}
+
+/** Both in-app alert groups on: the quieter alert is an attention cue, not a chime. */
+export const DEFAULT_IN_APP_NOTIFICATION_SOUND: InAppNotificationSoundSettings = {
+  success: true,
+  issue: true
+}
+
 export interface AppConfig {
   theme: ThemePreference
   /** Font family id used across the app UI. */
@@ -245,6 +266,8 @@ export interface AppConfig {
   maxConflictFileBytes: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
+  /** Quieter in-app alert played with the toast while the app is focused. */
+  inAppNotificationSound: InAppNotificationSoundSettings
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
   sound: import('../speech/types').SpeechSettings
 }
@@ -289,6 +312,7 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'inAppNotificationSound'
     | 'sound'
   >
 >

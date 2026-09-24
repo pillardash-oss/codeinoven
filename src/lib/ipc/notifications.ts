@@ -42,6 +42,38 @@ export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention'
 /** Which bundled alert the renderer should play for a notification. */
 export type NotificationSoundKind = 'default' | 'attention'
 
+/**
+ * Which surface raised an audible alert:
+ *
+ * - `system`   the app is in the background, so the OS card carries the
+ *   notification and the full-volume alert announces it.
+ * - `in-app`   the app is focused, so the user only sees the sonner toast and
+ *   the quieter in-app alert announces the exact same event.
+ *
+ * The two are mutually exclusive per notification, so a single burst can never
+ * play both.
+ */
+export type NotificationSoundSurface = 'system' | 'in-app'
+
+/**
+ * One audible alert request. The main process is the single producer (it owns
+ * the burst dedup window and the focus decision) and emits at most one per
+ * notification burst.
+ */
+export interface NotificationSoundRequest {
+  kind: NotificationSoundKind
+  surface: NotificationSoundSurface
+}
+
+/**
+ * Which in-app alert group a sound kind belongs to. Success covers everything
+ * that finished or is ready to review; an attention alert and a failure both
+ * mean the user has to act, so they share the issue alert.
+ */
+export function inAppSoundGroup(kind: NotificationSoundKind): 'success' | 'issue' {
+  return kind === 'attention' ? 'issue' : 'success'
+}
+
 /** Where a notification originated: a project thread, the global chat (inbox)
  *  or a temporary (side) chat piped through a parent thread. */
 export type NotificationSource = 'project' | 'chat' | 'temporary-chat'

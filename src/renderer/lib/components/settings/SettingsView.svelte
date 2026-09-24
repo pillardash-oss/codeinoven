@@ -440,6 +440,14 @@
     void invoke('notification:openSettings')
   }
 
+  /** Toggle one in-app alert group; the two groups are independent. */
+  function setInAppNotificationSound(group: 'success' | 'issue', enabled: boolean): void {
+    const next = { ...config.inAppNotificationSound }
+    if (group === 'success') next.success = enabled
+    else next.issue = enabled
+    void updateConfig({ inAppNotificationSound: next })
+  }
+
   onMount(() => {
     void refreshNotificationPermission()
     // The main process re-verifies a 'denied' state on every permission query
@@ -763,6 +771,44 @@
                 {/if}
                 Test notification
               </button>
+            </div>
+
+            <div class="mt-4 border-t pt-4">
+              <p class="text-sm font-medium">In-app notification sounds</p>
+              <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                A softer alert with the in-app toast while the app is in front. The off-app alert
+                for the same event is unchanged.
+              </p>
+              <div class="mt-3 space-y-3">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Success</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent finished, a chat replied, or a specification is ready to review
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.success}
+                    onchange={(checked) => setInAppNotificationSound('success', checked)}
+                    aria-label="Toggle the in-app notification sound for success notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Needs attention or failed</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent is waiting on you or a run stopped with an error
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.issue}
+                    onchange={(checked) => setInAppNotificationSound('issue', checked)}
+                    aria-label="Toggle the in-app notification sound for attention and error notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 

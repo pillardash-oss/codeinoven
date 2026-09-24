@@ -1,6 +1,10 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES, type AppConfig } from '$shared/types'
+import {
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  type AppConfig
+} from '$shared/types'
 
 /** Baseline configuration used until the main process returns the persisted one. */
 export const defaultConfig: AppConfig = {
@@ -33,5 +37,6 @@ export const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }

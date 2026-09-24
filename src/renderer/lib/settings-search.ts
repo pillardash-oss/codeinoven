@@ -191,8 +191,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-notifications',
     title: 'Notifications',
-    description: 'System notification alerts and permission status.',
-    keywords: ['alerts', 'permission', 'test'],
+    description: 'System notification alerts, in-app notification sounds, and permission status.',
+    keywords: ['alerts', 'permission', 'test', 'sound', 'in-app', 'toast'],
     icon: SlidersHorizontal
   },
   {

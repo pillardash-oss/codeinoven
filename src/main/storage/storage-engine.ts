@@ -13,7 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -76,6 +76,7 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -168,6 +169,10 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
+      },
+      inAppNotificationSound: {
+        ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
+        ...(config?.inAppNotificationSound ?? {})
       },
       sound: {
         ...DEFAULT_CONFIG.sound,

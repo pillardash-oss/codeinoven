@@ -66,6 +66,7 @@ function defaultConfig(): AppConfig {
     slashCommandMode: 'app',
     preferredEditor: 'system',
     openLocalhostInCioBrowser: true,
+    inAppNotificationSound: { success: true, issue: true },
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
     auxiliaryAgents: {},

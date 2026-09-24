@@ -135,6 +135,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxDiffLines',
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
+  'inAppNotificationSound',
   'sound'
 ])
 
@@ -448,6 +449,20 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
     }
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
+  }
+
+  if ('inAppNotificationSound' in value) {
+    const sound = value.inAppNotificationSound
+    if (!isRecord(sound)) throw new TypeError('In-app notification sound must be an object')
+    for (const field of Object.keys(sound)) {
+      if (field !== 'success' && field !== 'issue') {
+        throw new TypeError(`Unsupported in-app notification sound field: ${field}`)
+      }
+    }
+    if (typeof sound.success !== 'boolean' || typeof sound.issue !== 'boolean') {
+      throw new TypeError('In-app notification sound toggles must be booleans')
+    }
+    patch.inAppNotificationSound = { success: sound.success, issue: sound.issue }
   }
 
   if ('sound' in value) {
