@@ -226,6 +226,16 @@ function parseCodexCitation(attributes: string): ParsedFileCitation | null {
   return result
 }
 
+/** A path names something only when at least one of its segments is a real
+ *  name. A separator-only candidate (`/`, `//`, `./`, `.`) normalizes to a
+ *  root that resolves to the project directory, and linking it turned prose
+ *  slashes into citation links, so it is not a citation at all. */
+function hasNamedSegment(path: string): boolean {
+  return path
+    .split('/')
+    .some((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+}
+
 function parseFileCitation(value: string, explicitLink = false): ParsedFileCitation | null {
   let target = value.trim()
   if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1)
@@ -259,13 +269,14 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
   }
 
   const path = normalizeCitationPath(target)
+  if (!path || !hasNamedSegment(path)) return null
   const pathTail = path.split('/').at(-1) ?? ''
   const recognizablePath =
     explicitLink ||
     path.includes('/') ||
     path.startsWith('.') ||
     new RegExp(`\\.${FILE_EXT_PATTERN}$`, 'iu').test(pathTail)
-  if (!path || !recognizablePath) return null
+  if (!recognizablePath) return null
   return { path, line, lineEnd }
 }
 
@@ -408,17 +419,44 @@ function linkifyLine(line: string, isClickable: (path: string) => boolean): stri
     }
   )
 
-  const withSpans = withLinks.replace(BACKTICK_CANDIDATE, (match, value: string) => {
-    const parsed = parseFileCitation(value)
-    if (!parsed || !isClickable(parsed.path)) return match
-    return `[\`${value}\`](${citationHref(parsed)})`
-  })
+  // Pair backticks by splitting once, left to right. Scanning them with a
+  // regex whose opening backtick may not be preceded by `[`, which was there to
+  // protect a markdown link label, desynchronizes the pairing as soon as a line
+  // holds a backticked label such as `[\`path\`](url)`. Every later span is then
+  // read from the wrong backtick: the text between two labels looked like a path
+  // and prose slashes became `[/](#opencode-source:file?path=%2F)` links. A
+  // split cannot drift, and a label span is recognized from its neighbors.
+  const segments = withLinks.split('`')
 
-  return splitAroundInlineCode(withSpans)
-    .map((segment, index) =>
-      index % 2 === 1 ? segment : linkifyProseSegment(segment, isClickable)
-    )
-    .join('`')
+  const out = segments.map((segment, index) =>
+    index % 2 === 0 ? linkifyProseSegment(segment, isClickable) : segment
+  )
+
+  for (let index = 1; index < segments.length; index += 2) {
+    const payload = segments[index] ?? ''
+    // A span that is the label of a markdown link is never rewritten from the
+    // inside; the link pass already handled its target.
+    if (isInlineCodeLinkLabel(segments, index)) continue
+    const parsed = parseFileCitation(payload)
+    if (!parsed || !isClickable(parsed.path)) continue
+    const before = out[index - 1]
+    const after = out[index + 1]
+    if (before === undefined || after === undefined) continue
+    // The span's own backticks stay as the link label, so the opening `[` goes
+    // on the segment before and the target on the segment after.
+    out[index - 1] = `${before}[`
+    out[index + 1] = `](${citationHref(parsed)})${after}`
+  }
+
+  return out.join('`')
+}
+
+/** Whether the inline-code span at `index` is the label of a markdown link
+ *  (`[\`path\`](target)`), read from the segments around it. */
+function isInlineCodeLinkLabel(segments: string[], index: number): boolean {
+  const before = segments[index - 1] ?? ''
+  const after = segments[index + 1] ?? ''
+  return before.endsWith('[') && after.startsWith('](')
 }
 
 /** Linkify the parts of a line that sit outside inline code. */
