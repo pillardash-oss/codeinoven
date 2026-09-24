@@ -29,7 +29,6 @@
     pullStrategyError: string
     syncMainOpen: boolean
     syncDirection: GitSyncDirection
-    syncMainError: string
     integrationOpen: boolean
     conflictState: 'merge' | 'rebase' | 'none'
     conflicted: GitFileChange[]
@@ -102,7 +101,6 @@
     pullStrategyError,
     syncMainOpen,
     syncDirection,
-    syncMainError,
     integrationOpen,
     conflictState,
     conflicted,
@@ -401,24 +399,6 @@
             {@render integrationActions()}
           </div>
         </div>
-      {:else if syncMainError}
-        <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-          <p class="text-[0.625rem] font-semibold text-danger">
-            {syncDirection === 'from'
-              ? 'Main could not be synced'
-              : 'This worktree could not be sent to main'}
-          </p>
-          <p
-            class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
-          >
-            {syncMainError}
-          </p>
-          <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-            {syncDirection === 'from'
-              ? 'Choose another strategy below, or cancel without changing this worktree further.'
-              : 'Choose another strategy below, or cancel without changing anything further.'}
-          </p>
-        </div>
       {/if}
       {#if !integrationOpen}
         <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
@@ -449,6 +429,10 @@
               main has not diverged.
             </p>
           {/if}
+          <p>
+            The run reports in its own panel, so you can keep working while it trades commits with
+            main. A refusal or a conflict is answered there.
+          </p>
         </div>
       {/if}
     </div>
@@ -467,7 +451,7 @@
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync')}
-            onclick={() => void performSyncMain(syncDirection, 'ff-only')}
+            onclick={() => performSyncMain(syncDirection, 'ff-only')}
           >
             Fast-forward only
           </button>
@@ -475,7 +459,7 @@
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync')}
-            onclick={() => void performSyncMain(syncDirection, 'rebase')}
+            onclick={() => performSyncMain(syncDirection, 'rebase')}
           >
             Rebase
           </button>
@@ -484,7 +468,7 @@
             class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             data-modal-primary
             disabled={gitState.isBusy('sync')}
-            onclick={() => void performSyncMain(syncDirection, 'merge')}
+            onclick={() => performSyncMain(syncDirection, 'merge')}
           >
             Merge
           </button>

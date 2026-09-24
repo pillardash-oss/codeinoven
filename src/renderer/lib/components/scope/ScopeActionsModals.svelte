@@ -189,7 +189,7 @@
     initialDirection={actions.syncTarget.direction}
     initialPeer={{ kind: 'root' }}
     onClose={() => (actions.syncTarget = null)}
-    onDone={() => (actions.syncTarget = null)}
+    onStarted={() => (actions.syncTarget = null)}
   />
 {/if}
 

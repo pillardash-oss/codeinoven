@@ -97,7 +97,7 @@
   import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
   import GitSyncButton from './GitSyncButton.svelte'
   import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
-  import { reportSyncResult } from './git-sync-copy'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
@@ -184,7 +184,6 @@
    * user is not looking at).
    */
   let syncMainOpen = $state(false)
-  let syncMainError = $state('')
   /** Which direction the chooser and its actions apply to. */
   let syncDirection = $state<GitSyncDirection>('from')
   /**
@@ -1453,7 +1452,6 @@
     pullStrategyOpen = false
     pullStrategyError = ''
     syncMainOpen = false
-    syncMainError = ''
     showIntegrateModal = false
     showStashModal = false
     stashMessage = ''
@@ -1949,63 +1947,45 @@
   /**
    * Sync this worktree with the project's main worktree branch, in either
    * direction. The strategy chooser follows the same `ask` preference as the
-   * Pull button; folding work into main always confirms first, because it
-   * mutates a branch the user is not looking at and pushes nothing. A
-   * conflicted integration is handed to the existing conflict UI instead of
-   * retrying.
+   * Pull button; folding work into main always asks first, because it mutates a
+   * branch the user is not looking at and pushes nothing.
+   *
+   * The run itself leaves as a background job (`gitSyncJobs`): a refusal or a
+   * conflicted integration is answered in the docked panel, never in a modal the
+   * user has to dismiss, and a run they started still reports after they have
+   * navigated away.
    */
-  async function performSyncMain(
-    direction: GitSyncDirection,
-    strategy: GitPullStrategy
-  ): Promise<void> {
-    // "Main" is the project root, so the peer is named rather than chosen.
-    const result = await gitState.syncWith(projectId, scopeBucketId, {
-      direction,
-      peer: { kind: 'root' },
-      strategy
-    })
-    // The returned result is this operation's own answer, so it alone decides
-    // whether the chooser closes. `gitState.error` is shared with every other
-    // git read the panel runs, so a concurrent refresh can set it while the sync
-    // actually landed; keying the modal on it reopened the dialog with the
-    // strategy buttons replaced, leaving the user staring at a merge that had
-    // already happened.
-    if (!result) {
-      syncMainError = gitState.error ?? 'The sync could not be completed'
-      gitState.error = null
-      syncDirection = direction
-      syncMainOpen = true
-      // A refusal usually names a state this panel has not read yet   a rebase
-      // the platform, an agent or a terminal left stopped is not in the status
-      // the modal was rendered from. Re-reading it lets the modal show the state
-      // and its strategies instead of a list of strategies that cannot run.
-      void refreshStatus()
-      return
-    }
+  function performSyncMain(direction: GitSyncDirection, strategy: GitPullStrategy): void {
     syncMainOpen = false
-    syncMainError = ''
-    void refreshStatus()
-    reportSyncResult(result)
+    // "Main" is the project root, so the peer is named rather than chosen.
+    gitSyncJobs.start({
+      projectId,
+      scopeBucketId,
+      direction,
+      strategy,
+      peer: { kind: 'root' },
+      peerLabel: 'the project root',
+      // A sync adds commits to this checkout's history, which the panel keeps
+      // rendered client-side, so the list is re-read when the run settles.
+      onSettled: () => void refreshStatus()
+    })
   }
 
   function openSyncMain(direction: GitSyncDirection): void {
     syncDirection = direction
-    syncMainError = ''
     syncMainOpen = true
   }
 
-  async function syncMainAction(direction: GitSyncDirection): Promise<void> {
+  function syncMainAction(direction: GitSyncDirection): void {
     if (direction === 'to' || appConfigState.defaultPullStrategy === 'ask') {
       openSyncMain(direction)
       return
     }
-    await performSyncMain(direction, appConfigState.defaultPullStrategy)
+    performSyncMain(direction, appConfigState.defaultPullStrategy)
   }
 
   function closeSyncMain(): void {
-    if (gitState.isBusy('sync')) return
     syncMainOpen = false
-    syncMainError = ''
   }
 
   /** The peer chooser has to be opened: the other end is the whole choice. */
@@ -2015,13 +1995,12 @@
   }
 
   function closeSyncPeer(): void {
-    if (gitState.isBusy('sync')) return
     syncPeerOpen = false
   }
 
-  function syncPeerDone(): void {
+  /** The chooser is gone the moment a strategy is chosen: the run has its own panel. */
+  function syncPeerStarted(): void {
     syncPeerOpen = false
-    void refreshStatus()
   }
 
   async function performPush(remote: { name: string; url: string }): Promise<void> {
@@ -2188,7 +2167,6 @@
     // Acting from the sync modal closes it first, so the merge's own controls are
     // never behind an overlay.
     syncMainOpen = false
-    syncMainError = ''
     mergeTitle = ''
     mergeDescription = ''
     completeMergeOpen = true
@@ -2286,7 +2264,6 @@
 
   function requestAbortConflict(): void {
     syncMainOpen = false
-    syncMainError = ''
     abortConfirmOpen = true
   }
 
@@ -2306,7 +2283,6 @@
    */
   async function runRebaseAction(action: GitRebaseAction): Promise<void> {
     syncMainOpen = false
-    syncMainError = ''
     rebaseActionRunning = action
     try {
       await gitState.rebaseAction(projectId, action)
@@ -3868,7 +3844,6 @@
     {pullStrategyError}
     {syncMainOpen}
     {syncDirection}
-    {syncMainError}
     {integrationOpen}
     {conflictState}
     {conflicted}
@@ -3939,7 +3914,8 @@
     {scopeBucketId}
     initialDirection={syncPeerDirection}
     onClose={closeSyncPeer}
-    onDone={syncPeerDone}
+    onStarted={syncPeerStarted}
+    onSettled={() => void refreshStatus()}
   />
 {/if}
 

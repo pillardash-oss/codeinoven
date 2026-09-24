@@ -2,8 +2,9 @@
  * The vocabulary a background job's panel and dock chip share.
  *
  * Both are presentational: a job owner resolves its own steps into these views
- * and renders them, so the worktree runs and the pull request batches draw the
- * same panel without either one knowing about the other's job shape.
+ * and renders them, so the worktree runs, the pull request batches and the
+ * syncs between checkouts draw the same panel without any one of them knowing
+ * about another's job shape.
  */
 
 /** Where one step of a run sits relative to the run itself. */

@@ -53,6 +53,7 @@
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import type { ActionSelection } from '$lib/actions'
@@ -1467,6 +1468,13 @@
     <!-- Floats above every view so a confirmed batch keeps closing pull requests while the user works. -->
     {#await import('$lib/components/git/PrBatchDockHost.svelte') then { default: PrBatchDockHost }}
       <PrBatchDockHost />
+    {/await}
+  {/if}
+
+  {#if gitSyncJobs.jobs.length}
+    <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
+    {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
+      <GitSyncDockHost />
     {/await}
   {/if}
 

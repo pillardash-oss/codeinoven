@@ -3,12 +3,12 @@
    * One background job as a dockable panel: what it is doing, the steps it goes
    * through, and what it left behind.
    *
-   * Presentational on purpose. Both job owners in the app (the scope worktree runs
-   * and the pull request batches) report progress in their own terms, so each
-   * resolves its own steps into `JobStepView`s and hands them here. That is what
-   * keeps one panel, one footer and one dockable behaviour instead of two copies
-   * that drift: a run that spends minutes in the background is the same experience
-   * whoever started it.
+   * Presentational on purpose. Every job owner in the app (the scope worktree
+   * runs, the pull request batches and the syncs between checkouts) reports
+   * progress in its own terms, so each resolves its own steps into
+   * `JobStepView`s and hands them here. That is what keeps one panel, one footer
+   * and one dockable behaviour instead of three copies that drift: a run that
+   * spends minutes in the background is the same experience whoever started it.
    */
   import { Circle, CircleCheck, Loader2, TriangleAlert } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
