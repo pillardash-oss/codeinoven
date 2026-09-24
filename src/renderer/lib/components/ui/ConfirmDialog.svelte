@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Loader2 } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
-  import Modal from './Modal.svelte'
+  import Modal, { type ModalSize } from './Modal.svelte'
 
   /**
    * The shared confirmation dialog.
@@ -28,6 +28,7 @@
     onConfirm: () => void | Promise<void>
     /** Body copy. The caller owns its own paragraphs and emphasis. */
     children: Snippet
+    size?: ModalSize
     confirmLabel: string
     cancelLabel?: string
     /** Extra emphasis line under the body, e.g. that the action is irreversible. */
@@ -51,6 +52,7 @@
     confirmLabel,
     cancelLabel = 'Cancel',
     note,
+    size,
     busy = false,
     disabled = false,
     variant = 'danger',
@@ -58,7 +60,7 @@
   }: Props = $props()
 </script>
 
-<Modal {open} {title} onClose={onCancel}>
+<Modal {open} {title} onClose={onCancel} {size}>
   <div class="space-y-2 text-sm text-muted">
     {@render children()}
     {#if note}
