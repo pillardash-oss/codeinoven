@@ -38,6 +38,7 @@
   import { projectFilesWorkspace, type ProjectFileTab } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
@@ -502,8 +503,7 @@
 
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if (
-      (event.metaKey || event.ctrlKey) &&
-      event.key.toLowerCase() === 'g' &&
+      keymapState.matches('files-goto-line', event) &&
       activeTab &&
       (activeSession || deletedAtCheckpoint)
     ) {
@@ -515,12 +515,7 @@
       goToLineFocusTrigger += 1
       return
     }
-    if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 's' &&
-      conflictController !== null
-    ) {
+    if (keymapState.matches('files-save', event) && conflictController !== null) {
       // The conflict editor owns the chord while it is mounted, even when there
       // is nothing to save yet: consuming it keeps the press from falling
       // through to the workspace's left-sidebar toggle underneath the user.
@@ -532,9 +527,7 @@
       return
     }
     if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 's' &&
+      keymapState.matches('files-save', event) &&
       activeTab &&
       activeTab.view !== 'diff' &&
       activeSession &&

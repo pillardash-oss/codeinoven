@@ -9,6 +9,7 @@
   import { FolderTree, Search, X } from '@lucide/svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isTypeableKey } from '$lib/components/shared/model-picker-helpers'
   import type { ScopeBucket, ScopeChoice } from '$shared/types'
 
@@ -132,7 +133,7 @@
       focusScopeRow(scopeRowKeys[targetIndex])
       return
     }
-    if (event.key === 'Escape') {
+    if (keymapState.matches('palette-close', event)) {
       event.stopPropagation()
       onClose()
       return
@@ -196,7 +197,7 @@
           focusScopeRow('inherit')
           return
         }
-        if (event.key === 'Escape') {
+        if (keymapState.matches('palette-close', event)) {
           event.stopPropagation()
           onClose()
         }

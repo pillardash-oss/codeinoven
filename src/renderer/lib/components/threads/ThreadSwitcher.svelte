@@ -6,6 +6,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { Project, Thread } from '$shared/types'
 
   interface Props {
@@ -111,7 +112,7 @@
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Tab' && event.ctrlKey) {
+    if (keymapState.matches('thread-switcher', event)) {
       if (threads.length === 0) return
       event.preventDefault()
       event.stopPropagation()

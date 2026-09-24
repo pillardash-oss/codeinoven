@@ -5,6 +5,7 @@
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
   import FileDiffView from '../files/FileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     sections: Array<{ title: string; files: GitFileChange[] }>
@@ -294,7 +295,7 @@
           onToggleDiff(change)
         }}
         onkeydown={(e: KeyboardEvent) => {
-          if (e.key === 'Enter') {
+          if (keymapState.matches('git-toggle-diff', e)) {
             if (change.status === 'conflicted') onResolveConflict?.(change.path)
             else onToggleDiff(change)
           }

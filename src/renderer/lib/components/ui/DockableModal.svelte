@@ -5,6 +5,7 @@
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -296,7 +297,7 @@
     // A docked panel deliberately ignores Escape: the chip is not on view, the
     // user restores the panel from it, and the key stays free for everything
     // else that owns Escape behind the chip.
-    if (!open || minimized || e.key !== 'Escape') return
+    if (!open || minimized || !keymapState.matches('ui-close-modal', e)) return
     if (closable) {
       onClose()
     } else {

@@ -223,7 +223,7 @@
         },
         {
           "id": "chat-mention-accept",
-          "keys": ["tab"],
+          "keys": ["tab", "enter"],
           "label": "Accept mention",
           "description": "Inserts the highlighted mention.",
           "scenario": "While the mention menu is open."
@@ -255,6 +255,48 @@
           "label": "Open notification thread",
           "description": "Navigates to the thread for the highlighted notification.",
           "scenario": "Notifications panel, row focused."
+        },
+        {
+          "id": "chat-mention-close",
+          "keys": ["escape"],
+          "label": "Close mention menu",
+          "description": "Dismisses the @ mention candidate menu without inserting a mention.",
+          "scenario": "While the mention menu is open."
+        },
+        {
+          "id": "chat-slash-close",
+          "keys": ["escape"],
+          "label": "Close slash menu",
+          "description": "Dismisses the slash-command menu without running a command.",
+          "scenario": "While the slash menu is open."
+        },
+        {
+          "id": "chat-selection-popover-close",
+          "keys": ["escape"],
+          "label": "Close selection popover",
+          "description": "Closes the composer's reference selection popover.",
+          "scenario": "While the selection popover is open."
+        },
+        {
+          "id": "chat-start-after-popover-close",
+          "keys": ["escape"],
+          "label": "Close start-after picker",
+          "description": "Closes the composer's start-after picker.",
+          "scenario": "While the start-after popover is open."
+        },
+        {
+          "id": "chat-engineering-close",
+          "keys": ["escape"],
+          "label": "Close Engineering Toolbox",
+          "description": "Closes the Engineering Toolbox and returns focus to the composer.",
+          "scenario": "Engineering Toolbox open."
+        },
+        {
+          "id": "chat-annotation-close",
+          "keys": ["escape"],
+          "label": "Close annotation comment",
+          "description": "Closes the comment editor on a response selection without posting.",
+          "scenario": "Editing a comment on a response selection."
         }
       ]
     },
@@ -271,7 +313,7 @@
         },
         {
           "id": "editor-redo",
-          "keys": ["mod", "shift", "z"],
+          "keys": ["mod", "shift", "z", "ctrl", "y"],
           "label": "Redo",
           "description": "Redoes the last undone edit. Ctrl+Y also works on Windows/Linux.",
           "scenario": "Any rich text editor."
@@ -299,7 +341,7 @@
         },
         {
           "id": "editor-codeblock-newline",
-          "keys": ["enter"],
+          "keys": ["enter", "shift", "enter"],
           "label": "New line in code block",
           "description": "Inserts a new line inside a code block; Enter on the language label focuses the code body.",
           "scenario": "Caret inside a code block."
@@ -317,6 +359,27 @@
           "label": "Unlist list item",
           "description": "Turns the list item back into a paragraph when the caret is at its very start.",
           "scenario": "Caret at the start of a list item."
+        },
+        {
+          "id": "editor-inline-code-close",
+          "keys": ["`"],
+          "label": "Close inline code",
+          "description": "Moves the caret out of an inline code span when a backtick is typed at its end.",
+          "scenario": "Caret at the end of an inline code span."
+        },
+        {
+          "id": "editor-code-fence",
+          "keys": ["enter"],
+          "label": "Materialize code fence",
+          "description": "Turns a paragraph holding a fenced-code marker into a code block.",
+          "scenario": "Caret in a paragraph whose text is a fenced code marker."
+        },
+        {
+          "id": "editor-exit-empty-list",
+          "keys": ["enter"],
+          "label": "Exit empty list item",
+          "description": "Leaves the list when Enter is pressed on an empty list item.",
+          "scenario": "Caret in an empty list item."
         }
       ]
     },
@@ -365,6 +428,13 @@
           "label": "Toggle selection checkbox",
           "description": "Toggles selection for the focused checkbox (files, directories, or select-all sections).",
           "scenario": "Git changes tree / status panel, checkbox focused."
+        },
+        {
+          "id": "git-pr-clear-selection",
+          "keys": ["escape"],
+          "label": "Clear pull request selection",
+          "description": "Clears the selected pull request in the Git panel.",
+          "scenario": "Git pull request list, a request selected."
         }
       ]
     },
@@ -397,8 +467,22 @@
           "id": "studio-resize-sidebar",
           "keys": ["arrowleft", "arrowright"],
           "label": "Resize sidebar",
-          "description": "Resizes the panel by 16px (48px with Shift).",
+          "description": "Resizes the panel by 16px.",
           "scenario": "Studio sidebar or coordinator panel resize handle focused."
+        },
+        {
+          "id": "studio-edit-cancel",
+          "keys": ["escape"],
+          "label": "Cancel inline edit",
+          "description": "Abandons the inline markdown edit and restores the previous text.",
+          "scenario": "Editing a studio markdown field."
+        },
+        {
+          "id": "studio-cancel-annotation",
+          "keys": ["escape"],
+          "label": "Cancel annotation edit",
+          "description": "Clears the pending annotation, closes the open annotation editor, and drops a pending decision action.",
+          "scenario": "Spec or Brainstorm studio with an annotation pending or being edited."
         }
       ]
     },
@@ -415,7 +499,7 @@
         },
         {
           "id": "terminal-word-hop",
-          "keys": ["alt", "arrowleft", "arrowright"],
+          "keys": ["alt", "arrowleft", "arrowright", "ctrl", "arrowleft", "arrowright"],
           "label": "Word backward / forward",
           "description": "Moves the cursor by whole words in plain shells.",
           "scenario": "Terminal focused in a shell prompt (not on the alternate screen)."
@@ -488,6 +572,48 @@
           "label": "Search deployment logs",
           "description": "Opens log search; Escape closes it.",
           "scenario": "Cloud deployment detail view."
+        },
+        {
+          "id": "files-find-close",
+          "keys": ["escape"],
+          "label": "Close find bar",
+          "description": "Closes the find bar without changing the query.",
+          "scenario": "Find bar focused."
+        },
+        {
+          "id": "files-replace-one",
+          "keys": ["enter"],
+          "label": "Replace current match",
+          "description": "Replaces the active match from the replace field.",
+          "scenario": "Replace field focused."
+        },
+        {
+          "id": "files-goto-line-close",
+          "keys": ["escape"],
+          "label": "Close go-to-line bar",
+          "description": "Closes the go-to-line bar without jumping.",
+          "scenario": "Go-to-line bar focused."
+        },
+        {
+          "id": "files-tree-filter-close",
+          "keys": ["escape"],
+          "label": "Close file tree filter",
+          "description": "Closes the file tree filter.",
+          "scenario": "File tree filter focused."
+        },
+        {
+          "id": "files-hover-diff-close",
+          "keys": ["escape"],
+          "label": "Close hover diff",
+          "description": "Closes the hover diff popover.",
+          "scenario": "Hover diff popover open."
+        },
+        {
+          "id": "files-deployment-find-close",
+          "keys": ["escape"],
+          "label": "Close deployment log search",
+          "description": "Closes the deployment log search bar.",
+          "scenario": "Cloud deployment detail with log search open."
         }
       ]
     },
@@ -511,7 +637,7 @@
         },
         {
           "id": "palette-model-favorite",
-          "keys": ["enter"],
+          "keys": ["enter", "space"],
           "label": "Toggle model favorite",
           "description": "Favorites or unfavorites the highlighted model.",
           "scenario": "Favorite star focused in the model picker."
@@ -522,6 +648,20 @@
           "label": "Close overlay",
           "description": "Closes the command palette, model picker, appearance picker, and similar overlays.",
           "scenario": "A palette, menu, or picker is open."
+        },
+        {
+          "id": "palette-back",
+          "keys": ["alt", "arrowleft"],
+          "label": "Back to previous surface",
+          "description": "Returns the command palette to the surface it was opened from. Only the left Alt or Option key triggers this, so right Option keeps its native word jump.",
+          "scenario": "Inline command palette with a back stack."
+        },
+        {
+          "id": "palette-model-remove-recent",
+          "keys": ["enter", "space"],
+          "label": "Remove model from recently used",
+          "description": "Removes the highlighted model from the recently used list.",
+          "scenario": "Remove control focused in the model picker."
         }
       ]
     },
@@ -531,7 +671,7 @@
       "shortcuts": [
         {
           "id": "thread-switcher",
-          "keys": ["ctrl", "tab"],
+          "keys": ["ctrl", "tab", "ctrl", "shift", "tab"],
           "label": "Open thread switcher",
           "description": "Opens the thread switcher; Ctrl+Shift+Tab cycles backward. Releasing Ctrl selects the highlighted thread, Escape cancels.",
           "scenario": "A project with at least one thread."

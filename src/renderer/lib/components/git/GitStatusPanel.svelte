@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     invalidateRepositoryPreflight,
     loadRepositoryPreflight
@@ -923,7 +924,7 @@
    * and a cancelled key is what keeps it out of that path.
    */
   function activateWorkingChangesFromKeyboard(event: KeyboardEvent): void {
-    if (event.key !== 'Enter' && event.key !== ' ') return
+    if (!keymapState.matches('ui-activate', event)) return
     event.preventDefault()
     event.stopPropagation()
     openWorkingChanges()
@@ -1389,7 +1390,7 @@
   function onCommitMessageKeydown(event: KeyboardEvent): void {
     // Enter never commits by itself   only Cmd/Ctrl+Enter does, so writing a
     // multi-line message can never fire the commit early.
-    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    if (!keymapState.matches('git-commit', event)) return
     event.preventDefault()
     void commitInline()
   }

@@ -18,6 +18,7 @@
   } from '@lucide/svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { toast } from 'svelte-sonner'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
@@ -122,12 +123,12 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+    if (keymapState.matches('files-deployment-find', event)) {
       event.preventDefault()
       openSearch()
       return
     }
-    if (event.key === 'Escape' && searchOpen) {
+    if (keymapState.matches('files-deployment-find-close', event) && searchOpen) {
       event.preventDefault()
       closeSearch()
     }

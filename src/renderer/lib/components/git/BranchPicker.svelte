@@ -4,6 +4,7 @@
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { parseRemoteIdentity } from '$lib/git-remote-identity'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import type { GitBranchInfo } from '$shared/types'
 
@@ -117,13 +118,13 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('palette-close', event)) {
       open = false
       search = ''
       creating = false
       newBranchName = ''
     }
-    if (event.key === 'Enter' && creating) {
+    if (keymapState.matches('git-new-branch', event) && creating) {
       handleCreate()
     }
   }
@@ -265,7 +266,7 @@
             <div
               class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch)}
-              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch)}
+              onkeydown={(e: KeyboardEvent) => keymapState.matches('ui-activate', e) && handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>

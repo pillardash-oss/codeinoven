@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { X } from '@lucide/svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     maxLine: number
@@ -21,7 +22,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('files-goto-line-close', event)) {
       event.preventDefault()
       close()
       return

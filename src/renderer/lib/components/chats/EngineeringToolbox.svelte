@@ -3,6 +3,7 @@
   import { Toolbox } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { EngineeringLifecycleState } from '$shared/types'
   import type { EngineeringLifecycleSelectionInput, EngineeringLifecycleStage } from '$shared/types'
 
@@ -124,12 +125,12 @@
   function handleKeydown(event: KeyboardEvent): void {
     // Cmd/Ctrl+E is the toolbox toggle   the panel owns focus while open, so
     // the composer shortcut can't fire; handle closing here instead.
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'e') {
+    if (keymapState.matches('chat-engineering-mode', event)) {
       event.preventDefault()
       closeViaKeyboard()
       return
     }
-    if (event.key === 'Escape') {
+    if (keymapState.matches('chat-engineering-close', event)) {
       event.preventDefault()
       closeViaKeyboard()
       return

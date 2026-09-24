@@ -1,4 +1,5 @@
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import type { ComposerMentionEntry } from './composer-mentions'
 
@@ -59,17 +60,12 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
       )
       return
     }
-    if (e.key === 'Tab' && entries[ctx.getMentionIndex()]) {
+    if (keymapState.matches('chat-mention-accept', e) && entries[ctx.getMentionIndex()]) {
       e.preventDefault()
       ctx.selectMention(entries[ctx.getMentionIndex()])
       return
     }
-    if (e.key === 'Enter' && entries[ctx.getMentionIndex()]) {
-      e.preventDefault()
-      ctx.selectMention(entries[ctx.getMentionIndex()])
-      return
-    }
-    if (e.key === 'Escape') {
+    if (keymapState.matches('chat-mention-close', e)) {
       e.preventDefault()
       ctx.closeMentions()
       return
@@ -84,12 +80,7 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
       ctx.setSlashIndex((ctx.getSlashIndex() + direction + count) % count)
       return
     }
-    if (e.key === 'Tab' && !e.shiftKey && actions[ctx.getSlashIndex()]) {
-      e.preventDefault()
-      ctx.selectSlashAction(actions[ctx.getSlashIndex()], 'keyboard')
-      return
-    }
-    if (e.key === 'Enter' && actions[ctx.getSlashIndex()]) {
+    if (keymapState.matches('chat-slash-accept', e) && actions[ctx.getSlashIndex()]) {
       // The rich editor only submits when the caret sits in a plain paragraph
       // (P/DIV). When the slash is typed after text that renders as a heading,
       // list, code block, etc. the editor's own Enter handler would let the
@@ -101,18 +92,18 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
       ctx.selectSlashAction(actions[ctx.getSlashIndex()], 'keyboard')
       return
     }
-    if (e.key === 'Escape') {
+    if (keymapState.matches('chat-slash-close', e)) {
       e.preventDefault()
       ctx.closeSlash()
       return
     }
   }
-  if (ctx.isSelectionPopoverOpen() && e.key === 'Escape') {
+  if (ctx.isSelectionPopoverOpen() && keymapState.matches('chat-selection-popover-close', e)) {
     e.preventDefault()
     ctx.closeSelectionPopover()
     return
   }
-  if (ctx.isStartAfterPopoverOpen() && e.key === 'Escape') {
+  if (ctx.isStartAfterPopoverOpen() && keymapState.matches('chat-start-after-popover-close', e)) {
     e.preventDefault()
     ctx.closeStartAfterPopover()
     return
@@ -125,8 +116,7 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
       ctx.setSavedValue('')
     }
     if (
-      e.key === 'ArrowUp' &&
-      !e.shiftKey &&
+      keymapState.matches('chat-history-previous', e) &&
       (ctx.getValue() === '' || ctx.getHistoryIndex() >= 0)
     ) {
       const history = ctx.getHistoryMessages()
@@ -152,7 +142,7 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
         return
       }
     }
-    if (e.key === 'ArrowDown' && !e.shiftKey && ctx.getHistoryIndex() >= 0) {
+    if (keymapState.matches('chat-history-next', e) && ctx.getHistoryIndex() >= 0) {
       e.preventDefault()
       const history = ctx.getHistoryMessages()
       // Value-based position, matching the ArrowUp branch, so a list that
@@ -176,8 +166,7 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
   // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
   // default, so this won't immediately re-open it.
   if (
-    (e.metaKey || e.ctrlKey) &&
-    e.key.toLowerCase() === 'e' &&
+    keymapState.matches('chat-engineering-mode', e) &&
     !e.defaultPrevented &&
     ctx.getShowEngineeringMode()
   ) {
@@ -189,7 +178,7 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
   // visible "Stop?" state and the second confirms the abort. A running agent
   // is a global session concern, so this remains active even when the
   // composer editor itself does not have focus.
-  if (e.key !== 'Escape') return
+  if (!keymapState.matches('chat-stop', e)) return
   if (ctx.getWorking() && ctx.hasStop()) {
     ctx.confirmStop()
     return

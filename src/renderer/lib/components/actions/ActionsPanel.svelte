@@ -6,6 +6,7 @@
   import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type {
     ProjectAction,
     ProjectActionInput,
@@ -211,7 +212,7 @@
               tabindex="0"
               onclick={() => run && projectActionsState.toggle(action.id)}
               onkeydown={(event) => {
-                if (run && (event.key === 'Enter' || event.key === ' '))
+                if (run && keymapState.matches('ui-activate', event))
                   projectActionsState.toggle(action.id)
                 else if (event.altKey && event.key === 'ArrowUp') {
                   event.preventDefault()

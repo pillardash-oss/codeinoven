@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X, Download } from '@lucide/svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
@@ -65,7 +66,7 @@
     class="relative flex flex-1 items-center justify-center"
     onclick={onClose}
     onkeydown={(e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') onClose()
+      if (keymapState.matches('ui-activate', e)) onClose()
     }}
   >
     <div

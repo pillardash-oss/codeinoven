@@ -12,6 +12,7 @@
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
   import ProjectFileExplorerFilters from './ProjectFileExplorerFilters.svelte'
@@ -597,7 +598,7 @@
       return
     }
     const key = event.key
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && key.toLocaleLowerCase() === 'n') {
+    if (keymapState.matches('nav-new-thread', event)) {
       event.preventDefault()
       void startCreate(createTargetDirectory(event.target), 'untitled.txt')
       return
@@ -774,7 +775,7 @@
     if (event.key === 'Escape') {
       event.preventDefault()
       inlineEdit = null
-    } else if (event.key === 'Enter') {
+    } else if (keymapState.matches('files-rename', event)) {
       event.preventDefault()
       void commitInlineEdit()
     }

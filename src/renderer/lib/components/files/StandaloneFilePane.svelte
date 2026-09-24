@@ -13,6 +13,7 @@
   import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
   import { standaloneFilePreviewUrl } from '$lib/file-preview'
   import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import {
     isAudioMime,
@@ -146,8 +147,7 @@
    *  standalone file has unsaved edits. Shift is excluded, Cmd/Ctrl+Shift+S
    *  belongs to the right-sidebar toggle alone. */
   function handleSaveShortcut(event: KeyboardEvent): void {
-    if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return
-    if (event.key.toLowerCase() !== 's') return
+    if (!keymapState.matches('files-save', event)) return
     if (!standaloneFiles.isDirty(path)) return
     event.preventDefault()
     void standaloneFiles.save(path)

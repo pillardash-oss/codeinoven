@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
 
   interface Props {
@@ -86,7 +87,7 @@
     oninput={updateDraft}
     onblur={finishEditing}
     onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (keymapState.matches('studio-edit-cancel', event)) {
         event.preventDefault()
         cancelEditing()
       }
@@ -105,7 +106,7 @@
     onmouseup={preserveDoubleClickForEditing}
     ondblclick={startEditing}
     onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
+      if (keymapState.matches('studio-edit-field', event)) {
         event.preventDefault()
         void startEditing()
       }

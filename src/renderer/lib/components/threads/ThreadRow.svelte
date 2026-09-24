@@ -4,6 +4,7 @@
   import type { Attachment } from 'svelte/attachments'
   import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
@@ -887,7 +888,7 @@
             onTogglePin(thread)
           }}
           onkeydown={(e: KeyboardEvent) => {
-            if (e.key === 'Enter') {
+            if (keymapState.matches('thread-pin', e)) {
               e.stopPropagation()
               onTogglePin(thread)
             }

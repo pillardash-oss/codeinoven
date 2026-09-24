@@ -13,6 +13,7 @@
     X
   } from '@lucide/svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
@@ -457,7 +458,7 @@
         })
         return
       }
-      if (event.key === 'Escape') {
+      if (keymapState.matches('palette-close', event)) {
         event.stopPropagation()
         onClose()
       }
@@ -779,12 +780,12 @@
         })
         return
       }
-      if (event.key === 'Escape') {
+      if (keymapState.matches('palette-close', event)) {
         event.stopPropagation()
         onClose()
         return
       }
-      if (event.key === 'Enter') {
+      if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
         onChoose(entry)
         return
@@ -853,7 +854,7 @@
               onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
             }}
             onkeydown={(event: KeyboardEvent) => {
-              if (event.key === 'Enter' || event.key === ' ') {
+              if (keymapState.matches('palette-model-favorite', event)) {
                 event.stopPropagation()
                 onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
               }
@@ -877,7 +878,7 @@
               onRemoveRecent(recentKey)
             }}
             onkeydown={(event: KeyboardEvent) => {
-              if (event.key === 'Enter' || event.key === ' ') {
+              if (keymapState.matches('palette-model-remove-recent', event)) {
                 event.stopPropagation()
                 event.preventDefault()
                 onRemoveRecent(recentKey)

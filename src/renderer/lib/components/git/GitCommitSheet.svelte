@@ -1,5 +1,6 @@
 <script lang="ts">
   import { gitState } from '$lib/stores/git.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
   import { GitCommit, Loader2 } from '@lucide/svelte'
 
@@ -39,7 +40,7 @@
         placeholder="Summarize the change…"
         bind:value={message}
         onkeydown={(event: KeyboardEvent) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          if (keymapState.matches('git-commit', event)) {
             event.preventDefault()
             void commit()
           }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
   import { ChevronDown, ChevronRight, ChevronUp, Replace, ReplaceAll, X } from '@lucide/svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     query: string
@@ -72,12 +73,14 @@
   }
 
   async function handleKeydown(event: KeyboardEvent): Promise<void> {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('files-find-close', event)) {
       event.preventDefault()
       handleClose()
       return
     }
-    if (event.key !== 'Enter') return
+    const isPrevious = keymapState.matches('files-find-previous', event)
+    const isNext = keymapState.matches('files-find-next', event)
+    if (!isPrevious && !isNext) return
 
     event.preventDefault()
     if (draft !== query) {
@@ -85,7 +88,7 @@
       await onQueryChange(draft)
       await tick()
     }
-    if (event.shiftKey) onPrev()
+    if (isPrevious) onPrev()
     else if (onSubmit) onSubmit()
     else onNext()
   }
@@ -104,12 +107,12 @@
   }
 
   function handleReplaceKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('files-find-close', event)) {
       event.preventDefault()
       handleClose()
       return
     }
-    if (event.key === 'Enter') {
+    if (keymapState.matches('files-replace-one', event)) {
       event.preventDefault()
       onReplaceOne?.()
     }

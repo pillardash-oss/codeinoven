@@ -6,6 +6,7 @@
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -110,7 +111,7 @@
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (!open) return
-    if (mode === 'inline' && event.key === 'Escape') {
+    if (mode === 'inline' && keymapState.matches('palette-close', event)) {
       event.preventDefault()
       event.stopPropagation()
       onClose()
@@ -122,13 +123,7 @@
     // query, so pressing it must not bounce the user back to the actions list.
     // Shift is excluded so Shift+Alt+ArrowLeft keeps its native text-selection behavior.
     // Cmd/Meta+ArrowLeft is intentionally ignored so word-jump remains native.
-    if (
-      onBack &&
-      event.key === 'ArrowLeft' &&
-      !event.shiftKey &&
-      event.altKey &&
-      event.code === 'AltLeft'
-    ) {
+    if (onBack && keymapState.matches('palette-back', event) && event.code === 'AltLeft') {
       event.preventDefault()
       event.stopPropagation()
       onBack()

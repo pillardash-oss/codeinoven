@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { Brain, Check, Cpu, Star, UserRound, Zap } from '@lucide/svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
@@ -589,7 +590,7 @@
         tabindex={-1}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onkeydown={(event: KeyboardEvent) => {
-          if (event.key === 'Escape') close()
+          if (keymapState.matches('palette-close', event)) close()
         }}
       >
         <ModelPickerList

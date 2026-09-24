@@ -27,6 +27,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     onOpenThread?: (
@@ -572,7 +573,7 @@
               // Ignore keys that belong to a nested control (the stack-trace
               // toggle), which would otherwise navigate away on Enter.
               if (e.target !== e.currentTarget) return
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (keymapState.matches('chat-notification-open', e)) {
                 e.preventDefault()
                 void navigateToNotification(n)
               }

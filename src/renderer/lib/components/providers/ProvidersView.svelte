@@ -4,6 +4,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { displayShortcutLabel } from '$lib/shortcut-display'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
@@ -486,7 +487,7 @@
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (activeTab !== 'harnesses') return
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', event)) {
       event.preventDefault()
       event.stopPropagation()
       searchInputEl?.focus()
