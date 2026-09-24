@@ -412,6 +412,7 @@
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { formatDateTimeCompact } from '$shared/date-time-format'
   import { diffDetails } from './file-diff'
 
   interface Props {
@@ -458,15 +459,6 @@
 
   function isMarkdown(path: string): boolean {
     return /\.(?:md|mdown|markdown)$/iu.test(path)
-  }
-
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
   }
 </script>
 
@@ -684,7 +676,7 @@
                     {/if}
                   </span>
                   <span class="block text-[0.5625rem] text-dimmed">
-                    {formatDate(checkpoint.completedAt ?? checkpoint.createdAt)}
+                    {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
                   </span>
                 </span>
                 <span class="tabular-nums text-[0.625rem] text-dimmed">

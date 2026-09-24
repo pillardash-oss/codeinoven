@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readdir, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import { APP_NAME } from '../../lib/brand'
+import { APP_LOCALE } from '../../lib/date-time-format'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import { Logger } from '../system/logger'
 
@@ -29,6 +30,14 @@ const MAX_LISTING_ENTRIES = 2_000
 const LISTING_STAT_CONCURRENCY = 48
 const STREAM_HIGH_WATER_MARK = 256 * 1024
 const MAX_RANGE_HEADER_LENGTH = 128
+
+/** A listing's modified column reads the app's pinned locale, so it is the same
+ *  12-hour clock on every machine. Built once: every listing request renders
+ *  through it. */
+const LISTING_TIME_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  dateStyle: 'short',
+  timeStyle: 'short'
+})
 
 export interface DirectoryPreviewEndpoint {
   /** Origin URL to open in a browser (`http://127.0.0.1:<port>/`). */
@@ -515,10 +524,7 @@ export class DirectoryPreviewServer {
           directory: actual,
           relativePath,
           listing: await readDirectoryListing(actual),
-          timeFormatter: new Intl.DateTimeFormat(undefined, {
-            dateStyle: 'short',
-            timeStyle: 'short'
-          })
+          timeFormatter: LISTING_TIME_FORMATTER
         })
         const body = Buffer.from(html, 'utf8')
         response.statusCode = 200

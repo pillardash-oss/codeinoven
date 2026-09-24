@@ -1,4 +1,5 @@
 import type { AgentCapabilityEntry, AgentCapabilityOrigin, MemoryEntry } from '$shared/types'
+import { formatTime } from '$shared/date-time-format'
 import { memoryScopeSummary } from '$shared/memory/memory-scopes'
 import type { AgentSource, FileAgentSource, FileCitationAgentSource } from '$lib/agent-sources'
 
@@ -55,7 +56,7 @@ export function processName(command: string): string {
 }
 
 export function processStartedAt(startedAt: number): string {
-  return new Date(startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return formatTime(startedAt)
 }
 
 export function memoryScopeLabel(entry: MemoryEntry): string {

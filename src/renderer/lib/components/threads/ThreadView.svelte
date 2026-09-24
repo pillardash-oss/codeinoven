@@ -3,6 +3,7 @@
   import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -3808,11 +3809,6 @@
         scrollEl.scrollTop = scrollEl.scrollHeight
       }
     })
-  }
-
-  function formatTime(ts: number): string {
-    if (!ts) return ''
-    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   }
 
   /** For a user message that follows an assistant turn (a steer), return the

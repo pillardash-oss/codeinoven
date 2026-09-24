@@ -311,6 +311,7 @@ Motion is subtle and functional:
 - Empty states say what is missing and what to do next.
 - No generic marketing copy inside the app.
 - Absolute dates and times read the same on every machine: `src/lib/date-time-format.ts` renders `Sep 23, 2026, 8:05 AM`. Never hand a date to a bare `toLocaleString()`, which falls back to the operating system's locale and its numeric, seconds-bearing `9/23/2026, 8:05:00 AM` shape.
+- Clocks are 12-hour with am/pm on every machine. The same module owns the shapes (`formatTime` renders `8:05 AM`), and a time persisted in the machine format `HH:mm` goes through `formatTimeOfDay`, so a stored `08:05` reads `8:05 AM` and never `08:05`. Never leave the locale argument as `undefined` or `[]`: that hands the clock to the operating system, and a 24-hour locale prints `08:05`.
 
 ### 3.11 Accessibility
 

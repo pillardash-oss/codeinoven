@@ -1,4 +1,5 @@
 import type { AgentBankedResets, AgentRateLimitWindow, AgentUsageCredits } from '$shared/types'
+import { APP_LOCALE, formatDateTimeWithWeekday } from '$shared/date-time-format'
 
 /**
  * Presentation helpers for provider quota telemetry (`AgentRateLimitWindow`,
@@ -54,13 +55,7 @@ export function readableStatus(value: string | undefined): string {
  */
 export function formatResetCountdown(resetsAt: number | undefined): string {
   if (!resetsAt) return 'Reset time unavailable'
-  const label = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(resetsAt)
+  const label = formatDateTimeWithWeekday(resetsAt)
   if (resetsAt <= Date.now()) return `Reset ${label}`
   const minutes = Math.max(1, Math.round((resetsAt - Date.now()) / 60_000))
   const duration =
@@ -72,20 +67,22 @@ export function formatResetCountdown(resetsAt: number | undefined): string {
   return `Resets in ${duration} · ${label}`
 }
 
+const EXPIRY_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short'
+})
+
 /** Absolute expiry for banked reset credits: `Expires Aug 12, 2026, 3:00 PM GMT+1`. */
 export function formatExpiry(value: number | null | undefined): string {
   if (value === null) return 'Does not expire'
   if (value === undefined || !Number.isFinite(new Date(value).getTime())) {
     return 'Expiry time unavailable'
   }
-  const label = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  }).format(value)
+  const label = EXPIRY_FORMATTER.format(value)
   return `Expires ${label}`
 }
 

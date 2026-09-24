@@ -4,6 +4,7 @@
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { relativeTime } from '$lib/format/relative-time'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
+  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import type { HarnessAccount } from '$shared/types'
 
   interface Props {
@@ -31,15 +32,8 @@
       : 'Expiry time not reported'
   )
 
-  const checkedAtFormatter = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
   const checkedAt = $derived(
-    snapshot && snapshot.fetchedAt > 0 ? checkedAtFormatter.format(snapshot.fetchedAt) : ''
+    snapshot && snapshot.fetchedAt > 0 ? formatDateTimeWithWeekday(snapshot.fetchedAt) : ''
   )
   const checkedAtTitle = $derived(
     `Last checked ${checkedAt}${snapshot?.error ? ` · ${snapshot.error}` : ''}`

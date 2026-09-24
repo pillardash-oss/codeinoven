@@ -24,6 +24,7 @@
   import { copyText } from '$lib/copy-text'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import { presentProviderError, providerIssueTitle } from '$shared/provider-issue'
+  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
@@ -181,16 +182,6 @@
     return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`
   }
 
-  function absoluteRetryTime(retryAt: number): string {
-    return new Date(retryAt).toLocaleString([], {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    })
-  }
-
   async function beginSignIn(): Promise<void> {
     loginError = ''
     loginHandoff = null
@@ -306,7 +297,9 @@
       {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
-            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
+              issue.retryAt
+            )}
           </span>
           {#if issue.attempt}
             · attempt {issue.attempt}
@@ -314,21 +307,23 @@
         </p>
       {:else if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {absoluteRetryTime(issue.retryAt)}
+          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
         </p>
       {:else if autoResume && issue.retryAt && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           {#if autoRetryEnabled}
-            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
+              issue.retryAt
+            )}
           {:else}
-            Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(
+            Available again {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
               issue.retryAt
             )}
           {/if}
         </p>
       {:else if issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {absoluteRetryTime(issue.retryAt)}
+          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">

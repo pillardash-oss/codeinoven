@@ -1,4 +1,5 @@
 import { SvelteDate } from 'svelte/reactivity'
+import { APP_LOCALE } from '$shared/date-time-format'
 import type {
   AccountUsageBreakdown,
   LocalProfileAnalytics,
@@ -148,41 +149,47 @@ export function utilityLabel(id: string): string {
   }
 }
 
+const DATE_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric'
+})
+
+const LONG_DATE_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric'
+})
+
+const USAGE_DATE_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  month: 'short',
+  day: 'numeric'
+})
+
+const HOUR_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, { hour: 'numeric' })
+
 export function formatDateRange(range: LocalProfileAnalyticsRange): string {
-  const format = new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  })
-  return `${format.format(range.startAt)} – ${format.format(range.endAt - 1)}`
+  return `${DATE_FORMATTER.format(range.startAt)} – ${DATE_FORMATTER.format(range.endAt - 1)}`
 }
 
 export function formatDate(value: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  }).format(value)
+  return DATE_FORMATTER.format(value)
 }
 
 /** Spelled-out date for confirmations, where an abbreviated month reads as a code. */
 export function formatLongDate(value: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric'
-  }).format(value)
+  return LONG_DATE_FORMATTER.format(value)
 }
 
 export function formatUsageDate(value: string): string {
   const date = localDateFromInput(value)
   if (!date) return value
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
+  return USAGE_DATE_FORMATTER.format(date)
 }
 
 export function formatHour(hour: number): string {
   const date = new SvelteDate(2000, 0, 1, hour)
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(date)
+  return HOUR_FORMATTER.format(date)
 }
 
 export function formatIdentifier(value: string): string {
