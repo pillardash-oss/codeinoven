@@ -2,6 +2,7 @@
   import { tick } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
+  import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -17,13 +18,7 @@
     onSelect: (thread: Thread) => void | Promise<void>
   }
 
-  let {
-    threads,
-    projects,
-    projectIconUrls,
-    selectedThreadId,
-    onSelect
-  }: Props = $props()
+  let { threads, projects, projectIconUrls, selectedThreadId, onSelect }: Props = $props()
 
   let open = $state(false)
   let highlightedIndex = $state(0)
@@ -168,7 +163,9 @@
 >
   <header class="border-b border-border px-4 py-3">
     <p class="text-sm font-semibold text-foreground">Switch thread</p>
-    <p class="mt-0.5 text-[0.6875rem] text-dimmed">Release Control to open the highlighted thread</p>
+    <p class="mt-0.5 text-[0.6875rem] text-dimmed">
+      Release Control to open the highlighted thread
+    </p>
   </header>
 
   <div
@@ -178,6 +175,7 @@
   >
     {#each threads as thread, index (thread.id)}
       {@const resolvedProjectIcon = projectIcon(thread)}
+      {@const resolvedProjectIconGlyph = contentFamilyIcon(thread)}
       <button
         type="button"
         role="option"
@@ -195,6 +193,7 @@
           picker
           selected={index === highlightedIndex}
           projectIconUrl={resolvedProjectIcon}
+          projectIconGlyph={resolvedProjectIconGlyph}
         />
       </button>
     {/each}

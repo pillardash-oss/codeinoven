@@ -58,6 +58,7 @@
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
     assistantEffectiveSettings,
@@ -3401,16 +3402,26 @@
     contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
   }
 
+  /**
+   * A Ctrl+Tab selection is a deliberate jump to one specific thread, so the
+   * shell lands in the view that owns that thread's family: a chat is only ever
+   * shown by Chats, an assistant task only by Assistant, and a project thread by
+   * Projects (or by the scope state, which the projects family owns). Without
+   * this the switcher could select a thread in a view that does not own it, leaving
+   * the wrong sidebar and that view's own tools on screen for it.
+   */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
-    if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
+    const family = contentThreadFamily(thread)
+    if (family === 'chats') navigate('chats')
+    else if (family === 'assistant') navigate('assistant')
+    else if (mode === 'chats' || mode === 'assistant') navigate('projects')
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
     // the previous project. On the Scope page the view itself follows the
     // thread's project; an active scope-state sidebar follows the thread and
-    // its own scope bucket.
-    if (thread.projectId !== INBOX_PROJECT_ID) {
+    // its own scope bucket. Only the projects family has a scope state.
+    if (family === 'projects') {
       if (scopeViewActive) {
         void scopeState.activateProject(thread.projectId)
       } else if (scopeState.sidebarContext) {
@@ -3425,7 +3436,7 @@
     // the restore + folder expansion have settled.
     sidebarRevealSuppressed = false
     clearTimeout(sidebarRevealSuppressTimer)
-    if (thread.projectId !== INBOX_PROJECT_ID) sidebar.expandedFolders.add(thread.projectId)
+    if (family === 'projects') sidebar.expandedFolders.add(thread.projectId)
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 

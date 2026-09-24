@@ -61,6 +61,9 @@
     picker?: boolean
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
+    /** Mark shown in the project-icon slot when the thread's container has no
+     *  project icon of its own   the hidden Chats and Assistant containers. */
+    projectIconGlyph?: Component | null
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
     /** Hide the scope chip   used when the surrounding view is already scoped. */
@@ -82,6 +85,7 @@
     compact = false,
     picker = false,
     projectIconUrl = null,
+    projectIconGlyph = null,
     showChangeScope = true,
     hideScope = false,
     onOpen = () => {},
@@ -668,6 +672,11 @@
     <span class="flex w-full min-w-0 items-center gap-2">
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {:else if projectIconGlyph}
+        {@const ContainerIcon = projectIconGlyph}
+        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+          <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
       {/if}
       <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
         {#if badgeProps}
@@ -844,6 +853,11 @@
       <!-- Project icon -->
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {:else if projectIconGlyph}
+        {@const ContainerIcon = projectIconGlyph}
+        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+          <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
       {/if}
 
       <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
