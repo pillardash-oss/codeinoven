@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { AlertTriangle, Clock, Link2, ListChecks, Sparkles } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    CalendarClock,
+    CalendarPlus,
+    Clock,
+    Link2,
+    ListChecks,
+    Sparkles
+  } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { describeSchedule, type Routine } from '$shared/types'
   import { routineGap } from './assistant-view'
@@ -27,6 +35,8 @@
     return text.length > 180 ? `${text.slice(0, 180)}…` : text
   })
   const description = $derived(routine.description?.trim() ?? '')
+  const createdLabel = $derived(formatDateTime(routine.createdAt))
+  const updatedLabel = $derived(formatDateTime(routine.updatedAt))
 
   const statusLabel = $derived(
     routine.paused
@@ -98,6 +108,20 @@
     <dd class="flex min-w-0 items-start gap-1 text-muted">
       <Link2 size={12} class="mt-0.5 shrink-0" />
       <span class="min-w-0 break-words">{howToPreview}</span>
+    </dd>
+  </div>
+  <div class="flex gap-2">
+    <dt class="w-16 shrink-0 text-dimmed">Created</dt>
+    <dd class="flex min-w-0 items-center gap-1 text-muted">
+      <CalendarPlus size={12} class="shrink-0" />
+      <span class="min-w-0 break-words">{createdLabel}</span>
+    </dd>
+  </div>
+  <div class="flex gap-2">
+    <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
+    <dd class="flex min-w-0 items-center gap-1 text-muted">
+      <CalendarClock size={12} class="shrink-0" />
+      <span class="min-w-0 break-words">{updatedLabel}</span>
     </dd>
   </div>
 </dl>

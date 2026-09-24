@@ -266,8 +266,9 @@ icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
 with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
 task dragged onto a routine is grouped into it. Hovering a routine reveals a
-popover with its status, schedule type, next run, task count, and a how-to
-preview (`AssistantRoutineHoverPopover.svelte`). **Remove** deletes the routine
+popover with its status, schedule type, next run, task count, a how-to preview,
+and when it was created and last updated (`AssistantRoutineHoverPopover.svelte`).
+**Remove** deletes the routine
 and every thread it owns, the hidden getting-started thread included, through the
 same thread-deletion path a plain thread delete uses (`RoutineManager` is handed
 the canonical thread deleter by `src/main/ipc/ipc-handlers.ts`), so a routine
