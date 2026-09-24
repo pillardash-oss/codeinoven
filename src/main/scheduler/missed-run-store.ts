@@ -19,6 +19,9 @@ function isValidRun(value: unknown): value is MissedRun {
     typeof record.dueAt === 'number' &&
     typeof record.detectedAt === 'number' &&
     typeof record.title === 'string' &&
+    (record.reason === undefined ||
+      record.reason === 'app-closed' ||
+      record.reason === 'delayed') &&
     (record.status === 'pending' ||
       record.status === 'dismissed' ||
       record.status === 'run')
@@ -91,6 +94,7 @@ export class MissedRunStore {
     routineId?: string
     dueAt: number
     title: string
+    reason?: MissedRun['reason']
     detectedAt?: number
   }): MissedRun {
     const id = missedRunId(input.threadId, input.dueAt)
@@ -103,6 +107,7 @@ export class MissedRunStore {
       dueAt: input.dueAt,
       detectedAt: input.detectedAt ?? Date.now(),
       title: input.title,
+      reason: input.reason,
       status: 'pending'
     }
     this.runs.set(id, run)
@@ -115,6 +120,16 @@ export class MissedRunStore {
     const existing = this.runs.get(id)
     if (!existing) return
     this.runs.set(id, { ...existing, status: 'dismissed' })
+    this.persist()
+  }
+
+  /**
+   * Drop a record outright, for a miss that is no longer real (its slot
+   * predates the schedule, or its task is gone). Unlike `dismiss`, no trace is
+   * kept, so it can never resurface in a task-scoped list.
+   */
+  remove(id: string): void {
+    if (!this.runs.delete(id)) return
     this.persist()
   }
 

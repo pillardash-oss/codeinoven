@@ -21,6 +21,18 @@ import type {
 } from '../types'
 
 /**
+ * Whether two schedules are the same, so re-saving a routine's how-to does not
+ * restart its schedule clock and suppress a genuine missed fire.
+ */
+function schedulesEqual(
+  a: RoutineSchedule | null | undefined,
+  b: RoutineSchedule | null | undefined
+): boolean {
+  if (!a || !b) return (a ?? null) === (b ?? null)
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
  * RoutineManager   CRUD and task-grouping for assistant routines.
  *
  * Mirrors ProjectManager's SQLite-backed shape. A routine owns the how-to and
@@ -37,7 +49,11 @@ export class RoutineManager {
    */
   private threadDeleter: ((threadId: string) => Promise<void>) | null = null
 
-  constructor(private database: Database) {
+  constructor(
+    private database: Database,
+    /** Injectable clock so schedule-anchor bookkeeping is deterministic in tests. */
+    private now: () => number = () => Date.now()
+  ) {
     this.routineRepo = new RoutineRepo(database)
     this.threadRepo = new ThreadRepo(database)
   }
@@ -56,7 +72,7 @@ export class RoutineManager {
   }
 
   createRoutine(input: CreateRoutineInput): Routine {
-    const now = Date.now()
+    const now = this.now()
     const routine: Routine = {
       id: generateId(),
       name: input.name.trim() || 'New Routine',
@@ -64,6 +80,7 @@ export class RoutineManager {
       color: input.color ?? pickColorForSeed(input.name),
       iconType: input.iconType,
       schedule: input.schedule ?? null,
+      scheduleUpdatedAt: input.schedule ? now : undefined,
       howTo: input.howTo ?? '',
       howToUpdatedAt: input.howTo ? now : undefined,
       connections: input.connections ?? [],
@@ -81,8 +98,17 @@ export class RoutineManager {
   updateRoutine(routineId: string, input: UpdateRoutineInput): Routine {
     const existing = this.routineRepo.get(routineId)
     if (!existing) throw new Error(`Routine not found: ${routineId}`)
-    const now = Date.now()
+    const now = this.now()
     const howToChanged = input.howTo !== undefined && input.howTo !== existing.howTo
+    const scheduleChanged =
+      input.schedule !== undefined && !schedulesEqual(input.schedule, existing.schedule)
+    // The schedule's clock starts when the schedule is set and when the routine
+    // first becomes runnable (its how-to is written), because the authoring
+    // flow saves the how-to and the schedule in one call. A due slot before
+    // this moment was never really due, so it is neither fired nor recorded as
+    // missed.
+    const becameRunnable =
+      !existing.howTo.trim() && (input.howTo ?? existing.howTo).trim() !== ''
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
@@ -92,6 +118,7 @@ export class RoutineManager {
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,
       schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
+      scheduleUpdatedAt: scheduleChanged || becameRunnable ? now : existing.scheduleUpdatedAt,
       howTo: input.howTo ?? existing.howTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
@@ -118,7 +145,7 @@ export class RoutineManager {
     if (!isSupportedIconExtension(ext)) throw new Error(`Unsupported icon format: ${ext}`)
 
     const iconFile = await storeIconFile(getRoutinePath(routineId), sourcePath, existing.icon)
-    const updated: Routine = { ...existing, icon: iconFile, updatedAt: Date.now() }
+    const updated: Routine = { ...existing, icon: iconFile, updatedAt: this.now() }
     this.routineRepo.upsert(updated)
     return updated
   }
@@ -130,7 +157,7 @@ export class RoutineManager {
 
     if (existing.icon) await removeIconFile(getRoutinePath(routineId), existing.icon)
 
-    const updated: Routine = { ...existing, icon: undefined, updatedAt: Date.now() }
+    const updated: Routine = { ...existing, icon: undefined, updatedAt: this.now() }
     this.routineRepo.upsert(updated)
     return updated
   }
@@ -179,7 +206,7 @@ export class RoutineManager {
    */
   private async removeRoutineThread(thread: Thread): Promise<void> {
     if (!this.threadDeleter) {
-      const ungrouped: Thread = { ...thread, routineId: undefined, updatedAt: Date.now() }
+      const ungrouped: Thread = { ...thread, routineId: undefined, updatedAt: this.now() }
       this.threadRepo.upsert(ungrouped)
       return
     }
@@ -198,8 +225,8 @@ export class RoutineManager {
     const updated: Routine = {
       ...existing,
       pinned,
-      pinnedAt: pinned ? Date.now() : undefined,
-      updatedAt: Date.now()
+      pinnedAt: pinned ? this.now() : undefined,
+      updatedAt: this.now()
     }
     this.routineRepo.upsert(updated)
     return updated
@@ -210,7 +237,7 @@ export class RoutineManager {
     for (let index = 0; index < orderedIds.length; index++) {
       const existing = this.routineRepo.get(orderedIds[index])
       if (!existing) continue
-      const updated: Routine = { ...existing, sortOrder: index, updatedAt: Date.now() }
+      const updated: Routine = { ...existing, sortOrder: index, updatedAt: this.now() }
       this.routineRepo.upsert(updated)
       result.push(updated)
     }
@@ -284,7 +311,7 @@ export class RoutineManager {
       ...existing,
       archived: hidden,
       pinned: true,
-      updatedAt: Date.now()
+      updatedAt: this.now()
     }
     this.threadRepo.upsert(updated)
     return updated
@@ -297,7 +324,7 @@ export class RoutineManager {
     const updated: Thread = {
       ...existing,
       routineId: routineId ?? undefined,
-      updatedAt: Date.now()
+      updatedAt: this.now()
     }
     this.threadRepo.upsert(updated)
     return updated
@@ -310,7 +337,7 @@ export class RoutineManager {
     const updated: Thread = {
       ...existing,
       scheduleOverride: schedule,
-      updatedAt: Date.now()
+      updatedAt: this.now()
     }
     this.threadRepo.upsert(updated)
     return updated
@@ -320,7 +347,7 @@ export class RoutineManager {
   setTaskLastRun(threadId: string, at: number): Thread {
     const existing = this.threadRepo.get(threadId)
     if (!existing) throw new Error(`Thread not found: ${threadId}`)
-    const updated: Thread = { ...existing, lastRunAt: at, updatedAt: Date.now() }
+    const updated: Thread = { ...existing, lastRunAt: at, updatedAt: this.now() }
     this.threadRepo.upsert(updated)
     return updated
   }
@@ -333,7 +360,7 @@ export class RoutineManager {
   markTaskRunSuccess(threadId: string, at: number): Thread | null {
     const existing = this.threadRepo.get(threadId)
     if (!existing) return null
-    const updated: Thread = { ...existing, lastSuccessAt: at, updatedAt: Date.now() }
+    const updated: Thread = { ...existing, lastSuccessAt: at, updatedAt: this.now() }
     this.threadRepo.upsert(updated)
     return updated
   }
@@ -347,7 +374,7 @@ export class RoutineManager {
   markTaskRunDispatched(threadId: string, at: number): Thread | null {
     const existing = this.threadRepo.get(threadId)
     if (!existing) return null
-    const updated: Thread = { ...existing, lastDispatchedAt: at, updatedAt: Date.now() }
+    const updated: Thread = { ...existing, lastDispatchedAt: at, updatedAt: this.now() }
     this.threadRepo.upsert(updated)
     return updated
   }
@@ -358,6 +385,20 @@ export class RoutineManager {
     if (!task.routineId) return null
     const routine = this.routineRepo.get(task.routineId)
     return routine?.schedule ?? null
+  }
+
+  /**
+   * The moment a task's schedule became active. The scheduler uses it as the
+   * floor below which a due slot was never really due: a schedule cannot have
+   * missed a fire that predates it. A task override anchors to the task's own
+   * creation; otherwise the routine's schedule clock applies, falling back to
+   * the routine's creation for rows written before that clock existed.
+   */
+  resolveTaskScheduleAnchor(task: Thread): number {
+    if (task.scheduleOverride) return task.createdAt
+    if (!task.routineId) return task.createdAt
+    const routine = this.routineRepo.get(task.routineId)
+    return routine?.scheduleUpdatedAt ?? routine?.createdAt ?? 0
   }
 
   /**

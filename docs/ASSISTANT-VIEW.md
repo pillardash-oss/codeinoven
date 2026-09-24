@@ -186,7 +186,19 @@ the app's clock for Assistant View.
 - **No auto catch-up.** A slot that came due while the app was closed (or a
   machine slept through it) is recorded as a missed run, never run in a burst.
   The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss.
+  miss. Each record carries a `reason`   `app-closed` when the app was not
+  running at the due time, `delayed` when it was running but could not start the
+  run in time   and both surfaces state it instead of always claiming the app
+  was closed.
+- **A slot before the schedule existed is never due.** The scheduler floors a
+  due slot at the later of the task's last fire and the moment its schedule
+  became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
+  and when a routine first becomes runnable, since the authoring flow saves the
+  how-to and the schedule together). A routine created in the afternoon can
+  never badge a morning slot as missed, and a half-configured routine with no
+  how-to is not evaluated at all. Persisted misses that predate the schedule
+  (or whose task is gone) are dropped on load (`pruneStaleMisses`), so a record
+  written before this rule existed cannot keep badging.
 - **Missed-run persistence.** `MissedRunStore`
   (`src/main/scheduler/missed-run-store.ts`) writes
   `scheduler/missed-runs.json` through the storage engine. Records are
@@ -227,7 +239,9 @@ default:
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
   grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
   Assistants tab exposes no sub-filter buttons; with no miss it shows only a
-  neutral empty state.
+  neutral empty state. Each entry states why the fire was not run
+  (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
+  app was closed when the machine simply slept through the window.
 
 The renderer state lives in `assistantRoutines`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the

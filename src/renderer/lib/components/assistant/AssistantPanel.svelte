@@ -59,6 +59,7 @@
     parseHowToSections,
     resolveConnections,
     serializeHowToSections,
+    missedRunReasonText,
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
@@ -1086,7 +1087,7 @@
                     </span>
                   </div>
                   <p class="mt-1 text-[0.625rem] text-dimmed">
-                    Was due {formatDateTime(run.dueAt)} while the app was closed.
+                    Was due {formatDateTime(run.dueAt)}. {missedRunReasonText(run.reason)}
                   </p>
                   <div class="mt-2 flex justify-end gap-1.5">
                     <button
