@@ -126,6 +126,11 @@ export interface RendererRecoverySnapshot {
   chatFavoriteModels: string[]
   /** Chats-tab recently used models, most recent first. */
   chatRecentModels: string[]
+  /** Assistant-task favorites, kept separate so a model picked for a routine
+   *  task never reshapes the Chats or project model lists. */
+  assistantFavoriteModels: string[]
+  /** Assistant-task recently used models, most recent first. */
+  assistantRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
 }
@@ -191,6 +196,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     recentModels: [],
     chatFavoriteModels: [],
     chatRecentModels: [],
+    assistantFavoriteModels: [],
+    assistantRecentModels: [],
     auditModelKey: undefined
   }
 }
@@ -513,6 +520,8 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       recentModels: parseFavoriteModels(parsed.recentModels),
       chatFavoriteModels: parseFavoriteModels(parsed.chatFavoriteModels),
       chatRecentModels: parseFavoriteModels(parsed.chatRecentModels),
+      assistantFavoriteModels: parseFavoriteModels(parsed.assistantFavoriteModels),
+      assistantRecentModels: parseFavoriteModels(parsed.assistantRecentModels),
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey

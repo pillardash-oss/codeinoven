@@ -126,9 +126,9 @@
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
-    threadSettings,
-    chatSettings,
-    chatEffectiveSettings
+    initialSettingsFor,
+    settingsStoreFor,
+    type ModelScope
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
@@ -701,13 +701,27 @@
   })
   // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
+  /**
+   * Which model memory this conversation belongs to: an assistant task, a
+   * standalone chat, or a project thread. It decides the settings a thread
+   * starts on, the store a change is committed to, and the model lists the
+   * pickers show, so a model picked for one kind of conversation never reshapes
+   * another kind's. Props, not state: the view is remounted (keyed) per thread.
+   */
+  function modelScope(): ModelScope {
+    if (assistantMode) return 'assistant'
+    return chatMode ? 'chat' : 'project'
+  }
+
+  /** The settings a thread starts on: its own, else its family's model memory. */
+  function initialThreadSettings(source: Thread): ThreadSettings {
+    const next = initialSettingsFor(modelScope(), source)
+    return chatMode ? normalizeChatSettings(next) : next
+  }
+
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
-    hasController
-      ? normalizeChatSettings(controller!.settings)
-      : chatMode
-        ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-        : threadSettings.initialFor(thread)
+    hasController ? normalizeChatSettings(controller!.settings) : initialThreadSettings(thread)
   )
 
   function shouldHydrateEngineeringState(): boolean {
@@ -1003,12 +1017,10 @@
     return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
-  /** Commit to the chat-scoped last-used store on the Chats tab, and to the
-   *  project last-used store everywhere else, so switching a chat model never
-   *  changes the model used for project work. */
+  /** Commit to the model memory of this conversation's family, so a model picked
+   *  for a chat or an assistant task never changes what another kind starts on. */
   function commitSettings(next: ThreadSettings): void {
-    if (chatMode) chatSettings.commit(next)
-    else threadSettings.commit(next)
+    settingsStoreFor(modelScope()).commit(next)
   }
 
   function captureLiveWorkingSelection(): void {
@@ -1030,9 +1042,10 @@
    *  inherited or otherwise preselected model without opening the picker. */
   function recordModelUse(): void {
     if (!settings.harnessId || !settings.providerId || !settings.modelId) return
-    const key = modelKey(settings.harnessId, settings.providerId, settings.modelId)
-    if (chatMode) rendererRecovery.addChatRecentModel(key)
-    else rendererRecovery.addRecentModel(key)
+    rendererRecovery.addModelRecentFor(
+      modelScope(),
+      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+    )
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
@@ -4218,9 +4231,7 @@
       queueMicrotask(() => {
         if (!alive) return
         if (thread.settings) {
-          settings = chatMode
-            ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-            : threadSettings.initialFor(thread)
+          settings = initialThreadSettings(thread)
         }
         auditSettings = auditSettingsForThread()
         syncOpenSubagentTabs()
@@ -4252,11 +4263,7 @@
           queueMicrotask(() => {
             if (!alive) return
             if (threadData?.settings) {
-              settings = chatMode
-                ? normalizeChatSettings(
-                    chatSettings.initialFor(threadData, chatEffectiveSettings())
-                  )
-                : threadSettings.initialFor(threadData)
+              settings = initialThreadSettings(threadData)
             }
             agentDefaults = config.agentDefaults
             imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -4288,9 +4295,7 @@
       // around the newest tail now. No-op when the warm path already revealed.
       beginInitialPaintReveal()
       if (threadData?.settings) {
-        settings = chatMode
-          ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
-          : threadSettings.initialFor(threadData)
+        settings = initialThreadSettings(threadData)
       }
       agentDefaults = config.agentDefaults
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -5772,14 +5777,10 @@
     // unmount   releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab this seeds the chat's own
-    // store, so the next chat inherits this chat's model, thinking level, and
-    // File System state   never the project view's configuration.
-    if (chatMode) {
-      chatSettings.commit(settings)
-    } else {
-      threadSettings.commit(settings)
-    }
+    // Persist settings as last-used. Each family seeds its own store, so the
+    // next chat or assistant task inherits this thread's model, thinking level
+    // and File System state, never another family's configuration.
+    commitSettings(settings)
 
     errorMessage = ''
     providerStatus = null
@@ -11656,25 +11657,22 @@
                     : settings)}
                 {providers}
                 projectId={thread.projectId}
-                favoriteModels={chatMode
-                  ? rendererRecovery.chatFavoriteModels
-                  : rendererRecovery.favoriteModels}
-                recentModels={chatMode
-                  ? rendererRecovery.chatRecentModels
-                  : rendererRecovery.recentModels}
-                onRemoveRecent={(key) =>
-                  chatMode
-                    ? rendererRecovery.removeChatRecentModel(key)
-                    : rendererRecovery.removeRecentModel(key)}
+                favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
-                  chatMode
-                    ? rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))
-                    : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  rendererRecovery.toggleModelFavoriteFor(
+                    modelScope(),
+                    modelKey(harnessId, providerId, modelId)
+                  )}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
-                  chatMode
-                    ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                    : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  rendererRecovery.reorderModelFavoriteFor(
+                    modelScope(),
+                    draggedKey,
+                    targetKey,
+                    position
+                  )}
                 onStop={abortRun}
                 onRetry={retryConnection}
                 retrying={providerRetrying}
@@ -11975,26 +11973,21 @@
                   {providers}
                   {settings}
                   projectId={thread.projectId}
-                  favoriteModels={chatMode
-                    ? rendererRecovery.chatFavoriteModels
-                    : rendererRecovery.favoriteModels}
-                  recentModels={chatMode
-                    ? rendererRecovery.chatRecentModels
-                    : rendererRecovery.recentModels}
-                  onRemoveRecent={(key) =>
-                    chatMode
-                      ? rendererRecovery.removeChatRecentModel(key)
-                      : rendererRecovery.removeRecentModel(key)}
+                  favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                  recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                  onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
-                    chatMode
-                      ? rendererRecovery.toggleChatFavorite(
-                          modelKey(harnessId, providerId, modelId)
-                        )
-                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    rendererRecovery.toggleModelFavoriteFor(
+                      modelScope(),
+                      modelKey(harnessId, providerId, modelId)
+                    )}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
-                    chatMode
-                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                    rendererRecovery.reorderModelFavoriteFor(
+                      modelScope(),
+                      draggedKey,
+                      targetKey,
+                      position
+                    )}
                   onModelChange={updateSettings}
                   onConnect={openAiAccountSetup}
                   onDismiss={() => (aiAccountPromptOpen = false)}
@@ -12584,32 +12577,24 @@
                       historyMessages={composerHistoryTexts}
                       onHistoryNavigateStart={() => void refreshUserMessageHistory()}
                       hidePermissionSelector={chatMode}
-                      favoriteModels={chatMode
-                        ? rendererRecovery.chatFavoriteModels
-                        : rendererRecovery.favoriteModels}
+                      favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
                       onToggleFavorite={(providerId, modelId, harnessId) =>
-                        chatMode
-                          ? rendererRecovery.toggleChatFavorite(
-                              modelKey(harnessId, providerId, modelId)
-                            )
-                          : rendererRecovery.toggleFavorite(
-                              modelKey(harnessId, providerId, modelId)
-                            )}
+                        rendererRecovery.toggleModelFavoriteFor(
+                          modelScope(),
+                          modelKey(harnessId, providerId, modelId)
+                        )}
                       onReorderFavorite={(draggedKey, targetKey, position) =>
-                        chatMode
-                          ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                          : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                      recentModels={chatMode
-                        ? rendererRecovery.chatRecentModels
-                        : rendererRecovery.recentModels}
+                        rendererRecovery.reorderModelFavoriteFor(
+                          modelScope(),
+                          draggedKey,
+                          targetKey,
+                          position
+                        )}
+                      recentModels={rendererRecovery.modelRecentsFor(modelScope())}
                       onRemoveRecent={(key) =>
-                        chatMode
-                          ? rendererRecovery.removeChatRecentModel(key)
-                          : rendererRecovery.removeRecentModel(key)}
+                        rendererRecovery.removeModelRecentFor(modelScope(), key)}
                       onModelUsed={(modelKey) =>
-                        chatMode
-                          ? rendererRecovery.addChatRecentModel(modelKey)
-                          : rendererRecovery.addRecentModel(modelKey)}
+                        rendererRecovery.addModelRecentFor(modelScope(), modelKey)}
                       imageDescriptorDefault={agentDefaults.imageDescriptor}
                       {imageDescriptorAskAgain}
                       onImageDescriptorDefaultChange={setImageDescriptorDefault}

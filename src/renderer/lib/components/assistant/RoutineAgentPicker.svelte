@@ -3,6 +3,7 @@
   import ModelPicker from '$lib/components/shared/ModelPicker.svelte'
   import { modelKey } from '$lib/model-keys'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import type { ModelScope } from '$lib/stores/thread-settings.svelte'
   import type {
     AgentModelSelection,
     ProviderCatalog,
@@ -36,6 +37,13 @@
   }: Props = $props()
 
   const DEFAULT_HARNESS = 'opencode'
+
+  /**
+   * The routine's model set is an assistant decision, so both pickers read the
+   * assistant's model memory: its own favorites and recently used models, kept
+   * apart from the Chats and project lists.
+   */
+  const modelScope: ModelScope = 'assistant'
 
   /** One fallback row: a model, or an empty slot the user has not filled yet. */
   type FallbackRow = AgentModelSelection | null
@@ -150,9 +158,9 @@
           providerId={draft.primary?.providerId ?? ''}
           modelId={draft.primary?.modelId ?? ''}
           accountId={draft.primary?.accountId}
-          favoriteModels={rendererRecovery.favoriteModels}
-          recentModels={rendererRecovery.recentModels}
-          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+          favoriteModels={rendererRecovery.modelFavoritesFor(modelScope)}
+          recentModels={rendererRecovery.modelRecentsFor(modelScope)}
+          onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope, key)}
           side="bottom"
           variant="field"
           fullWidth
@@ -177,9 +185,12 @@
             )
           }}
           onToggleFavorite={(providerId, modelId, harnessId) =>
-            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            rendererRecovery.toggleModelFavoriteFor(
+              modelScope,
+              modelKey(harnessId, providerId, modelId)
+            )}
           onReorderFavorite={(draggedKey, targetKey, position) =>
-            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            rendererRecovery.reorderModelFavoriteFor(modelScope, draggedKey, targetKey, position)}
         />
       </div>
       {#if draft.primary}
@@ -217,9 +228,9 @@
             providerId={row?.providerId ?? ''}
             modelId={row?.modelId ?? ''}
             accountId={row?.accountId}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            favoriteModels={rendererRecovery.modelFavoritesFor(modelScope)}
+            recentModels={rendererRecovery.modelRecentsFor(modelScope)}
+            onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope, key)}
             side="bottom"
             variant="field"
             fullWidth
@@ -246,9 +257,12 @@
               )
             }}
             onToggleFavorite={(providerId, modelId, harnessId) =>
-              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+              rendererRecovery.toggleModelFavoriteFor(
+                modelScope,
+                modelKey(harnessId, providerId, modelId)
+              )}
             onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              rendererRecovery.reorderModelFavoriteFor(modelScope, draggedKey, targetKey, position)}
           />
         </div>
         <button

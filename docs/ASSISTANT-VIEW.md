@@ -150,6 +150,21 @@ the engineering agent behavior:
   delegating to a sub-agent stays off the table. The app's permission policy, not
   the deny matrix, governs the risk of any individual call. An explicit
   `@cio-utility` turn keeps its own `cio-utility-setup` agent.
+- **Its own model memory.** An assistant task is a third model-memory family,
+  next to the project threads and the Chats tab (`assistantSettings` in
+  `src/renderer/lib/stores/thread-settings.svelte.ts`). A new task starts on, in
+  order: the assistant task in focus, the assistant's own last-used model, else
+  the model the project work last ran on (`settingsForNewAssistantTask` in
+  `src/renderer/lib/thread-settings-inheritance.ts`, over
+  `assistantEffectiveSettings`). Only the model identity is ever borrowed from
+  the project (harness, account, provider, model), never its File System mode or
+  permission level: a task stays pinned to auto review until File System is
+  turned on for the assistant itself, exactly like a chat. Changing a model in a
+  task commits to the assistant store, so a routine task never reshapes the
+  model a chat or a project thread starts on. The model pickers in a task and in
+  a routine's **Agents** tab read the assistant's own favorites and recently
+  used models (`assistantFavoriteModels` / `assistantRecentModels` in
+  `src/renderer/lib/stores/renderer-recovery.svelte.ts`).
 
 ## Scheduler contract
 
@@ -631,7 +646,9 @@ value and editable where the user must.
   (`RoutineAgentPicker.svelte`). Creating a routine never asks for a model: the
   primary is the model the user was already working on
   (`currentAssistantModelSelection` in the workspace, applied through
-  `withDefaultRoutinePrimary` in `src/lib/routine-agents.ts`), and while the
+  `withDefaultRoutinePrimary` in `src/lib/routine-agents.ts`), which is the
+  selected task's model when there is one, else the assistant's own last-used
+  model, else the model the project work last ran on, and while the
   how-to is still being written the composer's model is written back to the
   primary on each turn (`syncRoutinePrimaryToCurrentModel` in
   `ThreadView.svelte`), so a model switched before the first turn still becomes

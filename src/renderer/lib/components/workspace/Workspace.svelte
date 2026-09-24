@@ -60,13 +60,14 @@
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
+    assistantEffectiveSettings,
     threadSettings,
-    chatEffectiveSettings,
-    chatSettings
+    chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
+    settingsForNewAssistantTask,
     settingsForNewThread,
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
@@ -2764,7 +2765,17 @@
     const inheritedBucketId =
       activeThread && activeThread.projectId === project.id ? activeThread.scopeBucketId : undefined
     const scopeBucketId = requestedBucketId ?? inheritedBucketId
-    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
+    // The assistant space is its own model-memory family: a new task inherits
+    // the assistant task in focus, and nothing else, so a chat or project
+    // thread that happens to be selected never leaks into the assistant space.
+    const assistantFocus =
+      project.id === ASSISTANT_SPACE_ID && activeThread?.projectId === ASSISTANT_SPACE_ID
+        ? activeThread
+        : null
+    const inheritedSettings =
+      project.id === ASSISTANT_SPACE_ID
+        ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
+        : settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
       // A routine-scoped create always lands inside its routine, even when it
@@ -3087,15 +3098,15 @@
 
   /**
    * The model the composer would start a new assistant task on: the selected
-   * assistant task's model, else the Chats last-used selection (assistant
-   * threads run on chat-style settings). A routine defaults its primary to it.
+   * assistant task's model, else the assistant's own last-used model, else the
+   * model the project work last ran on. A routine defaults its primary to it.
    */
   function currentAssistantModelSelection(): AgentModelSelection | undefined {
     const selected = workspaceState.selectedThread
     const settings =
       selected && selected.projectId === ASSISTANT_SPACE_ID
         ? selected.settings
-        : chatSettings.lastUsed
+        : assistantEffectiveSettings(threadSettings.lastUsed)
     if (!settings?.modelId) return undefined
     return {
       harnessId: settings.harnessId,

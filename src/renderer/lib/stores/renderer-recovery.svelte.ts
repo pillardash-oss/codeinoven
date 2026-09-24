@@ -5,6 +5,7 @@ import type {
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
 import { parseModelKey } from '$lib/model-keys'
+import type { ModelScope } from './thread-settings.svelte'
 import { setDraftLabelCookie } from './draft-label'
 import {
   commitDraftStateNow,
@@ -79,6 +80,8 @@ export class RendererRecoveryStore {
   recentModels = $state<string[]>([])
   chatFavoriteModels = $state<string[]>([])
   chatRecentModels = $state<string[]>([])
+  assistantFavoriteModels = $state<string[]>([])
+  assistantRecentModels = $state<string[]>([])
   auditModelKey = $state<string | undefined>(undefined)
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
   private queuedMessages = $state<Record<string, QueuedMessageEntry[]>>({})
@@ -100,6 +103,8 @@ export class RendererRecoveryStore {
     this.recentModels = saved.recentModels
     this.chatFavoriteModels = saved.chatFavoriteModels
     this.chatRecentModels = saved.chatRecentModels
+    this.assistantFavoriteModels = saved.assistantFavoriteModels
+    this.assistantRecentModels = saved.assistantRecentModels
     this.auditModelKey = saved.auditModelKey
     this.composerDrafts = saved.composerDrafts
     this.queuedMessages = saved.queuedMessages
@@ -154,6 +159,8 @@ export class RendererRecoveryStore {
       recentModels: [...this.recentModels],
       chatFavoriteModels: [...this.chatFavoriteModels],
       chatRecentModels: [...this.chatRecentModels],
+      assistantFavoriteModels: [...this.assistantFavoriteModels],
+      assistantRecentModels: [...this.assistantRecentModels],
       auditModelKey: this.auditModelKey
     }
   }
@@ -736,6 +743,105 @@ export class RendererRecoveryStore {
     if (next.length === this.chatRecentModels.length) return
     this.chatRecentModels = next
     this.persist()
+  }
+
+  toggleAssistantFavorite(modelKey: string): void {
+    const idx = this.assistantFavoriteModels.indexOf(modelKey)
+    if (idx === -1) {
+      this.assistantFavoriteModels = [...this.assistantFavoriteModels, modelKey]
+    } else {
+      this.assistantFavoriteModels = this.assistantFavoriteModels.filter(
+        (k) => k !== this.assistantFavoriteModels[idx]
+      )
+    }
+    this.persist()
+  }
+
+  /**
+   * Move an assistant favorite to a new position relative to another one. The
+   * array is stored oldest-first; the picker displays it reversed, so callers
+   * should pass the position in storage order.
+   */
+  reorderAssistantFavorite(
+    draggedKey: string,
+    targetKey: string,
+    position: 'before' | 'after'
+  ): void {
+    if (draggedKey === targetKey) return
+    const favorites = [...this.assistantFavoriteModels]
+    const draggedIndex = favorites.indexOf(draggedKey)
+    if (draggedIndex === -1) return
+    favorites.splice(draggedIndex, 1)
+    const targetIndex = favorites.indexOf(targetKey)
+    if (targetIndex === -1) return
+    favorites.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedKey)
+    this.assistantFavoriteModels = favorites
+    this.persist()
+  }
+
+  addAssistantRecentModel(modelKey: string): void {
+    this.assistantRecentModels = [
+      modelKey,
+      ...this.assistantRecentModels.filter((k) => k !== modelKey)
+    ].slice(0, 10)
+    this.persist()
+  }
+
+  /** Removes one model from the assistant-task recently-used history (picker "x"). */
+  removeAssistantRecentModel(modelKey: string): void {
+    const next = this.assistantRecentModels.filter((k) => k !== modelKey)
+    if (next.length === this.assistantRecentModels.length) return
+    this.assistantRecentModels = next
+    this.persist()
+  }
+
+  /**
+   * The favorite list a model picker shows for a conversation family. Read
+   * through this in reactive code: it resolves to the live $state array, so a
+   * new favorite re-renders the picker that asked for it.
+   */
+  modelFavoritesFor(scope: ModelScope): string[] {
+    if (scope === 'assistant') return this.assistantFavoriteModels
+    if (scope === 'chat') return this.chatFavoriteModels
+    return this.favoriteModels
+  }
+
+  /** The recently-used list a model picker shows for a conversation family. */
+  modelRecentsFor(scope: ModelScope): string[] {
+    if (scope === 'assistant') return this.assistantRecentModels
+    if (scope === 'chat') return this.chatRecentModels
+    return this.recentModels
+  }
+
+  /** Record a model as used by a conversation family (picker "Recent" row). */
+  addModelRecentFor(scope: ModelScope, modelKey: string): void {
+    if (scope === 'assistant') this.addAssistantRecentModel(modelKey)
+    else if (scope === 'chat') this.addChatRecentModel(modelKey)
+    else this.addRecentModel(modelKey)
+  }
+
+  /** Drop one model from a conversation family's recently-used history. */
+  removeModelRecentFor(scope: ModelScope, modelKey: string): void {
+    if (scope === 'assistant') this.removeAssistantRecentModel(modelKey)
+    else if (scope === 'chat') this.removeChatRecentModel(modelKey)
+    else this.removeRecentModel(modelKey)
+  }
+
+  toggleModelFavoriteFor(scope: ModelScope, modelKey: string): void {
+    if (scope === 'assistant') this.toggleAssistantFavorite(modelKey)
+    else if (scope === 'chat') this.toggleChatFavorite(modelKey)
+    else this.toggleFavorite(modelKey)
+  }
+
+  reorderModelFavoriteFor(
+    scope: ModelScope,
+    draggedKey: string,
+    targetKey: string,
+    position: 'before' | 'after'
+  ): void {
+    if (scope === 'assistant') this.reorderAssistantFavorite(draggedKey, targetKey, position)
+    else if (scope === 'chat') this.reorderChatFavorite(draggedKey, targetKey, position)
+    else this.reorderFavorite(draggedKey, targetKey, position)
   }
 
   setAuditModel(modelKey: string): void {
