@@ -7,6 +7,7 @@ import type {
   HarnessUninstallHandoff,
   ProviderConnectionInfo
 } from '../../lib/types'
+import { canUninstallHarness } from '../../lib/harness-uninstall'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'
@@ -414,16 +415,26 @@ export class HarnessInstallService {
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
 
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
-    if (!provider || provider.status !== 'available') {
+    if (!provider) {
       throw new Error(`${definition.name} is not installed   nothing to uninstall.`)
     }
     if (provider.executionTarget?.kind === 'bundled') {
       throw new Error(
-        `${definition.name} is bundled with CodeInOven and cannot be uninstalled separately.`
+        `${definition.name} is bundled with CodeInOven   it cannot be uninstalled separately.`
+      )
+    }
+    // A broken install is still an install: `error` means the binary resolved
+    // but its version probe died, which is precisely when the user needs the
+    // harness's own removal command. Only a genuinely absent harness is refused.
+    if (!canUninstallHarness(provider)) {
+      throw new Error(
+        provider.status === 'not_found'
+          ? `${definition.name} is not installed   nothing to uninstall.`
+          : `${definition.name} has not been probed yet   check it in Settings, Harnesses, then uninstall.`
       )
     }
 
-    const method = detectMethod(harnessId, provider.resolvedPath)
+    const method = detectMethod(harnessId, provider.resolvedPath, provider.executionTarget)
     const command = UNINSTALL_COMMANDS[harnessId]?.[method]
     if (!command) {
       throw new Error(

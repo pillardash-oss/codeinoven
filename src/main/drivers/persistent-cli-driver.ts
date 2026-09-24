@@ -647,7 +647,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   ): string {
     const reason = describeHarnessExit('Harness process', code, signal)
     if (!signal || producedOutput || requestedStop) return reason
-    return `${reason} before it produced any output, so ${this.name} could not start on this machine. Its install is the likeliest cause: reinstall it under Settings, Harnesses, or pick a different harness and retry.`
+    return `${reason} before it produced any output, so ${this.name} could not start on this machine. Its install is the likeliest cause: uninstall it under Settings, Harnesses, then install it again   or pick a different harness and retry.`
   }
 
   /**

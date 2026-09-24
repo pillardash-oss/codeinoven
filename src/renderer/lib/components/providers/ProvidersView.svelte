@@ -9,6 +9,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { canUninstallHarness } from '$shared/harness-uninstall'
   import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
     HarnessManifestEntry,
@@ -239,7 +240,7 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
-    if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
+    if (canUninstallHarness(provider)) {
       items.push({ label: `divider-${provider.id}`, divider: true })
       items.push({
         label: 'Uninstall',
@@ -793,6 +794,21 @@
                   <RefreshCw size={13} />
                   Retry
                 </button>
+                {#if canUninstallHarness(provider)}
+                  <button
+                    class="flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                    title="Uninstall {provider.name} in the embedded terminal, then install it again"
+                    disabled={harnessLifecycleStore.isRunning(provider.id)}
+                    onclick={() => void requestUninstall(provider)}
+                  >
+                    {#if harnessLifecycleStore.isRunning(provider.id)}
+                      <Loader2 size={13} class="animate-spin" />
+                    {:else}
+                      <Trash2 size={13} />
+                    {/if}
+                    Uninstall
+                  </button>
+                {/if}
                 <button
                   class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
