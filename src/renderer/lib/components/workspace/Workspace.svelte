@@ -2958,6 +2958,36 @@
     workspaceState.clearThread()
   }
 
+  /** Create a standalone (project-less) chat thread inside the hidden inbox. */
+  async function createInboxThread(): Promise<{ thread: Thread; inbox: Project }> {
+    const inbox = await invoke('project:ensureInbox')
+    const thread = await invoke('thread:create', {
+      projectId: inbox.id,
+      providerId: 'pi',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: '',
+      settings: chatEffectiveSettings(threadSettings.lastUsed)
+    })
+    return { thread, inbox }
+  }
+
+  /**
+   * In-flight creation of the welcome composer's inbox thread. The draft
+   * hand-off (first keystroke) and the first send share it, so a send landing
+   * while the hand-off is still creating the thread can never make a second
+   * one   both wait for the same thread and open it.
+   */
+  let welcomeChatThreadPromise: Promise<{ thread: Thread; inbox: Project }> | null = null
+
+  function ensureWelcomeChatThread(): Promise<{ thread: Thread; inbox: Project }> {
+    if (!welcomeChatThreadPromise) {
+      welcomeChatThreadPromise = createInboxThread().finally(() => {
+        welcomeChatThreadPromise = null
+      })
+    }
+    return welcomeChatThreadPromise
+  }
+
   /** Create a standalone (project-less) chat from the composer's first message. */
   async function createStandaloneChat(
     message: string,
@@ -2966,25 +2996,61 @@
     const msg = message.trim()
     if (!msg && files.length === 0) return
 
+    // Publish the hand-off before awaiting the thread: when a draft hand-off is
+    // already creating it, ThreadView mounts for that same thread and picks the
+    // message up, instead of a second thread being created here.
+    chatDraft.message = msg
+    chatDraft.attachments = files
     try {
-      const inbox = await invoke('project:ensureInbox')
-      const thread = await invoke('thread:create', {
-        projectId: inbox.id,
-        providerId: 'pi',
-        title: DEFAULT_THREAD_TITLE,
-        workingDirectory: '',
-        settings: chatEffectiveSettings(threadSettings.lastUsed)
-      })
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // Seed the empty conversation so the composer renders on the first frame
+      // and the hand-off message is sent without a loading flash.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
       upsertThreadInList(thread)
-      chatDraft.message = msg
-      chatDraft.attachments = files
       workspaceState.openThread(thread, inbox)
     } catch (error) {
+      chatDraft.message = ''
+      chatDraft.attachments = []
       // The thread was never created, so the message cannot appear anywhere.
       // Put it back in the composer so the user doesn't lose their first message.
       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
+    }
+  }
+
+  /**
+   * Turn the welcome composer's unsent draft into a real inbox thread so the
+   * chat surfaces in the Chats sidebar as a draft, exactly like a project's
+   * New thread row. The draft is read again after the thread exists, so words
+   * typed while it was being created are carried over, then it is moved off the
+   * welcome composer and onto the thread before that thread mounts. Nothing is
+   * sent: the draft stays a draft, and the next New chat starts another one.
+   */
+  async function startChatDraft(): Promise<void> {
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
+    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    if (!draft.trim() && attachments.length === 0) return
+
+    try {
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // The thread is seeded empty so its conversation renders the composer on
+      // the first frame   the welcome composer never flashes a loading state.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
+      // Re-read: the composer is authoritative and may have taken more
+      // keystrokes (or been cleared by a send) while the thread was created.
+      rendererRecovery.setDraft(
+        INBOX_PROJECT_ID,
+        thread.id,
+        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+      )
+      rendererRecovery.clearDraft(INBOX_PROJECT_ID, 'new-chat')
+      upsertThreadInList(thread)
+      workspaceState.openThread(thread, inbox)
+    } catch (error) {
+      // The draft stays in the welcome composer, so nothing the user typed is lost.
+      reportError(error, 'The chat draft could not be saved.')
     }
   }
 
@@ -3625,6 +3691,7 @@
         onProjectCreated={handleChatProjectCreated}
         onOpenScopeView={(thread) => void openThreadScopeView(thread)}
         onSendChat={createStandaloneChat}
+        onStartChatDraft={startChatDraft}
         onRequestAddProject={(kind) => {
           projectCreateTriggerKind = kind
           workspaceState.requestAddProject()

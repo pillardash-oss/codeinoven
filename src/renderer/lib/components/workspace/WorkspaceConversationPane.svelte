@@ -50,6 +50,9 @@
     onProjectCreated: (project: Project) => Promise<void>
     onOpenScopeView: (thread: Thread) => void
     onSendChat: (msg: string, files: PromptAttachment[]) => Promise<void>
+    /** Hand the welcome composer's unsent draft to a real inbox thread so it
+     *  shows in the Chats sidebar as a draft. */
+    onStartChatDraft: () => Promise<void>
     onRequestAddProject: (kind: 'local' | 'git-clone') => void
   }
 
@@ -69,6 +72,7 @@
     onProjectCreated,
     onOpenScopeView,
     onSendChat,
+    onStartChatDraft,
     onRequestAddProject
   }: Props = $props()
 
@@ -76,7 +80,9 @@
 
   /** Assistant mode reuses the chat thread renderer, but a routine's task
    *  authors its how-to conversationally, so the view needs the routine. */
-  let assistantRoutineId = $derived(mode === 'assistant' ? (selectedThread?.routineId ?? null) : null)
+  let assistantRoutineId = $derived(
+    mode === 'assistant' ? (selectedThread?.routineId ?? null) : null
+  )
   let assistantRoutine = $derived(
     assistantRoutineId
       ? (assistantRoutines.routines.find((routine) => routine.id === assistantRoutineId) ?? null)
@@ -169,6 +175,39 @@
       threadId: thread.id
     })
   }
+
+  /** Guards the one-shot hand-off of the welcome composer's draft: the
+   *  composer remounts into ThreadView once the thread it hands the draft to
+   *  exists, so a hand-off already in flight must not start a second one. */
+  let startingChatDraft = false
+
+  /**
+   * Materialise the welcome composer's draft as a real thread.
+   *
+   * That composer is not backed by a thread, so a draft typed there would never
+   * appear in the Chats sidebar. As soon as it holds content, the draft is
+   * handed to an inbox thread: the row shows as a draft and the next New chat
+   * starts another one, so several drafts can coexist exactly like project
+   * threads. Nothing is sent, the draft stays a draft.
+   */
+  function startChatDraft(): void {
+    if (startingChatDraft) return
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
+    const files = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    if (!draft.trim() && files.length === 0) return
+    startingChatDraft = true
+    void onStartChatDraft().finally(() => {
+      startingChatDraft = false
+    })
+  }
+
+  /** A draft restored from recovery (an upgrade, or a failed hand-off) is
+   *  materialised when the welcome composer mounts, not only on the next
+   *  keystroke. */
+  function startRestoredChatDraft(node: HTMLElement): void {
+    void node
+    startChatDraft()
+  }
 </script>
 
 <div
@@ -237,7 +276,7 @@
         <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
         <p class="mt-1 text-[0.875rem] text-muted">Send a message to begin no project needed</p>
       </div>
-      <div class="w-full max-w-4xl">
+      <div class="w-full max-w-4xl" {@attach startRestoredChatDraft}>
         {#if chatAiAccountPromptVisible}
           <div class="mb-3">
             <AiAccountSetupCard
@@ -296,16 +335,20 @@
             onImageDescriptorAskAgainChange={(value) =>
               void updateConfig?.({ imageDescriptorAskAgain: value })}
             initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-            onValueChange={(value) =>
-              rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+            onValueChange={(value) => {
+              rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)
+              startChatDraft()
+            }}
             initialAttachments={rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')}
-            onAttachmentsChange={(files) =>
+            onAttachmentsChange={(files) => {
               rendererRecovery.setDraft(
                 INBOX_PROJECT_ID,
                 'new-chat',
                 rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
                 files
-              )}
+              )
+              startChatDraft()
+            }}
             onSend={(msg, files) => void onSendChat(msg, files)}
             onNeedsAiAccount={() => (chatAiAccountPromptOpen = true)}
             onRevealUsage={revealNewChatUsage}
