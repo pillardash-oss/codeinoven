@@ -98,12 +98,22 @@ export function parseImageDataUrl(value: string): { mimeType: string; data: stri
   return { mimeType: match[1].toLowerCase(), data: match[2] }
 }
 
+/**
+ * The size a base64 payload decodes to, in whole kilobytes.
+ *
+ * Every marker that stands in for an image payload states its size, and they
+ * must agree: a reader comparing "32 KB" here with "31 KB" in the durable log
+ * would be looking at a bug that does not exist. Exported for that reason.
+ */
+export function base64Kilobytes(base64Length: number): number {
+  return Math.max(1, Math.round((base64Length * 3) / 4 / 1024))
+}
+
 /** The text left behind where an image was lifted out of the payload. It states
  *  the media type and size so the model knows what it is looking at without
  *  needing the bytes repeated as characters. */
 function imageMarker(mimeType: string, base64Length: number): string {
-  const kilobytes = Math.max(1, Math.round((base64Length * 3) / 4 / 1024))
-  return `[image delivered as an image content part, not inline base64: ${mimeType}, ${kilobytes} KB]`
+  return `[image delivered as an image content part, not inline base64: ${mimeType}, ${base64Kilobytes(base64Length)} KB]`
 }
 
 function collect(value: unknown, images: GatewayImagePart[], depth: number): unknown {

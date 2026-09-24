@@ -35,4 +35,14 @@ export interface PiTurnState {
    *  unchanged signature marks a repeat rather than a new request. A new
    *  assistant `message_start` clears it, arming the next request. */
   usageSignature?: string
+  /**
+   * Terminal tool results this turn already published, keyed by call id and
+   * their `status|outputLength|errorLength` signature.
+   *
+   * `turn_end` repeats every tool result after `tool_execution_end` already
+   * published it, the same repeat `usageSignature` guards on the usage channel.
+   * Without this the durable stream log held two copies of every tool result,
+   * which for a screenshot was two ~50KB base64 records per call.
+   */
+  publishedToolResults?: Set<string>
 }
