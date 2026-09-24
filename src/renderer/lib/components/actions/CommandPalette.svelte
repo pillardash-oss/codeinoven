@@ -111,6 +111,9 @@
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (!open) return
+    // Inline palettes draw no Modal, so they close on Escape here. A dialog
+    // palette's Escape is owned by its Modal, which routes a sub-screen back to
+    // the palette home through `onEscapeKeydown`.
     if (mode === 'inline' && keymapState.matches('palette-close', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -128,6 +131,21 @@
       event.stopPropagation()
       onBack()
     }
+  }
+
+  /**
+   * Escape on a sub-screen (file search, thread search, switch project) steps
+   * back to the palette home instead of dismissing the palette: the first
+   * Escape returns to the actions list, the next one closes everything. The
+   * home screen has no back target, so the shell still dismisses it. Claiming
+   * the event here   rather than listening for Escape on the window   keeps the
+   * step back tied to this panel's own escape layer, so a popover opened inside
+   * the panel (the footer project picker) still closes on its own first.
+   */
+  function handleEscapeKeydown(event: KeyboardEvent): void {
+    if (!onBack) return
+    event.preventDefault()
+    onBack()
   }
 
   function categoryLabel(action: ActionDefinition): string {
@@ -203,7 +221,9 @@
               {displayShortcutLabel(shortcutLabel)}
             </kbd>
           {/if}
-          <span class="text-[0.625rem] font-medium text-dimmed">ESC</span>
+          <span class="shrink-0 text-[0.625rem] font-medium text-dimmed">
+            {onBack ? 'ESC Back' : 'ESC'}
+          </span>
         </span>
       {/if}
     </header>
@@ -430,6 +450,7 @@
     placement="palette"
     size="lg"
     chrome={false}
+    onEscapeKeydown={handleEscapeKeydown}
     onCloseAutoFocus={(event) => {
       if (onRestoreFocus?.()) event.preventDefault()
     }}
