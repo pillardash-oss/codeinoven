@@ -7,7 +7,7 @@ import type {
   HarnessUninstallHandoff,
   ProviderConnectionInfo
 } from '../../lib/types'
-import { canUninstallHarness } from '../../lib/harness-uninstall'
+import { canUninstallHarness } from '../../lib/harness-actions'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'

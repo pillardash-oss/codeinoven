@@ -9,7 +9,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
-  import { canUninstallHarness } from '$shared/harness-uninstall'
+  import { canRestartHarness, canUninstallHarness } from '$shared/harness-actions'
   import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
     HarnessManifestEntry,
@@ -29,6 +29,7 @@
     Plug,
     Plug2,
     RefreshCw,
+    RotateCcw,
     Search,
     Trash2,
     X
@@ -40,6 +41,7 @@
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
@@ -64,6 +66,9 @@
   let uninstallLoading = $state(false)
   let uninstallError = $state('')
   let uninstallBusy = $state(false)
+  /** Harness awaiting a restart confirmation, whose in-session threads may stop. */
+  let restartTarget = $state<ProviderConnectionInfo | null>(null)
+  let restartBusy = $state(false)
   /** Confirmed/effective harness behavior manifests, keyed by harness id. */
   let manifestEntries = $state.raw<Record<string, HarnessManifestEntry>>({})
   let manifestSaving = $state<Record<string, boolean>>({})
@@ -240,8 +245,18 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
-    if (canUninstallHarness(provider)) {
+    if (canRestartHarness(provider) || canUninstallHarness(provider)) {
       items.push({ label: `divider-${provider.id}`, divider: true })
+    }
+    if (canRestartHarness(provider)) {
+      items.push({
+        label: 'Restart harness',
+        icon: RotateCcw,
+        disabled: harnessLifecycleStore.isRunning(provider.id),
+        onClick: () => requestRestart(provider)
+      })
+    }
+    if (canUninstallHarness(provider)) {
       items.push({
         label: 'Uninstall',
         icon: Trash2,
@@ -376,6 +391,33 @@
     uninstallTarget = null
     uninstallCommand = ''
     uninstallError = ''
+  }
+
+  /**
+   * Replace the harness process CodeInOven holds so the version installed on
+   * disk is the one the next turn runs. Always confirmed first: restarting takes
+   * the transport away from any thread that is mid-turn.
+   */
+  function requestRestart(provider: ProviderConnectionInfo): void {
+    if (harnessLifecycleStore.isRunning(provider.id)) return
+    restartTarget = provider
+  }
+
+  async function confirmRestart(): Promise<void> {
+    const target = restartTarget
+    if (!target || restartBusy) return
+    restartBusy = true
+    try {
+      await harnessLifecycleStore.restartHarnessNow(target.id)
+      restartTarget = null
+    } finally {
+      restartBusy = false
+    }
+  }
+
+  function cancelRestart(): void {
+    if (restartBusy) return
+    restartTarget = null
   }
 
   function customCountFor(harnessId: string): number {
@@ -1017,6 +1059,25 @@
 
 {#if addTarget}
   <ProviderConnectFlow harness={addTarget} onClose={() => (addTarget = null)} />
+{/if}
+
+{#if restartTarget}
+  <ConfirmDialog
+    open
+    title={`Restart ${restartTarget.name}?`}
+    confirmLabel="Restart harness"
+    variant="danger"
+    busy={restartBusy}
+    onCancel={cancelRestart}
+    onConfirm={confirmRestart}
+    note="Any thread that is actively in session may stop working."
+  >
+    <p>
+      This closes the {restartTarget.name} process {APP_NAME} is holding and starts a fresh one from the
+      version installed on your machine, so an update takes effect without restarting {APP_NAME}.
+    </p>
+    <p>Threads keep their conversations; a turn that is running right now is interrupted.</p>
+  </ConfirmDialog>
 {/if}
 
 {#if uninstallTarget}

@@ -258,6 +258,20 @@ export interface HarnessUninstallHandoff {
   method: HarnessInstallMethod
 }
 
+/**
+ * Outcome of asking CodeInOven to restart a harness's resident transports so
+ * the next turn runs the harness binary currently on disk.
+ */
+export interface HarnessRuntimeRestartResult {
+  harnessId: string
+  /** Resident transports were torn down; the next turn spawns a fresh process. */
+  restarted: boolean
+  /** Sessions that were mid-turn when a forced restart took their transport. */
+  interruptedSessions: number
+  /** Present when nothing was restarted, explaining why. */
+  detail?: string
+}
+
 /** A provider a harness offers for connection, surfaced from its catalog. */
 export interface OfferedProvider {
   id: string

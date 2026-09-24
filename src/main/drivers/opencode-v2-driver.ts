@@ -838,6 +838,22 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     this.stopSharedServerIfIdle()
   }
 
+  /**
+   * Tear down every pooled server so the next turn spawns `opencode serve` from
+   * the install currently on disk. The shared host and the per-turn hosts are
+   * long-lived processes that keep the old build alive across turns; a harness
+   * update only replaces the CLI. Sessions live in opencode's own store, so the
+   * rebuilt servers rehydrate them.
+   */
+  async restartRuntime(): Promise<void> {
+    // A host that is still starting would otherwise land in `this.server` after
+    // the kill and keep the old binary serving turns.
+    if (this.starting) await this.starting.catch(() => undefined)
+    for (const sessionId of [...this.turnServers.keys()]) await this.stopTurnServer(sessionId)
+    for (const isolated of [...this.isolatedServers.values()]) this.disposeIsolatedSession(isolated)
+    this.stopSharedServer()
+  }
+
   // ─── Auxiliary (disposable) work ──────────────────────────────────────────
 
   /** Big Pickle is the family's cheap auxiliary candidate. */

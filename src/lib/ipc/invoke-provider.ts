@@ -15,6 +15,7 @@ import type {
   HarnessInstallHandoff,
   HarnessInstallInfo,
   HarnessManifestEntry,
+  HarnessRuntimeRestartResult,
   HarnessUninstallHandoff,
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
@@ -85,6 +86,10 @@ export const invokeProviderContract = {
   'harnessInstall:getInfo': {} as Contract<[harnessId: string], HarnessInstallInfo>,
   'harnessInstall:handoff': {} as Contract<[harnessId: string], HarnessInstallHandoff>,
   'harnessUninstall:handoff': {} as Contract<[harnessId: string], HarnessUninstallHandoff>,
+  'harnessRuntime:restart': {} as Contract<
+    [harnessId: string, options?: { force?: boolean }],
+    HarnessRuntimeRestartResult
+  >,
   'harnessManifest:list': {} as Contract<[], HarnessManifestEntry[]>,
   'harnessManifest:confirm': {} as Contract<
     [input: { harnessId: string; behavior: string; value: boolean }],

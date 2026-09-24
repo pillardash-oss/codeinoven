@@ -246,6 +246,7 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent,
   HarnessCommand,
+  HarnessRuntimeRestartResult,
   HeartbeatConfig,
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
@@ -1193,6 +1194,14 @@ export class ChatEngine {
    */
   private releasedProjects = new Set<string>()
 
+  /**
+   * Harnesses whose resident transports must be restarted as soon as no thread
+   * is using them. A harness update that lands while a thread is still running
+   * may not take that thread's transport away, so the restart is remembered and
+   * the idle reaper applies it once the harness goes quiet.
+   */
+  private deferredHarnessRestarts = new Set<string>()
+
   private idleReaperTimer: ReturnType<typeof setInterval> | null = null
 
   /** How long to wait without SSE activity before checking provider history. */
@@ -1655,6 +1664,13 @@ export class ChatEngine {
   }
 
   register(): void {
+    ipcMain.handle(
+      'harnessRuntime:restart',
+      (_, harnessId: unknown, options?: { force?: boolean }) =>
+        this.restartHarnessRuntime(this.requireHarnessId(harnessId), {
+          force: options?.force === true
+        })
+    )
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.compactSession(projectId, threadId)
     )
@@ -3599,12 +3615,138 @@ export class ChatEngine {
     this.openCodeDriverIsV2 = desiredV2
   }
 
-  /** True when any driver for a harness (default or account-scoped) has a live turn. */
-  private harnessHasActiveTurn(harnessId: string): boolean {
-    const drivers = [this.drivers.get(harnessId), ...this.accountDrivers.values()].filter(
+  /**
+   * Restart a harness's resident transports so the next turn runs the harness
+   * binary currently on disk.
+   *
+   * Every long-lived harness process (OpenCode's `serve`, Codex's app-server
+   * daemon, Pi's per-session RPC client) was spawned from the install that was
+   * on disk when the session first needed it, and it keeps that build alive for
+   * as long as it runs. A harness self-update therefore changes nothing for
+   * sessions already using it: the version probe re-reads the new binary and
+   * reports the update as applied while the app keeps talking to the old
+   * process. Restarting is what makes an update take effect without an app
+   * restart.
+   *
+   * Sessions persist in each harness's own store, so a restart resumes them.
+   * `force` restarts even while threads are mid-turn, which stops those turns
+   * (the manual action makes the user confirm exactly that); without it a busy
+   * harness is remembered and restarted by the idle reaper once its threads
+   * have all gone quiet, so a background update still lands.
+   */
+  async restartHarnessRuntime(
+    harnessId: string,
+    options: { force?: boolean } = {}
+  ): Promise<HarnessRuntimeRestartResult> {
+    const drivers = this.harnessDrivers(harnessId)
+    if (drivers.length === 0) {
+      return {
+        harnessId,
+        restarted: false,
+        interruptedSessions: 0,
+        detail: `CodeInOven has no ${harnessId} driver, so there is nothing to restart.`
+      }
+    }
+
+    const busy = this.busySessionsForHarness(harnessId)
+    if (busy.length > 0 && options.force !== true) {
+      this.deferredHarnessRestarts.add(harnessId)
+      return {
+        harnessId,
+        restarted: false,
+        interruptedSessions: 0,
+        detail: `${busy.length} thread${busy.length === 1 ? '' : 's'} still running on ${harnessId}; the restart waits for them to finish.`
+      }
+    }
+
+    this.deferredHarnessRestarts.delete(harnessId)
+    for (const driver of drivers) {
+      try {
+        await driver.restartRuntime?.()
+      } catch (error) {
+        // One container's transport failing to restart must not stop the rest.
+        Logger.error('Harness runtime restart failed:', error)
+      }
+    }
+    Logger.info('Restarted harness runtime', { harnessId, interruptedSessions: busy.length })
+    return { harnessId, restarted: true, interruptedSessions: busy.length }
+  }
+
+  /**
+   * A harness update that landed while a thread was still running is applied
+   * here, once that harness has gone quiet. The reaper already runs on a fixed
+   * cadence and already knows how to tell a busy harness from an idle one, so
+   * the deferred restart rides that check instead of racing the idle
+   * transition it would have to detect itself.
+   */
+  private applyDeferredHarnessRestarts(): void {
+    for (const harnessId of [...this.deferredHarnessRestarts]) {
+      if (this.busySessionsForHarness(harnessId).length > 0) continue
+      void this.restartHarnessRuntime(harnessId).catch((error) => {
+        Logger.error('Deferred harness restart failed:', error)
+      })
+    }
+  }
+
+  /**
+   * Validate the harness id at the IPC boundary: it arrives from the renderer
+   * as untrusted input, like every other privileged channel argument.
+   */
+  private requireHarnessId(value: unknown): string {
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > 256) {
+      throw new TypeError('Harness ID is invalid')
+    }
+    return value.trim()
+  }
+
+  /**
+   * Sessions the engine still considers busy on a harness: a turn that is
+   * running or waiting on its provider, a card the user has not answered, a
+   * delegated worker inside the harness process, or a turn the engine is still
+   * finalizing. Their transport may not be taken away unannounced.
+   */
+  private busySessionsForHarness(harnessId: string): string[] {
+    const busy = new Set<string>()
+    for (const [sessionId, info] of this.sessionRegistry) {
+      if (info.driverId !== harnessId) continue
+      const state = this.sessionStatuses.get(sessionId)?.state
+      if (state === 'working' || state === 'waiting') busy.add(sessionId)
+    }
+    // A card on screen owns the harness process that asked for it, even once
+    // the session's own status has settled.
+    for (const pending of this.pendingQuestions.values()) {
+      if (pending.driverId === harnessId) busy.add(pending.request.sessionId)
+    }
+    for (const pending of this.pendingPermissions.values()) {
+      if (pending.driverId === harnessId) busy.add(pending.request.sessionId)
+    }
+    for (const [childSessionId, child] of this.childSessionOwners) {
+      if (child.driverId !== harnessId) continue
+      const state = this.sessionStatuses.get(childSessionId)?.state
+      if (state === 'working' || state === 'waiting') busy.add(childSessionId)
+    }
+    for (const sessionId of this.completionWaiters.keys()) {
+      if (this.sessionRegistry.get(sessionId)?.driverId === harnessId) busy.add(sessionId)
+    }
+    for (const sessionId of this.utilityTurns.keys()) {
+      if (this.sessionRegistry.get(sessionId)?.driverId === harnessId) busy.add(sessionId)
+    }
+    return [...busy]
+  }
+
+  /**
+   * Every live driver instance serving a harness: the default one plus each
+   * managed account container's own instance, which holds its own transports.
+   */
+  private harnessDrivers(harnessId: string): HarnessDriver[] {
+    return [this.drivers.get(harnessId), ...this.accountDrivers.values()].filter(
       (driver): driver is HarnessDriver => driver !== undefined && driver.id === harnessId
     )
-    for (const driver of drivers) {
+  }
+
+  /** True when any driver for a harness (default or account-scoped) has a live turn. */
+  private harnessHasActiveTurn(harnessId: string): boolean {
+    for (const driver of this.harnessDrivers(harnessId)) {
       if (!driver.hasActiveTurn) continue
       for (const sessionId of this.sessionRegistry.keys()) {
         if (driver.hasActiveTurn(sessionId)) return true
@@ -6637,6 +6779,7 @@ export class ChatEngine {
       }
     }
 
+    this.applyDeferredHarnessRestarts()
     await this.sweepOrphanedProcesses()
   }
 
