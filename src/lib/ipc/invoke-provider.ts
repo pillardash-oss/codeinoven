@@ -19,6 +19,8 @@ import type {
   HarnessUninstallHandoff,
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
+  McpConnectionTestResult,
+  McpProbeTarget,
   NativeMcpContent,
   NativeSkillContent,
   OfferedProvider,
@@ -98,8 +100,12 @@ export const invokeProviderContract = {
   'harnessManifest:reset': {} as Contract<[input: { harnessId: string; behavior: string }], void>,
   'harnessAutoUpdate:list': {} as Contract<[], Record<string, boolean>>,
   'harnessAutoUpdate:set': {} as Contract<[input: { harnessId: string; value: boolean }], void>,
+  /**
+   * Harness authentication status. With `accountId`, the read is scoped to that
+   * account's own credential home instead of the merged default-home view.
+   */
   'providerAccounts:getAuthStatus': {} as Contract<
-    [harnessId: string, projectPath?: string],
+    [harnessId: string, projectPath?: string, accountId?: string],
     ProviderAccountAuthStatus
   >,
   'providerAccounts:list': {} as Contract<
@@ -215,6 +221,7 @@ export const invokeProviderContract = {
     UtilityDefinition
   >,
   'utilities:resolve': {} as Contract<[context: UtilityResolutionContext], ResolvedUtility[]>,
+  'utilities:testMcp': {} as Contract<[target: McpProbeTarget], McpConnectionTestResult>,
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   /**

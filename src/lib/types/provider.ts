@@ -182,6 +182,12 @@ export interface ProviderAccountLoginHandoff {
   args: string[]
   /** Bounded credential-home overrides applied only to this login process. */
   environment?: Record<string, string>
+  /**
+   * Account whose credential home this login writes into. Absent only when the
+   * harness has no account to bind to, which leaves the harness's shared
+   * (default-home) credential store as the login target.
+   */
+  accountId?: string
   title: string
   mutatesGlobalCredentials: boolean
 }

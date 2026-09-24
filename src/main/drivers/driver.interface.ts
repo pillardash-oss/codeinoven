@@ -244,6 +244,8 @@ export interface HarnessLoginHandoff {
   command: string
   args: string[]
   environment?: Record<string, string>
+  /** Account whose credential home the login writes into, when main bound one. */
+  accountId?: string
   title: string
   mutatesGlobalCredentials: boolean
 }

@@ -1176,17 +1176,29 @@ export class ProviderAccountOrchestrator {
   async beginLogin(
     harnessId: string,
     options: HarnessLoginOptions = {},
-    environment: NodeJS.ProcessEnv = {}
+    environment: NodeJS.ProcessEnv = {},
+    /** Account whose credential home this login writes into, when main resolved one. */
+    accountId?: string
   ): Promise<HarnessLoginHandoff> {
     const definition = await this.resolveDefinition(harnessId)
+    const loginOptions: HarnessLoginOptions = { ...options }
+    // A custom base-URL provider lives in CodeInOven's own id namespace and means
+    // nothing to a harness CLI, so it never reaches a login command.
+    if (
+      loginOptions.providerId !== undefined &&
+      isCodeInOvenCustomProviderId(loginOptions.providerId)
+    ) {
+      delete loginOptions.providerId
+    }
     const prepared = await prepareHarnessTerminalHandoff(
       definition.command,
-      definition.loginArgs(options)
+      definition.loginArgs(loginOptions)
     )
     return {
       kind: 'terminal',
       command: prepared.command,
       args: prepared.args,
+      ...(accountId ? { accountId } : {}),
       ...(Object.keys(environment).length > 0
         ? { environment: environment as Record<string, string> }
         : {}),
