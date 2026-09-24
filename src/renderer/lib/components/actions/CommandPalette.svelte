@@ -18,6 +18,12 @@
 
   interface Props {
     open: boolean
+    /** Identifies the screen this palette is showing. A host that swaps the
+     *  content of one mounted palette (the app spotlight and its nested
+     *  screens) changes it so the new screen starts clean: empty query, no
+     *  selected row. A palette that only opens and closes (Settings search, the
+     *  inline composer menus) has no screen to identify and leaves it out. */
+    screenKey?: string
     actions: readonly ActionDefinition[]
     onSelect: (selection: ActionSelection) => void | Promise<void>
     onClose: () => void
@@ -48,8 +54,11 @@
     onSelectedProjectsChange?: (projectIds: string[]) => void
   }
 
+  export type CommandPaletteProps = Props
+
   let {
     open,
+    screenKey,
     actions,
     onSelect,
     onClose,
@@ -82,6 +91,7 @@
   let inputElement = $state<HTMLInputElement | null>(null)
   let selectionMethod: ActionSelection['method'] = 'keyboard'
   let wasOpen = false
+  let wasScreenKey: string | undefined = undefined
 
   let visibleActions = $derived(
     serverFiltered
@@ -89,9 +99,16 @@
       : filterActions(actions, query, { limit: maxResults })
   )
 
+  /**
+   * A fresh open and a screen change both start clean: an empty query and no
+   * selected row. `screenKey` is what lets one mounted palette show a different
+   * screen than the one it opened with, without the shell being torn down.
+   */
   $effect(() => {
-    if (open && !wasOpen) {
+    const screen = screenKey
+    if (open && (!wasOpen || screen !== wasScreenKey)) {
       wasOpen = true
+      wasScreenKey = screen
       query = initialQuery
       selectedActionId = ''
       if (mode === 'inline') void tick().then(() => inputElement?.focus())

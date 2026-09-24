@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
+  import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -140,6 +141,108 @@
     // menus   the global Cmd+K surface keeps app-level and cross-harness actions.
     ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
+
+  /** The spotlight is one surface, not four. `actions` is its home screen; the
+   *  other three open from it and only ever show inside the same shell. */
+  type SpotlightScreenId = 'actions' | 'files' | 'threads' | 'projects'
+
+  /** The screen on top. A nested screen outranks the actions list, because
+   *  picking one closes the actions list in the same flush. */
+  function resolveSpotlightScreen(): SpotlightScreenId | null {
+    if (fileSearch.paletteOpen) return 'files'
+    if (threadSearch.paletteOpen) return 'threads'
+    if (projectSwitch.paletteOpen) return 'projects'
+    if (commandPaletteOpen) return 'actions'
+    return null
+  }
+
+  let spotlightScreenId = $derived(resolveSpotlightScreen())
+
+  /**
+   * The props for the single mounted palette, for whichever screen is on top.
+   *
+   * Swapping the screen must not tear the shell down: unmounting one palette and
+   * mounting the next threw the scrim, the panel, the scroll lock and the focus
+   * away and built them again, which is what made the surface flash on every hop
+   * between the home screen and a nested one. One instance with `screenKey`
+   * swapped instead keeps the panel and leaves the query input focused.
+   */
+  let spotlightPalette = $derived.by((): CommandPaletteProps => {
+    /** What every spotlight screen shares; each screen adds its own list. */
+    const shell: Omit<CommandPaletteProps, 'actions' | 'onSelect'> = {
+      open: true,
+      screenKey: spotlightScreenId ?? 'actions',
+      onClose: closeSpotlight,
+      onRestoreFocus: restorePaletteFocus
+    }
+
+    switch (spotlightScreenId) {
+      case 'files':
+        return {
+          ...shell,
+          actions: fileSearch.actions,
+          title: 'Search files across projects',
+          placeholder: 'Type at least two characters…',
+          emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
+          headerIcon: FileSearch,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: fileSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => fileSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => fileSearch.handleQuery(query),
+          onSelect: (selection) => fileSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'threads':
+        return {
+          ...shell,
+          actions: threadSearch.actions,
+          title: 'Search threads across projects',
+          placeholder: 'Search thread titles and messages across all projects…',
+          emptyLabel: threadSearch.loading
+            ? 'Searching threads…'
+            : 'Type at least two characters to search all projects',
+          headerIcon: MessagesSquare,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: threadSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => threadSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => threadSearch.handleQuery(query),
+          onSelect: (selection) => threadSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'projects':
+        return {
+          ...shell,
+          actions: projectSwitch.actions,
+          title: 'Switch project',
+          placeholder: 'Search projects…',
+          emptyLabel: 'No matching projects',
+          headerIcon: FolderKanban,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
+          onBack: backToSpotlightHome,
+          onSelect: (selection) => projectSwitch.select(selection),
+          closeOnSelect: false
+        }
+      default:
+        return {
+          ...shell,
+          actions: paletteActions,
+          title: 'Search actions',
+          placeholder: 'Search actions, threads, and files…',
+          emptyLabel: 'No matching actions',
+          onSelect: handlePaletteSelection,
+          shortcutLabel: 'Ctrl K'
+        }
+    }
+  })
 
   /** Content view to return to when leaving Settings or Scope   persisted in the
    *  recovery snapshot so a restart made while on a Settings page or the Scope
@@ -541,35 +644,30 @@
   }
 
   function toggleCommandPalette(): void {
-    if (fileSearch.paletteOpen) {
-      fileSearch.close()
+    // A nested screen steps back to the actions list; the actions list closes.
+    if (spotlightScreenId === 'actions') {
+      closeSpotlight()
+      return
     }
-    if (threadSearch.paletteOpen) {
-      threadSearch.close()
-    }
-    if (projectSwitch.paletteOpen) {
-      projectSwitch.close()
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    if (spotlightScreenId) {
+      backToSpotlightHome()
       return
     }
     capturePaletteFocus()
     commandPaletteOpen = true
   }
 
-  function backToCommandPaletteFromFileSearch(): void {
-    fileSearch.close()
-    commandPaletteOpen = true
+  /** Close the whole spotlight, whichever screen is on top. */
+  function closeSpotlight(): void {
+    commandPaletteOpen = false
+    if (fileSearch.paletteOpen) fileSearch.close()
+    if (threadSearch.paletteOpen) threadSearch.close()
+    if (projectSwitch.paletteOpen) projectSwitch.close()
   }
 
-  function backToCommandPaletteFromThreadSearch(): void {
-    threadSearch.close()
-    commandPaletteOpen = true
-  }
-
-  function backToCommandPaletteFromProjectSwitch(): void {
-    projectSwitch.close()
+  /** Step back to the actions list from a nested spotlight screen. */
+  function backToSpotlightHome(): void {
+    closeSpotlight()
     commandPaletteOpen = true
   }
 
@@ -896,21 +994,10 @@
    * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
-    // App-managed palettes first   they float above every view.
-    if (fileSearch.paletteOpen) {
-      fileSearch.close()
-      return
-    }
-    if (threadSearch.paletteOpen) {
-      threadSearch.close()
-      return
-    }
-    if (projectSwitch.paletteOpen) {
-      projectSwitch.close()
-      return
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    // The spotlight is one surface: the close chord closes it whole, whichever
+    // screen is on top. Escape is the key that steps back between screens.
+    if (spotlightScreenId) {
+      closeSpotlight()
       return
     }
     // Reusable modals (Modal / DockableModal) register their close behavior.
@@ -1133,13 +1220,13 @@
       if (e.repeat) return
       // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
       if (activeView === 'assistant') {
-        if (commandPaletteOpen) commandPaletteOpen = false
+        if (spotlightScreenId) closeSpotlight()
         workspaceState.requestAssistantRoutine()
         return
       }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
       if (activeView === 'chats') return
-      if (commandPaletteOpen) commandPaletteOpen = false
+      if (spotlightScreenId) closeSpotlight()
       openNewProjectSpotlight()
       return
     }
@@ -1303,85 +1390,9 @@
       </div>
     {/if}
   </main>
-  {#if commandPaletteOpen}
+  {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
-      <CommandPalette
-        open={commandPaletteOpen}
-        actions={paletteActions}
-        title="Search actions"
-        placeholder="Search actions, threads, and files…"
-        emptyLabel="No matching actions"
-        onSelect={handlePaletteSelection}
-        onClose={() => (commandPaletteOpen = false)}
-        onRestoreFocus={restorePaletteFocus}
-        shortcutLabel="Ctrl K"
-      />
-    {/await}
-  {/if}
-  {#if fileSearch.paletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
-      <FileSearchPalette
-        open={fileSearch.paletteOpen}
-        actions={fileSearch.actions}
-        title="Search files across projects"
-        placeholder="Type at least two characters…"
-        emptyLabel={fileSearch.loading ? 'Searching project files…' : 'No matching files'}
-        headerIcon={FileSearch}
-        headerIconBadge
-        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={fileSearch.projectIds}
-        onSelectedProjectsChange={(projectIds) => fileSearch.setScope(projectIds)}
-        onBack={backToCommandPaletteFromFileSearch}
-        onQueryChange={(query) => fileSearch.handleQuery(query)}
-        onSelect={(selection) => fileSearch.select(selection)}
-        closeOnSelect={false}
-        onClose={() => fileSearch.close()}
-      />
-    {/await}
-  {/if}
-  {#if threadSearch.paletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
-      <ThreadSearchPalette
-        open={threadSearch.paletteOpen}
-        actions={threadSearch.actions}
-        title="Search threads across projects"
-        placeholder="Search thread titles and messages across all projects…"
-        emptyLabel={threadSearch.loading
-          ? 'Searching threads…'
-          : 'Type at least two characters to search all projects'}
-        headerIcon={MessagesSquare}
-        headerIconBadge
-        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={threadSearch.projectIds}
-        onSelectedProjectsChange={(projectIds) => threadSearch.setScope(projectIds)}
-        onBack={backToCommandPaletteFromThreadSearch}
-        onQueryChange={(query) => threadSearch.handleQuery(query)}
-        onSelect={(selection) => threadSearch.select(selection)}
-        closeOnSelect={false}
-        onClose={() => threadSearch.close()}
-      />
-    {/await}
-  {/if}
-  {#if projectSwitch.paletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ProjectSwitchPalette }}
-      <ProjectSwitchPalette
-        open={projectSwitch.paletteOpen}
-        actions={projectSwitch.actions}
-        title="Switch project"
-        placeholder="Search projects…"
-        emptyLabel="No matching projects"
-        headerIcon={FolderKanban}
-        headerIconBadge
-        headerIconBadgeClass="border-success/25 bg-success/10 text-success"
-        onBack={backToCommandPaletteFromProjectSwitch}
-        onSelect={(selection) => projectSwitch.select(selection)}
-        closeOnSelect={false}
-        onClose={() => projectSwitch.close()}
-      />
+      <CommandPalette {...spotlightPalette} />
     {/await}
   {/if}
   {#if newProjectSpotlightOpen}

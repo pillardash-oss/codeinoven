@@ -286,6 +286,7 @@ Reuse before you create:
 - Side sheets for focused editing and detail workflows.
 - Backdrops use tokenized overlays with light blur where established.
 - Navigation is instant and app-like   never full page reloads for in-app actions.
+- **The spotlight is one mounted surface, not one per screen.** Its home screen and its nested screens (file search, thread search, switch project) are content swapped inside a single `Modal` shell, driven by one screen id in `src/renderer/App.svelte`. Unmounting one palette and mounting the next threw the scrim, the panel, the scroll lock and the focus away and rebuilt them, which flashed on every hop; one instance with a swapped `screenKey` keeps the panel, the query input and its focus in place.
 - Route/view metadata should live in a central registry; header titles derive from the active view, never hardcoded copies that can drift.
 
 ### 3.8 Motion
