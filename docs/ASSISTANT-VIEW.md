@@ -683,9 +683,12 @@ contracts, the panel and the validators cannot drift apart.
 `RoutineDelivery` names a channel and, when the channel takes one, the concrete
 destination. The channels are `in-app`, `slack`, `telegram`, `whatsapp`,
 `signal`, `email`, and `other`. **In-app is the only channel wired up today**: it
-means a normal thread notification inside CodeInOven, surfaced in the
-notification panel's **Assistants** tab, and the app delivers it by the run
-thread simply existing. Every other channel is *external*, and picking one is
+means a normal thread notification inside CodeInOven, and the app delivers it by
+the run thread itself. Note what that does and does not mean today. The report is
+the run thread's message, and the thread is listed in the assistant sidebar under
+its routine. The notification panel's **Assistants** tab carries **missed runs
+only**, so a finished report does not currently raise its own notification entry
+there. Every other channel is *external*, and picking one is
 also a statement that the routine needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a

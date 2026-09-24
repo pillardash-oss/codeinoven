@@ -115,7 +115,7 @@ function reportingLines(routine: Pick<Routine, 'delivery' | 'priority'>): string
       )
     } else {
       lines.push(
-        `Deliver this routine's output as the report itself, in this thread: write it so it stands on its own, lead with what needs the user's attention, and keep it tight. The app surfaces the thread in the notification panel's Assistants tab, so do not send it anywhere else.`
+        `Deliver this routine's output as the report itself, in this thread: write it so it stands on its own, lead with what needs the user's attention, and keep it tight. This thread is where the user reads it, so do not send it anywhere else.`
       )
     }
     if (delivery.note) lines.push(`Delivery note from the agreement: ${delivery.note}`)
