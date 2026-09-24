@@ -506,7 +506,7 @@ export class NotificationService {
     let projectName = ''
     let projectColor: string | undefined
     try {
-      const project = this.projectRepo.get(thread.projectId)
+      const project = await this.projectRepo.getViaWorker(thread.projectId)
       projectName = project?.name ?? ''
       projectColor = project?.color
     } catch (error) {
@@ -629,7 +629,7 @@ export class NotificationService {
     let projectName = ''
     let projectColor: string | undefined
     try {
-      const project = this.projectRepo.get(thread.projectId)
+      const project = await this.projectRepo.getViaWorker(thread.projectId)
       projectName = project?.name ?? ''
       projectColor = project?.color
     } catch (error) {
@@ -674,7 +674,7 @@ export class NotificationService {
     let projectName = ''
     let projectColor: string | undefined
     try {
-      const project = this.projectRepo.get(thread.projectId)
+      const project = await this.projectRepo.getViaWorker(thread.projectId)
       projectName = project?.name ?? ''
       projectColor = project?.color
     } catch (error) {

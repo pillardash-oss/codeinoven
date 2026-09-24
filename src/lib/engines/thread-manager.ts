@@ -198,14 +198,30 @@ export class ThreadManager {
    * Sub-agent turns of a thread that reported usage, as a narrow projection for
    * the usage ledger. Never contacts a provider.
    */
-  listSubagentUsageMessages(projectId: string, threadId: string): Promise<UsageBearingMessage[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return Promise.resolve([])
+  async listSubagentUsageMessages(
+    projectId: string,
+    threadId: string
+  ): Promise<UsageBearingMessage[]> {
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.listSubagentUsageMessages(threadId)
   }
 
   private getOwnedThread(projectId: string, threadId: string): Thread | null {
     const thread = this.threadRepo.get(threadId)
     return thread?.projectId === projectId ? thread : null
+  }
+
+  /**
+   * Worker-backed ownership guard for the async read paths.
+   *
+   * The synchronous `getOwnedThread` remains for the mutators, which validate
+   * and write in the same tick. Every async reader    message pages, history,
+   * transcripts, sub-agent usage    goes through this one instead, so the two
+   * statements a guard costs (`threads` by id plus its harness-usage
+   * decoration) never run on the Electron main thread.
+   */
+  private getOwnedThreadViaWorker(projectId: string, threadId: string): Promise<Thread | null> {
+    return this.getThreadViaWorker(projectId, threadId)
   }
 
   private requireOwnedThread(projectId: string, threadId: string): Thread {
@@ -345,8 +361,18 @@ export class ThreadManager {
     if (resolved) thread.workingDirectory = resolved
   }
 
+  /**
+   * One thread, read on the database worker.
+   *
+   * Every caller is already async, and this is the most frequently read
+   * statement in the process   the chat engine reconciles a thread's status on
+   * each working signal   so a contended or stalled read must never land on the
+   * Electron main thread. Only the ownership check and the `titleSource`
+   * default stay here; the row itself comes from the worker connection, with
+   * the primary connection kept as the worker's own fallback.
+   */
   async getThread(projectId: string, threadId: string): Promise<Thread | null> {
-    const thread = this.getOwnedThread(projectId, threadId)
+    const thread = await this.getThreadViaWorker(projectId, threadId)
     if (thread && !thread.titleSource) {
       thread.titleSource = 'default'
     }
@@ -359,8 +385,13 @@ export class ThreadManager {
     return thread?.projectId === projectId ? thread : null
   }
 
+  /**
+   * Thread list for one project, read on the database worker for the same
+   * reason as `getThread`: the sidebar and the git flows ask for it whenever a
+   * scope board opens, and a stalled read there freezes the whole app.
+   */
   async listThreads(projectId: string, options?: ThreadListOptions): Promise<Thread[]> {
-    return this.threadRepo.listByProject(projectId, options)
+    return this.threadRepo.listByProjectViaWorker(projectId, options)
   }
 
   async reorderThreads(projectId: string, orderedIds: string[]): Promise<Thread[]> {
@@ -478,8 +509,7 @@ export class ThreadManager {
       throw new Error('Scope thread order must contain unique IDs')
     }
 
-    const partition = this.threadRepo
-      .listByProject(projectId)
+    const partition = (await this.threadRepo.listByProjectViaWorker(projectId))
       .filter((thread) => {
         if (thread.archived) return false
         if ((thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) !== bucketId) return false
@@ -710,16 +740,21 @@ export class ThreadManager {
     }
   }
 
-  /** All non-archived threads whose scope bucket equals `bucketId`. */
-  private scopeOwnedThreads(projectId: string, bucketId: string): Thread[] {
-    return this.threadRepo
-      .listByProject(projectId, { includeArchived: false })
-      .filter((thread) => (thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) === bucketId)
+  /** All non-archived threads whose scope bucket equals `bucketId`, read on the
+   *  database worker: scope tools and worktree preflights ask for this while
+   *  the user is typing, so it must not touch SQLite on the main thread. */
+  private async scopeOwnedThreads(projectId: string, bucketId: string): Promise<Thread[]> {
+    const threads = await this.threadRepo.listByProjectViaWorker(projectId, {
+      includeArchived: false
+    })
+    return threads.filter(
+      (thread) => (thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) === bucketId
+    )
   }
 
   /** Number of user-visible (non-orchestration-child) threads owned by a scope. */
   async countThreadsInScope(projectId: string, bucketId: string): Promise<number> {
-    return this.scopeOwnedThreads(projectId, bucketId).filter(
+    return (await this.scopeOwnedThreads(projectId, bucketId)).filter(
       (thread) => !isOrchestrationChildThread(thread)
     ).length
   }
@@ -731,13 +766,13 @@ export class ThreadManager {
    * scope) are removed individually.
    */
   async deleteThreadsInScope(projectId: string, bucketId: string): Promise<number> {
-    const owned = this.scopeOwnedThreads(projectId, bucketId)
+    const owned = await this.scopeOwnedThreads(projectId, bucketId)
     const roots = owned.filter((thread) => !isOrchestrationChildThread(thread))
     let deleted = roots.length
     for (const root of roots) {
       await this.deleteThread(projectId, root.id)
     }
-    const remaining = this.scopeOwnedThreads(projectId, bucketId)
+    const remaining = await this.scopeOwnedThreads(projectId, bucketId)
     for (const thread of remaining) {
       try {
         await this.deleteThread(projectId, thread.id)
@@ -761,7 +796,7 @@ export class ThreadManager {
   ): Promise<{ moved: number; evicted: number }> {
     const protectedIds = new Set<string>()
     let moved = 0
-    const owned = this.scopeOwnedThreads(projectId, fromBucketId)
+    const owned = await this.scopeOwnedThreads(projectId, fromBucketId)
     for (const root of owned.filter((thread) => !isOrchestrationChildThread(thread))) {
       await this.updateThread(projectId, root.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
       protectedIds.add(root.id)
@@ -769,7 +804,7 @@ export class ThreadManager {
     }
     // Sweep orphans the parent move did not cover (children whose coordinator
     // lived outside the scope).
-    const leftovers = this.scopeOwnedThreads(projectId, fromBucketId)
+    const leftovers = await this.scopeOwnedThreads(projectId, fromBucketId)
     for (const thread of leftovers) {
       await this.updateThread(projectId, thread.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
       protectedIds.add(thread.id)
@@ -821,7 +856,7 @@ export class ThreadManager {
   /** Remove app-owned scratch directories a deleted thread wrote to. Best-effort. */
   private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
     for (const thread of threads) {
-      const project = this.projectRepo.get(thread.projectId)
+      const project = await this.projectRepo.getViaWorker(thread.projectId)
       const dirs = threadOwnedDirectories(project, thread.projectId, thread.id)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
@@ -835,7 +870,7 @@ export class ThreadManager {
    * sub-agent checkpoint work to the parent thread's turn.
    */
   async listDescendantThreadIds(projectId: string, threadId: string): Promise<string[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return []
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     const threads = await this.threadRepo.listForDeletionViaWorker(projectId)
     return orchestrationDescendants(threads, threadId).map((thread) => thread.id)
   }
@@ -1228,7 +1263,7 @@ export class ThreadManager {
    * (falls back to the primary connection).
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
-    if (!this.getOwnedThread(projectId, threadId)) return
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
     return this.transcripts.saveMessages(threadId, messages)
   }
 
@@ -1252,7 +1287,7 @@ export class ThreadManager {
     messages: AgentMessage[],
     sessionId?: string
   ): Promise<ProviderDeltaSyncResult> {
-    const thread = this.getOwnedThread(projectId, threadId)
+    const thread = await this.getOwnedThreadViaWorker(projectId, threadId)
     if (!thread) {
       return {
         applied: 0,
@@ -1273,7 +1308,7 @@ export class ThreadManager {
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return []
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadMessages(threadId)
   }
 
@@ -1284,7 +1319,9 @@ export class ThreadManager {
     before: ThreadMessageCursor | undefined,
     limit: number
   ): Promise<ThreadMessagePage> {
-    if (!this.getOwnedThread(projectId, threadId)) return { messages: [], hasOlder: false }
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) {
+      return { messages: [], hasOlder: false }
+    }
     return this.transcripts.loadMessagePage(threadId, before, limit)
   }
 
@@ -1295,7 +1332,7 @@ export class ThreadManager {
     anchorId: string,
     limit: number
   ): Promise<ThreadMessagePage> {
-    if (!this.getOwnedThread(projectId, threadId)) {
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) {
       return { messages: [], hasOlder: false, hasNewer: false }
     }
     return this.transcripts.loadMessagePageAround(threadId, anchorId, limit)
@@ -1303,13 +1340,13 @@ export class ThreadManager {
 
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return []
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadUserMessages(projectId, threadId)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(projectId: string, threadId: string): Promise<AgentMessage[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return []
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadMessageRecords(threadId)
   }
 
@@ -1323,7 +1360,7 @@ export class ThreadManager {
     sessionId: string,
     messages: AgentMessage[]
   ): Promise<void> {
-    if (!this.getOwnedThread(projectId, threadId)) return
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
     return this.transcripts.saveSubagentMessages(threadId, sessionId, messages)
   }
 
@@ -1333,7 +1370,7 @@ export class ThreadManager {
     threadId: string,
     sessionId: string
   ): Promise<AgentMessage[]> {
-    if (!this.getOwnedThread(projectId, threadId)) return []
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadSubagentMessages(threadId, sessionId)
   }
 
@@ -1384,9 +1421,9 @@ export class ThreadManager {
    * make room   so the UI can explain a protected-capacity refusal.
    */
   async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
-    const project = this.projectRepo.get(projectId)
+    const project = await this.projectRepo.getViaWorker(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
-    const threads = this.threadRepo.listByProject(projectId)
+    const threads = await this.threadRepo.listByProjectViaWorker(projectId)
     const logicalThreads = threads.filter((thread) => !isOrchestrationChildThread(thread))
     const active = logicalThreads.filter((thread) => !thread.archived)
     const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(projectId))
