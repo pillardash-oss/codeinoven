@@ -159,6 +159,8 @@ import {
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
+import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
+import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
 import {
@@ -1294,6 +1296,9 @@ export class ChatEngine {
 
   private capabilityDiscovery: CapabilityDiscoveryService
 
+  /** Proves an MCP server connects, on demand from the Utilities page and editor. */
+  private mcpConnectionTest: McpConnectionTestService
+
   private baseUrlProviders: BaseUrlProviderService
 
   private accountRegistry: HarnessAccountRegistry
@@ -1442,6 +1447,11 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry, storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
+    this.mcpConnectionTest = new McpConnectionTestService({
+      registry: this.utilityRegistry,
+      resolveSecret: (secretRef) => this.secretVault.resolve(secretRef),
+      readNativeMcp: (source) => this.capabilityDiscovery.readMcp(source)
+    })
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
@@ -1800,6 +1810,11 @@ export class ChatEngine {
       this.capabilityDiscovery.deleteMcp(source)
     )
     ipcMain.handle('capabilities:listAll', () => this.listAllCapabilities())
+    // A saved MCP configuration says nothing about whether its server answers:
+    // the Utilities page and editor test the live connection through here.
+    ipcMain.handle('utilities:testMcp', (_, target: unknown) =>
+      this.mcpConnectionTest.test(validateMcpProbeTarget(target))
+    )
     ipcMain.handle(
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>

@@ -58,3 +58,26 @@ const DISABLEABLE_APP_OWNED_UTILITY_IDS: ReadonlySet<string> = new Set([APP_ADB_
 export function canToggleUtilityEnabled(utility: { id: string; appOwned: boolean }): boolean {
   return !utility.appOwned || DISABLEABLE_APP_OWNED_UTILITY_IDS.has(utility.id)
 }
+
+/** Native capability a binding claims when the connection drives the desktop. */
+const COMPUTER_USE_CAPABILITY = 'computer_use'
+
+/**
+ * Whether a utility reaches the machine's desktop through the computer-use
+ * path instead of as an ordinary MCP server.
+ *
+ * Those connections are only ever started after the app claims the Cua Driver
+ * daemon mode for the run, so they cannot be reachability-tested on their own:
+ * without that claim the server has no daemon to talk to. Their real state is
+ * what the Cua Driver status card reports, which is why every surface that
+ * offers a connection test skips them.
+ */
+export function isComputerUseUtility(utility: {
+  id: string
+  harnessBindings: ReadonlyArray<{ nativeCapability?: string }>
+}): boolean {
+  if (utility.id === APP_CUA_DRIVER_UTILITY_ID) return true
+  return utility.harnessBindings.some(
+    (binding) => binding.nativeCapability === COMPUTER_USE_CAPABILITY
+  )
+}

@@ -247,6 +247,60 @@ export interface UtilitySetupReport {
   installed: UtilityDefinition[]
 }
 
+/** One tool the tested MCP server advertised. */
+export interface McpConnectionTool {
+  name: string
+  description?: string
+}
+
+/** A credential value supplied with an unsaved MCP draft; a test never stores it. */
+export interface McpProbeCredential {
+  environmentVariable: string
+  value: string
+}
+
+/**
+ * What one MCP connection test connects to: an installed registry utility, a
+ * harness-native server already on disk, or the configuration an editor is
+ * showing before it is saved.
+ */
+export type McpProbeTarget =
+  | { kind: 'registry'; utilityId: string }
+  | { kind: 'native'; source: AgentCapabilitySource }
+  | {
+      kind: 'inline'
+      config: McpUtilityConfig
+      /** Saved utility whose stored credentials fill this draft's `{env:NAME}` references. */
+      baseUtilityId?: string
+      /** Values typed into an unsaved editor, used for this test only. */
+      credentials?: McpProbeCredential[]
+    }
+
+/**
+ * What a live MCP connection test found. A server that will not start is a
+ * result rather than an IPC failure, exactly like a provider connection check.
+ */
+export interface McpConnectionTestResult {
+  ok: boolean
+  /** Transport that was tested; absent when the test never reached a server. */
+  transport?: McpUtilityConfig['transport']
+  /** Where the test connected: the command line or the URL, never a credential value. */
+  target: string
+  /** Wall-clock time for the handshake plus `tools/list`. */
+  latencyMs: number
+  /** Tools the server advertised, capped for display. */
+  tools: McpConnectionTool[]
+  /** Advertised tool count, which may exceed `tools.length`. */
+  toolCount: number
+  /** What the server called itself while answering `initialize`. */
+  serverName?: string
+  serverVersion?: string
+  /** Why the test failed. Present only when `ok` is false. */
+  error?: string
+  /** Credential variables the configuration expects but had no value for. */
+  missingCredentials: string[]
+}
+
 /** Public skills.sh search result displayed in the Utilities marketplace. */
 export interface SkillMarketEntry {
   id: string

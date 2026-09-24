@@ -33,7 +33,7 @@ import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
-import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
+import { type McpClient } from '../agents/mcp-stdio-client'
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
@@ -91,11 +91,14 @@ import {
   readJsonBody,
   recordValue,
   requiredDatabase,
-  requiredString,
-  resolveEnvironmentReferences
+  requiredString
 } from './utility-orchestration/utility-input'
 import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
+import {
+  connectMcpServer,
+  credentialEnvironment as resolveCredentialEnvironment
+} from './mcp-connection'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -1621,65 +1624,19 @@ export class UtilityOrchestrationService {
       }
       return RemoteMcpClient.connect(utility.config.endpoint, {})
     }
-    const environment = await this.credentialEnvironment(utility)
-    if (utility.config.transport === 'stdio') {
-      if (!utility.config.command) throw new Error('stdio MCP command is not configured')
-      try {
-        return await StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
-          ...utility.config.environment,
-          ...environment
-        })
-      } catch (error) {
-        throw this.mcpStartupFailure(utility, environment, error)
-      }
-    }
-    if (!utility.config.url) throw new Error('Remote MCP URL is not configured')
-    return RemoteMcpClient.connect(
-      utility.config.url,
-      resolveEnvironmentReferences(utility.config.headers ?? {}, environment)
-    )
-  }
-
-  /**
-   * Turn a stdio MCP startup failure into something the agent can act on.
-   *
-   * A server that exits before it answers `initialize` usually died over missing setup, and
-   * the exit message alone does not say which utility or which credential. Naming both here
-   * is what stops a missing token from reading as a broken MCP server.
-   */
-  private mcpStartupFailure(
-    utility: UtilityDefinition,
-    environment: Record<string, string>,
-    error: unknown
-  ): Error {
-    const message = error instanceof Error ? error.message : String(error)
-    const missing = utility.credentials
-      .map((credential) => credential.environmentVariable)
-      .filter(
-        (name): name is string => typeof name === 'string' && name !== '' && !environment[name]
-      )
-    if (missing.length === 0) {
-      return new Error(`Utility \`${utility.name}\` could not start: ${message}`, { cause: error })
-    }
-    return new Error(
-      `Utility \`${utility.name}\` could not start: ${message}. Set its credential ${
-        missing.length > 1 ? 'variables' : 'variable'
-      } ${missing.map((name) => `\`${name}\``).join(', ')} in Utilities`,
-      { cause: error }
-    )
+    // One shared starter, which the Utilities connection test calls too, so a
+    // server that tests green is a server this gateway can start.
+    return connectMcpServer({
+      config: utility.config,
+      environment: await this.credentialEnvironment(utility),
+      owner: { name: utility.name, credentials: utility.credentials }
+    })
   }
 
   private async credentialEnvironment(utility: UtilityDefinition): Promise<Record<string, string>> {
-    const environment: Record<string, string> = {}
-    for (const credential of utility.credentials) {
-      if (!credential.environmentVariable) continue
-      try {
-        environment[credential.environmentVariable] = await this.vault.resolve(credential.secretRef)
-      } catch (error) {
-        if (credential.required) throw error
-      }
-    }
-    return environment
+    return resolveCredentialEnvironment(utility.credentials, (secretRef) =>
+      this.vault.resolve(secretRef)
+    )
   }
 
   private async audit(

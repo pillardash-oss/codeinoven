@@ -13,8 +13,10 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import McpConnectionTester from './McpConnectionTester.svelte'
   import type {
     AgentCapabilityEntry,
+    McpProbeTarget,
     NativeMcpContent,
     Project,
     Thread,
@@ -34,12 +36,13 @@
   import UtilityEditorModalFooter from './UtilityEditorModalFooter.svelte'
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
-  import { canToggleUtilityEnabled } from '$shared/utility-ids'
+  import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
   import {
     allHarnessBinding,
     buildBindings,
     buildConfig,
     buildCredential,
+    buildMcpConnectionConfig,
     buildScope,
     effectiveActivation,
     emptyDraft,
@@ -193,6 +196,15 @@
   )
   let credentialTarget = $derived(
     editedCredentials.find((credential) => credential.id === credentialTargetId) ?? null
+  )
+  /**
+   * A computer-use connection is only ever started by the run that claimed the
+   * desktop daemon, so it has no standalone test: the Cua Driver status card is
+   * what reports its state.
+   */
+  let computerUseConnection = $derived(
+    draft.kind === 'mcp' &&
+      isComputerUseUtility({ id: draft.id ?? '', harnessBindings: draft.bindings })
   )
 
   let title = $derived.by(() => {
@@ -432,6 +444,25 @@
       value: credentialValue,
       required: credentialTarget?.required ?? false,
       environmentVariable: credentialEnvironmentVariable
+    }
+  }
+
+  /**
+   * Test the MCP connection the editor is showing, which is what a save would
+   * store: the saved utility still supplies its stored credentials, and a value
+   * typed into an unsaved draft is used for this test only.
+   */
+  function mcpProbeTarget(): McpProbeTarget {
+    const environmentVariable = credentialEnvironmentVariable.trim()
+    const typed =
+      credentialValue && environmentVariable
+        ? [{ environmentVariable, value: credentialValue }]
+        : []
+    return {
+      kind: 'inline',
+      config: buildMcpConnectionConfig(draft),
+      ...(draft.id ? { baseUtilityId: draft.id } : {}),
+      ...(typed.length > 0 ? { credentials: typed } : {})
     }
   }
 
@@ -789,6 +820,15 @@
         {/if}
 
         <UtilityEditorModalConfigFields bind:draft {isNative} />
+
+        {#if draft.kind === 'mcp' && !computerUseConnection}
+          <McpConnectionTester
+            variant="panel"
+            subject={draft.name.trim() || 'MCP server'}
+            probe={mcpProbeTarget}
+            disabled={saving}
+          />
+        {/if}
 
         {#if !isNative && !isAppOwned && (draft.kind === 'mcp' || draft.kind === 'web_search' || draft.kind === 'web_fetch')}
           <UtilityEditorModalCredentialFields
