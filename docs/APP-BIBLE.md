@@ -167,7 +167,7 @@ Each store is the composition root over its own prefixed modules:
 `git.svelte.ts` over the `git-store-*` modules.
 
 **App shell and Spec Studio**
-`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,os-handoff,ipc-subscriptions}`.
+`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,project-switch,os-handoff,ipc-subscriptions}`.
 `components/specs/SpecStudio.svelte` composes
 `SpecStudio{Document,ResolutionSection,ContextSection,EditableListSection,EditableMiniList,AnnotationBubbles}.svelte`
 plus `spec-studio-{document-anchors,draft-edits,formatting,context-picker}`.

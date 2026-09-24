@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { FileSearch, MessagesSquare } from '@lucide/svelte'
+  import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -65,6 +65,7 @@
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
     isThreadWorking,
     threadTracksReadStatus,
     type AppConfig,
@@ -85,6 +86,7 @@
   import { defaultConfig } from './app-defaults'
   import { FileSearchPaletteController } from './app-file-search.svelte'
   import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
 
@@ -100,6 +102,9 @@
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
+  })
+  const projectSwitch = new ProjectSwitchPaletteController({
+    focusProject: (project) => focusProjectFromSpotlight(project)
   })
 
   const osHandoffDeps: OsHandoffDeps = {
@@ -424,6 +429,9 @@
       case 'app:new-project':
         openNewProjectSpotlight()
         return
+      case 'app:switch-project':
+        projectSwitch.openPalette()
+        return
       case 'app:new-chat':
         navigate('chats')
         workspaceState.requestNewChat()
@@ -537,6 +545,9 @@
     if (threadSearch.paletteOpen) {
       threadSearch.close()
     }
+    if (projectSwitch.paletteOpen) {
+      projectSwitch.close()
+    }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
       return
@@ -552,6 +563,11 @@
 
   function backToCommandPaletteFromThreadSearch(): void {
     threadSearch.close()
+    commandPaletteOpen = true
+  }
+
+  function backToCommandPaletteFromProjectSwitch(): void {
+    projectSwitch.close()
     commandPaletteOpen = true
   }
 
@@ -656,6 +672,61 @@
       onboardingProjectPickerActive = false
       onboardingStep = 7
       onboardingOpen = true
+    }
+  }
+
+  /**
+   * Focus a project picked from the Switch project spotlight.
+   *
+   * The scoped threads view keeps its docked sidebar: the picked project becomes
+   * the docked scope and the conversation is cleared, so the sidebar shows the
+   * new project's scoped threads. Every other view lands on the Projects view
+   * with the project's most recent thread open, matching how focusing a project
+   * already works elsewhere (OS hand-off, existing-project spotlight, header tabs).
+   */
+  function focusProjectFromSpotlight(project: Project): void {
+    const scopedThreadsActive =
+      (activeView === 'projects' || activeView === 'projects-scope') &&
+      scopeState.sidebarContext !== null
+    const iconUrl =
+      scopeState.projects.find((candidate) => candidate.id === project.id)?.iconUrl ?? null
+
+    if (scopedThreadsActive) {
+      void scopeState.activateProject(project.id)
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
+      scopeState.showSidebarForProject(project.id)
+      return
+    }
+
+    // Navigate before selecting the thread so the shell's content-view reconcile
+    // never paints the Projects family's remembered thread for a frame.
+    const wasOnProjectsView = activeView === 'projects' || activeView === 'projects-scope'
+    if (!wasOnProjectsView) navigate('projects')
+    void scopeState.activateProject(project.id)
+
+    // Picking the project that is already focused keeps the conversation the user
+    // is reading instead of jumping to its latest thread.
+    if (wasOnProjectsView && workspaceState.selectedThread?.projectId === project.id) return
+
+    const thread =
+      scopeState.allScopeThreads
+        .filter(
+          (candidate) =>
+            candidate.projectId === project.id &&
+            !candidate.archived &&
+            !isOrchestrationChildThread(candidate)
+        )
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    if (thread) {
+      workspaceState.openThread(thread, project, iconUrl)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
     }
   }
 
@@ -823,6 +894,10 @@
     }
     if (threadSearch.paletteOpen) {
       threadSearch.close()
+      return
+    }
+    if (projectSwitch.paletteOpen) {
+      projectSwitch.close()
       return
     }
     if (commandPaletteOpen) {
@@ -1276,6 +1351,24 @@
         onSelect={(selection) => threadSearch.select(selection)}
         closeOnSelect={false}
         onClose={() => threadSearch.close()}
+      />
+    {/await}
+  {/if}
+  {#if projectSwitch.paletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ProjectSwitchPalette }}
+      <ProjectSwitchPalette
+        open={projectSwitch.paletteOpen}
+        actions={projectSwitch.actions}
+        title="Switch project"
+        placeholder="Search projects…"
+        emptyLabel="No matching projects"
+        headerIcon={FolderKanban}
+        headerIconBadge
+        headerIconBadgeClass="border-success/25 bg-success/10 text-success"
+        onBack={backToCommandPaletteFromProjectSwitch}
+        onSelect={(selection) => projectSwitch.select(selection)}
+        closeOnSelect={false}
+        onClose={() => projectSwitch.close()}
       />
     {/await}
   {/if}
