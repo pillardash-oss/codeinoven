@@ -36,6 +36,26 @@ export class ProjectFilesPanelFind {
     this.total = 0
   }
 
+  /**
+   * Drop every per-file match and one-shot request this instance holds.
+   *
+   * The files panel keeps running across a file switch (see the files panel key
+   * in `WorkspaceContextPanelContent`), while the editor does not: a freshly
+   * mounted `ProjectTextEditor` starts its handled-nonce counters at zero, so a
+   * replace request left over from the previous file would be replayed against
+   * the file the user just opened. The shared find-nav store is deliberately
+   * left alone, exactly as the panel's own remount used to leave it: an open
+   * find bar stays open. */
+  reset(): void {
+    this.value = ''
+    this.active = 0
+    this.total = 0
+    this.nonce = 0
+    this.replaceValue = ''
+    this.replaceAction = 'one'
+    this.replaceNonce = 0
+  }
+
   setQuery(query: string): void {
     this.value = query
     this.active = 0

@@ -718,6 +718,39 @@
 
   const editorFind = new ProjectFilesPanelFind()
 
+  /**
+   * Clear the one-shot requests and matches the panel hands its editor when the
+   * file on screen changes.
+   *
+   * This panel no longer remounts on a sidebar file-tab switch (see the files
+   * panel key in `WorkspaceContextPanelContent`), so what its remount used to
+   * reset has to be reset here. A `replaceRequest` or an undo/redo request left
+   * over from the previous file would be applied by the editor that mounts for
+   * the new one, because that editor's handled-nonce counters start at zero.
+   *
+   * The active file tab is the trigger and not the sidebar tab: a swap that
+   * keeps the sidebar tab (the full screen "save and continue" hand-over rewrites
+   * its file mapping in place, and `swapFileSilent` retitles the tab) still
+   * changes the file the editor is showing.
+   *
+   * `$effect.pre` and not `$effect`: it has to land before the DOM updates in
+   * the new editor. Svelte flushes every `$effect.pre` before any `$effect`, and
+   * `ProjectTextEditor` reads these requests inside effects.
+   *
+   * Writing these back to their empty state is the point, so this is a reset and
+   * not a value kept in step: the requests are raised by user actions, and an
+   * identity check keeps it from firing on anything but the file changing.
+   */
+  let requestTabId: string | null = null
+  $effect.pre(() => {
+    const nextTabId = activeTab?.id ?? null
+    if (nextTabId === requestTabId) return
+    requestTabId = nextTabId
+    editRequest = null
+    editorFind.reset()
+    goToLineOpen = false
+  })
+
   function submitGoToLine(line: number): void {
     if (!activeTab) return
     goToLineOpen = false
@@ -1310,25 +1343,27 @@
               onOpenOriginal={() => void openRawConflictSource()}
             />
           {:else}
-            <ProjectTextEditor
-              value={visibleContent}
-              path={activeTab.path}
-              readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
-              ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
-              spellcheck={markdown}
-              {showLineNumbers}
-              wrap={wrapLines}
-              findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
-              findActiveIndex={editorFind.active}
-              findNonce={editorFind.nonce}
-              replaceRequest={editorFind.replaceRequest}
-              {editRequest}
-              focusLine={activeTab.focusLine}
-              focusLineRequest={activeTab.focusLineRequest}
-              onFindMatches={(matches) => editorFind.setMatches(matches)}
-              onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
-              onInput={handleEditorInput}
-            />
+            {#key activeTab.id}
+              <ProjectTextEditor
+                value={visibleContent}
+                path={activeTab.path}
+                readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
+                ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
+                spellcheck={markdown}
+                {showLineNumbers}
+                wrap={wrapLines}
+                findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
+                findActiveIndex={editorFind.active}
+                findNonce={editorFind.nonce}
+                replaceRequest={editorFind.replaceRequest}
+                {editRequest}
+                focusLine={activeTab.focusLine}
+                focusLineRequest={activeTab.focusLineRequest}
+                onFindMatches={(matches) => editorFind.setMatches(matches)}
+                onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+                onInput={handleEditorInput}
+              />
+            {/key}
           {/if}
         {/if}
       </div>
