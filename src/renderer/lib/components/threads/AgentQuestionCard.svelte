@@ -29,6 +29,7 @@
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
+  import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
     request: PendingAgentQuestionRequest
@@ -390,13 +391,14 @@
   out:slide={dismissSlide()}
   data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
   class={[
-    'relative overflow-hidden rounded-xl border bg-surface shadow-sm',
+    'relative flex flex-col overflow-hidden rounded-xl border bg-surface shadow-sm',
     draggingFiles && 'border-primary'
   ]}
   aria-label="Agent question"
   ondragover={handleCardDragOver}
   ondragleave={handleCardDragLeave}
   ondrop={handleCardDrop}
+  {@attach fitQuestionCard}
 >
   {#if draggingFiles}
     <div
@@ -408,7 +410,7 @@
     </div>
   {/if}
 
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+  <div class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
     <div class="min-w-0">
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
         {question.header ?? 'Question'}
@@ -461,8 +463,10 @@
   </div>
 
   {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="space-y-3 p-4">
+    <div class="flex min-h-0 flex-1 flex-col" transition:slide={foldSlide()}>
+      <!-- The scrollable half: the question, its options and the custom answer
+         give way first, while the header above and the footer below stay put. -->
+      <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
         <div class="space-y-1">
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
@@ -658,7 +662,7 @@
          The chat actions give way first, the speech control keeps its slot, and
          the model switch ellipsizes instead of pushing into its neighbour. -->
       <div
-        class="question-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
+        class="question-card-footer flex min-w-0 shrink-0 items-center justify-between gap-3 border-t px-4 py-2.5"
       >
         <div class="flex min-w-0 items-center gap-2">
           {#if onExplain || onQuickChat}
@@ -739,6 +743,17 @@
 </section>
 
 <style>
+  /*
+    The card never grows past the room its conversation pane offers, which
+    `question-card-fit` measures and writes here; the viewport clamp is the
+    fallback for the first frame and for a host that renders no pane. The body
+    scrolls inside this ceiling, so a long option list stays reachable and the
+    header and footer stay pinned.
+  */
+  section {
+    max-height: var(--question-card-max-height, calc(100dvh - 6rem));
+  }
+
   /*
     The footer row is the query container so its controls retreat before the row
     runs out of room (a wide side panel, a split pane). The chat actions drop
