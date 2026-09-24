@@ -35,6 +35,7 @@ import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
 import { designAssignmentCatalogue } from '../../lib/design-assignments'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
@@ -1556,7 +1557,13 @@ export class UtilityOrchestrationService {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
-    return result
+    // A picture that travels inline as base64 is billed as text, at roughly one
+    // token per character; the same bytes delivered as an image content part are
+    // billed on the pixels they cover, which measured about 22x cheaper on a real
+    // screenshot (40,788 tokens against 1,844 at 1568px). Both bridges forward a
+    // `content` array verbatim, so an image-bearing result is handed back in that
+    // shape and everything else keeps its existing form.
+    return resultWithImageParts(result) ?? result
   }
 
   /**

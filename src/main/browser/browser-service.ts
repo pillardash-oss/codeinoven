@@ -10,10 +10,12 @@ import {
   type WebFrameMain
 } from 'electron'
 import type { Database } from '../database/database'
+import { createHash } from 'node:crypto'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl } from '../../lib/local-development-url'
+import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
@@ -55,6 +57,8 @@ import {
   MAX_PARKED_TABS,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
+  SCREENSHOT_JPEG_QUALITY,
+  SCREENSHOT_MAX_BYTES,
   browserContextKey,
   isSameBounds,
   validateAttention,
@@ -91,6 +95,13 @@ export class BrowserService {
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
   private readonly stage: BrowserTabStage
+  /** Last capture per tab, so a page that has not changed is not sent to the
+   *  model a second time. A design thread was measured taking seven byte-identical
+   *  screenshots in one turn, which is what drove it to compact repeatedly. */
+  private readonly lastScreenshot = new Map<
+    string,
+    { hash: string; width: number; height: number }
+  >()
   private activeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
@@ -508,16 +519,61 @@ export class BrowserService {
       return { ...utilityContext, result }
     }
     if (operation === 'screenshot') {
-      const image = await tab.view.webContents.capturePage()
-      return {
-        ...utilityContext,
-        dataUrl: `data:image/png;base64,${image.toPNG().toString('base64')}`
-      }
+      return { ...utilityContext, ...(await this.captureScreenshot(tabId, tab, input)) }
     }
     if (operation === 'console') {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /**
+   * Capture a tab's page for an agent at a size the model can afford.
+   *
+   * `capturePage` returns device pixels, so a 4K panel yields a 3840x2160 picture
+   * and a requested viewport may reach `MAX_VIEWPORT_SIDE`, doubled again by the
+   * display scale factor. Base64 that travels inline in a tool result is billed as
+   * text, at roughly one token per character, which measured ~40,788 tokens for one
+   * such capture; the same picture sent as an image content part is billed on its
+   * pixels instead, which is why the gateway converts it. The capture is therefore
+   * capped to a legible size, bounded in bytes for a photo-heavy page, and skipped
+   * entirely when the page has not changed, because a design thread was measured
+   * taking seven byte-identical screenshots in a single turn.
+   */
+  private async captureScreenshot(
+    tabId: string,
+    tab: BrowserTab,
+    input: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const captured = await tab.view.webContents.capturePage()
+    const source = captured.getSize()
+    const target = fitWithin(source.width, source.height, MAX_SCREENSHOT_DIMENSION)
+    const capped = target.width !== source.width || target.height !== source.height
+    const resized = capped
+      ? captured.resize({ width: target.width, height: target.height })
+      : captured
+    const png = resized.toPNG()
+    const lossless = png.byteLength <= SCREENSHOT_MAX_BYTES
+    const encoded = lossless ? png : resized.toJPEG(SCREENSHOT_JPEG_QUALITY)
+    const hash = createHash('sha256').update(encoded).digest('hex')
+    if (input['force'] !== true && this.lastScreenshot.get(tabId)?.hash === hash) {
+      return {
+        unchanged: true,
+        width: target.width,
+        height: target.height,
+        detail:
+          'The page has not changed since the previous screenshot, so it was not captured again. Pass {"force":true} to capture it anyway.'
+      }
+    }
+    this.lastScreenshot.set(tabId, { hash, width: target.width, height: target.height })
+    return {
+      dataUrl: `data:image/${lossless ? 'png' : 'jpeg'};base64,${encoded.toString('base64')}`,
+      width: target.width,
+      height: target.height,
+      // Report the render size only when it was capped, so a model reading a
+      // screenshot knows the page it is reviewing was laid out larger.
+      ...(capped ? { sourceWidth: source.width, sourceHeight: source.height } : {})
+    }
   }
 
   /**
@@ -1256,6 +1312,7 @@ export class BrowserService {
     this.injectedDialogLabels.delete(tabId)
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
+    this.lastScreenshot.delete(tabId)
     this.capture.forget(tabId)
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()

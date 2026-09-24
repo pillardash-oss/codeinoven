@@ -25,6 +25,13 @@ const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
  *  page alert/confirm dialogs, so a long thread title cannot dominate them. */
 export const MAX_DIALOG_LABEL_LENGTH = 120
 
+/** A capture above this size is re-encoded as JPEG instead of PNG. A flat design
+ *  page stays well under it in PNG, which keeps text crisp for review; a
+ *  photo-heavy page would otherwise put megabytes of base64 into the transcript. */
+export const SCREENSHOT_MAX_BYTES = 512 * 1024
+/** Quality of the JPEG re-encode used only when a capture exceeds the size cap. */
+export const SCREENSHOT_JPEG_QUALITY = 82
+
 /** Viewport a tab is laid out at while parked offscreen, until an agent asks for
  *  another one. 1280x800 is a plain desktop size that most responsive layouts
  *  treat as a full desktop. */

@@ -117,7 +117,7 @@ The reply carries the URL, so you can also put it in your final message. The tab
 
 ## Checking your own work
 
-Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, \`snapshot\` lists the visible text and controls, and \`console\` reports runtime errors and failed requests. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
+Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`snapshot\` lists the visible text and controls, \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, and \`console\` reports runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size, and screenshot to judge the render; a page that has not changed since the previous capture is reported as unchanged rather than captured again. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
 
 ## Delegating to the models the user assigned
 

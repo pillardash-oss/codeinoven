@@ -107,8 +107,17 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture the browser page as a PNG data URL at its current viewport, whether the tab is on screen or parked offscreen.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+      'Capture the browser page at its current viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'Capture even when the page is unchanged since the previous screenshot.'
+        }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: 'reload',

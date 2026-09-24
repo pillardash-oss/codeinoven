@@ -216,7 +216,26 @@ async function callGateway(route: string, body: Record<string, unknown>, minimum
   }
 }
 
+/**
+ * Whether a gateway response already carries the content parts the harness should
+ * render. A result holding an image comes back this way so the picture travels as
+ * an image part rather than as inline base64, which a provider bills as text.
+ */
+function isGatewayContent(value) {
+  if (!Array.isArray(value) || value.length === 0) return false
+  return value.every(
+    (part) =>
+      part &&
+      typeof part === 'object' &&
+      ((part.type === 'text' && typeof part.text === 'string') ||
+        (part.type === 'image' && typeof part.data === 'string' && typeof part.mimeType === 'string'))
+  )
+}
+
 function textResult(value) {
+  if (value && typeof value === 'object' && isGatewayContent(value.content)) {
+    return { content: value.content }
+  }
   return {
     content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
   }
