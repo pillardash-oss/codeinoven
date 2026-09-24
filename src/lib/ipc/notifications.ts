@@ -39,30 +39,28 @@ export interface CloseConfirmationPayload {
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
-/** Which bundled alert the renderer should play for a notification. */
+/** Which bundled alert a notification maps to. */
 export type NotificationSoundKind = 'default' | 'attention'
 
 /**
- * Which surface raised an audible alert:
+ * How long the app stays quiet after it played an alert. Only the first
+ * notification of a burst is announced; the rest still show their card and
+ * toast but stay silent, so a burst never machine-guns beeps.
  *
- * - `system`   the app is in the background, so the OS card carries the
- *   notification and the full-volume alert announces it.
- * - `in-app`   the app is focused, so the user only sees the sonner toast and
- *   the quieter in-app alert announces the exact same event.
- *
- * The two are mutually exclusive per notification, so a single burst can never
- * play both.
+ * Both alert surfaces share this window: the main process gates the off-app
+ * alert it dispatches, and the renderer sound module gates the in-app alert it
+ * plays alongside the toast.
  */
-export type NotificationSoundSurface = 'system' | 'in-app'
+export const NOTIFICATION_SOUND_DEDUP_MS = 2_500
 
 /**
- * One audible alert request. The main process is the single producer (it owns
- * the burst dedup window and the focus decision) and emits at most one per
- * notification burst.
+ * Which alert an event maps to. An attention request and a failure both mean
+ * the user has to act, so they share the attention alert; everything else is
+ * the default alert. The off-app card and the in-app toast derive their alert
+ * from this one rule, so the same event never sounds different per surface.
  */
-export interface NotificationSoundRequest {
-  kind: NotificationSoundKind
-  surface: NotificationSoundSurface
+export function notificationSoundKind(kind: AgentNotificationKind): NotificationSoundKind {
+  return kind === 'attention' || kind === 'error' ? 'attention' : 'default'
 }
 
 /**

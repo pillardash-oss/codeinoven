@@ -776,8 +776,8 @@
             <div class="mt-4 border-t pt-4">
               <p class="text-sm font-medium">In-app notification sounds</p>
               <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
-                A softer alert with the in-app toast while the app is in front. The off-app alert
-                for the same event is unchanged.
+                A softer alert with the in-app toast, played only when that toast actually appears
+                while the app is in front. The off-app alert for the same event is unchanged.
               </p>
               <div class="mt-3 space-y-3">
                 <div class="flex items-center justify-between gap-4">

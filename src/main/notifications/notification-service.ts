@@ -16,15 +16,16 @@ import {
   type ThreadStatus
 } from '../../lib/types'
 import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
-import type {
-  AgentNotificationKind,
-  AgentNotificationPayload,
-  NotificationSoundKind,
-  NotificationSoundRequest,
-  NotificationSource,
-  SystemNotificationPermissionStatus,
-  SystemNotificationTestResult,
-  ThreadClickedPayload
+import {
+  NOTIFICATION_SOUND_DEDUP_MS,
+  notificationSoundKind,
+  type AgentNotificationKind,
+  type AgentNotificationPayload,
+  type NotificationSoundKind,
+  type NotificationSource,
+  type SystemNotificationPermissionStatus,
+  type SystemNotificationTestResult,
+  type ThreadClickedPayload
 } from '../../lib/ipc-contract'
 
 const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set(
@@ -41,12 +42,6 @@ const PERMISSION_STATE_PATH = 'state/notification-permission.json'
 const PERMISSION_VERIFY_DEDUP_MS = 15_000
 /** How long a background verification delivery may take before it is dropped. */
 const PERMISSION_VERIFY_TIMEOUT_MS = 4_000
-/**
- * Cooldown covering the alert's duration. Only the first notification of a
- * burst plays a sound   notifications arriving inside this window still show
- * their cards but stay quiet so a burst never machine-guns beeps.
- */
-const NOTIFICATION_SOUND_DEDUP_MS = 2_500
 
 interface BadgeStateRecord {
   version: 1
@@ -559,20 +554,14 @@ export class NotificationService {
     if (options.badgeThreadKey) this.markThreadNotified(options.badgeThreadKey)
 
     // The alert announces the notification on whichever surface actually reaches
-    // the user. While the app is in the background that is the OS card with the
-    // full-volume alert; while it is in front the card is suppressed, so the
-    // toast carries the event and the quieter in-app alert announces it. Both
-    // paths share this one dispatch (and its burst dedup), so a notification can
-    // never be announced twice and a burst can never machine-gun beeps.
+    // the user. While the app is in the background that is the OS card, and the
+    // full-volume alert is dispatched from here. While the app is in front the
+    // card is suppressed and the renderer plays the quieter in-app alert itself,
+    // at the moment it shows the toast, so a suppressed toast stays silent.
     const focused = this.appFocused()
-    // Errors use the same attention alert: both mean the user must act.
-    const soundKind: NotificationSoundKind =
-      payload.kind === 'attention' || payload.kind === 'error' ? 'attention' : 'default'
-    this.dispatchNotificationSound(
-      { kind: soundKind, surface: focused ? 'in-app' : 'system' },
-      windows
-    )
     if (focused) return
+
+    this.dispatchNotificationSound(notificationSoundKind(payload.kind), windows)
 
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
@@ -708,8 +697,8 @@ export class NotificationService {
 
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
     // The test exercises the OS card path, so it always uses the full-volume
-    // system alert regardless of which window is focused.
-    this.dispatchNotificationSound({ kind: 'default', surface: 'system' })
+    // off-app alert regardless of which window is focused.
+    this.dispatchNotificationSound()
     const silent = this.appManagesSound()
     if (!Notification.isSupported()) {
       return {
@@ -900,19 +889,19 @@ export class NotificationService {
   }
 
   /**
-   * Dispatch one audible alert for a notification. Only the first alert of a
-   * burst plays: notifications arriving within the dedup window after the last
-   * played sound still show their cards but stay quiet. The gate lives here in
-   * the main process   not the throttled renderer   so the decision is
+   * Dispatch the off-app audible alert for a notification. Only the first alert
+   * of a burst plays: notifications arriving within the dedup window after the
+   * last played sound still show their OS card but stay quiet. The gate lives
+   * here in the main process, not the throttled renderer, so the decision is
    * deterministic and the first sound is dispatched the moment its notification
    * arrives, instead of seconds after the OS card appears.
    *
-   * The renderer decides only whether the user has muted the in-app alert for
-   * this sound's group; every other decision (burst dedup, surface, volume) is
-   * made here and in the shared renderer sound module.
+   * This covers the background surface only. While the app is in front the
+   * renderer plays its own in-app alert from the toast path, under the same
+   * dedup window and the user's mute preference.
    */
   private dispatchNotificationSound(
-    request: NotificationSoundRequest,
+    kind: NotificationSoundKind = 'default',
     windows = BrowserWindow.getAllWindows()
   ): boolean {
     const soundWindow = windows.find(
@@ -924,7 +913,7 @@ export class NotificationService {
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
 
-    return sendToRenderer(soundWindow.webContents, 'notification:playSound', request)
+    return sendToRenderer(soundWindow.webContents, 'notification:playSound', kind)
   }
 
   private retainNotification(key: string, notification: Notification): void {

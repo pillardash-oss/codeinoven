@@ -18,7 +18,7 @@ import type {
 import type {
   AgentNotificationPayload,
   CloseConfirmationPayload,
-  NotificationSoundRequest,
+  NotificationSoundKind,
   SystemNotificationPermissionStatus,
   ThreadClickedPayload
 } from './notifications'
@@ -65,9 +65,11 @@ export const IPC_EVENT_CONTRACT = {
   'routine:checkpointChanged': [] as unknown as [routineId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
-  /** One audible alert for a notification, tagged with the surface that raised
-   *  it: the OS card path (background) or the in-app toast path (focused). */
-  'notification:playSound': [] as unknown as [request: NotificationSoundRequest],
+  /** The off-app audible alert for a notification, dispatched by the main
+   *  process to a live renderer while the app is in the background. The in-app
+   *  alert for a focused toast is played by the renderer itself, at the moment
+   *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
+  'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
   /** Transient in-app toast (error/info, optional navigation action). */
   'app:toast': [] as unknown as [

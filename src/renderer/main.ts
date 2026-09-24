@@ -10,13 +10,13 @@ import { installNotificationSound } from './lib/notification-sound'
 installRendererErrorCapture()
 
 /**
- * The main process is the single gate for every audible alert: it owns the
- * burst dedup window and decides which surface raised the notification, so the
- * renderer plays every request it receives immediately. Cards still show for
- * every notification via the separate `notification:show` channel. Off-app
- * requests play the full-volume pair for the OS card; in-app requests play the
- * quieter, purpose-made pair for the toast and honour the user's mute
- * preference.
+ * Alerts are split by surface. While the app is in the background the main
+ * process dispatches the off-app alert for the OS card, and this renderer plays
+ * every request it receives. While the app is in front the OS card is
+ * suppressed, so the in-app alert is played by the renderer at the moment it
+ * shows the toast (see app-ipc-subscriptions.ts), which keeps the cue and the
+ * card in lockstep. Cards still show for every notification via the separate
+ * `notification:show` channel.
  */
 const unsubscribeFromNotificationSound = installNotificationSound()
 window.addEventListener('beforeunload', unsubscribeFromNotificationSound, { once: true })
