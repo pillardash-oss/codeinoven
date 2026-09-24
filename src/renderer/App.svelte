@@ -22,6 +22,11 @@
   } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
+    contentThreadFamily,
+    decideContentViewThread,
+    type ContentThreadFamily
+  } from '$lib/content-view-threads'
+  import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
@@ -59,7 +64,6 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    ASSISTANT_SPACE_ID,
     INBOX_PROJECT_ID,
     isThreadWorking,
     threadTracksReadStatus,
@@ -239,13 +243,12 @@
       // it   the sidebar context itself is stashed for later restore.
       scopeState.clearSidebarContext()
     }
-    const previousContentView = rendererRecovery.lastContentView
     activeView = view
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
-    reconcileThreadForContentView(view, previousContentView)
+    reconcileThreadForContentView(view)
     observeNavigationLocation()
   }
 
@@ -253,118 +256,53 @@
     navigationHistoryState.observe(currentLocation())
   }
 
-  /** The most recently opened thread of the given kind that still exists. */
-  function lastThreadOfKind(isChat: boolean): Thread | null {
+  /** The most recently visited thread of one content-view family that still exists. */
+  function lastThreadOfFamily(family: ContentThreadFamily): Thread | null {
     for (const key of workspaceState.recentThreadVisits) {
       const thread = scopeState.allScopeThreads.find(
         (candidate) => threadVisitKey(candidate) === key
       )
       if (!thread || thread.archived) continue
-      const isAssistant = thread.projectId === ASSISTANT_SPACE_ID
-      if (isAssistant) continue
-      if ((thread.projectId === INBOX_PROJECT_ID) === isChat) return thread
+      if (contentThreadFamily(thread) === family) return thread
     }
     return null
   }
 
-  /** The most recently opened assistant task that still exists. */
-  function lastAssistantTask(): Thread | null {
-    for (const key of workspaceState.recentThreadVisits) {
-      const thread = scopeState.allScopeThreads.find(
-        (candidate) => threadVisitKey(candidate) === key
-      )
-      if (!thread || thread.archived) continue
-      if (thread.projectId === ASSISTANT_SPACE_ID) return thread
-    }
-    return null
+  /** The thread a content-view family was last showing, resolved against the live list. */
+  function rememberedThreadOfFamily(family: ContentThreadFamily): Thread | null {
+    const ref = workspaceState.contentViewThreadRef(family)
+    if (!ref) return null
+    const thread = scopeState.allScopeThreads.find(
+      (candidate) => candidate.id === ref.threadId && candidate.projectId === ref.projectId
+    )
+    return thread && !thread.archived ? thread : null
   }
 
   /**
-   * Switching between Chats and the project views must never leave a thread of
-   * the wrong kind selected (a chat shown as a project thread, or vice versa).
-   * Restores the last opened thread of the target view, or falls back to the
-   * empty state when nothing of that kind exists. Covers every navigation path
-   * (nav buttons, command palette, programmatic navigation like "continue in a
-   * project"), not just the header buttons.
+   * Keep the open thread in step with the content view the shell switched to.
+   *
+   * Each content-view family (Projects, Chats, Assistant) remembers the thread
+   * it was last showing, so moving between them restores that family's own
+   * thread instead of one global selection that the last visited view wins.
+   * Covers every navigation path (nav buttons, command palette, programmatic
+   * navigation like "continue in a project", notifications), not just the
+   * header buttons.
    */
-  function reconcileThreadForContentView(
-    view: View,
-    previousContentView: 'projects' | 'chats' | 'threads' | 'assistant'
-  ): void {
-    // Assistant tasks are their own family: entering the view opens the last
-    // assistant task (or the empty state), and leaving it never keeps a task
-    // selected in a project/chat view.
-    if (view === 'assistant') {
-      const selected = workspaceState.selectedThread
-      if (selected?.projectId === ASSISTANT_SPACE_ID) return
-      const last = lastAssistantTask()
-      if (last) {
-        const project =
-          scopeState.projectRecords.find((candidate) => candidate.id === last.projectId) ?? null
-        workspaceState.openThread(last, project)
-      } else {
-        workspaceState.clearThread()
-      }
-      return
-    }
-    if (view !== 'chats' && view !== 'projects' && view !== 'threads') return
-    const current = workspaceState.selectedThread
-    if (current?.projectId === ASSISTANT_SPACE_ID) {
-      // Leaving the assistant view: restore the last thread of the target kind.
-      if (view === 'chats') {
-        const lastChat = lastThreadOfKind(true)
-        if (lastChat) {
-          const project =
-            scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ??
-            null
-          workspaceState.openThread(lastChat, project)
-        } else {
-          workspaceState.clearThread()
-        }
-        return
-      }
-      const lastProjectThread = lastThreadOfKind(false)
-      if (lastProjectThread) {
-        const project =
-          scopeState.projectRecords.find(
-            (candidate) => candidate.id === lastProjectThread.projectId
-          ) ?? null
-        workspaceState.openThread(lastProjectThread, project)
-      } else {
-        workspaceState.clearThread()
-      }
-      return
-    }
-    if (view === previousContentView) return
-    const goingToChats = view === 'chats'
-    const leavingChats = previousContentView === 'chats'
-    if (goingToChats === leavingChats) return
-
-    const thread = workspaceState.selectedThread
-    const threadIsChat = thread ? thread.projectId === INBOX_PROJECT_ID : false
-
-    if (goingToChats) {
-      // Entering chats: keep a chat selected, otherwise restore the last chat.
-      if (thread && threadIsChat) return
-      const lastChat = lastThreadOfKind(true)
-      if (!lastChat) return
-      const project =
-        scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ?? null
-      workspaceState.openThread(lastChat, project)
-      return
-    }
-
-    // Leaving chats for a project view: never keep the chat selected.
-    if (!thread || !threadIsChat) return
-    const lastProjectThread = lastThreadOfKind(false)
-    if (!lastProjectThread) {
+  function reconcileThreadForContentView(view: View): void {
+    const decision = decideContentViewThread(view, workspaceState.selectedThread, {
+      remembered: rememberedThreadOfFamily,
+      recentOfFamily: lastThreadOfFamily
+    })
+    if (decision.kind === 'keep') return
+    if (decision.kind === 'clear') {
       workspaceState.clearThread()
       return
     }
     const project =
-      scopeState.projectRecords.find((candidate) => candidate.id === lastProjectThread.projectId) ??
+      scopeState.projectRecords.find((candidate) => candidate.id === decision.thread.projectId) ??
       null
-    workspaceState.openThread(lastProjectThread, project)
+    workspaceState.openThread(decision.thread, project)
+    void scopeState.ensureBoardLoaded(decision.thread.projectId)
   }
 
   /** Re-open the thread captured in a history entry, if it still exists. */
@@ -547,12 +485,17 @@
       case 'app:projects':
         navigate('projects')
         return
-      case 'app:chats':
-        if (activeView !== 'chats' && workspaceState.selectedThread) {
-          scopeState.stashedProjectThreadId = workspaceState.selectedThread.id
+      case 'app:chats': {
+        // Only a project-family thread is a restorable project thread; an
+        // assistant task stashed here would later be restored into the scope
+        // sidebar as if it were one.
+        const selected = workspaceState.selectedThread
+        if (activeView !== 'chats' && selected && contentThreadFamily(selected) === 'projects') {
+          scopeState.stashedProjectThreadId = selected.id
         }
         navigate('chats')
         return
+      }
       case 'app:scope':
         navigate('scope')
         return

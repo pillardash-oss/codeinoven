@@ -5,17 +5,20 @@ import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
-import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
+import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
+import { type Project, type Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import { BotMessageSquare, FolderKanban, Kanban, MessageSquare, SquareDashedKanban, Timeline } from '@lucide/svelte'
+import {
+  BotMessageSquare,
+  FolderKanban,
+  Kanban,
+  MessageSquare,
+  SquareDashedKanban,
+  Timeline
+} from '@lucide/svelte'
 
 export type HeaderViewOptionId =
-  | 'projects'
-  | 'threads'
-  | 'scoped-threads'
-  | 'scope-board'
-  | 'chats'
-  | 'assistant'
+  'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant'
 
 export interface HeaderViewOption {
   id: HeaderViewOptionId
@@ -33,12 +36,12 @@ export interface AppHeaderNavigationOptions {
   navigate: (view: MainView) => void
 }
 
-/** Return the most recently visited thread of one navigation family. */
-function recentThreadForKind(isChat: boolean): Thread | null {
+/** Return the most recently visited thread of one content-view family. */
+function recentThreadOfFamily(family: ContentThreadFamily): Thread | null {
   for (const visit of workspaceState.recentThreadVisits) {
     const candidate = scopeState.allScopeThreads.find((thread) => threadVisitKey(thread) === visit)
     if (!candidate || candidate.archived) continue
-    if ((candidate.projectId === INBOX_PROJECT_ID) === isChat) return candidate
+    if (contentThreadFamily(candidate) === family) return candidate
   }
   return null
 }
@@ -85,12 +88,12 @@ export class AppHeaderNavigationController {
 
   /** Warm every plausible restore target before a nav click or shortcut lands. */
   preloadNavigationThreads(target: 'chats' | 'projects'): void {
-    const isChat = target === 'chats'
+    const family: ContentThreadFamily = target === 'chats' ? 'chats' : 'projects'
     const targetIds = [
-      isChat ? scopeState.stashedChatThreadId : scopeState.stashedProjectThreadId,
-      recentThreadForKind(isChat)?.id,
-      workspaceState.selectedThread &&
-      (workspaceState.selectedThread.projectId === INBOX_PROJECT_ID) === isChat
+      workspaceState.contentViewThreadRef(family)?.threadId,
+      family === 'chats' ? scopeState.stashedChatThreadId : scopeState.stashedProjectThreadId,
+      recentThreadOfFamily(family)?.id,
+      workspaceState.selectedThread && contentThreadFamily(workspaceState.selectedThread) === family
         ? workspaceState.selectedThread.id
         : null
     ]
@@ -128,7 +131,9 @@ export class AppHeaderNavigationController {
 
   /** Navigate to a primary view without any sidebar toggling   used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
-  async navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'): Promise<void> {
+  async navigateToView(
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+  ): Promise<void> {
     const activeView = this.getActiveView()
     if (view === 'chats') this.preloadNavigationThreads('chats')
     else if (view === 'projects') this.preloadNavigationThreads('projects')
@@ -137,23 +142,22 @@ export class AppHeaderNavigationController {
     } else if (view === 'assistant') {
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
-      // Remember the current project thread before switching to chats
-      scopeState.stashedProjectThreadId = workspaceState.selectedThread?.id ?? null
+      // Remember the project-family thread before switching to chats so the
+      // scope state can restore it; an assistant task is never a project thread.
+      // Which thread the chats view itself shows is the shell's decision, from
+      // the chats family's own remembered thread.
+      const selected = workspaceState.selectedThread
+      scopeState.stashedProjectThreadId =
+        selected && contentThreadFamily(selected) === 'projects' ? selected.id : null
       if (scopeState.sidebarContext) {
         scopeState.stashSidebarContext()
       }
-      // Restore the last chat thread, or clear selection so the composer shows
-      if (scopeState.stashedChatThreadId) {
-        void this.restoreThread(scopeState.stashedChatThreadId)
-      } else {
-        workspaceState.clearThread()
-      }
     } else if (view === 'projects' && activeView === 'chats') {
-      // Coming from chats   remember the chat thread and restore the project thread
-      scopeState.stashedChatThreadId = workspaceState.selectedThread?.id ?? null
-      if (scopeState.stashedProjectThreadId) {
-        void this.restoreThread(scopeState.stashedProjectThreadId)
-      }
+      // Remember the chat thread so returning to chats can preload it; the
+      // shell restores the project thread from the projects family's memory.
+      const selected = workspaceState.selectedThread
+      scopeState.stashedChatThreadId =
+        selected && contentThreadFamily(selected) === 'chats' ? selected.id : null
     } else if (view === 'projects' && activeView === 'scope') {
       scopeState.clearSidebarContext()
     }
@@ -167,7 +171,9 @@ export class AppHeaderNavigationController {
     }
   }
 
-  async onPrimaryNavClick(view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'): Promise<void> {
+  async onPrimaryNavClick(
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+  ): Promise<void> {
     const activeView = this.getActiveView()
     // Scope Board keeps its toggle behaviour: already open → last view.
     if (view === 'scope' && view === activeView) {
