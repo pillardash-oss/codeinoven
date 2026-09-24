@@ -32,6 +32,50 @@ export function isLocalDevelopmentUrl(value: string): boolean {
 }
 
 /**
+ * Whether an outbound fetch must refuse this host.
+ *
+ * `isLocalDevelopmentUrl` owns this repository's notion of loopback, RFC1918 and
+ * `.localhost`, which is what a browser address bar needs. An outbound fetch
+ * needs that answer plus the ranges that only matter when this process opens the
+ * connection: link-local IPv4 (where cloud metadata services answer), IPv6
+ * link-local and unique-local, and IPv4-mapped IPv6.
+ *
+ * The WHATWG URL parser normalizes exotic IPv4 spellings (`0x7f.1`,
+ * `2130706433`) to dotted decimal, so a literal check on the serialized hostname
+ * cannot be spelled around. It is a literal check only: it resolves no DNS, so a
+ * public hostname that resolves to an internal address is not covered, and a
+ * caller that follows redirects has to re-check every hop.
+ */
+export function isBlockedFetchHost(value: string | URL): boolean {
+  let url: URL
+  try {
+    url = typeof value === 'string' ? new URL(value) : value
+  } catch {
+    return false
+  }
+  if (isLocalDevelopmentUrl(url.href)) return true
+
+  const host = url.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, '')
+    .replace(/\.$/u, '')
+
+  const octets = host.split('.')
+  if (octets.length === 4 && octets.every((part) => /^\d{1,3}$/u.test(part))) {
+    // Link-local 169.254.0.0/16, the range cloud metadata endpoints answer on.
+    if (Number(octets[0]) === 169 && Number(octets[1]) === 254) return true
+  }
+
+  if (host.includes(':')) {
+    // IPv6 link-local `fe80::/10`, unique-local `fc00::/7`, IPv4-mapped `::ffff:0:0/96`.
+    if (/^(?:fe[89ab]|f[cd])/u.test(host)) return true
+    if (host.startsWith('::ffff:')) return true
+  }
+
+  return false
+}
+
+/**
  * Whether a page URL belongs to one preview origin.
  *
  * This is how the tab a preview server is feeding gets found: the server knows

@@ -14,8 +14,10 @@ import {
  * and which models the user assigned to the design work. The operations are
  * `preview`, which serves the design folder on the app's own loopback origin and
  * opens it in the project's browser tab (`src/main/preview/design-preview-executor.ts`),
- * and `delegate`, which runs one prompt on a model the user assigned rather than
- * on one the agent picked (`src/main/design/design-assignment-executor.ts`).
+ * `delegate`, which runs one prompt on a model the user assigned rather than on
+ * one the agent picked (`src/main/design/design-assignment-executor.ts`), and
+ * `save-media`, which turns a generated asset on a link into a file beside the
+ * design (`src/main/design/design-media-executor.ts`).
  *
  * That shape is deliberate. The content security policy of the engineering
  * prototype phase and the open posture of the design preview differ, and both
@@ -121,14 +123,25 @@ Activate the app's in-app browser capability, \`cio:browser\` (search for "brows
 
 ## Delegating to the models the user assigned
 
-Design work usually needs more than markup: a generated image, copy that sounds like the product, a script, a voice-over, a video. The user assigns a model to each kind of work in Settings, Design, and operation \`delegate\` runs that exact model:
+Some design work is words: the copy that sounds like the product, an SEO pass, a script, a storyboard, the prompts a generator will be given. The user assigns a model to each kind of work in Settings, Design, and operation \`delegate\` runs that exact model:
 
 - \`assignment\`, the work to delegate, by its handle or by its title.
 - \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
 
 ${delegationGuidance(assignments)}
 
+A delegated model answers in words. It cannot hand back an image, a video or a sound file, so never delegate one and never accept prose as though it were the asset.
+
 Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
+
+## Pictures, video and sound
+
+Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it:
+
+1. Find it with the search tool the turn instructions name (query the work, for example "generate an image" or "video generation"), activate the result, then invoke it. Every one takes its own arguments, so read the capability's documentation before calling it.
+2. When it answers with a link, save that link with this capability's \`save-media\` operation, naming the design's own folder and a file name that says what the asset is. Generation links expire within hours or days, so a design that references one stops rendering; the saved file does not.
+3. Reference the file from the markup with the relative path the reply gave you, and preview the folder to check it renders at the size and in the position the design needs.
+4. When no installed capability does the work, say so plainly and name what would: the user installs it in Utilities. Do not stand in for a generator, and never leave an empty frame or a grey box where a real asset was asked for.
 
 ## External assets
 

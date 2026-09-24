@@ -371,6 +371,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       browser: () => state.browserService
     })
   )
+  // Generation services answer with a link and those links expire, so the design
+  // capability can bring a generated image, video or sound file into the project
+  // as a file the design references by relative path.
+  const { createDesignMediaExecutor } = await import('../design/design-media-executor')
+  state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
   // A previewed folder refreshes itself: the preview server reports a batched
   // change for the directory it serves, and the tab showing that origin reloads.
   // The browser is read lazily because it exists only while the app has a window,

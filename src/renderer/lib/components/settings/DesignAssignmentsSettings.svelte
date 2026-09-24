@@ -220,10 +220,12 @@
   <div class="rounded-xl border bg-surface p-4">
     <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Assigned models</h3>
     <p class="mt-2 text-xs leading-relaxed text-dimmed">
-      Name each kind of design work and pick the model that does it: image generation, copy, a
-      script, a voice-over. A design session delegates that work to the model you pick here, and it
-      never picks one itself. With nothing assigned, the agent says which work needs a model instead
-      of improvising one.
+      Name each kind of design work and pick the model that does it: product copy, an SEO pass, a
+      script, a storyboard, the prompts a generator is given. A design session delegates that work
+      to the model you pick here, and it never picks one itself. The model answers in words, so
+      pictures, video and sound come from a generation capability instead: install one in Utilities
+      and the session uses it, then saves the result into the design as a file. With nothing
+      assigned, the agent says which work needs a model instead of improvising one.
     </p>
   </div>
 
@@ -376,7 +378,7 @@
             id="design-assignment-new"
             class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
             type="text"
-            placeholder="Image generation"
+            placeholder="Product copy"
             maxlength={DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH}
             bind:value={draftLabel}
             disabled={!settingsReady || atCapacity}

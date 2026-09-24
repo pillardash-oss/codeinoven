@@ -135,11 +135,12 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
 /**
  * Operations of the app-owned design capability (`cio:design`).
  *
- * Two, and both are things the agent cannot do with its own tools: show the
- * design on the app's own origin, and run the model the user assigned to a piece
- * of design work. Looking at the result is deliberately not repeated here: the
- * browser capability already owns screenshots, viewports and console reads, and
- * the docs point at it.
+ * Three, and all of them are things the agent cannot do with its own tools: show
+ * the design on the app's own origin, run the model the user assigned to a piece
+ * of design work, and turn a generated asset into a file beside the design.
+ * Looking at the result is deliberately not repeated here: the browser capability
+ * already owns screenshots, viewports and console reads, and the docs point at
+ * it.
  */
 export const DESIGN_UTILITY_TOOLS: McpTool[] = [
   {
@@ -170,7 +171,7 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'delegate',
     description:
-      'Run one prompt on the model the user assigned to a named piece of design work (for example image generation, long-form copy, video). The assigned model did not see this conversation, so the prompt has to carry every detail it needs. Delegate whenever the user has assigned the work; never choose a model yourself and never stand in for one.',
+      'Run one prompt on the model the user assigned to a named piece of design work, for example long-form copy, an SEO pass, a script or a storyboard. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. It answers in words, so it cannot hand back an image, a video or a sound file; media is produced by the capability the user installed for it, and operation save-media is what turns that result into a design file. Delegate whenever the user has assigned the work; never choose a model yourself and never stand in for one.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -186,6 +187,31 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
         }
       },
       required: ['assignment', 'prompt'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'save-media',
+    description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: {
+          type: 'string',
+          description:
+            'The https link the generation service returned for the asset. Only an https link with a media type, from a public host, is accepted.'
+        },
+        name: {
+          type: 'string',
+          description:
+            'Optional file name without an extension, such as hero. Defaults to the name in the source URL.'
+        },
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to save into. Defaults to ${DESIGN_OUTPUT_ROOT}, so name the design's own folder when the asset belongs to a design.`
+        }
+      },
+      required: ['source'],
       additionalProperties: false
     }
   }

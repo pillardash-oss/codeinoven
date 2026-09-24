@@ -76,8 +76,18 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'design',
     section: 'design',
     title: 'Design',
-    description: 'The model that does each kind of design work: images, copy, video.',
-    keywords: ['design', 'assignments', 'image generation', 'copy', 'video', 'delegate'],
+    description: 'The model that does each kind of design work: copy, SEO, scripts, storyboards.',
+    keywords: [
+      'design',
+      'assignments',
+      'copy',
+      'seo',
+      'script',
+      'storyboard',
+      'delegate',
+      'image generation',
+      'video'
+    ],
     icon: Palette
   },
   {

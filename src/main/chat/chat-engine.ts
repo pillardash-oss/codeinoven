@@ -1680,6 +1680,15 @@ export class ChatEngine {
   }
 
   /**
+   * Register the executor behind the design capability's `save-media`
+   * operation. It needs the database rather than the chat engine's own state,
+   * because the one thing it resolves is the project root the file lands in.
+   */
+  setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.utilityOrchestration.setDesignMediaExecutor(executor)
+  }
+
+  /**
    * Land a utility registry change in the turns that are already running.
    *
    * Called by the renderer boundary after every successful write, so switching a

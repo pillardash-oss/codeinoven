@@ -220,9 +220,10 @@ export type BrowserUtilityExecutor = (
 /**
  * Runs one gateway invocation of the app-owned design capability for the turn
  * that made it. The app supplies one of these per operation group, because the
- * two halves have different owners: `preview` composes the loopback directory
- * preview with the in-app browser, and `delegate` runs a prompt on the model the
- * user assigned to that design work.
+ * three halves have different owners: `preview` composes the loopback directory
+ * preview with the in-app browser, `delegate` runs a prompt on the model the
+ * user assigned to that design work, and `save-media` writes a generated asset
+ * into the project as a file the design can reference.
  */
 export type DesignCapabilityExecutor = (
   operation: string,
@@ -325,6 +326,7 @@ export class UtilityOrchestrationService {
   private browserExecutor: BrowserUtilityExecutor | null = null
   private designPreviewExecutor: DesignCapabilityExecutor | null = null
   private designAssignmentExecutor: DesignCapabilityExecutor | null = null
+  private designMediaExecutor: DesignCapabilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -407,6 +409,16 @@ export class UtilityOrchestrationService {
    */
   setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designAssignmentExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `save-media`
+   * operation, which writes a generated image, video or sound file into the
+   * project so the design references a file rather than a link that expires.
+   * The app supplies it because it owns the project root the file lands in.
+   */
+  setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designMediaExecutor = executor
   }
 
   /**
@@ -633,7 +645,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus two operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, and a \`delegate\` operation that runs the model the user assigned to a named piece of design work. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1494,15 +1506,20 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // One capability, two operation groups with different owners: `preview`
-      // serves the design folder, `delegate` runs the model the user assigned.
-      const executor =
-        operation === 'delegate' ? this.designAssignmentExecutor : this.designPreviewExecutor
+      // One capability, three operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned,
+      // and `save-media` brings a generated asset in as a file.
+      const executors = new Map<string, DesignCapabilityExecutor | null>([
+        ['preview', this.designPreviewExecutor],
+        ['delegate', this.designAssignmentExecutor],
+        ['save-media', this.designMediaExecutor]
+      ])
+      const executor = executors.get(operation)
       if (!executor) {
         throw new Error(
-          operation === 'delegate'
-            ? 'The design delegation is unavailable'
-            : 'The design preview is unavailable'
+          executors.has(operation)
+            ? `The design capability's "${operation}" operation is unavailable`
+            : `The design capability has no operation named "${operation}"`
         )
       }
       result = await executor(operation, operationInput, {

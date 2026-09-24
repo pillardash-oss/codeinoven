@@ -1,14 +1,13 @@
 import { stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { requireLocalProject } from '../../lib/project-artifacts'
-import { DESIGN_OUTPUT_ROOT } from '../../lib/design-skill'
+import { isInsideProject, resolveDesignDirectory } from '../design/design-paths'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
 
-/** Ceilings on the path fields, so a hand-written call cannot inflate a log line. */
-const MAX_DIRECTORY_LENGTH = 1_024
+/** Ceiling on the entry field, so a hand-written call cannot inflate a log line. */
 const MAX_ENTRY_LENGTH = 512
 
 /** File the folder is expected to hold, and the one a preview falls back to. */
@@ -25,33 +24,6 @@ export interface DesignPreviewExecutorOptions {
   previews: DirectoryPreviewService
   database: Database
   browser: () => BrowserService | null
-}
-
-function isInside(root: string, target: string): boolean {
-  const rel = relative(root, target)
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
-}
-
-/** One project-relative folder, defaulted and refused when it could escape. */
-function resolveDirectory(
-  projectPath: string,
-  raw: unknown
-): { absolute: string; display: string } {
-  let requested = DESIGN_OUTPUT_ROOT
-  if (raw !== undefined) {
-    if (typeof raw !== 'string') throw new Error('directory must be a project-relative path')
-    const trimmed = raw.trim()
-    if (trimmed.length > MAX_DIRECTORY_LENGTH) throw new Error('directory is too long')
-    if (trimmed.length > 0) requested = trimmed
-  }
-  if (isAbsolute(requested)) throw new Error('directory must be relative to the project')
-  const absolute = resolve(projectPath, requested)
-  if (!isInside(projectPath, absolute)) {
-    throw new Error(
-      'directory must be a folder inside the project, and not the project root itself'
-    )
-  }
-  return { absolute, display: relative(projectPath, absolute).split(sep).join('/') }
 }
 
 /** One file inside the served folder, or null to let the folder listing show. */
@@ -107,7 +79,7 @@ export function createDesignPreviewExecutor(
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
-    const directory = resolveDirectory(project.path, input['directory'])
+    const directory = resolveDesignDirectory(project.path, input['directory'])
     const requested = resolveEntry(input['entry'])
     const registration = await options.previews.open(directory.absolute).catch((error: unknown) => {
       throw new Error(
@@ -118,7 +90,7 @@ export function createDesignPreviewExecutor(
     let entry = requested
     if (entry) {
       const absolute = resolve(directory.absolute, ...entry.segments)
-      if (!isInside(directory.absolute, absolute)) {
+      if (!isInsideProject(directory.absolute, absolute)) {
         throw new Error('entry must name a file inside the served folder')
       }
       if (!(await existsAsFile(absolute))) {
