@@ -763,26 +763,34 @@
   }
 
   /**
-   * Open a thread from a notification while preserving the current view:
+   * Open a thread from a notification while preserving the current view.
+   *
+   * The target view follows the thread's own family, so a deep link can never
+   * select a thread in a content view that does not own it:
+   * - Chat thread → switch to the chats view.
+   * - Assistant task → switch to the assistant view.
    * - Regular project view → stay there (no scope sidebar).
    * - Scope state / scope view → stay there and reveal the thread in the sidebar.
-   * - Threads view → stay there (no scope sidebar).
-   * - Chat notification → switch to the chats view.
+   * - Threads view → stay there (no scope sidebar), the project family's own timeline.
+   * - Settings or any other view → return to Projects for the thread.
    */
   async function openThreadFromNotification(
     thread: Thread,
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
-    const isChat = thread.projectId === INBOX_PROJECT_ID
+    const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
       activeView === 'projects-scope' ||
       (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
-    if (isChat) {
-      // Chat notifications always land in the chats view.
+    if (family === 'chats') {
+      // A chat is only ever shown by the chats view.
       navigate('chats')
+    } else if (family === 'assistant') {
+      // An assistant task is only ever shown by the assistant view.
+      navigate('assistant')
     } else if (inScopeState) {
       // Stay in the scope state: reveal the thread in the scope sidebar.
       if (activeView !== 'projects') navigate('projects')
@@ -792,11 +800,10 @@
       // Stay in the threads view without entering the scope state.
       scopeState.clearSidebarContext()
     } else {
-      // Regular project view or a non-content view (chats or a settings page):
-      // stay or return to the last content view, never entering the scope state.
-      const target =
-        activeView === 'projects' || lastContentView === 'chats' ? 'projects' : lastContentView
-      if (target !== activeView) navigate(target)
+      // A project thread belongs in Projects, so return to it from Settings, the
+      // chats view, the assistant view, or any other out-of-family view rather
+      // than leaving it selected somewhere that cannot own it.
+      if (activeView !== 'projects') navigate('projects')
       scopeState.clearSidebarContext()
     }
 
@@ -1109,14 +1116,18 @@
     // remap side buttons to on macOS, since there's no native OS-level
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
-    if (keymapState.matches('nav-history-back', e) || keymapState.matches('nav-history-forward', e)) {
+    if (
+      keymapState.matches('nav-history-back', e) ||
+      keymapState.matches('nav-history-forward', e)
+    ) {
       e.preventDefault()
       if (e.repeat) return
       if (keymapState.matches('nav-history-back', e)) void goBack()
       else void goForward()
     }
     if (
-      keymapState.matches('nav-new-project', e) || keymapState.matches('assistant-new-routine', e)
+      keymapState.matches('nav-new-project', e) ||
+      keymapState.matches('assistant-new-routine', e)
     ) {
       e.preventDefault()
       if (e.repeat) return
