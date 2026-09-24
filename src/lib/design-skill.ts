@@ -69,7 +69,7 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
  */
 function delegationGuidance(assignments: string): string {
   return assignments.length === 0
-    ? 'Nothing is delegated in this project yet: the user has not assigned a model to any design work. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
+    ? 'No design work is delegated yet: the user has not assigned a model to any design work. The assignments are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
     : `The user assigned: ${assignments}. Delegate that work before telling the user it cannot be produced. When you need something that is not in that list, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design.`
 }
 

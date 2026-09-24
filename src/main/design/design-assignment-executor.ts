@@ -80,7 +80,7 @@ export function createDesignAssignmentExecutor(
       const catalogue = designAssignmentCatalogue(config)
       throw new Error(
         catalogue.length === 0
-          ? `Nothing is delegated in this project: the user has not assigned a model to any design work yet. Do the work with your own tools when you can, and when the design needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.`
+          ? `No design work is delegated yet: the user has not assigned a model to any design work. Do the work with your own tools when you can, and when the design needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.`
           : `There is no design assignment named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
       )
     }
