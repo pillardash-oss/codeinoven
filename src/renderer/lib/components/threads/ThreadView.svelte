@@ -6106,8 +6106,6 @@
       if (plan?.schedule) patch.schedule = plan.schedule
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
-      if (plan?.delivery) patch.delivery = plan.delivery
-      if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
         const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
         const catalog = await invoke('utilities:list').catch(() => null)
