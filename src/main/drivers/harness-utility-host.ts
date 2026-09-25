@@ -67,11 +67,19 @@ class UtilityHostChild extends ChildProcess {
 
   private readonly helper: UtilityProcess
   private exitAccepted = false
+  /** Whether a positive pid has already been published (and `spawn` emitted). */
+  private spawnAnnounced = false
 
   constructor(helper: UtilityProcess, request: HarnessRunRequest, bridgePid: number) {
     super()
     this.helper = helper
-    this.pid = bridgePid
+    // Electron leaves `helper.pid` undefined until the helper has spawned, which
+    // is after this constructor runs; the bridge reports the real pid back as its
+    // first message (see `resolvePid`). A non-zero value here only happens on the
+    // rare occasion the pid is already known, which lets the driver register
+    // synchronously.
+    this.pid = bridgePid > 0 ? bridgePid : 0
+    this.spawnAnnounced = this.pid > 0
     this.spawnfile = request.argv[0] ?? 'utility'
     this.spawnargs = request.argv.slice()
 
@@ -114,6 +122,10 @@ class UtilityHostChild extends ChildProcess {
   private consumeHelperMessage(message: unknown): void {
     if (!message || typeof message !== 'object') return
     const record = message as Record<string, unknown>
+    if (record['t'] === 'pid') {
+      this.resolvePid(record['pid'])
+      return
+    }
     if (record['t'] === 'data') {
       const stream = record['stream'] === 'err' ? this.stderr : this.stdout
       const baseline = record['b64']
@@ -128,6 +140,18 @@ class UtilityHostChild extends ChildProcess {
     if (record['t'] === 'exit' && typeof record['code'] === 'number') {
       this.acceptExit(record['code'], null)
     }
+  }
+
+  /**
+   * Publish the helper's OS pid once it is known and emit `spawn` so a process
+   * observer that could not read it synchronously can attach the harness root.
+   */
+  private resolvePid(pid: unknown): void {
+    if (this.spawnAnnounced) return
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return
+    this.pid = pid
+    this.spawnAnnounced = true
+    this.emit('spawn')
   }
 }
 
