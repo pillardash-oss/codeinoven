@@ -209,6 +209,7 @@ export class BrowserService {
   }
 
   register(): void {
+    this.guardAgainstStrandedView()
     ipcMain.handle(
       'browser:show',
       (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds) => {
@@ -1349,6 +1350,50 @@ export class BrowserService {
       timestamp: Date.now()
     }
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
+  }
+
+  /**
+   * Detach the native view when the app renderer goes away, so a reload can never
+   * leave the browser floating over the app.
+   *
+   * The renderer is the only thing that knows which tab belongs on screen and at
+   * which frame, and the compositor paints the view ABOVE every DOM surface. A
+   * reload throws that knowledge away (the full screen browser is renderer state,
+   * and the sidebar browser starts hidden), while the view stays parented to the
+   * app window at the last frame it was given. Main only ever moves a view on the
+   * next `browser:show`, so without this the frame the user was looking at keeps
+   * covering the window and swallowing every click, with no DOM surface left that
+   * would ever ask for a different frame.
+   *
+   * The tab itself is kept alive and parked offscreen, exactly as if the user had
+   * left it, and the next renderer re-attaches it when it reports a frame. A
+   * crashed renderer is handled the same way: nothing will report a frame again
+   * until Electron reloads it, and an inert app must not sit under a live page.
+   */
+  private guardAgainstStrandedView(): void {
+    const contents = this.window.webContents
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.detachDisplayedView()
+    })
+    contents.on('render-process-gone', () => this.detachDisplayedView())
+  }
+
+  /**
+   * Take the view off the app window without touching a tab the stage already
+   * released: reviving an inert tab would spend frames on a page nobody is
+   * looking at, which is the state `enforceParkedCap` deliberately created. The
+   * window's own child list is the authority on what is on screen, so this
+   * cannot strand a view that no record happens to mention.
+   */
+  private detachDisplayedView(): void {
+    // The toast hold is published by DOM that a reload or a crash has taken with
+    // it, so keeping it would strand the browser offscreen for a toast that no
+    // longer exists.
+    this.toastVisible = false
+    const parented = new Set(this.window.contentView.children)
+    for (const [tabId, tab] of this.tabs) {
+      if (parented.has(tab.view)) this.parkTab(tabId)
+    }
   }
 
   /**
