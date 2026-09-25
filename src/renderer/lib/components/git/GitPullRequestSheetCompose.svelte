@@ -130,7 +130,7 @@
             providerId={prComposeAgentSettings.selection?.providerId ?? ''}
             modelId={prComposeAgentSettings.selection?.modelId ?? ''}
             accountId={prComposeAgentSettings.selection?.accountId}
-            label={prComposeAgentSettings.selection ? 'Change' : 'Choose a model'}
+            label={prComposeAgentSettings.selection ? undefined : 'Choose a model'}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
