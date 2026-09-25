@@ -19,7 +19,6 @@
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
   import {
-    captureVisibleSelection,
     demoteSmartPunctuation,
     flattenWithNewlines,
     hasRealAdjacentContent,
@@ -645,80 +644,26 @@
     publishCaretText()
   }
 
-  /** Put the caret inside the final editable block. Collapsing a range at the
-   *  editor root can strand it outside a trailing non-editable code wrapper. */
-  function placeCaretAtEditorEnd(): void {
-    if (!editor) return
-    const lastBlock = editor.lastElementChild as HTMLElement | null
-    if (!lastBlock) {
-      placeCaretAtEnd(editor)
-      return
-    }
-    if (lastBlock.matches('[data-editor-codeblock]')) {
-      placeCaretAtEnd(lastBlock.querySelector('code') ?? lastBlock)
-      return
-    }
-    placeCaretAtEnd(lastBlock)
-  }
-
   function handlePaste(event: ClipboardEvent): void {
     onPaste?.(event)
     if (event.defaultPrevented || !editor) return
     const text = event.clipboardData?.getData('text/plain')
     if (text === undefined) return
     const historyEntry = history.captureEntry()
-    const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
     // Pasting content right after a fresh `` pair opens an inline code span,
     // exactly like typing the first character there would.
     applyEmptyPairCodeRule(editor)
-    const insideCodeBlock = Boolean(
-      window.getSelection()?.anchorNode?.parentElement?.closest?.('[data-editor-codeblock]')
-    )
-    if (insideCodeBlock) {
-      // Pasting while the caret is inside a code block: insertPlainText already
-      // placed the text inside the <code> element and left the caret there, so a
-      // full serialize → re-render → caret-at-end round trip would eject the caret
-      // out of the block. Keep the caret put and just publish the new value.
-      emitEditorValue()
-      history.commit(historyEntry)
-      publishCaretText()
-      return
-    }
-    const markdown = serializeRichMarkdown(editor)
-    // `insertPlainText` leaves the caret right after the pasted text. Re-rendering
-    // the whole editor would otherwise drop that caret to the end of the document,
-    // so bookmark it first and restore it onto the freshly rendered content.
-    const bookmark = captureVisibleSelection(editor)
-    replaceEditorContent(markdown)
-    // A paste whose tail renders as a fenced code block must never park the caret
-    // inside or against the non-editable wrapper   typing, the slash menu and the
-    // input rules all go dead there. Guarantee a trailing editable paragraph.
-    if (editor.lastElementChild?.matches('[data-editor-codeblock]')) {
-      const p = document.createElement('p')
-      p.innerHTML = '<br>'
-      // eslint-disable-next-line svelte/no-dom-manipulating
-      editor.appendChild(p)
-    }
-    if (pasteEndsAtEditorEnd) placeCaretAtEditorEnd()
-    else if (bookmark) restoreSelection(bookmark)
-    else placeCaretAtEditorEnd()
-    // The bookmark is measured on the pre-render DOM, which can be much longer than
-    // the re-rendered markdown (fence markers, soft breaks and code headers collapse
-    // away), so it overshoots and strands the caret at the editor level   typically
-    // right after a trailing code block, where typing is impossible and ArrowDown
-    // cannot leave the block. Snap a stranded caret to the end of the last block
-    // (inside a trailing code block's <code> element), which is where the caret
-    // belongs after a paste that ends in a code block.
-    const selection = window.getSelection()
-    if (selection?.anchorNode === editor && editor.lastElementChild) {
-      placeCaretAtEditorEnd()
-    }
-    if (markdown !== value) {
-      value = markdown
-      onValueChange?.(markdown)
-    }
+    // Insert the clipboard text verbatim and leave every other block in the
+    // document exactly as the user wrote it. Serializing the whole editor and
+    // re-rendering it here would re-parse every untouched block as markdown and
+    // silently reformat text the user already typed   a literal `2. item` line
+    // becomes an ordered list, `x * y * z` becomes emphasis, a mid-paragraph `#`
+    // becomes a heading. Nothing outside the pasted text may change on paste.
+    // `insertPlainText` already parks the caret right after the inserted text,
+    // so no re-render (and no caret bookmark dance) is needed.
+    emitEditorValue()
     history.commit(historyEntry)
     publishCaretText()
   }
