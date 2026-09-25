@@ -1007,6 +1007,7 @@
                     placeholder="Write this section in Markdown…"
                     ariaLabel="Edit {section.title}"
                     autofocus
+                    onSubmit={() => void saveSection(section.id)}
                     containerClass="rounded-md border border-border bg-surface"
                     class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                   />
