@@ -65,11 +65,19 @@ export class WorkspaceProjectDialogs {
     const editProject = this.editProject
     if (!editProject || !this.editProjectName.trim()) return
 
+    const patch = {
+      name: this.editProjectName.trim(),
+      color: this.editProjectColor,
+      iconType: this.editProjectIconType
+    }
     let updated: Project
 
     if (this.editProjectPendingIcon) {
-      // User uploaded a new custom image   persist it now
-      updated = await invoke('project:setIcon', editProject.id, this.editProjectPendingIcon.path)
+      // Persist the new image, then the appearance the form holds. An image wins
+      // the preview, but the colour and icon type still save so a colour picked
+      // in the same session is never dropped.
+      await invoke('project:setIcon', editProject.id, this.editProjectPendingIcon.path)
+      updated = await invoke('project:update', editProject.id, patch)
     } else {
       const hadCustomIcon = !!editProject.icon
       // Only clear a custom image when switching to an SVG icon type.
@@ -80,11 +88,7 @@ export class WorkspaceProjectDialogs {
         await invoke('project:clearIcon', editProject.id)
       }
 
-      updated = await invoke('project:update', editProject.id, {
-        name: this.editProjectName.trim(),
-        color: this.editProjectColor,
-        iconType: this.editProjectIconType
-      })
+      updated = await invoke('project:update', editProject.id, patch)
     }
 
     this.options.setProjects(
@@ -138,9 +142,6 @@ export class WorkspaceProjectDialogs {
     const dataUrl = await invoke('file:readAsDataUrl', imagePath)
     if (!dataUrl) return
     this.editProjectPendingIcon = { path: imagePath, dataUrl }
-    // Clear any local colour/icon selection since a custom image takes precedence
-    this.editProjectColor = undefined
-    this.editProjectIconType = undefined
   }
 
   askRemoveProject(projectId: string): void {

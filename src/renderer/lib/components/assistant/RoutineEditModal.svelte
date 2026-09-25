@@ -49,9 +49,6 @@
     const dataUrl = await invoke('file:readAsDataUrl', imagePath)
     if (!dataUrl) return
     pendingIcon = { path: imagePath, dataUrl }
-    // A custom image takes precedence over the colour and SVG icon selection.
-    color = undefined
-    iconType = undefined
   }
 
   function resetAppearance(): void {
@@ -66,23 +63,27 @@
     busy = true
     error = null
     try {
+      const appearance = {
+        name: name.trim(),
+        description: description.trim() || null,
+        color: color ?? null,
+        iconType: iconType ?? null
+      }
       let saved: Routine
       if (pendingIcon) {
-        // Persist the new image only; the routine keeps its colour and icon type
-        // so clearing the image later restores the previous appearance.
-        saved = await assistantRoutines.setRoutineIcon(target.id, pendingIcon.path)
+        // Persist the new image, then the appearance the form holds. An image
+        // takes precedence over the SVG icon in the preview, but the colour and
+        // icon type still save so clearing the image later restores them, and a
+        // colour picked in the same session is never dropped.
+        await assistantRoutines.setRoutineIcon(target.id, pendingIcon.path)
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
       } else {
         const hadCustomIcon = Boolean(target.icon)
         const switchingToSvgIcon = iconType !== target.iconType && iconType !== undefined
         if (hadCustomIcon && switchingToSvgIcon) {
           await assistantRoutines.clearRoutineIcon(target.id)
         }
-        saved = await assistantRoutines.updateRoutine(target.id, {
-          name: name.trim(),
-          description: description.trim() || null,
-          color: color ?? null,
-          iconType: iconType ?? null
-        })
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
       }
       onSaved?.(saved)
       onClose()
