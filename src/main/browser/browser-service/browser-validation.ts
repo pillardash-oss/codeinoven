@@ -7,9 +7,13 @@
 import type {
   BrowserInspectorMarker,
   BrowserPermissionDecision,
+  BrowserShortcutAction,
+  BrowserShortcutBindings,
+  BrowserShortcutChord,
   BrowserSiteDataScope,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
+import { BROWSER_SHORTCUT_ACTIONS } from '../../../lib/ipc-contract'
 import type { BrowserViewport } from './browser-types'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
@@ -42,6 +46,13 @@ export const DEFAULT_PARKED_VIEWPORT: BrowserViewport = { width: 1280, height: 8
  *  app carry an unbounded string in its marker set. */
 export const MAX_INSPECTOR_SELECTOR_LENGTH = 2_000
 
+/** One step of the browser's own zoom. Chromium's zoom level is logarithmic, so
+ *  0.5 is the familiar 120% step Chrome takes per press. */
+export const ZOOM_STEP = 0.5
+/** Chromium's zoom level range (`-5` is ~33%, `5` is ~300%), which the browser
+ *  shortcuts clamp to so held key repeats cannot run past it. */
+export const MAX_ZOOM_LEVEL = 5
+
 /** Most pins a page may hold at once, so a stuck loop cannot fill the document
  *  and the marker set the renderer publishes stays bounded. */
 export const MAX_INSPECTOR_MARKERS = 40
@@ -52,6 +63,66 @@ export const MAX_INSPECTOR_MARKERS = 40
 export const MAX_INSPECTOR_COMMENT_LENGTH = 2_000
 
 const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
+
+/** Chords an action may carry. The keymap binds one or two alternatives per
+ *  action, so a larger list is a caller bug rather than a layout. */
+const MAX_SHORTCUT_CHORDS_PER_ACTION = 6
+/** Ceiling on a chord's key token, matching the longest DOM key name. */
+const MAX_SHORTCUT_KEY_LENGTH = 24
+
+/**
+ * Validate the browser shortcut table the renderer pushes.
+ *
+ * The table decides which keys the browser claims before the application menu
+ * sees them, so an unchecked entry could claim every key in the app. Only known
+ * actions are accepted, an unknown action is dropped rather than fatal (a newer
+ * renderer must not break an older interception path), and every chord is a
+ * single key with an explicit modifier set.
+ */
+export function validateBrowserShortcutBindings(value: unknown): BrowserShortcutBindings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Browser shortcut bindings must be an object')
+  }
+  const source = value as Record<string, unknown>
+  const bindings: BrowserShortcutBindings = {}
+  for (const action of BROWSER_SHORTCUT_ACTIONS) {
+    const rawChords = source[action]
+    if (rawChords === undefined || rawChords === null) continue
+    if (!Array.isArray(rawChords)) {
+      throw new TypeError('Browser shortcut chords must be an array')
+    }
+    if (rawChords.length > MAX_SHORTCUT_CHORDS_PER_ACTION) {
+      throw new TypeError('Browser shortcut chord count exceeds the cap')
+    }
+    bindings[action as BrowserShortcutAction] = rawChords.map((entry) =>
+      validateBrowserShortcutChord(entry)
+    )
+  }
+  return bindings
+}
+
+function validateBrowserShortcutChord(value: unknown): BrowserShortcutChord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Browser shortcut chord must be an object')
+  }
+  const chord = value as Record<string, unknown>
+  const key = chord['key']
+  if (typeof key !== 'string' || key.length === 0 || key.length > MAX_SHORTCUT_KEY_LENGTH) {
+    throw new TypeError('Browser shortcut chord needs a bounded key')
+  }
+  for (const modifier of ['meta', 'control', 'shift', 'alt']) {
+    if (typeof chord[modifier] !== 'boolean') {
+      throw new TypeError('Browser shortcut chord modifiers must be booleans')
+    }
+  }
+  return {
+    key: key.toLowerCase(),
+    meta: chord['meta'] as boolean,
+    control: chord['control'] as boolean,
+    shift: chord['shift'] as boolean,
+    alt: chord['alt'] as boolean
+  }
+}
 
 /**
  * Validate the marker set the renderer publishes for a tab.

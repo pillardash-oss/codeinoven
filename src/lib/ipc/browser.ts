@@ -108,6 +108,53 @@ export interface BrowserDevToolsState {
   open: boolean
 }
 
+/**
+ * What the browser surface claims while it owns the keyboard.
+ *
+ * The set is Chrome's, scoped to the browser and nothing else: a key pressed
+ * inside a browser tab must act on that tab, never on the application around
+ * it, and an unbound action leaves the key to the rest of the app.
+ */
+export const BROWSER_SHORTCUT_ACTIONS = [
+  'reload',
+  'hardReload',
+  'back',
+  'forward',
+  'focusAddress',
+  'savePage',
+  'zoomIn',
+  'zoomOut',
+  'zoomReset',
+  'toggleDevTools',
+  'closeTab',
+  'newTab'
+] as const
+
+export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
+
+/**
+ * One key chord an action answers to, with `mod` already resolved for the
+ * platform the renderer is running on. Main matches Electron's `Input` against
+ * this directly, so it never has to know the keymap's trigger grammar.
+ */
+export interface BrowserShortcutChord {
+  /** Lowercase `KeyboardEvent.key` the chord ends on, e.g. `'r'` or `'arrowleft'`. */
+  key: string
+  meta: boolean
+  control: boolean
+  shift: boolean
+  alt: boolean
+}
+
+/** Chords per action, resolved from the keymap. A missing action is unbound. */
+export type BrowserShortcutBindings = Partial<Record<BrowserShortcutAction, BrowserShortcutChord[]>>
+
+/**
+ * A browser action the renderer owns, because only the renderer knows the tab
+ * strip: focusing the address bar, and closing or opening a tab.
+ */
+export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab'
+
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
   projectId: string

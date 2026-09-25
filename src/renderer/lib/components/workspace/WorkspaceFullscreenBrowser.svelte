@@ -4,6 +4,7 @@
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
 
   interface Props {
@@ -27,6 +28,16 @@
         indicatorCount: browserTabIndicators(contextSidebarState.browserRuntime(tab.id)).length
       }))
   )
+
+  // While this overlay is up the browser is the surface the user is in, so its
+  // keys are the browser's, wherever the focus sits inside the dialog: the
+  // strip, the transport, the toolbar or the page. Released with the overlay.
+  $effect(() => {
+    const active = tabId
+    if (!active) return
+    browserKeyboardFocus.setClaim('fullscreen', active)
+    return () => browserKeyboardFocus.setClaim('fullscreen', null)
+  })
 </script>
 
 {#if tabId}

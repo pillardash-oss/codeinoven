@@ -1,5 +1,7 @@
 import {
+  app,
   BrowserWindow,
+  dialog,
   Menu,
   MenuItem,
   session,
@@ -11,6 +13,7 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
@@ -22,7 +25,10 @@ import type {
   BrowserDesignTab,
   BrowserDevToolsState,
   BrowserPageState,
+  BrowserPanelShortcutAction,
   BrowserPermissionRequest,
+  BrowserShortcutAction,
+  BrowserShortcutBindings,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -35,6 +41,7 @@ import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
+import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
   permissionGrantKeys,
@@ -57,15 +64,19 @@ import {
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
   MAX_PARKED_TABS,
+  MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
   SCREENSHOT_JPEG_QUALITY,
   SCREENSHOT_MAX_BYTES,
+  ZOOM_STEP,
   browserContextKey,
   isSameBounds,
+  safeBasename,
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserShortcutBindings,
   validateBrowserUrl,
   validateDownloadId,
   validateInspectorMarkers,
@@ -80,6 +91,19 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import type { BrowserViewport } from './browser-service/browser-types'
+
+/**
+ * Where a renderer-owned shortcut lands. The key is decided in this process,
+ * which is the only one that sees it before the application menu, and the tab
+ * strip stays the renderer's: it opens, closes and focuses its own tabs.
+ */
+const PANEL_SHORTCUT_TARGETS: Readonly<
+  Record<'focusAddress' | 'closeTab' | 'newTab', BrowserPanelShortcutAction>
+> = {
+  focusAddress: 'focus-address',
+  closeTab: 'close-tab',
+  newTab: 'new-tab'
+}
 import {
   designTabFor,
   isSameDesign,
@@ -116,6 +140,19 @@ export class BrowserService {
   /** How a tab is recognised as showing a design, supplied by the app at boot. */
   private designTabRecogniser: DesignTabRecogniser | null = null
   private activeTabId: string | null = null
+  /** Chords the browser claims, resolved from the keymap by the renderer. Empty
+   *  until that report arrives, which leaves every key to the rest of the app. */
+  private shortcutBindings: BrowserShortcutBindings = {}
+  /**
+   * The tab whose toolbar holds DOM focus (address bar, navigation buttons), or
+   * null while none does.
+   *
+   * A key pressed inside the page arrives on the tab's own web contents; a key
+   * pressed in the toolbar arrives on the window's, where the application menu
+   * would otherwise act on it. This is the one fact main cannot read for itself,
+   * so the panel reports it and the window-level interception routes to this tab.
+   */
+  private focusedChromeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
@@ -295,18 +332,23 @@ export class BrowserService {
       // silently unmuted through its own audio controls.
       this.publishState(tabId)
     })
-    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
-      const tab = this.requireTab(validateTabId(rawTabId))
-      const contents = tab.view.webContents
-      if (contents.isDevToolsOpened()) {
-        contents.closeDevTools()
-        return false
+    ipcMain.handle('browser:setChromeFocus', (_event, rawTabId) => {
+      // The panel may name a tab that was already destroyed (a close racing the
+      // last focus report). Parking the answer as null is correct: no toolbar
+      // holds the keyboard any more.
+      if (rawTabId === null) {
+        this.focusedChromeTabId = null
+        return
       }
-      // Plain native behavior: default dock inside the window, resizable
-      // there, fully undockable from DevTools' own controls.
-      contents.openDevTools()
-      return true
+      const tabId = validateTabId(rawTabId)
+      this.focusedChromeTabId = this.tabs.has(tabId) ? tabId : null
     })
+    ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
+      this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
+    })
+    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
+      this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
+    )
     ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed) => {
       const tabId = validateTabId(rawTabId)
       const tab = this.requireTab(tabId)
@@ -828,6 +870,131 @@ export class BrowserService {
       : { rendered: false, ...(reason ? { reason } : {}) }
   }
 
+  /**
+   * Run one claimed browser action on a tab.
+   *
+   * The actions split by owner: what acts on the page happens here, and what
+   * acts on the tab strip (focusing the address bar, closing or opening a tab)
+   * is forwarded to the renderer, which is the only side that knows the strip.
+   * Saving is asynchronous because the save dialog is, and it must never block
+   * the key event that asked for it.
+   */
+  private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    const contents = tab.view.webContents
+    switch (action) {
+      case 'reload':
+        contents.reload()
+        return
+      case 'hardReload':
+        contents.reloadIgnoringCache()
+        return
+      case 'back':
+        if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack()
+        return
+      case 'forward':
+        if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
+        return
+      case 'zoomIn':
+        this.stepTabZoom(contents, ZOOM_STEP)
+        return
+      case 'zoomOut':
+        this.stepTabZoom(contents, -ZOOM_STEP)
+        return
+      case 'zoomReset':
+        contents.setZoomLevel(0)
+        return
+      case 'toggleDevTools':
+        this.toggleTabDevTools(tab)
+        return
+      case 'savePage':
+        void this.saveTabPage(tab)
+        return
+      case 'focusAddress':
+      case 'closeTab':
+      case 'newTab':
+        this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
+        return
+    }
+  }
+
+  /** Ask the renderer to act on the tab strip, which only the renderer owns. */
+  private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
+  }
+
+  /**
+   * Resolve a key pressed while the browser toolbar holds DOM focus.
+   *
+   * That key goes to the app renderer, so the window-level interception is the
+   * only place it can be claimed before the application menu acts on it. Called
+   * from `before-input-event` on the window's web contents; when it answers true
+   * the caller prevents the event, which the renderer, the page and the menu all
+   * then never see.
+   */
+  consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
+    const tabId = this.focusedChromeTabId
+    if (!tabId) return false
+    const action = matchBrowserShortcut(input, this.shortcutBindings)
+    if (!action) return false
+    event.preventDefault()
+    this.runBrowserShortcut(tabId, action)
+    return true
+  }
+
+  /** Toggle the web page's own DevTools. Returns whether it is now open. */
+  private toggleTabDevTools(tab: BrowserTab): boolean {
+    const contents = tab.view.webContents
+    if (contents.isDevToolsOpened()) {
+      contents.closeDevTools()
+      return false
+    }
+    // Plain native behavior: default dock inside the window, resizable
+    // there, fully undockable from DevTools' own controls.
+    contents.openDevTools()
+    return true
+  }
+
+  /** Step one tab's zoom, clamped to Chromium's own range. */
+  private stepTabZoom(contents: WebContents, step: number): void {
+    const next = Math.min(MAX_ZOOM_LEVEL, Math.max(-MAX_ZOOM_LEVEL, contents.getZoomLevel() + step))
+    contents.setZoomLevel(next)
+  }
+
+  /**
+   * Save the page to a file the user picks.
+   *
+   * Chromium writes the page as it stands (markup plus its resources) rather
+   * than the raw response, which is what Chrome's own "Web page, complete"
+   * does and the only useful answer for a page a script rendered. A refusal or a
+   * write failure has no UI of its own, so it is reported as an app toast
+   * instead of leaving the user with a key that silently did nothing.
+   */
+  private async saveTabPage(tab: BrowserTab): Promise<void> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || this.window.isDestroyed()) return
+    const title = contents.getTitle() || contents.getURL()
+    const { canceled, filePath } = await dialog.showSaveDialog(this.window, {
+      title: 'Save page',
+      defaultPath: join(app.getPath('downloads'), `${safeBasename(title)}.html`),
+      filters: [{ name: 'Web page, complete', extensions: ['html'] }]
+    })
+    if (canceled || !filePath) return
+    if (contents.isDestroyed()) return
+    try {
+      await contents.savePage(filePath, 'HTMLComplete')
+    } catch (error: unknown) {
+      Logger.error('Browser page could not be saved:', error)
+      if (this.window.webContents.isDestroyed()) return
+      sendToRenderer(this.window.webContents, 'app:toast', {
+        message: 'This page could not be saved to that file.',
+        type: 'error'
+      })
+    }
+  }
+
   private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {
@@ -863,6 +1030,18 @@ export class BrowserService {
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
+    // A key pressed in the page reaches this view's web contents and nothing
+    // else in the app, so this is where the browser claims its own shortcuts.
+    // Preventing the event also prevents the application menu from acting on
+    // the key, which is what keeps Cmd/Ctrl+R from reloading the whole app (in
+    // a development build the menu is Electron's default one) and Cmd/Ctrl+W
+    // from closing its window.
+    view.webContents.on('before-input-event', (event, input) => {
+      const action = matchBrowserShortcut(input, this.shortcutBindings)
+      if (!action) return
+      event.preventDefault()
+      this.runBrowserShortcut(tabId, action)
+    })
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
     view.webContents.on('audio-state-changed', publish)
@@ -1593,6 +1772,9 @@ export class BrowserService {
       this.activeTabBounds = null
     }
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
+    // A destroyed tab can no longer hold the keyboard, so its toolbar must not
+    // stay the tab the window-level interception routes to.
+    if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
     this.injectedDialogLabels.delete(tabId)
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)

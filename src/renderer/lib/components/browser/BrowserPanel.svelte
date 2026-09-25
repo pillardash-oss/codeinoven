@@ -17,6 +17,7 @@
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { designElementReference } from '$lib/design-element-reference'
@@ -25,8 +26,20 @@
     BrowserInspectorEvent,
     BrowserInspectorMarker,
     BrowserPageState,
+    BrowserPanelShortcutAction,
     BrowserViewBounds
   } from '$shared/ipc-contract'
+
+  /**
+   * The sidebar's own region, which the browser panel shares with the strip that
+   * selects it. Read from the DOM contract every surface already agrees on, so
+   * the panel never has to be handed the sidebar by its parent.
+   *
+   * The bottom dock carries the same marker with a different placement, and a
+   * terminal docked there owns its own keys (on Windows and Linux Ctrl+W is the
+   * shell's delete-word binding), so the dock is excluded rather than claimed.
+   */
+  const SIDEBAR_REGION_SELECTOR = '[data-region="context-sidebar"]:not([data-placement="bottom"])'
 
   interface Props {
     tab: BrowserContextTab
@@ -74,6 +87,7 @@
   }
 
   let contentElement = $state<HTMLDivElement>()
+  let addressInput = $state<HTMLInputElement>()
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
@@ -162,6 +176,60 @@
     ).catch(() => {
       siteMenuOpen = false
     })
+  }
+
+  /**
+   * Move focus to the address bar and select what is there, which is what
+   * Cmd/Ctrl+L does in a browser. Main asks for it because the chord is claimed
+   * in the main process, where a page-focused key is visible before the
+   * application menu acts on it.
+   */
+  function focusAddress(): void {
+    addressInput?.focus()
+    addressInput?.select()
+  }
+
+  /**
+   * Tell the keyboard owner whether the focus that just moved belongs to this
+   * browser.
+   *
+   * The claim follows the *sidebar*, not just this panel: the strip that
+   * selects this tab is the sidebar's own chrome, so a key pressed while that
+   * button holds focus still belongs to the browser being shown. Anything that
+   * takes focus outside the sidebar hands the keyboard back to the app.
+   */
+  function onSidebarFocusIn(event: FocusEvent): void {
+    if (!panelVisible) return
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest(SIDEBAR_REGION_SELECTOR)) return
+    browserKeyboardFocus.setClaim('sidebar', tabId)
+  }
+
+  function onSidebarFocusOut(event: FocusEvent): void {
+    const next = event.relatedTarget
+    if (next instanceof Element && next.closest(SIDEBAR_REGION_SELECTOR)) return
+    browserKeyboardFocus.setClaim('sidebar', null)
+  }
+
+  /**
+   * The focus a keyboard-driven shortcut lands on. Only the instance that owns
+   * the native view may take it: a full screen and a sidebar panel can both be
+   * mounted for one tab, and the hidden one has no visible address bar.
+   */
+  function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
+    if (eventTabId !== tabId || action !== 'focus-address') return
+    if (!panelVisible) return
+    focusAddress()
+  }
+
+  /** Keep the address input reachable, so a chord the main process claims can
+   *  move focus into it. An attachment rather than `bind:this`: the element
+   *  already binds its value, and this panel only ever needs the node. */
+  const attachAddressInput: Attachment<HTMLInputElement> = (element) => {
+    addressInput = element
+    return () => {
+      if (addressInput === element) addressInput = undefined
+    }
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -349,6 +417,14 @@
     const unsubscribeInspector = subscribe('browser:inspector', (eventTabId, event) => {
       if (eventTabId === tabId) onInspectorEvent(event)
     })
+    const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
+    // Only the sidebar report is focus-driven: a single panel decides it for the
+    // whole sidebar, so one listener is enough. The full screen overlay claims
+    // the keyboard for as long as it is mounted instead (WorkspaceFullscreenBrowser).
+    if (surface === 'sidebar') {
+      document.addEventListener('focusin', onSidebarFocusIn)
+      document.addEventListener('focusout', onSidebarFocusOut)
+    }
     const unsubscribeReferences = responseReferencesState.subscribe((projectId, threadId) => {
       if (projectId !== tabProjectId || threadId !== tabThreadId) return
       publishMarkers()
@@ -390,10 +466,18 @@
       unsubscribeState()
       unsubscribeDevTools()
       unsubscribeInspector()
+      unsubscribePanelShortcut()
       unsubscribeReferences()
       // Stop the injected event promise for a panel that is going away, so no
       // tab keeps reporting picks the user can no longer see.
       if (inspectArmed) void invoke('browser:inspectSetArmed', tabId, false).catch(() => {})
+      // A claim on the keyboard cannot outlive the surface that made it: focus
+      // events are not guaranteed for an element that is being removed.
+      if (surface === 'sidebar') {
+        document.removeEventListener('focusin', onSidebarFocusIn)
+        document.removeEventListener('focusout', onSidebarFocusOut)
+        browserKeyboardFocus.setClaim('sidebar', null)
+      }
       void invoke('browser:hide', tabId).catch(() => {})
     }
   })
@@ -463,6 +547,7 @@
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}
+        {@attach attachAddressInput}
         bind:value={address}
         spellcheck="false"
         autocomplete="url"

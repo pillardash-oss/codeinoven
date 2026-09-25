@@ -322,6 +322,11 @@ function createWindow(): BrowserWindow {
     })
 
   window.webContents.on('before-input-event', (event, input) => {
+    // A key pressed while a browser toolbar holds focus arrives here, not on the
+    // native page view. Claim the browser's own chords first, so a page-scoped
+    // key acts on the page instead of on the app around it (Cmd/Ctrl+R would
+    // otherwise reload the whole app, and Cmd/Ctrl+W would close its window).
+    if (state.browserService?.consumeChromeShortcut(event, input)) return
     // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
     // settings page, or thread). Prevent the default here so the macOS
     // application menu's "Close Window" accelerator never closes the window

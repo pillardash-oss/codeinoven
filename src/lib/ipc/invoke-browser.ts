@@ -4,6 +4,7 @@ import type {
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
+  BrowserShortcutBindings,
   BrowserSiteDataScope,
   BrowserViewBounds
 } from './browser'
@@ -32,6 +33,20 @@ export const invokeBrowserContract = {
   /** Mute or unmute one tab's audio output. Main publishes the applied state
    *  back through `browser:state`. */
   'browser:setMuted': {} as Contract<[tabId: string, muted: boolean], void>,
+  /**
+   * Replace the browser surface's shortcut table. The renderer resolves the
+   * keymap's `browser` category into platform-explicit chords and pushes them
+   * whenever the keymap changes, because main intercepts those keys before the
+   * application menu can and holds no keymap of its own.
+   */
+  'browser:setShortcutBindings': {} as Contract<[bindings: BrowserShortcutBindings], void>,
+  /**
+   * Report which tab's toolbar (address bar, buttons) holds DOM focus, or null
+   * when none does. A key pressed in a native page view never reaches the
+   * renderer, so main needs the focus the toolbar holds to route the same
+   * chords when the user is typing an address.
+   */
+  'browser:setChromeFocus': {} as Contract<[tabId: string | null], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   /**

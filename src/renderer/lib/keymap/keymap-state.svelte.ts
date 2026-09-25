@@ -6,6 +6,7 @@ import {
   triggerMatches,
   type KeymapTriggerParse
 } from './keymap'
+import { publishBrowserShortcutBindings } from './browser-shortcuts'
 
 /**
  * Runtime keymap: the registry defaults merged with the user's overrides, plus
@@ -29,6 +30,9 @@ class KeymapState {
       next[id] = typeof value === 'string' ? parseKeymapOverride(value) : [...value]
     }
     this.overrides = next
+    // The browser surface's chords are claimed in the main process, which cannot
+    // read this keymap, so every change to the bindings is reported to it.
+    publishBrowserShortcutBindings(this)
   }
 
   /** The effective key tokens for an id: the user override when present,

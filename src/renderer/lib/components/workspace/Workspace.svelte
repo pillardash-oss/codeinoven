@@ -1752,6 +1752,24 @@
     })
   })
 
+  $effect(() => {
+    return subscribe('browser:panelShortcut', (tabId, action) => {
+      // Focusing the address bar is the panel's own: it owns the input, and it
+      // is the surface (sidebar or full screen) that decides whether it shows it.
+      if (action === 'focus-address') return
+      const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'browser') return
+      if (action === 'close-tab') {
+        closeContextTab(tabId)
+        return
+      }
+      // A new tab opens in the container the focused tab belongs to, so a key
+      // pressed in a thread's browser can never open a tab the strip is not
+      // showing.
+      contextSidebarState.openBrowserForContext('', tab.projectId, tab.threadId, undefined, true)
+    })
+  })
+
   /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
    *  effect below only fires when the draft state actually transitions   never
    *  clobbering a manual slice switch while a draft stays unchanged. */

@@ -14,6 +14,7 @@ import type {
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
+  BrowserPanelShortcutAction,
   BrowserPermissionRequest
 } from './browser'
 import type {
@@ -165,6 +166,12 @@ export const IPC_EVENT_CONTRACT = {
   /** One event from a tab's injected design inspector: a pick, a finished
    *  comment, a removed pin, or inspect mode ending on its own. */
   'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
+  /**
+   * A browser shortcut the renderer has to carry out, because it owns the tab
+   * strip: focusing the address bar of a tab, or closing or opening a tab. Main
+   * decides the key, the renderer decides what the tab strip does with it.
+   */
+  'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Delivered to the native permission-prompt popup window (not the main
