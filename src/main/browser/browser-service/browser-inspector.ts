@@ -6,8 +6,18 @@
  * Chrome-style inspect affordance therefore lives in the page: this observer
  * injects an idempotent script into the document under a random per-tab global
  * name, exactly the way `browser-capture.ts` does, and that script draws the
- * hover box, the label, the selected border, the numbered pins and the comment
- * box, and reports picks and comments back.
+ * hover box, the label and the numbered pins, and reports picks back.
+ *
+ * It deliberately draws NO comment editor. A comment is written in the app's own
+ * component, the same one the conversation and the file annotator use, so the
+ * page never owns comment text and there is one editor everywhere. The page
+ * draws the pin that says "this element is commented on", and clicking it asks
+ * the app to open that comment.
+ *
+ * The overlay is themed with the application's own design tokens, which main
+ * hands over with the arm command and re-sends when the theme changes: injected
+ * script cannot read the app's stylesheet, and a hardcoded light box on a dark
+ * application is exactly the bug that push exists to prevent.
  *
  * The channel is the same one the capture observer uses, and for the same
  * reason: the embedded browser deliberately gives remote content no preload
@@ -18,12 +28,16 @@
  * page script back to privileged APIs.
  *
  * Commands travel the other way as their own `executeJavaScript` calls, so a
- * marker set or an opened comment box costs one evaluation and never blocks the
+ * marker set or a focus change costs one evaluation and never blocks the
  * pending event.
  */
 
 import type { WebContents } from 'electron'
-import type { BrowserInspectorEvent, BrowserInspectorMarker } from '../../../lib/ipc/browser'
+import type {
+  BrowserInspectorEvent,
+  BrowserInspectorMarker,
+  BrowserInspectorTheme
+} from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import {
   INSPECTOR_REARM_INTERVAL_MS,
@@ -59,6 +73,13 @@ interface ObservedTab {
   failures: number
   /** Last marker set the renderer published, re-applied to every new document. */
   markers: BrowserInspectorMarker[]
+  /** Last theme the application published, re-applied to every new document so a
+   *  reloaded overlay is never briefly drawn with the wrong colours. */
+  theme: BrowserInspectorTheme | null
+  /** Last element the app asked to highlight, replayed after the pins exist. A
+   *  focus can arrive before the marker set it names, so it is remembered rather
+   *  than dropped. */
+  focus: { id: string | null; scroll: boolean } | null
 }
 
 /**
@@ -92,21 +113,14 @@ export function inspectorInstallScript(key: string): string {
       ':host{all:initial}',
       '.cio-layer{position:fixed;inset:0;pointer-events:none;z-index:2147483646}',
       '.cio-box{position:fixed;box-sizing:border-box;border-radius:2px;pointer-events:none}',
-      '.cio-hover{background:rgba(79,156,255,.14);outline:1px solid #4f9cff}',
-      '.cio-active{background:rgba(79,156,255,.10);outline:2px solid #4f9cff}',
-      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 6px;border-radius:5px;background:#111827;color:#f9fafb;font:500 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 2px 8px rgba(0,0,0,.45)}',
-      '.cio-label .d{color:#9ca3af}',
-      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 9px;border-radius:999px;border:1px solid #111827;background:#ffffff;color:#111827;font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35)}',
-      '.cio-pin[data-comment="1"]{border-color:#4f9cff;background:#eff6ff}',
-      '.cio-editor{position:fixed;pointer-events:auto;width:320px;max-width:92vw;background:#ffffff;color:#111827;border:1px solid rgba(17,24,39,.14);border-radius:12px;padding:10px;box-shadow:0 12px 32px rgba(0,0,0,.30);font:400 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}',
-      '.cio-editor .h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 6px}',
-      '.cio-editor .h b{font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-      '.cio-editor textarea{width:100%;height:66px;resize:vertical;border:1px solid rgba(17,24,39,.18);border-radius:8px;padding:6px 8px;background:#f8fafc;color:#111827;font:inherit;outline:none}',
-      '.cio-editor .row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px}',
-      '.cio-btn{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 10px;border:1px solid transparent;border-radius:8px;font:600 11px/1 inherit;cursor:pointer}',
-      '.cio-btn.done{background:#4f9cff;color:#ffffff}',
-      '.cio-btn.ghost{background:transparent;color:#6b7280}',
-      '.cio-btn.danger{background:transparent;color:#dc2626}'
+      '.cio-hover{background:color-mix(in srgb,var(--cio-accent,#d4af37) 18%,transparent);outline:1px solid var(--cio-accent,#d4af37)}',
+      '.cio-active{background:color-mix(in srgb,var(--cio-accent,#d4af37) 12%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
+      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 6px;border-radius:5px;background:var(--cio-foreground,#081825);color:var(--cio-surface,#ffffff);font:500 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 2px 8px rgba(0,0,0,.35)}',
+      '.cio-label .d{opacity:.72}',
+      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:999px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
+      '.cio-pin svg{width:12px;height:12px;flex:none}',
+      '.cio-pin[data-comment="1"]{border-color:var(--cio-accent,#d4af37);color:var(--cio-accent,#d4af37)}',
+      '.cio-pin[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37);outline-offset:1px}'
     ].join('');
 
     const host = document.createElement('div');
@@ -138,7 +152,6 @@ export function inspectorInstallScript(key: string): string {
       armed: false,
       hovered: null,
       activeId: null,
-      editorId: null,
       markers: new Map(),
       waiters: [],
       queued: [],
@@ -147,9 +160,39 @@ export function inspectorInstallScript(key: string): string {
       listeners: false
     };
 
+    // Lucide's message-circle icon, the same one the app draws a comment pin
+    // with (ResponseAnnotationBubble.svelte), inlined as path data: the page
+    // overlay cannot import the icon library, and an icon is not an emoji.
+    const PIN_ICON =
+      'M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719';
+    const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
     const text = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
     const escapeId = (value) => (globalThis.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
+
+    function applyTheme(tokens) {
+      if (!tokens || typeof tokens !== 'object') return;
+      for (const name of ['surface', 'elevated', 'border', 'foreground', 'muted', 'accent']) {
+        const value = tokens[name];
+        if (typeof value === 'string' && value) layer.style.setProperty('--cio-' + name, value);
+      }
+    }
+
+    function pinIcon() {
+      const svg = document.createElementNS(SVG_NAMESPACE, 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS(SVG_NAMESPACE, 'path');
+      path.setAttribute('d', PIN_ICON);
+      svg.appendChild(path);
+      return svg;
+    }
 
     function cssPath(element) {
       const parts = [];
@@ -264,6 +307,7 @@ export function inspectorInstallScript(key: string): string {
 
       for (const marker of state.markers.values()) {
         const element = resolveElement(marker);
+        marker.pin.setAttribute('data-active', state.activeId === marker.id ? '1' : '0');
         if (!element) {
           marker.pin.style.display = 'none';
           continue;
@@ -273,25 +317,10 @@ export function inspectorInstallScript(key: string): string {
         marker.pin.style.left = clamp(rect.x, 2, Math.max(2, innerWidth - 52)) + 'px';
         marker.pin.style.top = clamp(rect.y - 26, 2, Math.max(2, innerHeight - 26)) + 'px';
       }
-      layoutEditor();
-    }
-
-    function layoutEditor() {
-      if (!state.editorId) return;
-      const marker = state.markers.get(state.editorId);
-      if (!marker) return;
-      const rect = marker.pin.getBoundingClientRect();
-      const width = 320;
-      const left = clamp(rect.left, 8, Math.max(8, innerWidth - width - 8));
-      const below = rect.bottom + 8;
-      const height = marker.editor.offsetHeight || 150;
-      const top = below + height > innerHeight - 8 ? Math.max(8, rect.top - height - 8) : below;
-      marker.editor.style.left = left + 'px';
-      marker.editor.style.top = top + 'px';
     }
 
     function syncCursor() {
-      if (!state.armed || state.editorId) {
+      if (!state.armed) {
         hoverBox.style.display = 'none';
         labelEl.style.display = 'none';
         return;
@@ -313,7 +342,7 @@ export function inspectorInstallScript(key: string): string {
     }
 
     function onPointerMove(event) {
-      if (!state.armed || state.editorId) return;
+      if (!state.armed) return;
       if (ourNode(event)) return;
       const element = event.target instanceof Element ? event.target : null;
       if (element === state.hovered) return;
@@ -325,8 +354,39 @@ export function inspectorInstallScript(key: string): string {
       });
     }
 
+    /**
+     * The marker already covering an element, or null when it has none.
+     *
+     * Identity comes first, because the same live node is unambiguously the
+     * same element. A node that was re-rendered is a different node with the
+     * same place, so its CSS path is compared as well, and only when that path
+     * resolves to exactly one element: a path inside a list matches every row,
+     * and treating those as one element would merge comments on distinct ones.
+     * That is what keeps a second click on one element an edit of its single
+     * comment instead of a second comment on the same element.
+     */
+    function markerForElement(element, selector) {
+      for (const marker of state.markers.values()) {
+        if (marker.element && marker.element.isConnected) {
+          if (marker.element === element) return marker;
+          continue;
+        }
+        if (resolveElement(marker) === element) return marker;
+      }
+      if (!selector) return null;
+      for (const marker of state.markers.values()) {
+        if (marker.selector !== selector) continue;
+        try {
+          if (document.querySelectorAll(selector).length === 1) return marker;
+        } catch (error) {
+          return null;
+        }
+      }
+      return null;
+    }
+
     function onClick(event) {
-      if (!state.armed || state.editorId) return;
+      if (!state.armed) return;
       if (ourNode(event)) return;
       const element = event.target instanceof Element ? event.target : null;
       if (!element) return;
@@ -336,9 +396,19 @@ export function inspectorInstallScript(key: string): string {
       state.hovered = element;
       syncCursor();
       const target = describe(element);
+      const existing = markerForElement(element, target.selector);
+      if (existing) {
+        // One element, one comment: the app opens that comment for editing
+        // instead of the page inventing a second pin for the same element.
+        state.activeId = existing.id;
+        layout();
+        emit({ kind: 'open', id: existing.id });
+        return;
+      }
       const id = crypto.randomUUID();
       addMarker({ id: id, number: state.markers.size + 1, comment: '' }, element, target.selector);
-      openEditor(id);
+      state.activeId = id;
+      layout();
       emit({ kind: 'pick', id: id, target: target });
     }
 
@@ -347,10 +417,6 @@ export function inspectorInstallScript(key: string): string {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
-      if (state.editorId) {
-        closeEditor();
-        return;
-      }
       state.armed = false;
       state.hovered = null;
       syncCursor();
@@ -406,16 +472,10 @@ export function inspectorInstallScript(key: string): string {
         const pin = document.createElement('button');
         pin.type = 'button';
         pin.className = 'cio-pin';
-        const icon = document.createElement('span');
-        icon.textContent = '\uD83D\uDCAC';
         const pinLabel = document.createElement('span');
-        pin.appendChild(icon);
+        pin.appendChild(pinIcon());
         pin.appendChild(pinLabel);
-        const editor = document.createElement('div');
-        editor.className = 'cio-editor';
-        editor.style.display = 'none';
         layer.appendChild(pin);
-        layer.appendChild(editor);
         marker = {
           id: input.id,
           number: input.number || state.markers.size + 1,
@@ -424,16 +484,17 @@ export function inspectorInstallScript(key: string): string {
           element: element || null,
           selector: selector || '',
           pin: pin,
-          pinLabel: pinLabel,
-          editor: editor,
-          input: null
+          pinLabel: pinLabel
         };
         pin.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
-          if (state.editorId === marker.id) closeEditor();
-          else openEditor(marker.id);
+          // The comment is written in the app, which owns the editor and the
+          // text; the page reports which pin the user asked about.
+          state.activeId = marker.id;
+          layout();
+          emit({ kind: 'open', id: marker.id });
         });
         state.markers.set(marker.id, marker);
       }
@@ -450,109 +511,29 @@ export function inspectorInstallScript(key: string): string {
       return marker;
     }
 
-    function buildEditor(marker) {
-      const editor = marker.editor;
-      editor.textContent = '';
-      const head = document.createElement('div');
-      head.className = 'h';
-      const title = document.createElement('b');
-      title.textContent = 'Comment on ' + marker.label;
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.className = 'cio-btn ghost';
-      close.textContent = 'Close';
-      head.appendChild(title);
-      head.appendChild(close);
-      const area = document.createElement('textarea');
-      area.placeholder = 'Describe the change for the agent\u2026';
-      area.value = marker.comment;
-      const row = document.createElement('div');
-      row.className = 'row';
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'cio-btn danger';
-      remove.textContent = 'Remove';
-      const done = document.createElement('button');
-      done.type = 'button';
-      done.className = 'cio-btn done';
-      done.textContent = 'Done';
-      row.appendChild(remove);
-      row.appendChild(done);
-      editor.appendChild(head);
-      editor.appendChild(area);
-      editor.appendChild(row);
-      marker.input = area;
-      area.addEventListener('input', () => {
-        marker.comment = area.value;
-        renderPin(marker);
-      });
-      area.addEventListener('keydown', (event) => {
-        event.stopPropagation();
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
-          submitEditor(marker.id);
-        }
-      });
-      close.addEventListener('click', (event) => {
-        event.stopPropagation();
-        closeEditor();
-      });
-      remove.addEventListener('click', (event) => {
-        event.stopPropagation();
-        removeMarker(marker.id, true);
-      });
-      done.addEventListener('click', (event) => {
-        event.stopPropagation();
-        submitEditor(marker.id);
-      });
-      return area;
-    }
-
-    function openEditor(id) {
+    function removeMarker(id) {
       const marker = state.markers.get(id);
       if (!marker) return;
-      if (state.editorId && state.editorId !== id) closeEditor();
-      const area = buildEditor(marker);
-      marker.editor.style.display = 'block';
-      state.editorId = id;
-      state.activeId = id;
-      layout();
-      try {
-        area.focus();
-      } catch (error) {}
-    }
-
-    function closeEditor() {
-      const marker = state.editorId ? state.markers.get(state.editorId) : null;
-      if (marker) {
-        marker.editor.style.display = 'none';
-        marker.input = null;
+      if (state.activeId === id) {
+        state.activeId = null;
+        activeBox.style.display = 'none';
       }
-      state.editorId = null;
-      state.activeId = null;
-      activeBox.style.display = 'none';
-      layout();
-    }
-
-    function submitEditor(id) {
-      const marker = state.markers.get(id);
-      if (!marker) return;
-      const comment = marker.input ? marker.input.value : marker.comment;
-      marker.comment = comment;
-      renderPin(marker);
-      closeEditor();
-      emit({ kind: 'comment', id: id, comment: comment });
-    }
-
-    function removeMarker(id, notify) {
-      const marker = state.markers.get(id);
-      if (!marker) return;
-      if (state.editorId === id) closeEditor();
       marker.pin.remove();
-      marker.editor.remove();
       state.markers.delete(id);
       layout();
-      if (notify) emit({ kind: 'remove', id: id });
+    }
+
+    /** Highlight one pinned element for the user, optionally scrolling to it. */
+    function focusMarker(id, scroll) {
+      const marker = id ? state.markers.get(id) : null;
+      state.activeId = marker ? marker.id : null;
+      if (marker && scroll) {
+        const element = resolveElement(marker);
+        if (element && element.scrollIntoView) {
+          element.scrollIntoView({ block: 'center', inline: 'nearest' });
+        }
+      }
+      layout();
     }
 
     function apply(command) {
@@ -568,9 +549,16 @@ export function inspectorInstallScript(key: string): string {
         state.armed = false;
         state.hovered = null;
         removeListener();
-        closeEditor();
         hoverBox.style.display = 'none';
         labelEl.style.display = 'none';
+        return true;
+      }
+      if (command.type === 'theme') {
+        applyTheme(command.theme);
+        return true;
+      }
+      if (command.type === 'focus') {
+        focusMarker(typeof command.id === 'string' ? command.id : null, command.scroll === true);
         return true;
       }
       if (command.type === 'markers') {
@@ -581,27 +569,16 @@ export function inspectorInstallScript(key: string): string {
           addMarker(input, null, input.selector);
         }
         for (const id of Array.from(state.markers.keys())) {
-          if (!keep.has(id)) removeMarker(id, false);
+          if (!keep.has(id)) removeMarker(id);
         }
         layout();
         if (state.markers.size > 0) startScan();
-        return true;
-      }
-      if (command.type === 'editor') {
-        if (command.editor && command.editor.id) {
-          const marker = state.markers.get(command.editor.id);
-          if (marker && typeof command.editor.comment === 'string') marker.comment = command.editor.comment;
-          openEditor(command.editor.id);
-        } else {
-          closeEditor();
-        }
         return true;
       }
       if (command.type === 'cease') {
         state.armed = false;
         state.hovered = null;
         removeListener();
-        closeEditor();
         const waiters = state.waiters.splice(0, state.waiters.length);
         for (const resolve of waiters) resolve({ kind: 'closed' });
         return true;
@@ -665,19 +642,51 @@ export class BrowserInspector {
 
   /**
    * Turn inspect mode on or off for a tab. Arming installs the script, replays
-   * the current marker set and starts waiting for events; disarming stops the
-   * pick listeners but leaves the pins, so a comment can still be opened.
+   * the current theme and marker set and starts waiting for events; disarming
+   * stops the pick listeners but leaves the pins, which still report a click so
+   * a comment can be opened from the page at any time.
+   *
+   * The theme rides on the arm because the page overlay is injected script: it
+   * cannot read the application's stylesheet, so it is handed the resolved
+   * tokens here, and this is the one call that can guarantee they are applied
+   * before the first box is drawn instead of racing a separate push.
    */
-  setArmed(tabId: string, contents: WebContents, armed: boolean): void {
+  setArmed(
+    tabId: string,
+    contents: WebContents,
+    armed: boolean,
+    theme: BrowserInspectorTheme | null
+  ): void {
     const record = this.record(tabId, contents)
     record.contents = contents
     record.desiredArmed = armed
+    if (theme) record.theme = theme
     if (armed) {
       this.arm(tabId)
       this.command(tabId, { type: 'arm' })
     } else {
       this.command(tabId, { type: 'disarm' })
     }
+  }
+
+  /** Re-theme one tab's overlay, and keep the tokens for the next install. */
+  syncTheme(tabId: string, theme: BrowserInspectorTheme): void {
+    const record = this.tabs.get(tabId)
+    if (!record) return
+    record.theme = theme
+    this.command(tabId, { type: 'theme', theme })
+  }
+
+  /**
+   * Put one pinned element in front of the user: highlight it, and optionally
+   * scroll it into view. This is how a comment the reader clicks in the composer
+   * brings the browser back to the element it was written about.
+   */
+  focus(tabId: string, contents: WebContents, referenceId: string | null, scroll: boolean): void {
+    const record = this.record(tabId, contents)
+    record.contents = contents
+    record.focus = { id: referenceId, scroll }
+    this.command(tabId, { type: 'focus', id: referenceId, scroll })
   }
 
   /** Replace the marker set the page draws. The renderer owns the truth. */
@@ -693,14 +702,14 @@ export class BrowserInspector {
    * void. The desired mode is kept and the wait is re-armed, so a live preview
    * that reloads itself on every edit stays inspectable instead of dropping out
    * of inspection on the first write; the re-arm installs into the new document
-   * and replays the markers.
+   * and replays the mode, the theme, the markers and the highlight.
    */
   reset(tabId: string): void {
     const record = this.tabs.get(tabId)
     if (!record) return
     record.generation += 1
     record.pending = false
-    if (record.desiredArmed) this.arm(tabId)
+    if (this.shouldWatch(record)) this.arm(tabId)
   }
 
   forget(tabId: string): void {
@@ -726,11 +735,24 @@ export class BrowserInspector {
         pending: false,
         generation: 0,
         failures: 0,
-        markers: []
+        markers: [],
+        theme: null,
+        focus: null
       }
       this.tabs.set(tabId, record)
     }
     return record
+  }
+
+  /**
+   * Whether this tab still has a reason to wait for events.
+   *
+   * Armed is the obvious one. The pins are the other: they outlive a disarmed
+   * tab on purpose, and a pin the user clicks has to reach the app, so the wait
+   * stays outstanding while any pin is on the page.
+   */
+  private shouldWatch(record: ObservedTab): boolean {
+    return record.desiredArmed || record.markers.length > 0
   }
 
   /** Fire a command without waiting, keeping failures off the event loop. */
@@ -743,27 +765,40 @@ export class BrowserInspector {
   }
 
   /**
-   * Install into the current document, replay the markers, then wait for one
-   * event. Every answer re-arms, so an idle tab costs one pending promise and
-   * nothing polls.
+   * Install into the current document, re-apply everything the renderer has
+   * published, then wait for one event. Every answer re-arms, so an idle tab
+   * costs one pending promise and nothing polls.
+   *
+   * The replay order matters and is not incidental: the mode first, so picking
+   * works the moment the document is live; then the theme, so no box is ever
+   * drawn in the wrong colours; then the pins, so the focus that follows has
+   * something to point at.
    */
   private arm(tabId: string): void {
     const record = this.tabs.get(tabId)
-    if (!record || !record.desiredArmed || record.pending || record.contents.isDestroyed()) return
+    if (!record || !this.shouldWatch(record) || record.pending || record.contents.isDestroyed()) {
+      return
+    }
     record.pending = true
     const generation = record.generation
+    const issue = (command: unknown): Promise<unknown> =>
+      record.contents.executeJavaScript(inspectorCommandScript(record.key, command), false)
     record.contents
       .executeJavaScript(inspectorEnsureScript(record.key), false)
       .then((installed: unknown) => {
         if (installed !== true) throw new Error('inspector refused to install')
-        return record.contents.executeJavaScript(
-          inspectorCommandScript(record.key, { type: 'markers', markers: record.markers }),
-          false
-        )
+        // A document swap starts the installed script unarmed, so the desired
+        // mode is asserted here rather than assumed to have survived the load.
+        return record.desiredArmed ? issue({ type: 'arm' }) : undefined
       })
-      .then(() => {
-        return record.contents.executeJavaScript(inspectorWaitScript(record.key), false)
-      })
+      .then(() => (record.theme ? issue({ type: 'theme', theme: record.theme }) : undefined))
+      .then(() => issue({ type: 'markers', markers: record.markers }))
+      .then(() =>
+        record.focus
+          ? issue({ type: 'focus', id: record.focus.id, scroll: record.focus.scroll })
+          : undefined
+      )
+      .then(() => record.contents.executeJavaScript(inspectorWaitScript(record.key), false))
       .then((event: unknown) => {
         const current = this.tabs.get(tabId)
         if (!current || current !== record) return

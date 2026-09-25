@@ -16,19 +16,15 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
+  import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import {
-    mergeReferenceById,
-    responseReferencesState
-  } from '$lib/stores/response-references.svelte'
-  import { designElementReference } from '$lib/design-element-reference'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
     BrowserDevToolsState,
-    BrowserInspectorEvent,
-    BrowserInspectorMarker,
     BrowserPageState,
     BrowserPanelShortcutAction,
     BrowserViewBounds
@@ -107,11 +103,22 @@
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
   /**
-   * Whether the element inspector is armed on this tab. Kept beside the panel,
-   * not inside the page, because the user turns it on and off and the page can
-   * only report that it ended on its own (Escape).
+   * Whether element inspection is armed on this tab.
+   *
+   * Read from the shared session, not owned here: the mode belongs to the tab,
+   * so the sidebar and the full screen surface show and keep the same state, and
+   * moving between them neither drops the mode nor disarms the page.
    */
-  let inspectArmed = $state(false)
+  let inspectArmed = $derived(browserInspector.isArmed(tabId))
+  /** The comment currently open for editing on this tab, in composer order. */
+  let editingComment = $derived.by(() => {
+    const referenceId = browserInspector.editingId(tabId)
+    if (!referenceId) return null
+    const references = responseReferencesState.forThread(tabProjectId, tabThreadId)
+    const index = references.findIndex((reference) => reference.id === referenceId)
+    const reference = index < 0 ? null : references[index]
+    return reference ? { reference, number: index + 1 } : null
+  })
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
@@ -300,9 +307,6 @@
     if (next.tabId !== tabId) return
     pageState = next
     if (next.url) address = next.url
-    // A tab that navigated away from its design folder is no longer a design
-    // tab, so inspection cannot stay armed for a page that no longer offers it.
-    if (!next.design) inspectArmed = false
     // Also routes the audio and capture state into the tab strip, so the tab's
     // indicator is correct even for the first report of a tab main kept alive
     // across a renderer reload.
@@ -322,80 +326,32 @@
     devToolsOpen = state.open
   }
 
-  /**
-   * The pins this tab's page draws: the thread's design references picked from
-   * this tab, numbered in the same one-based order the composer numbers them.
-   */
-  function designMarkers(): BrowserInspectorMarker[] {
-    return responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .flatMap((reference, index) =>
-        reference.kind === 'design' && reference.tabId === tabId
-          ? [
-              {
-                id: reference.id,
-                number: index + 1,
-                comment: reference.comment ?? '',
-                selector: reference.selector ?? ''
-              }
-            ]
-          : []
-      )
-  }
-
-  /** Push the current pin set to the page. Called when the reference list for
-   *  this thread changes and whenever inspect mode is turned on. */
-  function publishMarkers(): void {
-    if (!inspectArmed) return
-    void invoke('browser:inspectMarkers', tabId, designMarkers()).catch(() => {})
-  }
-
-  /** Arm or disarm the element inspector, and hand the page the current pins. */
+  /** Arm or disarm element inspection for this tab, through the shared session. */
   function toggleInspect(): void {
     if (!inspectArmed && !pageState.design) return
-    const next = !inspectArmed
-    inspectArmed = next
-    void invoke('browser:inspectSetArmed', tabId, next)
-      .then(() => (next ? invoke('browser:inspectMarkers', tabId, designMarkers()) : undefined))
-      .catch(() => {
-        inspectArmed = false
-      })
+    browserInspector.toggle(tabId)
   }
 
-  /**
-   * One report from the page's inspector. A pick becomes a composer reference;
-   * a finished comment updates the reference it belongs to; a removed pin drops
-   * it; `closed` means the page ended inspect mode on its own (Escape) and the
-   * toggle has to follow.
-   */
-  function onInspectorEvent(event: BrowserInspectorEvent): void {
-    if (event.kind === 'closed') {
-      inspectArmed = false
-      return
-    }
-    if (event.kind === 'pick') {
-      const reference = designElementReference(event.id, event.target, pageState.design, tabId)
-      // A pick's id is the id of the page marker it created, so the same pick can
-      // only ever name one reference. Folding it in by id keeps a repeated report
-      // of one pick from adding a second entry with the same key.
-      responseReferencesState.setForThread(
-        tabProjectId,
-        tabThreadId,
-        mergeReferenceById(responseReferencesState.forThread(tabProjectId, tabThreadId), reference)
-      )
-      return
-    }
-    if (event.kind === 'comment') {
-      responseReferencesState.updateComment(tabProjectId, tabThreadId, event.id, event.comment)
-      return
-    }
+  /** Save the comment on the element being edited, and close its editor. */
+  function saveComment(referenceId: string, comment: string): void {
+    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    browserInspector.closeComment(tabId)
+  }
+
+  function persistCommentDraft(referenceId: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+  }
+
+  /** Remove a picked element from the chat, pins and all. */
+  function removeComment(referenceId: string): void {
     responseReferencesState.setForThread(
       tabProjectId,
       tabThreadId,
       responseReferencesState
         .forThread(tabProjectId, tabThreadId)
-        .filter((reference) => reference.id !== event.id)
+        .filter((reference) => reference.id !== referenceId)
     )
+    browserInspector.closeComment(tabId)
   }
 
   // Publish the pin set whenever the reference list changes, so a pick, a
@@ -413,9 +369,6 @@
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
     const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
-    const unsubscribeInspector = subscribe('browser:inspector', (eventTabId, event) => {
-      if (eventTabId === tabId) onInspectorEvent(event)
-    })
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     // Only the sidebar report is focus-driven: a single panel decides it for the
     // whole sidebar, so one listener is enough. The full screen overlay claims
@@ -424,10 +377,6 @@
       document.addEventListener('focusin', onSidebarFocusIn)
       document.addEventListener('focusout', onSidebarFocusOut)
     }
-    const unsubscribeReferences = responseReferencesState.subscribe((projectId, threadId) => {
-      if (projectId !== tabProjectId || threadId !== tabThreadId) return
-      publishMarkers()
-    })
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
     })
@@ -464,14 +413,11 @@
       unsubscribeSiteMenu()
       unsubscribeState()
       unsubscribeDevTools()
-      unsubscribeInspector()
       unsubscribePanelShortcut()
-      unsubscribeReferences()
-      // Stop the injected event promise for a panel that is going away, so no
-      // tab keeps reporting picks the user can no longer see.
-      if (inspectArmed) void invoke('browser:inspectSetArmed', tabId, false).catch(() => {})
-      // A claim on the keyboard cannot outlive the surface that made it: focus
-      // events are not guaranteed for an element that is being removed.
+      // The inspection session outlives this panel on purpose: the mode, the
+      // pins and the open comment belong to the tab, and the other surface (the
+      // full screen dialog, or the sidebar it is returning to) keeps them. Only
+      // the user, the page, or the tab leaving its design ends the session.
       if (surface === 'sidebar') {
         document.removeEventListener('focusin', onSidebarFocusIn)
         document.removeEventListener('focusout', onSidebarFocusOut)
@@ -660,4 +606,16 @@
       ).catch(() => {})
     }}
   ></div>
+  {#if panelVisible && editingComment}
+    <BrowserCommentEditor
+      reference={editingComment.reference}
+      number={editingComment.number}
+      projectId={tabProjectId}
+      threadId={tabThreadId}
+      onDraftChange={(comment) => persistCommentDraft(editingComment.reference.id, comment)}
+      onDone={(comment) => saveComment(editingComment.reference.id, comment)}
+      onRemove={() => removeComment(editingComment.reference.id)}
+      onClose={() => browserInspector.closeComment(tabId)}
+    />
+  {/if}
 </div>

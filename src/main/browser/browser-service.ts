@@ -85,6 +85,8 @@ import {
   validateBrowserUrl,
   validateDownloadId,
   validateInspectorMarkers,
+  validateInspectorReferenceId,
+  validateInspectorTheme,
   validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -387,7 +389,7 @@ export class BrowserService {
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
       this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
     )
-    ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed) => {
+    ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
       const tabId = validateTabId(rawTabId)
       const tab = this.requireTab(tabId)
       if (typeof rawArmed !== 'boolean') {
@@ -396,7 +398,30 @@ export class BrowserService {
       if (!tab.design && rawArmed) {
         throw new TypeError('The element inspector is available on a design preview only')
       }
-      this.inspector.setArmed(tabId, tab.view.webContents, rawArmed)
+      this.inspector.setArmed(
+        tabId,
+        tab.view.webContents,
+        rawArmed,
+        rawTheme === undefined ? null : validateInspectorTheme(rawTheme)
+      )
+    })
+    ipcMain.handle('browser:inspectTheme', (_event, rawTabId, rawTheme) => {
+      const tabId = validateTabId(rawTabId)
+      this.requireTab(tabId)
+      this.inspector.syncTheme(tabId, validateInspectorTheme(rawTheme))
+    })
+    ipcMain.handle('browser:inspectFocus', (_event, rawTabId, rawReferenceId, rawScroll) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.requireTab(tabId)
+      if (typeof rawScroll !== 'boolean') {
+        throw new TypeError('Inspector focus scroll flag must be a boolean')
+      }
+      this.inspector.focus(
+        tabId,
+        tab.view.webContents,
+        validateInspectorReferenceId(rawReferenceId),
+        rawScroll
+      )
     })
     ipcMain.handle('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
       const tabId = validateTabId(rawTabId)
@@ -589,7 +614,7 @@ export class BrowserService {
     if (isSameTabMark(next, previous)) return
     tab.design = next.design
     tab.composition = next.composition
-    if (next.design === null) this.inspector.setArmed(tabId, tab.view.webContents, false)
+    if (next.design === null) this.inspector.setArmed(tabId, tab.view.webContents, false, null)
     this.publishState(tabId)
     if (!next.composition) {
       // A tab that left the composition has no playhead to restore.

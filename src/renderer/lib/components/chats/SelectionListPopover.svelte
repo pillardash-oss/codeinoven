@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Pencil, SquareDashedMousePointer, Trash2, X } from '@lucide/svelte'
   import type { PromptReference } from '$shared/types'
-  import { isResponseSelection } from '$lib/stores/response-references.svelte'
+  import { referenceHasEditableSurface } from '$lib/stores/response-references.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
 
   interface Props {
@@ -73,12 +73,20 @@
           </p>
         </div>
         <div class="flex shrink-0 items-center gap-0.5">
-          {#if onEdit && isResponseSelection(reference)}
+          {#if onEdit && referenceHasEditableSurface(reference)}
             <button
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-              title={`Edit comment on ${reference.label}`}
-              aria-label={`Edit comment on ${reference.label}`}
+              title={isAnnotation
+                ? `Open ${reference.label} and edit its comment`
+                : isElement
+                  ? `Show ${reference.label} in the browser and edit its comment`
+                  : `Edit comment on ${reference.label}`}
+              aria-label={isAnnotation
+                ? `Open ${reference.label} and edit its comment`
+                : isElement
+                  ? `Show ${reference.label} in the browser and edit its comment`
+                  : `Edit comment on ${reference.label}`}
               onclick={() => onEdit(reference.id)}
             >
               <Pencil size={11} />

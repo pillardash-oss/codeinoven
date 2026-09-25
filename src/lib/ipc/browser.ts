@@ -145,16 +145,44 @@ export interface BrowserInspectorMarker {
 }
 
 /**
+ * The app's own theme tokens, which the page overlay draws itself with.
+ *
+ * The overlay is injected page script, so it cannot read the application's
+ * stylesheet. It is handed the resolved values of the app's design tokens
+ * instead, which is what keeps a pin and the comment it belongs to the same
+ * colour in light and dark mode rather than a hardcoded white box on a dark
+ * application.
+ */
+export interface BrowserInspectorTheme {
+  /** Panel and pin background. */
+  surface: string
+  /** Raised background (the comment field, hovered buttons). */
+  elevated: string
+  /** Hairline border. */
+  border: string
+  /** Primary text. */
+  foreground: string
+  /** Secondary text. */
+  muted: string
+  /** The app's accent, used for a pin that carries a comment. */
+  accent: string
+}
+
+/**
  * What the injected inspector reports back to the app.
  *
- * `pick` is a fresh selection, `comment` is the user finishing a comment box,
- * `remove` is the user deleting a pin, and `closed` is inspect mode ending on
- * its own (Escape, or the script giving up) so the panel can reset its toggle.
+ * `pick` is a fresh element selection, `open` is the user clicking an existing
+ * pin to read or edit its comment, and `closed` is inspect mode ending on its
+ * own (Escape, or the script giving up) so the surface showing the tab can
+ * reset its toggle.
+ *
+ * There is deliberately no `comment` event. A comment is written in the app's
+ * own editor, which is the component the rest of the application already uses
+ * for the same job, so the page never owns comment text and never reports one.
  */
 export type BrowserInspectorEvent =
   | { kind: 'pick'; id: string; target: BrowserInspectorTarget }
-  | { kind: 'comment'; id: string; comment: string }
-  | { kind: 'remove'; id: string }
+  | { kind: 'open'; id: string }
   | { kind: 'closed' }
 
 /** DevTools open/closed state for a browser tab. */

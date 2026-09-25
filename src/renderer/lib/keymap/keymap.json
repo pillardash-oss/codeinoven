@@ -248,8 +248,8 @@
           "id": "chat-annotation-comment",
           "keys": ["mod", "enter"],
           "label": "Submit annotation comment",
-          "description": "Posts the comment on a response selection; Escape closes the editor.",
-          "scenario": "Editing a comment on a response selection."
+          "description": "Posts the comment being written: on a response selection, on a document passage, or on an element of a design open in the browser. Escape closes the editor.",
+          "scenario": "Editing a comment on a selection, a document passage, or a design element."
         },
         {
           "id": "chat-notification-open",

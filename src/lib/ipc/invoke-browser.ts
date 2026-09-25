@@ -2,6 +2,7 @@ import type {
   BrowserCompositionPlayback,
   BrowserDownload,
   BrowserInspectorMarker,
+  BrowserInspectorTheme,
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
@@ -66,14 +67,32 @@ export const invokeBrowserContract = {
   /**
    * Arm or disarm the element inspector on a design tab. Arming injects the
    * page-side inspector and starts reporting picks; disarming stops picking but
-   * leaves the pins in place. Only meaningful on a tab whose
-   * `BrowserPageState.design` is set.
+   * leaves the pins in place, and both keep reporting a pin the user clicks.
+   * Only meaningful on a tab whose `BrowserPageState.design` is set.
+   *
+   * The theme rides on the arm so the injected overlay is themed by the time it
+   * draws its first box, instead of racing a separate theme push.
    */
-  'browser:inspectSetArmed': {} as Contract<[tabId: string, armed: boolean], void>,
-  /** Replace the pinned-element set the page draws, after a pick, comment or
-   *  removal changed the composer's references. */
+  'browser:inspectSetArmed': {} as Contract<
+    [tabId: string, armed: boolean, theme?: BrowserInspectorTheme],
+    void
+  >,
+  /** Replace the pinned-element set the page draws, after a pick or a removal
+   *  changed the composer's references. */
   'browser:inspectMarkers': {} as Contract<
     [tabId: string, markers: BrowserInspectorMarker[]],
+    void
+  >,
+  /** Re-theme a tab's page overlay. Sent when the application's theme changes,
+   *  so a pin and its comment follow light and dark mode without a re-arm. */
+  'browser:inspectTheme': {} as Contract<[tabId: string, theme: BrowserInspectorTheme], void>,
+  /**
+   * Put one pinned element in front of the user: highlight it, and optionally
+   * scroll it into view. This is how a comment clicked in the composer brings
+   * the browser back to the element it was made on.
+   */
+  'browser:inspectFocus': {} as Contract<
+    [tabId: string, referenceId: string | null, scroll: boolean],
     void
   >,
   'browser:clearData': {} as Contract<[projectId: string], void>,

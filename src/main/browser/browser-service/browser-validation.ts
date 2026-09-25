@@ -6,6 +6,7 @@
 
 import type {
   BrowserInspectorMarker,
+  BrowserInspectorTheme,
   BrowserPermissionDecision,
   BrowserShortcutAction,
   BrowserShortcutBindings,
@@ -165,6 +166,61 @@ export function validateInspectorMarkers(value: unknown): BrowserInspectorMarker
     }
     return { id, number, comment, selector }
   })
+}
+
+/** The theme tokens the page overlay draws itself with. */
+const INSPECTOR_THEME_KEYS = [
+  'surface',
+  'elevated',
+  'border',
+  'foreground',
+  'muted',
+  'accent'
+] as const satisfies readonly (keyof BrowserInspectorTheme)[]
+
+/** Ceiling on one token. A CSS colour or a `var()` reference is short; anything
+ *  longer is not a colour, and the value ends up in an injected page script. */
+const MAX_INSPECTOR_THEME_VALUE_LENGTH = 120
+
+/**
+ * Validate the application theme pushed for a tab's page overlay.
+ *
+ * These values are set as CSS custom properties inside an injected script, so
+ * each one is bounded and every expected token is required: a partial theme
+ * would leave the overlay half-drawn in the wrong palette, which is the exact
+ * bug this push exists to fix.
+ */
+export function validateInspectorTheme(value: unknown): BrowserInspectorTheme {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Inspector theme must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const theme = {} as BrowserInspectorTheme
+  for (const key of INSPECTOR_THEME_KEYS) {
+    const raw = record[key]
+    if (
+      typeof raw !== 'string' ||
+      raw.length === 0 ||
+      raw.length > MAX_INSPECTOR_THEME_VALUE_LENGTH
+    ) {
+      throw new TypeError(`Inspector theme token "${key}" is invalid`)
+    }
+    theme[key] = raw
+  }
+  return theme
+}
+
+/**
+ * Validate the reference a renderer asks the page to highlight, or null for
+ * "nothing in particular". It is matched against the marker set the page holds,
+ * so it is the same uuid the marker boundary already accepts.
+ */
+export function validateInspectorReferenceId(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string' || !INSPECTOR_MARKER_ID_PATTERN.test(value)) {
+    throw new TypeError('Inspector reference id is invalid')
+  }
+  return value
 }
 
 /** How many tabs may render offscreen at once. A parked tab renders exactly like

@@ -174,6 +174,7 @@
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
+  import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
@@ -2157,15 +2158,41 @@
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
+  /**
+   * Bring a commented design element back in front of the reader: reveal the
+   * browser tab it was picked from, then highlight the element, scroll it into
+   * view and open its comment. A tab the user has since closed has nothing to
+   * show, so it is reported rather than silently doing nothing.
+   */
+  function editDesignAnnotation(reference: ResponseReferenceAnchor): void {
+    const tabId = reference.tabId
+    const open = tabId
+      ? contextSidebarState.tabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
+      : false
+    if (!tabId || !open) {
+      toast.error('The design this comment was made on is no longer open.', {
+        description: reference.label
+      })
+      return
+    }
+    contextSidebarState.focus(tabId)
+    browserInspector.focusComment(tabId, reference.id)
+  }
+
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
-    // Only a response selection has a highlight in the conversation to jump
-    // back to. A design element's comment is edited on the page by its own pin,
-    // and a document annotation in the file panel that shows the passage.
-    if (
-      !responseReferences.some((reference) => reference.id === id && isResponseSelection(reference))
-    )
+    const reference = responseReferences.find((candidate) => candidate.id === id)
+    if (!reference) return
+    // A design element's comment is drawn by the browser page, not by the
+    // conversation, so its edit action opens the browser instead of a response
+    // range here.
+    if (reference.kind === 'design') {
+      editDesignAnnotation(reference)
       return
+    }
+    // Only a response selection has a highlight in the conversation to jump
+    // back to.
+    if (!isResponseSelection(reference)) return
     commentEditorReferenceId = id
     void tick().then(() => {
       updateResponseBubblePositions()

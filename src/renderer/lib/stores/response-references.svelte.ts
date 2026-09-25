@@ -40,6 +40,19 @@ export function isResponseSelection(reference: Pick<PromptReference, 'kind'>): b
 }
 
 /**
+ * Whether a reference has a surface that can be opened on it to edit its comment.
+ *
+ * A comment is written on the surface that draws its anchor: a response
+ * selection's highlight is in the conversation, and a picked design element's
+ * pin is in the browser tab it was picked from. The composer offers the jump for
+ * both, so a comment can be read and edited from where it is listed rather than
+ * only from the surface that happens to be on screen.
+ */
+export function referenceHasEditableSurface(reference: Pick<PromptReference, 'kind'>): boolean {
+  return isResponseSelection(reference) || reference.kind === 'design'
+}
+
+/**
  * One entry per reference id.
  *
  * A reference id is an identity, not a position: a picked design element's id is
