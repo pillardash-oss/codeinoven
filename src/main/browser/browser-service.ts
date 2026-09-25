@@ -650,6 +650,97 @@ export class BrowserService {
     return reloaded
   }
 
+  /** The agent tab bound to a project and thread, or null when it has none.
+   *  A preview uses this to decide between navigating the thread's existing tab
+   *  and creating its first one, so the answer comes from the browser rather
+   *  than from a memo a caller keeps on the side. */
+  agentTabFor(projectId: string, threadId: string): string | null {
+    return this.agentTabIds.get(browserContextKey(projectId, threadId)) ?? null
+  }
+
+  /**
+   * Bring an existing tab to the user.
+   *
+   * Creating a tab reveals it as a side effect, but showing a page the thread
+   * already has open makes no new tab, so nothing would move the sidebar. The
+   * renderer already knows how to open or focus a tab from this event, so
+   * revealing reuses it rather than adding a second reveal path.
+   */
+  revealTab(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || this.window.webContents.isDestroyed()) return
+    sendToRenderer(
+      this.window.webContents,
+      'browser:openRequested',
+      tab.view.webContents.getURL(),
+      {
+        projectId: tab.projectId,
+        threadId: tab.threadId,
+        requestedTabId: tabId,
+        reveal: true
+      }
+    )
+  }
+
+  /**
+   * Wait until a tab is no longer loading, bounded.
+   *
+   * A capture taken mid-navigation shows a half-painted page, and a page that
+   * never finishes (a hung script, an unreachable host) must not hold the caller
+   * forever, so the wait ends on stop, failure, or the deadline.
+   */
+  async waitForTabLoad(tabId: string, timeoutMs = 8_000): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || !contents.isLoading()) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        contents.removeListener('did-stop-loading', finish)
+        contents.removeListener('did-fail-load', finish)
+        resolve()
+      }
+      // Declared after `finish` closes over it: the deadline cannot fire before
+      // this line runs, so the reference is always initialised.
+      const timer = setTimeout(finish, timeoutMs)
+      contents.once('did-stop-loading', finish)
+      contents.once('did-fail-load', finish)
+    })
+  }
+
+  /**
+   * Capture a tab as a small PNG data URL, for a UI preview rather than a model.
+   *
+   * Distinct from the agent's `screenshot` operation: that one is capped for
+   * tokens and skipped when the page has not changed, while a preview wants a
+   * fresh picture at the size the panel can show.
+   */
+  async captureThumbnail(
+    tabId: string,
+    maxWidth: number
+  ): Promise<{ dataUrl: string; width: number; height: number } | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    const captured = await tab.view.webContents.capturePage()
+    const source = captured.getSize()
+    if (source.width < 1 || source.height < 1) return null
+    const target = fitWithin(source.width, source.height, maxWidth)
+    const resized =
+      target.width !== source.width || target.height !== source.height
+        ? captured.resize({ width: target.width, height: target.height })
+        : captured
+    const size = resized.getSize()
+    return {
+      dataUrl: `data:image/png;base64,${resized.toPNG().toString('base64')}`,
+      width: size.width,
+      height: size.height
+    }
+  }
+
   private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {

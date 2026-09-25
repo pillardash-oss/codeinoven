@@ -941,6 +941,27 @@ CREATE TABLE IF NOT EXISTS routines (
 
 CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
 
+/**
+ * Which design folder a thread is working on.
+ *
+ * A design session is user-started (the `@cio-design` tag, which lives in the
+ * thread's persisted messages), but the folder the agent wrote into is not
+ * derivable from a message, and the app must be able to put a restarted user
+ * back on their design. One row per thread: the design has no identity of its
+ * own beyond its folder, and a thread works on one at a time. The foreign key
+ * makes the row follow the thread's deletion instead of orphaning.
+ */
+const THREAD_DESIGNS_SQL = `
+CREATE TABLE IF NOT EXISTS thread_designs (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  directory  TEXT NOT NULL,
+  entry      TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_designs_project ON thread_designs(project_id);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -958,5 +979,6 @@ export const DATABASE_SCHEMA_SQL = [
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
+  THREAD_DESIGNS_SQL,
   ROUTINES_SQL
 ].join('\n')

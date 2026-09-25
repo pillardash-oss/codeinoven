@@ -360,12 +360,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // the loopback static host that serves a folder and the thread's browser tab
   // that shows it. Serving must keep working with no window to host a tab, so the
   // browser is read lazily and a missing one degrades to a URL in the reply.
+  //
+  // The design service is the durable side of the same thing: it owns what the
+  // app knows about a thread's design (which folder, and how to get back to it
+  // after a restart) and serves the design coordinator's open and thumbnail
+  // actions. The executor records every preview through it, so the user's design
+  // is not lost when the window that showed it closes.
+  const { DesignService } = await import('../design/design-service')
+  const designService = new DesignService({
+    database,
+    previews: state.directoryPreviewService,
+    browser: () => state.browserService
+  })
+  designService.registerIpc()
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
-      browser: () => state.browserService
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
     })
   )
   // Generation services answer with a link and those links expire, so the design

@@ -1,18 +1,9 @@
-import { stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
 import { requireLocalProject } from '../../lib/project-artifacts'
-import type { BrowserDesignTab } from '../../lib/ipc/browser'
-import { isInsideProject, resolveDesignDirectory } from '../design/design-paths'
 import type { BrowserService } from '../browser/browser-service'
+import { openDesignPreview } from '../design/design-preview-session'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
-
-/** Ceiling on the entry field, so a hand-written call cannot inflate a log line. */
-const MAX_ENTRY_LENGTH = 512
-
-/** File the folder is expected to hold, and the one a preview falls back to. */
-const DESIGN_ENTRY_FILE = 'index.html'
 
 /**
  * What the design capability needs from the app.
@@ -20,45 +11,21 @@ const DESIGN_ENTRY_FILE = 'index.html'
  * The browser is supplied as a getter because the service exists only while the
  * app has a window to host tabs in. Serving the folder must still work without
  * one, so a missing browser degrades to a URL rather than a failure.
+ *
+ * `record` is how the preview becomes durable: the folder the agent chose is
+ * written to the design registry, which is what lets a restarted app put the
+ * user back on their design instead of leaving them with no way to find it.
  */
 export interface DesignPreviewExecutorOptions {
   previews: DirectoryPreviewService
   database: Database
   browser: () => BrowserService | null
-}
-
-/** One file inside the served folder, or null to let the folder listing show. */
-function resolveEntry(
-  raw: unknown
-): { requested: string; segments: string[]; absolute: string } | null {
-  if (raw === undefined || raw === null) return null
-  if (typeof raw !== 'string') throw new Error('entry must be a path inside the served folder')
-  const requested = raw.trim()
-  if (requested.length === 0) return null
-  if (requested.length > MAX_ENTRY_LENGTH) throw new Error('entry is too long')
-  if (isAbsolute(requested) || /^[a-zA-Z]:/u.test(requested)) {
-    throw new Error('entry must be relative to the served folder')
-  }
-  const segments = requested.split(/[\\/]+/u).filter((segment) => segment.length > 0)
-  if (segments.length === 0 || segments.some((segment) => segment === '..' || segment === '.')) {
-    throw new Error('entry must name a file inside the served folder')
-  }
-  return { requested, segments, absolute: resolve(...segments) }
-}
-
-async function existsAsFile(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isFile()
-  } catch {
-    return false
-  }
-}
-
-/** The tab id an in-app browser operation reported, or null when it reported none. */
-function tabIdOf(result: unknown): string | null {
-  if (typeof result !== 'object' || result === null) return null
-  const tabId = (result as Record<string, unknown>)['tabId']
-  return typeof tabId === 'string' && tabId.length > 0 ? tabId : null
+  record: (input: {
+    projectId: string
+    threadId: string
+    directory: string
+    entry: string | null
+  }) => void
 }
 
 /**
@@ -71,15 +38,14 @@ function tabIdOf(result: unknown): string | null {
  * the thread's browser tab showing it, and then the in-app browser capability's
  * `screenshot`, `viewport`, `snapshot` and `console` operations apply to that
  * tab without any new machinery here.
+ *
+ * The showing itself lives in `design-preview-session.ts`, because the design
+ * coordinator's open and thumbnail actions do the same thing on the user's
+ * behalf; a second copy here would be a second thing to keep in step.
  */
 export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
 ): DesignCapabilityExecutor {
-  // Which project and thread pairs already have a preview tab, so a design that
-  // changes twenty times reloads one tab instead of opening twenty. The browser
-  // is still the authority: if it let the tab go, the navigate below fails and
-  // the open that follows makes a new one.
-  const previewed = new Set<string>()
   return async (operation, input, context) => {
     if (operation !== 'preview') {
       throw new Error(
@@ -87,77 +53,34 @@ export function createDesignPreviewExecutor(
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
-    const directory = resolveDesignDirectory(project.path, input['directory'])
-    const requested = resolveEntry(input['entry'])
-    const registration = await options.previews.open(directory.absolute).catch((error: unknown) => {
-      throw new Error(
-        `The design folder "${directory.display}" is not there yet. Write the design into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`
-      )
+    const attention = input['attention'] === 'background' ? 'background' : 'focus'
+    const result = await openDesignPreview(
+      { previews: options.previews, browser: options.browser },
+      {
+        projectPath: project.path,
+        projectId: context.projectId,
+        threadId: context.threadId,
+        directory: input['directory'],
+        entry: input['entry'],
+        attention,
+        reveal: false
+      }
+    )
+    options.record({
+      projectId: context.projectId,
+      threadId: context.threadId,
+      directory: result.directory,
+      entry: result.entry
     })
 
-    let entry = requested
-    if (entry) {
-      const absolute = resolve(directory.absolute, ...entry.segments)
-      if (!isInsideProject(directory.absolute, absolute)) {
-        throw new Error('entry must name a file inside the served folder')
-      }
-      if (!(await existsAsFile(absolute))) {
-        throw new Error(`The served folder has no file named "${entry.requested}".`)
-      }
-      entry = { ...entry, absolute }
-    } else if (await existsAsFile(resolve(directory.absolute, DESIGN_ENTRY_FILE))) {
-      entry = {
-        requested: DESIGN_ENTRY_FILE,
-        segments: [DESIGN_ENTRY_FILE],
-        absolute: resolve(directory.absolute, DESIGN_ENTRY_FILE)
-      }
-    }
-
-    const url = entry
-      ? `${registration.url}${entry.segments.map((segment) => encodeURIComponent(segment)).join('/')}`
-      : registration.url
-    const attention = input['attention'] === 'background' ? 'background' : 'focus'
-    const design: BrowserDesignTab = {
-      directory: directory.display,
-      origin: new URL(registration.url).origin
-    }
-    const browser = options.browser()
-    const tabKey = `${context.projectId}\u0000${context.threadId}`
-    let tab: 'reused' | 'opened' | null = null
-    if (browser) {
-      const target = { projectId: context.projectId, threadId: context.threadId }
-      // One agent tab per thread is the browser service's own model, so a second
-      // preview navigates the tab the first one opened, and only a tab shown for
-      // the first time is "opened".
-      const showDesign = async (): Promise<{ tabId: string | null; how: 'reused' | 'opened' }> => {
-        try {
-          if (!previewed.has(tabKey)) throw new Error('no preview tab yet')
-          return {
-            tabId: tabIdOf(await browser.executeUtility('navigate', { url }, target)),
-            how: 'reused'
-          }
-        } catch {
-          const tabId = tabIdOf(await browser.executeUtility('open', { url, attention }, target))
-          previewed.add(tabKey)
-          return { tabId, how: 'opened' }
-        }
-      }
-      const shown = await showDesign()
-      tab = shown.how
-      // Marking the tab is what arms the element inspector: the panel offers
-      // inspection only on a tab that is rendering a design, so this call has to
-      // land before the user can pick anything.
-      if (shown.tabId) browser.markDesignTab(shown.tabId, design)
-    }
-
     return {
-      url,
-      directory: directory.display,
-      entry: entry?.requested ?? null,
-      served: entry ? 'file' : 'folder listing',
+      url: result.url,
+      directory: result.directory,
+      entry: result.entry,
+      served: result.served,
       attention,
-      tab,
-      note: tab
+      tab: result.tab,
+      note: result.tab
         ? 'Activate the in-app browser capability to screenshot this tab, change its viewport, or read its console.'
         : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
     }

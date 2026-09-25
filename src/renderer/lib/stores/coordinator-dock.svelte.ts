@@ -3,6 +3,7 @@ import type { Component } from 'svelte'
 import type {
   AchievementCoordinatorPanelProps,
   AssignmentCoordinatorPanelProps,
+  DesignCoordinatorPanelProps,
   IndependentAuditCoordinatorPanelProps
 } from '$shared/types'
 
@@ -26,6 +27,10 @@ export type CoordinatorDockPanel =
   | { component: 'assignment'; props: AssignmentCoordinatorPanelProps }
   | { component: 'achievement'; props: AchievementCoordinatorPanelProps }
   | { component: 'independent-audit'; props: IndependentAuditCoordinatorPanelProps }
+  /** The design coordinator: a thread's design, and the way back to it after a
+   *  restart. Published for a thread that opened a design session, whether or not
+   *  any worker exists, because the design is what the user returns to. */
+  | { component: 'design'; props: DesignCoordinatorPanelProps }
 
 export interface CoordinatorDockRegistration {
   projectId: string

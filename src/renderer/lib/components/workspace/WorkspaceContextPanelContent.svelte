@@ -258,6 +258,10 @@
           {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
             <AchievementCoordinatorPanel {...coordinator.panel.props} />
           {/await}
+        {:else if coordinator.panel.component === 'design'}
+          {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
+            <DesignCoordinatorPanel {...coordinator.panel.props} />
+          {/await}
         {:else}
           {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
             <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />

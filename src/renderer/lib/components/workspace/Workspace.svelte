@@ -30,6 +30,7 @@
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -680,6 +681,23 @@
   let coordinator = $derived(
     coordinatorDockState.forThread(selectedThread?.projectId, activeThreadRowId(selectedThread))
   )
+
+  /**
+   * Keep the design coordinator in step with the on-screen thread.
+   *
+   * A design session belongs to a thread and survives everything the turn that
+   * started it did, so this re-reads when the thread changes and whenever that
+   * thread sees activity: the `@cio-design` tag can arrive on any later message,
+   * and main is the one that decides from the persisted messages, so the
+   * coordinator docks the moment the tag lands rather than waiting for a reload.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) return
+    // Read as a dependency: a new message on this thread re-runs the refresh.
+    void thread.lastActivity
+    void designCoordinatorState.refresh(thread.projectId, thread.id)
+  })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
