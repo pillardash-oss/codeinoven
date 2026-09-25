@@ -136,6 +136,7 @@
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             side="top"
             variant="action"
+            fullWidth
             disabled={working}
             onSelect={chooseComposeModel}
             thinkingLevel={prComposeAgentSettings.selection?.thinkingLevel ?? null}
