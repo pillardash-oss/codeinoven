@@ -49,7 +49,7 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import { groupRunsByTask } from '../assistant/assistant-view'
+  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
@@ -1399,6 +1399,8 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
+  let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
   let assistantRoutineList = $derived(assistantRoutines.routines)
@@ -3639,6 +3641,7 @@
         routines={assistantRoutineList}
         tasks={assistantTasks}
         runsByTask={assistantRunsByTask}
+        runsByRoutine={assistantRunsByRoutine}
         selectedThreadId={activeThreadRowId(selectedThread)}
         {navigate}
         onOpenTask={openAssistantTask}

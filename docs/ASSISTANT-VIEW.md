@@ -192,9 +192,9 @@ the app's clock for Assistant View.
 - **No auto catch-up.** A slot that came due while the app was closed (or a
   machine slept through it) is recorded as a missed run, never run in a burst.
   The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss. Each record carries a `reason`   `app-closed` when the app was not
+  miss. Each record carries a `reason` `app-closed` when the app was not
   running at the due time, `delayed` when it was running but could not start the
-  run in time   and both surfaces state it instead of always claiming the app
+  run in time and both surfaces state it instead of always claiming the app
   was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
@@ -332,6 +332,18 @@ runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
 execution.
+
+**A routine's Getting started runs leave that row once the routine is set up.**
+While the routine is still authoring (its how-to unsaved) its runs stay nested
+inside the Getting started thread, since they are still about setting the
+routine up. Once `routineHowToComplete` holds, `Workspace.svelte` also groups
+every run by its `routineId` (`groupRunsByRoutine`) and the sidebar lifts the
+seed thread's runs out to sit beside its task rows, at the same level, through
+`routineSiblingRuns`. A run whose task is no longer on screen (the Getting
+started thread was hidden) rises to the routine too, so hiding the seed only
+hides that row and never the runs it produced. A run whose task renders
+elsewhere (a pinned task that left for the Pinned section) keeps nesting under
+that row.
 
 Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
@@ -498,6 +510,7 @@ prompt"; the user-facing term is how-to.
   re-offer its choices) and the ask itself: the two priority brackets are two
   separate single-choice questions, because one question carrying both brackets
   produces a combined answer no turn can resolve back into brackets.
+
 - The how-to panel shows that checkpoint under **Agreed so far** while the
   how-to is incomplete, so the interview is auditable from the panel instead of
   only from the thread. The main process broadcasts `routine:checkpointChanged`
@@ -771,7 +784,7 @@ the run thread itself. Note what that does and does not mean today. The report i
 the run thread's message, and the thread is listed in the assistant sidebar under
 its routine. The notification panel's **Assistants** tab carries **missed runs
 only**, so a finished report does not currently raise its own notification entry
-there. Every other channel is *external*, and picking one is
+there. Every other channel is _external_, and picking one is
 also a statement that the routine needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a
