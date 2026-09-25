@@ -103,8 +103,9 @@
    * This also puts it in the thread's browser tab, off screen, which is
    * deliberate: a picture has to come from a page the app is rendering, and the
    * tab has to exist anyway for the Preview button to be instant. The capture is
-   * asked for on demand, never on a timer. A composition is captured as it plays,
-   * because a frame is what a composition exists to draw.
+   * asked for on demand, never on a timer. A video composition is captured as a
+   * still at its opening, so docking the board never starts it playing or
+   * sounding; the moving composition is what Preview loads.
    */
   async function loadThumbnail(): Promise<void> {
     if (selected.directory === '') return
