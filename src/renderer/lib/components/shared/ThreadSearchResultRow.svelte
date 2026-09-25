@@ -11,6 +11,7 @@
     THREAD_HOVER_POPOVER_SURFACE_CLASS
   } from '$lib/components/shared/thread-hover-popover-layout'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
+  import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { statusBadgeForThread } from '$lib/thread-status-badge'
@@ -196,7 +197,7 @@
     {#if isRecording}
       <RecordingIndicator label="Listening" />
     {:else if isSpeaking}
-      <RecordingIndicator label="Speaking" tone="speech" />
+      <SpeakingIndicator label="Playing audio" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed">
         {relativeTime(thread.lastActivity)}
