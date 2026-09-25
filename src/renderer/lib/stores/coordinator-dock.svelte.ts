@@ -33,6 +33,29 @@ export type CoordinatorDockPanel =
    *  to. */
   | { component: 'design'; props: DesignCoordinatorPanelProps }
 
+/**
+ * The panel component a registration carries, which is also how a view says which
+ * panels it owns.
+ *
+ * One row is one thread, and two different views can publish to it: the thread view
+ * owns the orchestration boards, and the design store owns an authored-work board.
+ * Ownership is what keeps one view's cleanup from tearing down the other's panel.
+ */
+export type CoordinatorPanelComponent = CoordinatorDockPanel['component']
+
+/**
+ * The panels an orchestration view publishes, and the only ones it may withdraw.
+ *
+ * Listed rather than inferred because the thread view withdraws the moment its
+ * workflow lookup settles with no orchestration coordinator, which is a moment it
+ * knows nothing about an authored-work board it never published.
+ */
+export const ORCHESTRATION_COORDINATOR_COMPONENTS: readonly CoordinatorPanelComponent[] = [
+  'assignment',
+  'achievement',
+  'independent-audit'
+]
+
 export interface CoordinatorDockRegistration {
   projectId: string
   /** The coordinator thread id. Children of one coordinator share this value,
@@ -103,15 +126,27 @@ class CoordinatorDockState {
     this.registration = next
   }
 
-  /** Drop a row's panel, e.g. because its thread settled with no coordinator.
-   *  The next publish re-registers it, so a coordinator that returns is never
-   *  lost. */
-  withdraw(projectId: string, threadId: string): void {
-    this.recalled.delete(coordinatorRowKey(projectId, threadId))
+  /**
+   * Drop a row's panel, e.g. because its thread settled with no coordinator.
+   * The next publish re-registers it, so a coordinator that returns is never
+   * lost.
+   *
+   * `owned` names the panels the caller publishes. A row holds one panel, and the
+   * thread view and the design store both publish to the same row, so a cleanup that
+   * did not check ownership tore down a design board the moment the thread view
+   * settled without an orchestration coordinator. Nothing republished it, because
+   * the design store refreshes only when the thread or its activity changes.
+   */
+  withdraw(projectId: string, threadId: string, owned: readonly CoordinatorPanelComponent[]): void {
+    const key = coordinatorRowKey(projectId, threadId)
     const current = this.registration
-    if (current && current.projectId === projectId && current.threadId === threadId) {
-      this.registration = null
-    }
+    const currentIsRow =
+      current !== null && current.projectId === projectId && current.threadId === threadId
+    if (currentIsRow && !owned.includes(current.panel.component)) return
+    const recalled = this.recalled.get(key)
+    if (recalled && !owned.includes(recalled.panel.component)) return
+    if (currentIsRow) this.registration = null
+    this.recalled.delete(key)
   }
 
   setAutoOpen(value: boolean): void {

@@ -73,7 +73,9 @@ class DesignCoordinatorState {
       const existing = coordinatorDockState.forThread(projectId, threadId)
       const ownsRow = existing === null || existing.panel.component === 'design'
       if (!state.active) {
-        if (ownsRow && existing !== null) coordinatorDockState.withdraw(projectId, threadId)
+        if (ownsRow && existing !== null) {
+          coordinatorDockState.withdraw(projectId, threadId, ['design'])
+        }
         return
       }
       if (!ownsRow) return

@@ -152,6 +152,7 @@
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
+    ORCHESTRATION_COORDINATOR_COMPONENTS,
     type CoordinatorDockPanel
   } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -2953,7 +2954,13 @@
   $effect(() => {
     if (hasController || !workflowReady) return
     if (coordinatorKind !== null) return
-    coordinatorDockState.withdraw(thread.projectId, coordinatorDockThreadId)
+    // Only the orchestration boards this view publishes. An authored-work board on
+    // the same row belongs to the design store and must survive this cleanup.
+    coordinatorDockState.withdraw(
+      thread.projectId,
+      coordinatorDockThreadId,
+      ORCHESTRATION_COORDINATOR_COMPONENTS
+    )
   })
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
