@@ -693,6 +693,20 @@ export class BrowserService {
   }
 
   /**
+   * The URL a tab is showing right now, or null when it is gone.
+   *
+   * A preview asks this before loading something, because a page the tab already
+   * has open is a page the user is already looking at: reloading it would throw
+   * away what they are watching, and a composition that is playing must not be
+   * replaced by a still.
+   */
+  tabUrl(tabId: string): string | null {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    return tab.view.webContents.getURL()
+  }
+
+  /**
    * Bring an existing tab to the user.
    *
    * Creating a tab reveals it as a side effect, but showing a page the thread

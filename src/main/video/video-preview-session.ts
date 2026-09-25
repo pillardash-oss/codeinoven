@@ -48,6 +48,18 @@ export interface VideoPreviewRequest {
    * stops the page racing the capture while it settles.
    */
   captureSeconds?: number
+  /**
+   * When set, a tab that is not already watching this composition loads it frozen
+   * at this second instead of moving.
+   *
+   * A picture for the coordinator's board is a still, so opening a board must not
+   * start the composition playing and sounding in a tab the user never asked for.
+   * That is the whole difference between this and `captureSeconds`: a capture is
+   * the agent asking for one exact frame, while a poster is the board asking for
+   * something to look at. A poster therefore leaves a composition that is already
+   * moving alone, because that page is one the user asked for.
+   */
+  posterSeconds?: number
 }
 
 export interface VideoPreviewResult {
@@ -57,7 +69,13 @@ export interface VideoPreviewResult {
   entry: string | null
   /** The URL a viewing loads: the composition moving. */
   playUrl: string
-  /** The URL actually loaded: `playUrl`, or its frozen form for a capture. */
+  /**
+   * The URL the tab actually holds when this returns.
+   *
+   * Usually the URL that was asked for, and its frozen form for a capture or a
+   * poster. It is `playUrl` when an already-watching tab was left alone, so a
+   * caller is never told a page was loaded that was not.
+   */
   url: string
   origin: string
   served: 'file' | 'folder listing'
@@ -91,20 +109,39 @@ export async function openVideoPreview(
   })
   const entry = await resolveServedEntry(directory.absolute, request.entry)
   const playUrl = servedFileUrl(registration.url, entry)
+  // The frozen form of the playing page is built here, so a capture and a poster
+  // cannot disagree about how one composition is asked for.
+  const posterUrl =
+    request.posterSeconds === undefined ? null : videoCaptureUrl(playUrl, request.posterSeconds)
   const url =
     request.captureSeconds === undefined
-      ? playUrl
+      ? (posterUrl ?? playUrl)
       : videoCaptureUrl(playUrl, request.captureSeconds)
   const origin = new URL(registration.url).origin
 
   const browser = deps.browser()
   let tab: 'reused' | 'opened' | null = null
   let tabId: string | null = null
+  // What the tab holds when this returns, which is not always what was asked for:
+  // a tab already watching this composition is left on the moving page.
+  let loaded = url
   if (browser) {
     const target = { projectId: request.projectId, threadId: request.threadId }
-    if (browser.agentTabFor(request.projectId, request.threadId)) {
-      tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target))
+    const existing = browser.agentTabFor(request.projectId, request.threadId)
+    if (existing) {
+      tabId = existing
       tab = 'reused'
+      const showing = browser.tabUrl(tabId)
+      // A composition the user is already watching is theirs, so a poster request
+      // must not replace the moving page with a still under their eyes. The page
+      // already on screen is also the one being asked for again, so nothing is
+      // reloaded then either: a refresh here means a fresh picture, not a new load.
+      const watching = posterUrl !== null && showing === playUrl
+      if (watching) {
+        loaded = playUrl
+      } else if (showing !== url) {
+        tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target)) ?? tabId
+      }
     } else {
       tabId = tabIdOf(
         await browser.executeUtility('open', { url, attention: request.attention }, target)
@@ -120,7 +157,7 @@ export async function openVideoPreview(
     directory: directory.display,
     entry: entry?.requested ?? null,
     playUrl,
-    url,
+    url: loaded,
     origin,
     served: entry ? 'file' : 'folder listing',
     tab,

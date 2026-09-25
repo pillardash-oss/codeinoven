@@ -47,6 +47,15 @@ import { openDesignPreview } from './design-preview-session'
 const MIN_THUMBNAIL_WIDTH = 160
 const MAX_THUMBNAIL_WIDTH = 1_200
 
+/**
+ * The second a composition's board picture is taken at.
+ *
+ * The opening, because it is always a valid second for any composition: a later one
+ * would need the manifest read first and could sit past a composition shorter than
+ * it, turning a picture into a failure.
+ */
+const POSTER_SECONDS = 0
+
 /** The later of a thread's two session tags. */
 interface SessionTag {
   kind: AuthoredWorkKind
@@ -360,8 +369,10 @@ export class DesignService {
    * It is shown in the thread's own tab, off screen, then captured. That is
    * deliberate: the capture has to come from a page the app is actually rendering,
    * and a hidden tab is the same page the user would see, at the same size, without
-   * a second browser and without stealing focus. A composition is captured as it
-   * plays, because a frame is what the composition exists to draw.
+   * a second browser and without stealing focus. A composition is captured as a
+   * still at its opening, because a picture for a board must not start playback: a
+   * frame is what the composition exists to draw, and the user asks for the moving
+   * one by clicking Preview.
    */
   async thumbnail(
     projectId: string,
@@ -372,8 +383,9 @@ export class DesignService {
   ): Promise<DesignThumbnail> {
     const project = requireLocalProject(this.options.database, projectId)
     const browser = this.options.browser()
+    const kind = this.resolveKind(threadId)
     const result = await this.serveWork({
-      kind: this.resolveKind(threadId),
+      kind,
       projectPath: project.path,
       projectId,
       threadId,
@@ -382,19 +394,24 @@ export class DesignService {
       // looking at, not always the folder's index file.
       entry,
       attention: 'background',
-      reveal: false
+      reveal: false,
+      // A board's picture of a composition is a still, so selecting a video thread
+      // must not start playback and sound in a tab the user never asked for. The
+      // design kind has no timeline to freeze, so it is unaffected.
+      posterSeconds: kind === 'video' ? POSTER_SECONDS : undefined
     })
-    if (!browser || !result.tabId) {
-      return { directory: result.directory, dataUrl: null, width: 0, height: 0 }
+    const tabId = result.tabId
+    if (!browser || !tabId) {
+      return { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
     }
-    await browser.waitForTabLoad(result.tabId)
+    await browser.waitForTabLoad(tabId)
     const captured = await browser.captureThumbnail(
-      result.tabId,
+      tabId,
       Math.min(MAX_THUMBNAIL_WIDTH, Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width)))
     )
     return captured
-      ? { directory: result.directory, ...captured }
-      : { directory: result.directory, dataUrl: null, width: 0, height: 0 }
+      ? { directory: result.directory, ...captured, tabId }
+      : { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
   }
 
   /**
@@ -545,6 +562,11 @@ export class DesignService {
     entry: unknown
     attention: 'focus' | 'background'
     reveal: boolean
+    /**
+     * Load a still at this second instead of the moving composition. Video only:
+     * a design is shown as it is, and the design path ignores this.
+     */
+    posterSeconds?: number
   }): Promise<ServedWork> {
     const deps = { previews: this.options.previews, browser: this.options.browser }
     const target = {
@@ -554,7 +576,8 @@ export class DesignService {
       directory: input.directory,
       entry: input.entry,
       attention: input.attention,
-      reveal: input.reveal
+      reveal: input.reveal,
+      posterSeconds: input.posterSeconds
     }
     const result =
       input.kind === 'video'

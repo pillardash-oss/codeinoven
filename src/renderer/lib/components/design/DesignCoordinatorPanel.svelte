@@ -1,7 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { ExternalLink, Film, Frame, ImageOff, LoaderCircle, RefreshCw } from '@lucide/svelte'
+  import {
+    ExternalLink,
+    Film,
+    Frame,
+    ImageOff,
+    LoaderCircle,
+    RefreshCw,
+    Volume2,
+    VolumeX
+  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { DESIGN_OUTPUT_ROOT } from '$shared/design-skill'
   import type { DesignEntry, ThreadDesignState } from '$shared/ipc-contract'
@@ -39,6 +49,9 @@
   let thumbnailBusy = $state(false)
   let opening = $state('')
   let error = $state('')
+  /** The tab holding the work, so the board can reach its own controls. Empty
+   *  until the first capture opens one, and an empty id reads as idle state. */
+  let tabId = $state('')
 
   /** The session's words and icon: a design session and a video session share this
    *  board, so nothing below hard-codes the word "design". */
@@ -48,6 +61,19 @@
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
   let WorkIcon = $derived(video ? Film : Frame)
   let workRoot = $derived(video ? VIDEO_PROJECT_ROOT : DESIGN_OUTPUT_ROOT)
+
+  /**
+   * The tab's live audio state, read from the same store the tab strip reads.
+   *
+   * A composition's mute is a property of its tab, so the board drives that one
+   * rather than keeping its own: the speaker in this panel and the speaker on the
+   * tab can then never disagree about whether the work is audible.
+   */
+  let tabRuntime = $derived(contextSidebarState.browserRuntime(tabId))
+  /** What the mute button does next, in this board's own words. */
+  let muteLabel = $derived(
+    tabRuntime.muted ? `Unmute the ${noun} preview` : `Mute the ${noun} preview`
+  )
 
   /** The folder being shown: the thread's own, or the newest one it can open. */
   let selected = $derived.by(() => {
@@ -94,6 +120,7 @@
       )
       thumbnail = shot.dataUrl ?? ''
       thumbnailSize = shot.dataUrl ? { width: shot.width, height: shot.height } : null
+      tabId = shot.tabId ?? ''
     } catch {
       thumbnail = ''
       thumbnailSize = null
@@ -145,6 +172,24 @@
         </span>
       </span>
       <span class="flex shrink-0 items-center gap-1">
+        {#if video && tabId !== ''}
+          <button
+            type="button"
+            class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
+              ? 'text-accent'
+              : 'text-dimmed'}"
+            aria-pressed={tabRuntime.muted}
+            title={muteLabel}
+            aria-label={muteLabel}
+            onclick={() => contextSidebarState.toggleBrowserTabMute(tabId)}
+          >
+            {#if tabRuntime.muted}
+              <VolumeX size={12} />
+            {:else}
+              <Volume2 size={12} />
+            {/if}
+          </button>
+        {/if}
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
