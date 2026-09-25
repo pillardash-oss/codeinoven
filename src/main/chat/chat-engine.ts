@@ -6565,17 +6565,7 @@ export class ChatEngine {
     const reconciliation = (async (): Promise<void> => {
       const info = this.sessionRegistry.get(sessionId)
       if (!info || info.ephemeral) return
-      const awaitingInput =
-        [...this.pendingQuestions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingPermissions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingImageDescriptorDecisions.values()].some(
-          (pending) => pending.sessionId === sessionId
-        )
-      if (awaitingInput) return
+      if (this.sessionAwaitsUserInput(sessionId)) return
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
@@ -20796,6 +20786,19 @@ export class ChatEngine {
     if (eventOwner) {
       this.projectIdleSince.delete(eventOwner.projectId)
       this.releasedProjects.delete(eventOwner.projectId)
+      // Live traffic is the only proof of life the silence watchdog has, and its
+      // timer is armed once from the session's `working` status. Without this
+      // reset the watchdog fires a fixed window later   even while the harness
+      // streams parts, tool calls and questions   and a probe that answers for
+      // the wrong process then kills a turn that was demonstrably alive.
+      // Lifecycle signals are excluded: they arm or clear the watchdog themselves.
+      if (
+        event.type !== 'session.status' &&
+        event.type !== 'session.idle' &&
+        event.type !== 'session.error'
+      ) {
+        this.resetSessionWatchdog(event.sessionId)
+      }
       this.forwardBrainstormTrace(eventOwner, event)
       this.forwardInitialSpecTrace(eventOwner, event)
       this.forwardAssignmentDraftTrace(eventOwner, event)
@@ -23296,16 +23299,7 @@ export class ChatEngine {
       if (!userAborted && erroredSession?.state === 'error' && !failure) {
         failure = erroredSession.issue?.message ?? 'Agent session failed'
       }
-      const awaitingUser =
-        [...this.pendingQuestions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingPermissions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingImageDescriptorDecisions.values()].some(
-          (pending) => pending.sessionId === sessionId
-        )
+      const awaitingUser = this.sessionAwaitsUserInput(sessionId)
       const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
       const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
       const contractBlocked =
@@ -26176,6 +26170,22 @@ export class ChatEngine {
     }
   }
 
+  /** Whether the session is parked on a card the user has not settled: a
+   *  question, a permission request, or an image-descriptor decision. */
+  private sessionAwaitsUserInput(sessionId: string): boolean {
+    return (
+      [...this.pendingQuestions.values()].some(
+        (pending) => pending.request.sessionId === sessionId
+      ) ||
+      [...this.pendingPermissions.values()].some(
+        (pending) => pending.request.sessionId === sessionId
+      ) ||
+      [...this.pendingImageDescriptorDecisions.values()].some(
+        (pending) => pending.sessionId === sessionId
+      )
+    )
+  }
+
   /**
    * Called when the watchdog fires   the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
@@ -26209,12 +26219,16 @@ export class ChatEngine {
       // unbounded amount of time reasoning or running a tool without emitting
       // another event, while their harness process remains healthy. Keep the
       // canonical working state and re-check later; driver lifecycle events
-      // remain authoritative for completion and transport failures.
-      Logger.info('Session remains silent without an explicit provider failure   preserving turn', {
-        sessionId,
-        projectId: info.projectId,
-        threadId: info.threadId
-      })
+      // remain authoritative for completion and transport failures. A card the
+      // user has not settled is the same bargain from the other side: the turn
+      // is waiting on a human, so the card's own timer ends the wait.
+      const waitingOnUser = this.sessionAwaitsUserInput(sessionId)
+      Logger.info(
+        waitingOnUser
+          ? 'Session is waiting on the user   extending watchdog'
+          : 'Session remains silent without an explicit provider failure   preserving turn',
+        { sessionId, projectId: info.projectId, threadId: info.threadId }
+      )
       this.startSessionWatchdog(sessionId, ChatEngine.SILENT_WORK_GRACE_MS)
       return
     }
@@ -26374,6 +26388,11 @@ export class ChatEngine {
     if (driver?.isSessionBusy) {
       const probe = await probeSessionLiveness(driver, info, sessionId)
       if (probe === 'busy') return null
+      // A quiet harness with a card on screen is the user's turn to move, not a
+      // failure: extend instead of promoting the silence, so the engine never
+      // tears a live harness out from under a card the user is still filling in.
+      // A wedged transport is a real failure and still reports below.
+      if (probe === 'idle' && this.sessionAwaitsUserInput(sessionId)) return null
       const message =
         probe === 'wedged'
           ? `The ${harnessId} session stopped responding (its connection appears wedged).`
