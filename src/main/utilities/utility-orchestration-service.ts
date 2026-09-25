@@ -1768,6 +1768,7 @@ export class UtilityOrchestrationService {
     return connectMcpServer({
       config: utility.config,
       environment: await this.credentialEnvironment(utility),
+      credentials: utility.credentials,
       owner: { name: utility.name, credentials: utility.credentials }
     })
   }

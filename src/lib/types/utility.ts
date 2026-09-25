@@ -36,7 +36,12 @@ export interface McpUtilityConfig {
   args?: string[]
   url?: string
   environment?: Record<string, string>
-  /** Remote headers should reference vault-backed env vars with `{env:NAME}`. */
+  /**
+   * Explicit remote request headers. A value may reference a vault-backed
+   * variable with `{env:NAME}`; a declared credential that no header carries is
+   * still sent to a remote server automatically, so this is only needed for a
+   * server that reads its secret from a header other than `Authorization`.
+   */
   headers?: Record<string, string>
 }
 
