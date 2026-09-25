@@ -1,4 +1,7 @@
-import { DESIGN_OUTPUT_ROOT } from '../../lib/design-skill'
+import { realpathSync } from 'node:fs'
+import { isAbsolute, relative, sep } from 'node:path'
+import { AUTHORED_WORK_ROOT_BY_KIND, authoredWorkKindOf } from '../../lib/design/authored-work'
+import type { BrowserDesignTab } from '../../lib/ipc/browser'
 import type {
   AuthoredWorkKind,
   DesignEntry,
@@ -7,8 +10,8 @@ import type {
   ThreadDesignCurrent,
   ThreadDesignState
 } from '../../lib/ipc/design'
+import { originOf } from '../../lib/local-development-url'
 import { requireLocalProject } from '../../lib/project-artifacts'
-import { VIDEO_PROJECT_ROOT } from '../../lib/video/project'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
@@ -44,12 +47,6 @@ import { openDesignPreview } from './design-preview-session'
 const MIN_THUMBNAIL_WIDTH = 160
 const MAX_THUMBNAIL_WIDTH = 1_200
 
-/** Where each session's folders live, which is also how a folder is spelled back. */
-const WORK_ROOT_BY_KIND: Record<AuthoredWorkKind, string> = {
-  design: DESIGN_OUTPUT_ROOT,
-  video: VIDEO_PROJECT_ROOT
-}
-
 /** The later of a thread's two session tags. */
 interface SessionTag {
   kind: AuthoredWorkKind
@@ -57,19 +54,18 @@ interface SessionTag {
   at: number
 }
 
-/**
- * Which session a recorded folder belongs to, read from its root.
- *
- * The row stores only a project-relative path, so the root is what says whether it
- * holds a design or a composition. A path under neither root claims no kind and
- * lets the tag decide.
- */
-function kindOfWorkDirectory(directory: string): AuthoredWorkKind | null {
-  for (const kind of ['design', 'video'] as const) {
-    const root = WORK_ROOT_BY_KIND[kind]
-    if (directory === root || directory.startsWith(`${root}/`)) return kind
+/** The part of a served URL under its origin, decoded, or null when it names no file. */
+function entryWithinOrigin(url: string, origin: string): string | null {
+  const withoutQuery = url.slice(origin.length).split(/[?#]/u)[0] ?? ''
+  const path = withoutQuery.replace(/^\/+/u, '')
+  if (path.length === 0) return null
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    // A URL the browser accepted can still hold a malformed escape; its raw form
+    // is still the file that was asked for.
+    return path
   }
-  return null
 }
 
 /** Identifier validation for the two ids every call carries. */
@@ -100,6 +96,8 @@ interface ServedWork {
 export class DesignService {
   private readonly designs: DesignRepo
   private readonly messages: AgentMessageRepo
+  /** Canonical spelling of a project's path per stored spelling, filled on first use. */
+  private readonly canonicalProjects = new Map<string, string>()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
@@ -157,6 +155,41 @@ export class DesignService {
     this.designs.upsert(input)
   }
 
+  /**
+   * The design a tab is showing, recognised from the URL it is on rather than from
+   * who opened it, and recorded so the board follows.
+   *
+   * The browser calls this on every committed navigation. A design folder is served
+   * on its own loopback origin, so the URL is enough to answer the question the
+   * board asks: which folder is this thread working in. Recognising it this way
+   * covers the two cases a record of the last preview cannot: a tab the agent
+   * opened itself, and a tab the renderer restored after a restart.
+   *
+   * A composition answers null. The tab marker arms the element inspector, and a
+   * composition is a page that moves rather than a design whose elements are picked
+   * out, so it is recorded for the board without being marked as a design.
+   */
+  observeShownFolder(projectId: string, threadId: string, url: string): BrowserDesignTab | null {
+    const origin = originOf(url)
+    if (origin === null) return null
+    const root = this.options.previews.rootForOrigin(origin)
+    if (root === null) return null
+    const directory = this.projectRelativeFolder(
+      requireLocalProject(this.options.database, projectId).path,
+      root
+    )
+    if (directory === null) return null
+    const kind = authoredWorkKindOf(directory)
+    if (kind === null) return null
+    this.rememberShownFolder({
+      projectId,
+      threadId,
+      directory,
+      entry: entryWithinOrigin(url, origin)
+    })
+    return kind === 'design' ? { directory, origin } : null
+  }
+
   forgetProject(projectId: string): void {
     this.designs.deleteProject(projectId)
   }
@@ -176,7 +209,7 @@ export class DesignService {
     const current = this.designs.forThread(threadId)
     const tagged = this.latestSessionTag(threadId)
     const kind = this.kindFor(current, tagged)
-    const root = WORK_ROOT_BY_KIND[kind]
+    const root = AUTHORED_WORK_ROOT_BY_KIND[kind]
     const items = await this.listWorkFolders(project.path, root)
     return {
       projectId,
@@ -285,6 +318,64 @@ export class DesignService {
     return listProjectWorkFolders(projectPath, root)
   }
 
+  /**
+   * Record a folder recognised from a tab, so the board follows the tab.
+   *
+   * Guarded on the stored row because this runs on every navigation: a page the
+   * thread already has open must not write the row again, and a folder that changed
+   * must, because re-pointing the row is the whole point of having it. Writing
+   * unconditionally would also keep refreshing `updated_at`, which is what the kind
+   * is weighed against, so a folder left open in a tab would outrank a tag typed
+   * afterwards.
+   */
+  private rememberShownFolder(input: {
+    projectId: string
+    threadId: string
+    directory: string
+    entry: string | null
+  }): void {
+    const current = this.designs.forThread(input.threadId)
+    if (current && current.directory === input.directory && current.entry === input.entry) return
+    this.designs.upsert(input)
+  }
+
+  /**
+   * One served root as a project-relative folder, or null when it is not inside the
+   * project.
+   *
+   * A preview server reports the folder it serves after `realpath`, while a project
+   * keeps the path the user chose, which can be a symlink: `/tmp/proj` on macOS is
+   * really `/private/tmp/proj`. So the comparison is between canonical paths rather
+   * than between two spellings that are usually, but not always, the same string.
+   */
+  private projectRelativeFolder(projectPath: string, root: string): string | null {
+    const relativePath = relative(this.canonicalProjectPath(projectPath), root)
+    if (
+      relativePath === '' ||
+      relativePath === '..' ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath)
+    ) {
+      return null
+    }
+    return relativePath.split(sep).join('/')
+  }
+
+  private canonicalProjectPath(projectPath: string): string {
+    const cached = this.canonicalProjects.get(projectPath)
+    if (cached !== undefined) return cached
+    let canonical = projectPath
+    try {
+      // One syscall per project, ever: the answer cannot change while the app runs,
+      // and this is reached only when a tab is on a folder the app is serving.
+      canonical = realpathSync(projectPath)
+    } catch {
+      // A project whose folder is gone keeps the path it was stored with.
+    }
+    this.canonicalProjects.set(projectPath, canonical)
+    return canonical
+  }
+
   /** Which session the thread is in, from the record and the persisted tags. */
   private resolveKind(threadId: string): AuthoredWorkKind {
     return this.kindFor(this.designs.forThread(threadId), this.latestSessionTag(threadId))
@@ -304,7 +395,7 @@ export class DesignService {
     tagged: SessionTag | null
   ): AuthoredWorkKind {
     if (current) {
-      const recorded = kindOfWorkDirectory(current.directory)
+      const recorded = authoredWorkKindOf(current.directory)
       if (recorded !== null && (tagged === null || current.updatedAt >= tagged.at)) return recorded
     }
     return tagged?.kind ?? 'design'

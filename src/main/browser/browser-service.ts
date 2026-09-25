@@ -80,16 +80,11 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import type { BrowserViewport } from './browser-service/browser-types'
-
-/** The origin of an http(s) URL, or null when it cannot be parsed. Used to tell
- *  whether a tab is still showing the origin its design folder is served on. */
-function originOf(url: string): string | null {
-  try {
-    return new URL(url).origin
-  } catch {
-    return null
-  }
-}
+import {
+  designTabFor,
+  isSameDesign,
+  type DesignTabRecogniser
+} from './browser-service/browser-design-tab'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -118,6 +113,8 @@ export class BrowserService {
     string,
     { hash: string; width: number; height: number }
   >()
+  /** How a tab is recognised as showing a design, supplied by the app at boot. */
+  private designTabRecogniser: DesignTabRecogniser | null = null
   private activeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
@@ -443,6 +440,42 @@ export class BrowserService {
     const tab = this.requireTab(tabId)
     tab.design = { directory: design.directory, origin: design.origin }
     this.publishState(tabId)
+  }
+
+  /**
+   * Register how a tab is recognised from the page it is showing.
+   *
+   * Without this, a tab is a design only when the design capability marked it, which
+   * is what left a tab the agent opened itself, and a tab the renderer restored after
+   * a restart, showing a design as an ordinary page.
+   */
+  setDesignTabRecogniser(recogniser: DesignTabRecogniser | null): void {
+    this.designTabRecogniser = recogniser
+  }
+
+  /**
+   * Decide, from the origin a tab is showing, whether it is rendering a design.
+   *
+   * Called on every committed navigation and nowhere else, because the origin is the
+   * only thing that can change the answer: an in-page navigation cannot move a page
+   * to another origin. A tab that navigated away from its folder therefore stops
+   * being a design tab, and a tab that arrives on a design folder starts being one
+   * whether or not it was opened through the design capability.
+   */
+  private refreshDesignTab(tabId: string, tab: BrowserTab): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    const url = contents.getURL()
+    let recognised: BrowserDesignTab | null = null
+    try {
+      recognised = this.designTabRecogniser?.(tab.projectId, tab.threadId, url) ?? null
+    } catch (error: unknown) {
+      Logger.error('Browser design recognition failed:', error)
+    }
+    const next = designTabFor(url, tab.design, recognised)
+    if (isSameDesign(next, tab.design)) return
+    tab.design = next
+    if (next === null) this.inspector.setArmed(tabId, contents, false)
   }
 
   async executeUtility(
@@ -858,13 +891,10 @@ export class BrowserService {
       // kept (a live preview reloads itself mid-session), but the outstanding
       // event promise is void and the next arm installs into the new document.
       this.inspector.reset(tabId)
-      // A tab that navigates away from the design folder it was showing stops
-      // being a design tab, so the panel does not offer inspection for a page
-      // that is no longer a design.
-      if (tab.design && originOf(view.webContents.getURL()) !== tab.design.origin) {
-        tab.design = null
-        this.inspector.setArmed(tabId, tab.view.webContents, false)
-      }
+      // Recognition is decided from the page that just committed, not from a record
+      // of who opened the tab last: that is what keeps a design a design across a
+      // restart, and what covers a tab the agent opened itself.
+      this.refreshDesignTab(tabId, tab)
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)

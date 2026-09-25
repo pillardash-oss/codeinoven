@@ -28,6 +28,15 @@ export const MAX_LIVE_SERVERS = 8
 interface LivePreview {
   server: DirectoryPreviewServer
   endpoint: DirectoryPreviewEndpoint
+  /**
+   * The origin the folder is served on, kept beside the endpoint so a browser tab
+   * can be recognised from the URL it is showing.
+   *
+   * A previewed folder is reached at a loopback origin with no path prefix (see
+   * `DirectoryPreviewServer` for why), so the origin is the only thing that says
+   * which folder a tab has open.
+   */
+  origin: string
   touchedAt: number
 }
 
@@ -68,7 +77,12 @@ export class DirectoryPreviewService {
     }
     const server = new DirectoryPreviewServer(root, (change) => this.changeListener?.(change))
     const endpoint = await server.start()
-    this.live.set(root, { server, endpoint, touchedAt: Date.now() })
+    this.live.set(root, {
+      server,
+      endpoint,
+      origin: new URL(endpoint.url).origin,
+      touchedAt: Date.now()
+    })
     // Announce the served folder so the task manager shows the design or file
     // preview server the app opened, not only the OS processes it spawned.
     appServiceRegistry.register({
@@ -83,6 +97,21 @@ export class DirectoryPreviewService {
     })
     await this.evictBeyondCapacity(root)
     return { ...endpoint, root, started: true }
+  }
+
+  /**
+   * The directory served on one origin, or null when this service serves nothing
+   * there.
+   *
+   * The reverse of `open`, and the reason a browser tab can be recognised from the
+   * page it is showing rather than from a record of who opened it: the tab stores a
+   * URL, and this is what turns a URL back into the folder the app is serving.
+   */
+  rootForOrigin(origin: string): string | null {
+    for (const [root, entry] of this.live) {
+      if (entry.origin === origin) return root
+    }
+    return null
   }
 
   /** Close one served directory and drop it from the task manager. */

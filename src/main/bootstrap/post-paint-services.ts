@@ -373,6 +373,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     browser: () => state.browserService
   })
   designService.registerIpc()
+  // A tab is recognised from the page it is showing rather than from a record of who
+  // opened it, so a design the agent opened itself and a tab the renderer restored
+  // after a restart are designs too, and a tab that navigated away stops being one.
+  // The service records what it recognises, which is how the board follows the tab.
+  state.browserService?.setDesignTabRecogniser((projectId, threadId, url) =>
+    designService.observeShownFolder(projectId, threadId, url)
+  )
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
