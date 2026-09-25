@@ -728,6 +728,8 @@
                         {expanded}
                         {working}
                         showLocation={hasProjectNameCollision(project, visibleProjects)}
+                        actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
+                          openProjectMenuId === project.id}
                         onToggle={() => toggleFolder(project.id)}
                         onMoveProject={(draggedId, targetId, pos) =>
                           onProjectMove(draggedId, targetId, pos)}
@@ -940,6 +942,8 @@
                     {expanded}
                     {working}
                     showLocation={hasProjectNameCollision(project, visibleProjects)}
+                    actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
+                      openProjectMenuId === project.id}
                     onToggle={() => toggleFolder(project.id)}
                     onMoveProject={(draggedId, targetId, pos) =>
                       onProjectMove(draggedId, targetId, pos)}
