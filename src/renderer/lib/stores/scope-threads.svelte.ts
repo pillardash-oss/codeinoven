@@ -127,8 +127,17 @@ export class ScopeThreads {
   get currentProjectThreads(): Thread[] {
     const activeProjectId = this.host.activeProjectId()
     if (!activeProjectId) return []
+    // Orchestration children (Assignment workers and auditors) stay in
+    // `allScopeThreads` so the Sr. Engineer row can aggregate their unread and
+    // active-delegate state, but they are never listed as their own row on the
+    // scoped sidebar or board. A `thread:updated` broadcast can introduce a
+    // child that the bounded hydration slice excluded, so the predicate has to
+    // sit on this read and not only on the ingestion paths.
     return this.allScopeThreads.filter(
-      (thread) => thread.projectId === activeProjectId && !thread.archived
+      (thread) =>
+        thread.projectId === activeProjectId &&
+        !thread.archived &&
+        !isOrchestrationChildThread(thread)
     )
   }
 

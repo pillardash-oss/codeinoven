@@ -1518,6 +1518,15 @@
    *  or history   or one the harness just started working on   must be added
    *  on first sighting instead of silently dropped. */
   function upsertThreadInList(thread: Thread): void {
+    // Orchestration children (Assignment workers and auditors) are internals:
+    // their activity rolls up onto the Sr. Engineer's row, so they never get a
+    // sidebar row of their own. This guard lives here, not only at the call
+    // sites, because the sidebar list is exactly the user-facing surface a
+    // child must never enter   an unguarded ingestion (for example restoring
+    // the last-open thread when the user had a worker open) previously inserted
+    // one, and every later `thread:updated` for it was then skipped by the same
+    // predicate, freezing that row on the stale snapshot it was restored with.
+    if (isOrchestrationChildThread(thread)) return
     const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
       allThreads = [thread, ...allThreads]

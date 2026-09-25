@@ -8319,6 +8319,12 @@ export class ChatEngine {
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
+    // The thread can also carry a pending record keyed to an earlier session:
+    // a harness or account switch replaces the session id while the old wait
+    // stays on the ledger. A fresh turn on the thread resolves every one of
+    // them, so a retried worker can never keep reading "Waiting to retry"
+    // while it is actually working.
+    this.retryScheduler?.dropThread(threadId)
     updateRetryWakeWindow(sessionId, null)
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
