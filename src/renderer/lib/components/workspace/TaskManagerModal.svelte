@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    AppWindow,
     ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
@@ -9,7 +8,6 @@
     Check,
     ChevronDown,
     ExternalLink,
-    FolderTree,
     MemoryStick,
     MessagesSquare,
     Network,
@@ -31,6 +29,9 @@
   import TaskManagerNode from './TaskManagerNode.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
+  import { pickColorForSeed } from '$lib/project-colors'
+  import { generateInitialsIconSvg } from '$lib/project-svg-icons'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
@@ -38,7 +39,6 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import type {
-    Project,
     TaskManagerProcess,
     TaskManagerService,
     TaskManagerServiceKind,
@@ -107,7 +107,7 @@
   let stopTarget = $state<TaskManagerService | null>(null)
   let stopping = $state(false)
   let projectIconsRequest: Promise<void> | null = null
-  const projectsById = new SvelteMap<string, Project>()
+  const projectColors = new SvelteMap<string, string>()
   const projectIconUrls = new SvelteMap<string, string>()
 
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
@@ -348,19 +348,6 @@
     return getAgentIcon(name)?.id
   }
 
-  function projectIconFor(process: TaskManagerProcess): string | undefined {
-    return process.projectId ? projectIconUrls.get(process.projectId) : undefined
-  }
-
-  function handleProjectIconError(event: Event, projectId: string | null): void {
-    const image = event.currentTarget
-    if (!(image instanceof HTMLImageElement) || image.dataset.iconFallbackApplied) return
-    image.dataset.iconFallbackApplied = 'true'
-    const project = projectId ? projectsById.get(projectId) : undefined
-    const fallback = project ? getProjectIcon(project, undefined) : null
-    if (fallback) image.src = fallback
-  }
-
   async function ensureProjectIcons(nextProcesses: readonly TaskManagerProcess[]): Promise<void> {
     if (projectIconsRequest) await projectIconsRequest
     const missingIds = new Set(
@@ -376,9 +363,9 @@
       )
       const storedIcons = await loadProjectIcons(projects)
       for (const project of projects) {
-        projectsById.set(project.id, project)
         const iconUrl = getProjectIcon(project, storedIcons.get(project.id))
         if (iconUrl) projectIconUrls.set(project.id, iconUrl)
+        projectColors.set(project.id, project.color ?? pickColorForSeed(project.id))
       }
     })()
     projectIconsRequest = request
@@ -639,6 +626,34 @@
           </div>
         </div>
       {:else}
+        {#snippet projectIconTile(
+          projectId: string,
+          label: string,
+          boxClass: string,
+          iconClass: string
+        )}
+          {@const color = projectColors.get(projectId) ?? pickColorForSeed(projectId)}
+          {@const iconUrl = projectIconUrls.get(projectId) ?? generateInitialsIconSvg(label, color)}
+          <span
+            class="flex shrink-0 items-center justify-center overflow-hidden border {boxClass}"
+            style:border-color={`color-mix(in srgb, ${color} 45%, transparent)`}
+            style:background-color={`color-mix(in srgb, ${color} 14%, var(--color-raised))`}
+          >
+            <img
+              src={iconUrl}
+              alt=""
+              class="{iconClass} object-contain"
+              onerror={(event) => {
+                const image = event.currentTarget
+                if (!(image instanceof HTMLImageElement) || image.dataset.iconFallbackApplied)
+                  return
+                image.dataset.iconFallbackApplied = 'true'
+                image.src = generateInitialsIconSvg(label, color)
+              }}
+            />
+          </span>
+        {/snippet}
+
         {#snippet serviceRow(service: TaskManagerService)}
           <li class="flex items-start gap-3 px-5 py-3">
             <span
@@ -707,7 +722,6 @@
 
         {#snippet processRow(process: TaskManagerProcess)}
           {@const harnessId = harnessIdFor(process.command)}
-          {@const projectIcon = projectIconFor(process)}
           <li
             class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
               ? 'bg-elevated'
@@ -730,22 +744,26 @@
               aria-pressed={selected.has(process.pid)}
               onclick={() => toggleSelected(process)}
             >
-              <span
-                class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-              >
-                {#if harnessId}
+              {#if harnessId}
+                <span
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                >
                   <AgentIcon agentId={harnessId} size={16} />
-                {:else if projectIcon}
-                  <img
-                    src={projectIcon}
-                    alt=""
-                    class="h-4 w-4 rounded-sm object-contain grayscale"
-                    onerror={(event) => handleProjectIconError(event, process.projectId)}
-                  />
-                {:else}
+                </span>
+              {:else if process.projectId}
+                {@render projectIconTile(
+                  process.projectId,
+                  process.projectName ?? processName(process.command),
+                  'mt-0.5 h-8 w-8 rounded-lg',
+                  'h-4 w-4'
+                )}
+              {:else}
+                <span
+                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                >
                   <SquareTerminal size={15} />
-                {/if}
-              </span>
+                </span>
+              {/if}
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <p class="truncate text-sm font-semibold text-foreground">
@@ -863,7 +881,7 @@
           onswitch={allProcessPids.length > 0 ? () => toggleGroup(allProcessPids) : undefined}
         >
           {#snippet icon()}
-            <AppWindow size={15} class="shrink-0 text-primary" />
+            <VendorIcon id="codeinoven" name={APP_NAME} size={18} class="shrink-0" />
           {/snippet}
 
           {#if visibleServices.length > 0}
@@ -902,22 +920,15 @@
                   group.kind === 'thread'
                     ? harnessIdFor(group.processes[0]?.command ?? '')
                     : undefined}
-                {@const iconUrl = group.projectId
-                  ? projectIconUrls.get(group.projectId)
-                  : undefined}
                 {#if harnessId}
-                  <AgentIcon agentId={harnessId} size={16} class="shrink-0" />
-                {:else if iconUrl}
-                  <img
-                    src={iconUrl}
-                    alt=""
-                    class="h-4 w-4 shrink-0 rounded-sm object-contain grayscale"
-                    onerror={(event) => handleProjectIconError(event, group.projectId)}
-                  />
-                {:else if group.kind === 'project'}
-                  <FolderTree size={14} class="shrink-0 text-primary" />
+                  <AgentIcon agentId={harnessId} size={20} class="shrink-0" />
                 {:else}
-                  <MessagesSquare size={14} class="shrink-0 text-primary" />
+                  {@render projectIconTile(
+                    group.projectId ?? group.id,
+                    group.projectName ?? group.label,
+                    'h-6 w-6 rounded-md',
+                    'h-4 w-4'
+                  )}
                 {/if}
               {/snippet}
               <ul class="divide-y divide-border">
