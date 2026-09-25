@@ -1,11 +1,12 @@
 import type {
   HarnessInstallHandoff,
+  HarnessRuntimeRestartResult,
   HarnessUninstallHandoff,
   HarnessUpdateHandoff,
   HarnessUpdateStatus
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
-import { toast } from 'svelte-sonner'
+import { reportError } from './app-errors.svelte'
 import { providerStore } from '$lib/stores/providers.svelte'
 
 /** Reuse recent update results when Settings remounts or startup checks overlap. */
@@ -107,8 +108,7 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessUpdates:handoff', harnessId)
       this.pushRun({ kind: 'update', harnessId, harnessName, handoff }, options?.docked ?? false)
     } catch (updateError) {
-      const message = updateError instanceof Error ? updateError.message : 'Update failed to start.'
-      toast.error(message)
+      reportError(updateError, 'Update failed to start.')
     }
   }
 
@@ -119,9 +119,7 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessUninstall:handoff', harnessId)
       this.pushRun({ kind: 'uninstall', harnessId, harnessName, handoff })
     } catch (uninstallError) {
-      const message =
-        uninstallError instanceof Error ? uninstallError.message : 'Uninstall failed to start.'
-      toast.error(message)
+      reportError(uninstallError, 'Uninstall failed to start.')
     }
   }
 
@@ -132,10 +130,52 @@ class HarnessLifecycleStore {
       const handoff = await invoke('harnessInstall:handoff', harnessId)
       this.pushRun({ kind: 'install', harnessId, harnessName, handoff })
     } catch (installError) {
-      const message =
-        installError instanceof Error ? installError.message : 'Install failed to start.'
-      toast.error(message)
+      reportError(installError, 'Install failed to start.')
     }
+  }
+
+  /**
+   * Restart a harness's resident transports so the next turn runs the build
+   * currently on disk.
+   *
+   * CodeInOven keeps long-lived harness processes (OpenCode's server, Codex's
+   * app-server daemon, Pi's per-session RPC client) that were spawned from the
+   * install present at the time. A harness self-update only replaces the CLI on
+   * disk, so without a restart the app keeps talking to the old build   and the
+   * version badge, which re-reads the new binary, reports the update as applied
+   * while sessions still run the old one.
+   *
+   * Main never takes a transport away from a thread that is still running
+   * unless `force` is set, and remembers the request so it is applied as soon
+   * as the harness goes quiet. Returns undefined when the call itself failed.
+   */
+  async restartHarness(
+    harnessId: string,
+    options?: { force?: boolean }
+  ): Promise<HarnessRuntimeRestartResult | undefined> {
+    try {
+      return await invoke('harnessRuntime:restart', harnessId, { force: options?.force === true })
+    } catch (restartError) {
+      reportError(restartError, 'Harness restart failed.')
+      return undefined
+    }
+  }
+
+  /**
+   * Restart a harness now, even while threads are mid-turn. Only for the manual
+   * action, whose confirmation has already told the user that in-session
+   * threads may stop working. Re-probes afterwards so the version badge reflects
+   * whatever is on disk now.
+   */
+  async restartHarnessNow(harnessId: string): Promise<boolean> {
+    const result = await this.restartHarness(harnessId, { force: true })
+    if (!result) return false
+    if (!result.restarted) {
+      if (result.detail) reportError(new Error(result.detail), 'Harness restart skipped.')
+      return false
+    }
+    await this.checkOne(harnessId)
+    return true
   }
 
   /**
@@ -163,7 +203,7 @@ class HarnessLifecycleStore {
 
       for (const provider of providerStore.providers) {
         if (enabledIds.includes(provider.id) && this.updateAvailableFor(provider.id)) {
-          // Docked: the panel stays collapsed to the bottom-right chip so a
+          // Docked: the panel stays collapsed to its dock chip so a
           // quiet background update never opens a modal over the workspace.
           await this.startUpdate(provider.id, provider.name, { docked: true })
         }
@@ -190,6 +230,9 @@ class HarnessLifecycleStore {
 
   /** One process exited: record it, then re-probe so version/badge refresh. */
   async handleRunExit(harnessId: string, exitCode: number): Promise<void> {
+    const finished = this.runs.find(
+      (run) => run.harnessId === harnessId && run.exitCode === undefined
+    )
     this.runs = this.runs.map((run) =>
       run.harnessId === harnessId && run.exitCode === undefined ? { ...run, exitCode } : run
     )
@@ -199,6 +242,14 @@ class HarnessLifecycleStore {
       // Version re-probe is best-effort after a lifecycle run.
     }
     await this.checkOne(harnessId)
+
+    // An update (or install) only replaced the CLI on disk. The harness's
+    // resident process still runs the previous build, so ask for a restart now:
+    // main skips it while a thread is using the harness and applies it as soon
+    // as the harness goes quiet.
+    if (exitCode === 0 && (finished?.kind === 'update' || finished?.kind === 'install')) {
+      await this.restartHarness(harnessId)
+    }
 
     // Auto-managed batches close themselves once every run has finished so the
     // user is never left with a stale panel after a quiet startup update.

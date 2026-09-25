@@ -13,8 +13,8 @@ describe('handleFatalStartupFailure', () => {
     const closeChat = vi.fn(() => {
       closed.push('chatEngine')
     })
-    const closeRemote = vi.fn(() => {
-      throw new Error('remote dispose failed')
+    const closeSpeech = vi.fn(() => {
+      throw new Error('speech dispose failed')
     })
 
     const outcome = await handleFatalStartupFailure({
@@ -22,7 +22,7 @@ describe('handleFatalStartupFailure', () => {
       appName: 'CodeInOven',
       resources: [
         { name: 'chatEngine', close: closeChat },
-        { name: 'remoteMode', close: closeRemote }
+        { name: 'speechService', close: closeSpeech }
       ],
       closeDatabase,
       quit: () => undefined
@@ -32,7 +32,7 @@ describe('handleFatalStartupFailure', () => {
     expect(outcome.exited).toBe(true)
     expect(outcome.quitFailed).toBe(false)
     expect(outcome.closed).toEqual(['chatEngine', 'database'])
-    expect(outcome.closeFailures).toEqual(['remoteMode'])
+    expect(outcome.closeFailures).toEqual(['speechService'])
     expect(closed).toEqual(['chatEngine', 'database'])
   })
 

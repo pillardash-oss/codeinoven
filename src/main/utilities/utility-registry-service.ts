@@ -17,15 +17,41 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
-import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
-import { listHarnesses } from '../agents/harness-registry'
+import {
+  ADB_CAPABILITY_DOCS,
+  ADB_CAPABILITY_NAME,
+  ADB_CAPABILITY_SUMMARY
+} from '../../lib/adb-skill'
+import {
+  DESIGN_CAPABILITY_DOCS,
+  DESIGN_CAPABILITY_NAME,
+  DESIGN_CAPABILITY_SUMMARY
+} from '../../lib/design-skill'
+import {
+  SCOPE_CAPABILITY_DOCS,
+  SCOPE_CAPABILITY_NAME,
+  SCOPE_CAPABILITY_SUMMARY
+} from '../../lib/scope-tool'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
 // `fs`-importing `utils` dependency) into client bundles.
-import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from '../../lib/utility-ids'
-export { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID }
+import {
+  APP_ADB_UTILITY_ID,
+  APP_BROWSER_UTILITY_ID,
+  APP_CUA_DRIVER_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID,
+  canToggleUtilityEnabled
+} from '../../lib/utility-ids'
+export {
+  APP_ADB_UTILITY_ID,
+  APP_BROWSER_UTILITY_ID,
+  APP_CUA_DRIVER_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID
+}
 
 const REGISTRY_PATH = 'utilities/registry.json'
 const REGISTRY_VERSION = 1
@@ -44,14 +70,23 @@ const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brav
 
 /** Stable id of the app-seeded image-descriptor utility. */
 export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
-/** Stable id of the app-owned, always-active MCP host recovery utility. */
-export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 
 /** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
-  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  'codeinoven:retrieve-mcp-host': APP_RETRIEVE_MCP_HOST_UTILITY_ID
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
 }
+
+/**
+ * App-owned entries the app no longer ships.
+ *
+ * The seed only adds defaults, and an app-owned entry is locked against user
+ * deletion, so a registry written by an older build would keep the entry alive
+ * forever. Retiring it here is what removes it from an existing install.
+ */
+const RETIRED_APP_UTILITY_IDS: ReadonlySet<string> = new Set([
+  'cio:retrieve-mcp-host',
+  'codeinoven:retrieve-mcp-host'
+])
 
 function isBlankImageDescriptorConfig(config: ImageDescriptorUtilityConfig): boolean {
   return (
@@ -78,7 +113,7 @@ export class UtilityRegistryService {
   /** In-flight seeding guard so concurrent callers share one seed write. */
   private seeding: Promise<void> | null = null
 
-  constructor(private readonly storage: StorageEngine) { }
+  constructor(private readonly storage: StorageEngine) {}
 
   /** Every public entry point first guarantees the app-owned default utility. */
   private async ensureAppDefaultsSeeded(): Promise<void> {
@@ -97,8 +132,8 @@ export class UtilityRegistryService {
   private async performSeed(): Promise<void> {
     const registry = await this.loadRaw()
     const migrated = this.migrateLegacyAppUtilities(registry)
+    const retired = this.retireRemovedAppUtilities(registry)
     const now = Date.now()
-    const harnesses = listHarnesses()
     const defaults: UtilityDefinition[] = [
       {
         id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -111,34 +146,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: { harnessId: '', providerId: '', modelId: '' },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'native',
-          nativeCapability: 'image_descriptor'
-        })),
-        appOwned: true,
-        createdAt: now,
-        updatedAt: now
-      },
-      {
-        id: APP_RETRIEVE_MCP_HOST_UTILITY_ID,
-        kind: 'skill',
-        name: RETRIEVE_MCP_HOST_TOOL_NAME,
-        description:
-          'Recovers the live app-managed MCP/utility gateway host from the CodeInOven instance that owns the exact current utility turn.',
-        enabled: true,
-        activation: 'always',
-        scope: { level: 'global' },
-        config: {
-          instructions:
-            `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
-        },
-        credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'skill',
-          transportName: RETRIEVE_MCP_HOST_TOOL_NAME
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native',
+            nativeCapability: 'image_descriptor'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -154,11 +168,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: { backend: 'codeinoven-browser' },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'native',
-          nativeCapability: 'browser'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native',
+            nativeCapability: 'browser'
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -178,12 +194,83 @@ export class UtilityRegistryService {
           args: ['mcp']
         },
         credentials: [],
-        harnessBindings: harnesses.map((harness) => ({
-          harnessId: harness.id,
-          strategy: 'mcp' as const,
-          nativeCapability: 'computer_use',
-          transportName: 'cua-driver'
-        })),
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'mcp' as const,
+            nativeCapability: 'computer_use',
+            transportName: 'cua-driver'
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: APP_SCOPE_UTILITY_ID,
+        kind: 'skill',
+        name: SCOPE_CAPABILITY_NAME,
+        description: SCOPE_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: SCOPE_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'native' as const,
+            nativeCapability: 'scope'
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        // Knowledge, not a tool: no executor, no operation catalog, no gateway
+        // contract. Activation hands back the playbook and the agent works the
+        // device with its own shell, which keeps the text the only thing that
+        // has to change when adb, Android or a project's tooling moves on.
+        id: APP_ADB_UTILITY_ID,
+        kind: 'skill',
+        name: ADB_CAPABILITY_NAME,
+        description: ADB_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: ADB_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'skill' as const
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        // The design pass is the substance. The app adds one operation on top of
+        // it, `preview`, which serves the design folder on the app's own loopback
+        // origin and opens it in the thread's browser tab, so a design can be
+        // looked at while the turn that produced it is still running.
+        id: APP_DESIGN_UTILITY_ID,
+        kind: 'skill',
+        name: DESIGN_CAPABILITY_NAME,
+        description: DESIGN_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: DESIGN_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'skill' as const
+          }
+        ],
         appOwned: true,
         createdAt: now,
         updatedAt: now
@@ -191,11 +278,40 @@ export class UtilityRegistryService {
     ]
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
-    if (missing.length > 0 || migrated) {
+    const rebound = this.normalizeAppOwnedBindings(registry)
+    if (missing.length > 0 || migrated || retired || rebound) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true
+  }
+
+  /**
+   * Collapses an app-owned utility's per-harness bindings into the single
+   * all-harness binding its seed already means. An app-owned capability belongs
+   * to every harness the app runs, including one registered after this install,
+   * so a harness list captured at first seed must not keep it frozen out.
+   */
+  private normalizeAppOwnedBindings(registry: UtilityRegistryFile): boolean {
+    let changed = false
+    for (let index = 0; index < registry.utilities.length; index += 1) {
+      const utility = registry.utilities[index]
+      if (!utility.appOwned) continue
+      const [first] = utility.harnessBindings
+      if (
+        !first ||
+        (utility.harnessBindings.length === 1 && first.harnessId === ALL_HARNESSES_BINDING_ID)
+      ) {
+        continue
+      }
+      registry.utilities[index] = {
+        ...utility,
+        harnessBindings: [{ ...first, harnessId: ALL_HARNESSES_BINDING_ID }],
+        updatedAt: Date.now()
+      }
+      changed = true
+    }
+    return changed
   }
 
   /**
@@ -235,6 +351,17 @@ export class UtilityRegistryService {
     return changed
   }
 
+  /**
+   * Drops app-owned entries this build no longer ships. Idempotent: once the
+   * entry is gone the pass reports no change and no further write happens.
+   */
+  private retireRemovedAppUtilities(registry: UtilityRegistryFile): boolean {
+    const kept = registry.utilities.filter((utility) => !RETIRED_APP_UTILITY_IDS.has(utility.id))
+    if (kept.length === registry.utilities.length) return false
+    registry.utilities = kept
+    return true
+  }
+
   /** Raw registry read that never triggers seeding (used by the seed itself). */
   private async loadRaw(): Promise<UtilityRegistryFile> {
     const stored = await this.storage.read<unknown>(REGISTRY_PATH)
@@ -255,7 +382,10 @@ export class UtilityRegistryService {
   }
 
   async create(input: UtilityDefinitionInput): Promise<UtilityDefinition> {
-    const normalized = normalizeInput(input)
+    const normalized = normalizeInput(input, {
+      acceptMissingScope: true,
+      acceptMissingBindings: true
+    })
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -275,7 +405,9 @@ export class UtilityRegistryService {
     if (!Array.isArray(inputs) || inputs.length === 0) {
       throw new TypeError('Utility bundle must contain at least one utility')
     }
-    const normalized = inputs.map((input) => normalizeInput(input))
+    const normalized = inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
     await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
@@ -294,6 +426,72 @@ export class UtilityRegistryService {
     })
   }
 
+  /**
+   * Install a bundle the way a reinstall should behave: a definition that matches
+   * an entry the registry already holds updates that entry in place instead of
+   * adding a second one, and an install path that owns reconciliation (the agent
+   * bundle and the skills marketplace) also drops further copies of the same
+   * identity, so reinstalling a capability never leaves several entries competing
+   * for one name. Manual creation in the editor still uses `createMany`, because
+   * silently merging an entry the user just typed would be surprising there.
+   */
+  async installMany(
+    inputs: UtilityDefinitionInput[],
+    options: UtilityInstallOptions = {}
+  ): Promise<UtilityInstallOutcome[]> {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('Utility bundle must contain at least one utility')
+    }
+    const normalized = inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
+    await this.ensureAppDefaultsSeeded()
+    return this.mutate(async (registry) => {
+      const now = Date.now()
+      const outcomes: UtilityInstallOutcome[] = []
+      /** Entries this call already wrote, excluded from later matching so a bundle
+       *  that installs one capability for two projects keeps both entries. */
+      const written = new Set<string>()
+      for (const input of normalized) {
+        // App-owned utilities are never reconciled: their identity, scope and
+        // bindings are locked, so an install must not try to take one over.
+        const matches = registry.utilities.filter(
+          (utility) =>
+            !utility.appOwned && !written.has(utility.id) && sameUtilityIdentity(utility, input)
+        )
+        const existing = matches[0]
+        const removed =
+          options.consolidate === true ? matches.slice(1).map(({ id, name }) => ({ id, name })) : []
+        const definition = existing
+          ? {
+              ...input,
+              // A reinstall must not detach the credentials the user already
+              // wired up in Utilities; the incoming definition carries none.
+              credentials: input.credentials?.length ? input.credentials : existing.credentials,
+              id: existing.id,
+              appOwned: false,
+              createdAt: existing.createdAt,
+              updatedAt: now
+            }
+          : { ...input, id: generateId(), appOwned: false, createdAt: now, updatedAt: now }
+        const utility = definition as UtilityDefinition
+        if (existing) registry.utilities[registry.utilities.indexOf(existing)] = utility
+        else registry.utilities.push(utility)
+        written.add(utility.id)
+        for (const duplicate of removed) {
+          const index = registry.utilities.findIndex((candidate) => candidate.id === duplicate.id)
+          if (index >= 0) registry.utilities.splice(index, 1)
+        }
+        outcomes.push({
+          utility: structuredClone(utility),
+          action: existing ? 'updated' : 'installed',
+          removed
+        })
+      }
+      return outcomes
+    })
+  }
+
   async update(id: string, patch: UtilityDefinitionPatch): Promise<UtilityDefinition> {
     assertId(id, 'Utility ID')
     assertUpdate(patch)
@@ -302,24 +500,28 @@ export class UtilityRegistryService {
       const index = registry.utilities.findIndex((candidate) => candidate.id === id)
       const current = registry.utilities[index]
       if (!current) throw new Error(`Utility not found: ${id}`)
-      if (
-        current.appOwned &&
-        (patch.name ??
-          patch.description ??
-          patch.enabled ??
-          patch.activation ??
-          patch.scope ??
-          patch.credentials ??
-          patch.harnessBindings) !== undefined
-      ) {
+      // App-owned identity stays the app's call, and so does availability, with
+      // one exception: app-owned knowledge is advice rather than wiring, so a
+      // user who already has a better runbook for a topic may switch ours off.
+      // See `canToggleUtilityEnabled`.
+      const lockedAppOwnedField =
+        patch.name ??
+        patch.description ??
+        patch.activation ??
+        patch.scope ??
+        patch.credentials ??
+        patch.harnessBindings
+      const lockedAvailability = patch.enabled !== undefined && !canToggleUtilityEnabled(current)
+      if (current.appOwned && lockedAvailability) {
         throw new Error(
-          'App-owned utility identity, availability, scope, credentials, and bindings are locked'
+          'This app-owned utility cannot be disabled: the app supplies the wiring behind it'
         )
       }
-      if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {
-        throw new Error(`The app-owned ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is fully managed`)
+      if (current.appOwned && lockedAppOwnedField !== undefined) {
+        throw new Error(
+          'App-owned utility identity, activation, scope, credentials, and bindings are locked'
+        )
       }
-
       const normalized = normalizeInput({
         kind: current.kind,
         name: patch.name ?? current.name,
@@ -405,8 +607,8 @@ export class UtilityRegistryService {
 
       const implicitCapability =
         utility.kind === 'web_search' ||
-          utility.kind === 'web_fetch' ||
-          utility.kind === 'computer_use'
+        utility.kind === 'web_fetch' ||
+        utility.kind === 'computer_use'
           ? utility.kind
           : undefined
       const capability = binding.nativeCapability
@@ -450,6 +652,48 @@ export class UtilityRegistryService {
   }
 }
 
+/** One definition's arrival: a fresh entry, or the entry it replaced. */
+export interface UtilityInstallOutcome {
+  utility: UtilityDefinition
+  action: 'installed' | 'updated'
+  /** Extra copies of the same identity that consolidation removed. */
+  removed: Array<{ id: string; name: string }>
+}
+
+export interface UtilityInstallOptions {
+  /** Remove entries that duplicate a reinstalled utility's identity. */
+  consolidate?: boolean
+}
+
+/**
+ * Identity that decides whether an install is a reinstall. A definition that
+ * claims harness transport names is the same capability as an entry claiming one
+ * of those names; a definition claiming none falls back to its name, which is all
+ * a skill installed without bindings has to go on.
+ */
+function sameUtilityIdentity(
+  existing: UtilityDefinition,
+  incoming: UtilityDefinitionInput
+): boolean {
+  if (existing.kind !== incoming.kind) return false
+  // Scope is part of the identity: the same skill installed for two projects is
+  // two entries, while reinstalling it for one of those projects is one entry.
+  if (!scopesEqual(existing.scope, incoming.scope ?? { level: 'global' })) return false
+  const incomingNames = utilityTransportNames(incoming)
+  const existingNames = utilityTransportNames(existing)
+  if ([...incomingNames].some((name) => existingNames.has(name))) return true
+  if (incomingNames.size > 0 && existingNames.size > 0) return false
+  return existing.name.trim().toLocaleLowerCase() === incoming.name.trim().toLocaleLowerCase()
+}
+
+function utilityTransportNames(utility: UtilityDefinition | UtilityDefinitionInput): Set<string> {
+  return new Set(
+    (utility.harnessBindings ?? [])
+      .map((binding) => binding.transportName?.trim().toLocaleLowerCase() ?? '')
+      .filter(Boolean)
+  )
+}
+
 function parseRegistry(value: unknown): UtilityRegistryFile {
   if (
     !isRecord(value) ||
@@ -485,7 +729,16 @@ function parseStoredUtility(value: unknown, index: number): UtilityDefinition {
   } as UtilityDefinition
 }
 
-function normalizeInput(value: unknown): UtilityDefinitionInput {
+/** Write-path options. A missing scope or harness binding is tolerated only for input the app
+ *  is about to persist, where the app defaults apply: global scope, and one all-harness binding.
+ *  A stored entry must still carry an explicit scope, so a corrupted registry file keeps failing
+ *  loudly instead of silently turning an entry into a global capability. */
+interface NormalizeOptions {
+  acceptMissingScope?: boolean
+  acceptMissingBindings?: boolean
+}
+
+function normalizeInput(value: unknown, options: NormalizeOptions = {}): UtilityDefinitionInput {
   if (!isRecord(value)) throw new TypeError('Utility definition must be an object')
   const kind = value['kind']
   if (typeof kind !== 'string' || !UTILITY_KINDS.has(kind as UtilityKind)) {
@@ -503,11 +756,11 @@ function normalizeInput(value: unknown): UtilityDefinitionInput {
     name: boundedString(value['name'], 'Utility name', 1, 120),
     description: boundedString(value['description'], 'Utility description', 0, 2_000),
     enabled,
-    activation: activation as UtilityActivation,
-    scope: parseScope(value['scope']),
+    activation: normalizeActivation(kind as UtilityKind, activation as UtilityActivation),
+    scope: normalizeScope(value['scope'], options),
     config: parseConfig(kind as UtilityKind, value['config']),
     credentials: parseCredentials(value['credentials']),
-    harnessBindings: parseBindings(value['harnessBindings'])
+    harnessBindings: normalizeBindings(kind as UtilityKind, value['harnessBindings'], options)
   }
 }
 
@@ -594,6 +847,63 @@ function parseWebToolProvider(value: unknown): WebToolProviderId {
   return value as WebToolProviderId
 }
 
+/**
+ * App-owned scope default. A definition that arrives without a scope is stored as global:
+ * it is what the installation contract means, and narrowing it stays an explicit choice.
+ */
+function normalizeScope(value: unknown, options: NormalizeOptions): UtilityScope {
+  if (value === undefined && options.acceptMissingScope === true) return { level: 'global' }
+  return parseScope(value)
+}
+
+/**
+ * App-owned harness default. A definition that names no harness is stored with a single `*`
+ * binding, which `resolve` reads as "every harness, present and future". That is what
+ * "installed globally" means here: the capability lives in the app's one global store, and a
+ * harness added later resolves it with no reinstall. Naming individual harnesses stays an
+ * explicit, narrower choice.
+ */
+function normalizeBindings(
+  kind: UtilityKind,
+  value: unknown,
+  options: NormalizeOptions
+): HarnessUtilityBinding[] {
+  if (value === undefined && options.acceptMissingBindings === true) {
+    return [{ harnessId: ALL_HARNESSES_BINDING_ID, ...defaultBinding(kind) }]
+  }
+  return parseBindings(value)
+}
+
+/** Strategy the all-harness default uses for one kind, matching the app-owned seeds. */
+function defaultBinding(kind: UtilityKind): Omit<HarnessUtilityBinding, 'harnessId'> {
+  switch (kind) {
+    case 'skill':
+      return { strategy: 'skill' }
+    case 'mcp':
+      return { strategy: 'mcp' }
+    case 'image_descriptor':
+      return { strategy: 'native', nativeCapability: 'image_descriptor' }
+    case 'computer_use':
+      return { strategy: 'native', nativeCapability: 'browser' }
+    case 'web_search':
+    case 'web_fetch':
+      return { strategy: 'environment', nativeCapability: kind }
+    case 'provider':
+      return { strategy: 'provider' }
+  }
+}
+
+/**
+ * App-owned activation invariant. An MCP server is never launched natively into
+ * a harness: the app starts its client inside the turn and exposes its tools
+ * through the utility gateway, so `always` has no path to run and would leave
+ * the utility inert. Normalize it to `on_demand` on every write and on every
+ * registry read, which also repairs entries stored before this invariant.
+ */
+function normalizeActivation(kind: UtilityKind, activation: UtilityActivation): UtilityActivation {
+  return kind === 'mcp' ? 'on_demand' : activation
+}
+
 function parseScope(value: unknown): UtilityScope {
   if (!isRecord(value)) throw new TypeError('Utility scope must be an object')
   if (value['level'] === 'global') return { level: 'global' }
@@ -623,12 +933,12 @@ function parseCredentials(value: unknown): UtilityCredentialMetadata[] {
       required: entry['required'] === true,
       ...(optionalString(entry['environmentVariable'], 'Credential environment variable', 160)
         ? {
-          environmentVariable: optionalString(
-            entry['environmentVariable'],
-            'Credential environment variable',
-            160
-          )
-        }
+            environmentVariable: optionalString(
+              entry['environmentVariable'],
+              'Credential environment variable',
+              160
+            )
+          }
         : {})
     }
     if (entry['required'] !== true && entry['required'] !== false) {
@@ -669,8 +979,8 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       ...(entry['options'] === undefined
         ? {}
         : {
-          options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
-        })
+            options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
+          })
     }
     if (harnesses.has(binding.harnessId)) {
       throw new TypeError(`Duplicate harness binding: ${binding.harnessId}`)

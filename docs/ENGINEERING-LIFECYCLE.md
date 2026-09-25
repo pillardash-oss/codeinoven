@@ -15,15 +15,88 @@ A plain chat message sent while the lifecycle is parked is answered normally in 
 
 ## Stage behavior
 
-Dependencies cascade when a switch is enabled: **Assignment and Achievement both imply Spec**, so enabling either one leaves the Spec switch on. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm   instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
+Dependencies cascade when a switch is enabled: **Achievement implies Spec**, so enabling it leaves the Spec switch on. **Assignment stands alone** and never turns Spec on see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
-Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Assignment and Achievement require an approved Spec.
+Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Achievement requires an approved Spec; Assignment does not.
+
+### Assignment sources
+
+An Assignment always has exactly one authoritative source, resolved when generation runs:
+
+- **Spec-backed** an approved Spec exists, so it is the immutable scope and the Assignment records the Spec identifier and version. A Spec that exists but is not yet approved still owns the Assignment: approve it first, or dismiss the Spec review to fall back to the conversation.
+- **Conversation-backed** no Spec exists, so the user's message and the thread conversation are the scope. Every distinct work item the message names becomes its own task, the Sr. Engineer inspects the project read-only to resolve concrete `expectedFiles`, and the Assignment is persisted with no Spec identifier.
+
+Both sources produce the same reviewable draft, the same human Assignment-approval gate, and the same durable worker threads. A conversation-backed Assignment completes into an audit run against its own task prompts and conversation, because there is no specification to audit against.
+
+The user's message that triggers generation is passed to the Sr. Engineer as that Assignment's request, so a send in the Assignment stage is never silently discarded.
+
+### Assignment interview
+
+The Assignment stage is conversational, exactly like the Brainstorm and PRD stages. A send in the Assignment stage is never force-decomposed: the Sr. Engineer reads the whole thread (the user's message plus everything the conversation already recorded, and the approved Spec as well when one exists) and then either submits or interviews.
+
+- **Submits** when the source already holds a task graph: concrete deliverables, the files or areas each one touches, ownership, dependencies, and how every task is verified. The submission persists the draft, or replaces the unsigned draft the same turn is re-deriving, and it always advances the Assignment-approval gate.
+- **Interviews** when it does not: the Sr. Engineer asks only the unresolved task-graph questions through the question tool and ends the turn on them, keeping every question as a card in the conversation. The answers resume the same logical turn and the interview repeats until the source is sufficient. A partial, speculative, or invented graph is never submitted to look complete.
+
+The interview owns both the active Assignment stage and its `assignment_approval` gate, so the unsigned draft under review can still be reworked by talking to the Sr. Engineer. Two paths deliberately bypass the interview: **Auto Pilot**, which has nobody to answer and keeps the forced background decomposition, and the explicit **Generate assignment** action, which is the user asking for the graph now.
+
+Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
+
+### Worker reporting
+
+A worker thread decides for itself whether the finished task goes back to the Sr. Engineer. The composer footer of any worker thread carries a reporting control next to the git branch pill: it reads **Reporting** in green while the worker hands its work back, and **Not reporting** in amber once the user has taken the thread over.
+
+- **Reporting (default)** is the full Assignment loop. The worker receives the Assignment API contract with its task prompt, submits baseline and check evidence, and reports the task when the work is complete, which is what makes the Sr. Engineer audit the thread.
+- **Not reporting** makes the thread a private iteration loop. Every worker prompt dispatch, Sr. Engineer steer, and reactivation after a direct user message replaces the report-task contract with an explicit instruction to finish the work in the conversation, no worker API capability is minted, and the report is refused at the Assignment boundary with an `invalid_transition` error. The task therefore never advances to `reported` and the coordinator is never prompted, so no review or audit can start while the user iterates directly with the worker.
+
+The setting lives on the thread (`ThreadSettings.reportToCoordinator`) and applies to the whole thread rather than one turn, so it survives navigation and restarts. Because the refusal is enforced in the engine rather than only in the prompt, switching reporting off mid-run still stops that run from reporting. Switching it off is destructive and confirms through the shared `ConfirmDialog`, which states that the Sr. Engineer will not be able to audit the thread; switching it back on restores the hand-off immediately.
+
+The coordinator panel marks the state without opening a thread: a task whose worker has reporting off carries an amber **Not reporting** badge next to the worker name in the task row, in the same tooltip and accessible name as the row itself.
+
+Reporting can be switched back on from the board too. While the open worker has reporting off, the Assignment coordinator board shows a **Report to Sr. Engineer** button above **Back to Sr. Engineer**. It switches reporting back on, reactivates the task, and prompts the worker to submit fresh baseline and check evidence and report through the Assignment API, which is what hands the work to the Sr. Engineer for audit and feedback. The button carries a loading state and is disabled while it runs, and it disappears the moment the thread reports again. A stopped Assignment cannot take a worker report, so the button is not offered there.
+
+Because such a worker never hands its task back, the Assignment lifecycle is frozen for it. A live worker turn no longer flips the task to `running`: `AssignmentEngine.markWorkerSteered` returns the plan untouched when the worker's reporting is off, so the task stays wherever the user left it instead of sitting on `running` forever with no report coming to settle it. The row shows the worker thread's own live status next to the badge instead, using the same indicator, colour, and wording as the thread row (Working, Waiting to retry, Needs approval, Spec ready, Needs attention, Unread, Done, New), and the frozen lifecycle pill is hidden for that row because it can no longer advance.
+
+Read tracking belongs to the same split. Only a non-reporting worker carries a read state at all: a reporting worker's progress is visible through the Assignment lifecycle, so its `read` flag stays untouched and nothing ever settles it. Opening or selecting a non-reporting worker marks it read through the same `thread:markRead` flow as a regular thread, so its chip moves from Unread (green) to Done once the user has seen it. The Sr. Engineer's own row aggregates this: it reads as unread while any of its non-reporting workers is unread, and it clears only once the coordinator itself and all of those workers are read.
+
+### Assignment audit offer
+
+When implementation finishes, the coordinator thread shows the **Implementation finished** offer that starts the independent audit. Cancelling the offer does not end the audit cycle. It hides the composer prompt for that thread and reveals the ordinary composer, so the Sr. Engineer can simply be talked to again, and the worker hand-off loop is untouched.
+
+The cycle stays `available` with `offerDismissedAt` set, so the audit remains reachable from the coordinator panel's **Audit Work** action and from Spec Studio, and asking for it there restores the composer prompt (`audit:restoreOffer`). Starting the audit or making it available again clears the dismissal.
+
+The offer belongs to a finished implementation, so it is only written and only shown while every task is `completed`. Any transition that reopens work on that plan (a steered worker, a worker that went unavailable and was recovered, a review that did not pass) drops it through `settleAuditOffer`, and the composer derives the offer from `completed` alone. Without that, a plan holding an `available` cycle while its tasks ran again pinned the prompt to the composer where it could neither be started nor dismissed, and Cancel appeared to do nothing because it landed on a plan whose audit was no longer startable.
+
+An Assignment's audit belongs to one plan, so the Sr. Engineer's card and the auditor's card are the same cycle seen from two threads and never disagree. Every persisted cycle transition (start, failure, retry, report, rework, dismissal, completion) re-announces the coordinator thread, which reconciles every mounted view of that plan. A retry started from the auditor's card therefore clears the Sr. Engineer's failed card the moment the run begins, and a dismissal or completion on the coordinator clears the auditor's card just as directly. The cycle is also marked `running` before any driver or recovery work, so the cards flip on the action rather than on the harness coming back. The same plan drives the studio tabs: a thread with no specification does not offer a **Spec** tab at all, instead of a tab that opens onto an empty document.
+
+### Worker scope
+
+An Assignment runs in the scope its coordinator already uses. Sign-off freezes that scope onto the plan (`AssignmentPlan.scopeBucketId`, taken from the coordinator thread and falling back to Default), and every worker thread is created inside it, so the default is that workers share the Sr. Engineer's checkout and branch.
+
+Above the phase and the task, the Assignment carries one worker scope of its own (`AssignmentPlanContent.workerScope`). It sits at the top of the assignment review, under the TL;DR, next to the model pickers, so the whole Assignment can be pointed at a fresh worktree or an existing scope in one pick at sign-off instead of task by task. A phase can then be pointed somewhere else, exactly like the phase model: the phase header carries the same scope picker next to its model picker, and the choice lives on the phase (`AssignmentPhase.workerScope`). A phase pick governs that phase and every phase after it, mirroring the phase-model cascade, so a mid-list pick never bleeds upward. Dispatch takes the narrowest level that made a real choice: `task.workerScope`, then `phase.workerScope`, then `content.workerScope`, and only falls back to the Assignment's own scope when no level chose one.
+
+The Assignment-wide choice stays editable after sign-off for as long as the Assignment can still take work (`approved`, `running`, `attention`), through `assignment:updateWorkerScope`, and it moves every worker that has no scope of its own. It is a request either way, so re-pointing a running Assignment at a new worktree costs nothing until the next dispatch.
+
+All three levels offer the same three choices. Each worker task also carries the picker on its own row, and its choice lives on the task (`AssignmentTask.workerScope`). Both menus are the same component, `ScopePickerMenu`, shared with the composer shoe's scope switcher:
+
+- **Inherit (default)** the worker runs in whatever the level above resolved to: the Assignment level for a phase, and for a task its phase's choice, or the Assignment level where the phase made none. It defers rather than pinning, whether it is the default (no field stored) or an explicit pick on an inherited row, so a lower level always shows the target its own picker names. `workerScopeBucketId` is deliberately not consulted, so a task whose scope the user changed back to inherit follows wherever inherit points now rather than the checkout an earlier choice created.
+- **Dedicated worktree** the worker gets a managed worktree scope of its own, with its own branch and setup, created when the task is dispatched. Signing off an Assignment with a dozen such tasks stays instant because nothing is created up front. A phase or the whole Assignment with this choice gives every one of its tasks its own worktree, one per dispatch.
+- **Existing scope** the worker runs in a scope already on the project board, or one the user creates from the picker on the spot, in which case the worktree is theirs to shape (fork branch, setup commands, environment mode) through the same creation form the composer uses.
+
+Provisioning happens in the app rather than the engine. The engine calls an `AssignmentWorkerScopeProvisioner` port, installed on it by the IPC layer once the scope and worktree services exist, and that implementation creates the bucket and then the worktree exactly like an agent-made scope, including rolling the empty bucket back if the worktree never lands. A dedicated scope is named after the worker and its task, uniquified against every existing scope name, because scope names are how a scope is addressed by reference and a duplicate would make every name-based lookup ambiguous.
+
+`AssignmentTask.workerScopeBucketId` records the scope a dispatched worker actually runs in. A retried task passes it back to the provisioner, so a replacement worker reuses the checkout holding the failed attempt's commits instead of leaking a second worktree for the same task. Changing the choice clears it, and the engine refuses both to change a scope once a worker thread exists and to fail a dispatch quietly: if the scope can no longer be created or found, the dispatch fails with `scope_unavailable` and the task stays `ready` rather than starting a worker in the wrong directory. The auditor always inherits the Assignment scope.
+
+Agent-generated task graphs cannot set a worker scope, at any level. Only the human choice made on the review surface does, so Autopilot, which has no sign-off, always inherits. A rework draft adopts the model's new task graph but keeps every scope choice the user already made, at all three levels, because where a worker runs is not the model's to change.
+
+### Reopening a finished worker
+
+A direct message to a worker thread is work, not a dead end. When a worker that already finished its task starts a new turn from the user, live activity is authoritative: the task returns to `running` (its report and review are cleared), the Assignment returns to `running`, and the turn carries the worker's Assignment API contract again, because that capability is revoked when the Assignment completes. The worker can therefore submit fresh baseline/check evidence and report the task back to the Sr. Engineer exactly as it did the first time, and the coordinator panel, the Assignment studio, and the task row all show the run from the moment it starts. An explicitly `stopped` Assignment is never reopened this way, and a task that is `reported`, `auditing`, or `rework` stays with the coordinator while it reviews. The restored contract follows the thread's reporting setting: with reporting switched off, the turn carries the stand-down instruction instead and the task is never handed back (see _Worker reporting_ above).
 
 After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document. Likewise, after a PRD finalizes, the PRD Studio offers a **Next step** menu to Generate Spec.
 
 ### Auto Pilot
 
-Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs   the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention.
+Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention. Auto Pilot therefore always takes the spec-backed source above.
 
 ## Stage behavior (original single-run notes)
 
@@ -49,16 +122,31 @@ Canonical files live at `.cio/specs/<feature-slug>/prototypes/<prototype-id>/`. 
 
 ## Preview deployment
 
-`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production and remote access require an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
+`CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the runtime public origin. `MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` is the build-time public value. Production requires an explicit HTTPS origin. Development may omit both values and use the app-owned `http://127.0.0.1:<allocated-port>` service.
 
-`REMOTE_API_ORIGIN` and `ACCOUNT_AUTH_ORIGIN` retain their existing meanings and are never preview-origin fallbacks. A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
+A missing production preview origin is a deployment-readiness failure; the relative `cio/<slug>/` path remains visible for diagnosis.
 
-Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. Remote and mobile clients request 192 KiB chunks through the authenticated, encrypted workflow RPC and assemble a bounded Blob locally; ownership is checked against the active Brainstorm metadata before any canonical file is read. The relay's existing 1 MiB frame cap remains unchanged, and neither the account origin nor arbitrary filesystem RPC is used for prototype delivery.
+Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. The preview origin serves the canonical prototype files to the desktop's own browser surface.
 
 ## Recovery
 
 - Generation failure: keep the lifecycle selected, fix the provider or validation failure, and retry from the persisted stage.
 - Invalid preview link: verify the feature-scoped artifact, manifest, preview link target, and configured public origin.
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
-- Remote disconnection: reconnect the paired client and reload the persisted lifecycle before resuming.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
+
+### Stop outranks every auto-resume
+
+A deliberate Stop (the composer stop button, a child stop, or the steer
+stop-and-resend) latches `stoppedByUserAt` into the thread's settings, and the
+latch survives app restarts. Every automatic resume checks it and stays quiet
+while it is set: assignment-attention resume, restart recovery of interrupted
+threads, the scheduled usage-reset retry (its pending record is dropped at
+launch and never re-tracked), and the launch repair scan. The next real user
+prompt clears the latch, which re-arms all automatic resumes.
+
+The assignment's own status is deliberately untouched by Stop, so the Auto
+Pilot chain and the manual resume controls keep working; only the *automatic*
+paths honour the latch. With auto-retry off in General settings, a recorded
+usage-reset wait backs the visible "Waiting to retry" card but never fires
+automatically.

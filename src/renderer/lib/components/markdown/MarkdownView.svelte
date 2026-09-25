@@ -3,14 +3,18 @@
   import type { Token, Tokens } from 'marked'
   import CodeBlock from './CodeBlock.svelte'
   import LongTextBlock from './LongTextBlock.svelte'
+  import MarkdownTable from './MarkdownTable.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
-  import { blockHtml, fileCitationTarget, lexMarkdownCached } from './markdown'
+  import { blockHtml, fileCitationTarget, htmlFragment, lexMarkdownCached } from './markdown'
+  import { groupHtmlContainers, type MarkdownNode } from './html-containers'
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
   import { revealCitationFile, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { githubImageState } from '$lib/stores/github-images.svelte'
+  import type { GithubRepoContext } from '$lib/github-references'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 
   interface InlineFileTag {
@@ -36,6 +40,15 @@
      */
     allowHtml?: boolean
     /**
+     * The repository the text was authored in, for provider content.
+     *
+     * Enables GitHub's own reference linkification, so `#150` links to the pull
+     * request and `@login` links to the account, exactly as they do on
+     * github.com. Leave it unset for anything the app or an agent wrote: a `#` in
+     * agent output does not belong to any repository.
+     */
+    repository?: GithubRepoContext | null
+    /**
      * Replace exact `@path` tokens in the source with trusted inline chips.
      * Used for user messages that tag project files/directories so a long
      * project-relative path renders as a compact tag instead of raw text.
@@ -53,6 +66,7 @@
     text,
     class: className = '',
     allowHtml = false,
+    repository = null,
     inlineFileTags = [],
     onCiteFile,
     onOpenLocalFile,
@@ -175,8 +189,26 @@
 
   const segments = $derived(splitLongLineSegments(lexedText))
 
+  /**
+   * The render tree for a token run, built once per run.
+   *
+   * `lexMarkdownCached` hands back the same array for the same text, so keying on
+   * the array identity makes this a memo rather than a per-render scan   the
+   * important property when a list item calls it again for every one of its own
+   * tokens on every render.
+   */
+  const nodeCache = new WeakMap<Token[], MarkdownNode[]>()
+
+  function nodesFor(tokens: Token[]): MarkdownNode[] {
+    const cached = nodeCache.get(tokens)
+    if (cached) return cached
+    const nodes = groupHtmlContainers(tokens)
+    nodeCache.set(tokens, nodes)
+    return nodes
+  }
+
   function renderBlockHtml(token: Token): string {
-    const html = blockHtml(token, allowHtml)
+    const html = blockHtml(token, allowHtml, repository)
     const { substitutions } = tagSubstitutions
     if (substitutions.size === 0) return html
     let result = html
@@ -194,6 +226,10 @@
   $effect(() => {
     citationPathsState.ensureActiveProjectChecked(extractCitationCandidates(text))
     faviconState.ensureResolved(faviconState.externalUrlsFromText(text))
+    // Images in the source are queued the same way favicons are, from the raw
+    // text: the renderer cannot fetch them itself (the CSP blocks remote hosts),
+    // so main downloads each one and the block re-renders once it lands.
+    githubImageState.ensureResolved(githubImageState.imageUrlsFromText(text))
   })
 
   onDestroy(() => {
@@ -239,7 +275,7 @@
     const citation = citationFromLink(link)
     if (citation) return `${citation.path}${citation.line ? `:${citation.line}` : ''}`
     const href = link.getAttribute('href')
-    // Fragment links (footnotes, section anchors) stay inside the document  
+    // Fragment links (footnotes, section anchors) stay inside the document
     // no external destination to preview, so no tooltip.
     if (!href || href.startsWith('#')) return null
     return href
@@ -342,49 +378,59 @@
 <!--
   Marked's streaming token arrays only grow or mutate at the tail. Index keys
   therefore keep completed blocks and the active CodeBlock instance stable.
+
+  A node is one of three things: a block token drawn by its own renderer, a
+  sanitized HTML fragment, or an element a provider-authored comment left open
+  across a blank line (`<details>` and friends). That last one renders as a real
+  element built from a dynamic tag, so the blocks that follow it are its
+  children rather than its siblings.
 -->
-{#snippet renderBlocks(blockTokens: Token[])}
-  {#each blockTokens as token, index (index)}
-    {#if isCodeToken(token)}
-      {@const language = token.lang?.split(/\s+/)[0]?.toLowerCase()}
-      {#if language === 'mermaid' && isCompleteFence(token)}
-        <MermaidDiagram code={token.text} onAnnotate={onAnnotateMermaid} />
+{#snippet renderNodes(nodes: MarkdownNode[])}
+  {#each nodes as node, index (index)}
+    {#if node.kind === 'container'}
+      <svelte:element this={node.tag} {...node.attrs}>
+        {@render renderNodes(node.children)}
+      </svelte:element>
+    {:else if node.kind === 'html'}
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -- htmlFragment is DOMPurify-sanitized -->
+      {@html htmlFragment(node.raw, repository)}
+    {:else if isCodeToken(node.token)}
+      {@const language = node.token.lang?.split(/\s+/)[0]?.toLowerCase()}
+      {#if language === 'mermaid' && isCompleteFence(node.token)}
+        <MermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
       {:else}
-        <CodeBlock code={token.text} lang={language} />
+        <CodeBlock code={node.token.text} lang={language} />
       {/if}
-    {:else if isListToken(token)}
-      {#if token.ordered}
-        <ol start={token.start === '' ? undefined : token.start}>
-          {#each token.items as item, itemIndex (itemIndex)}
+    {:else if isListToken(node.token)}
+      {#if node.token.ordered}
+        <ol start={node.token.start === '' ? undefined : node.token.start}>
+          {#each node.token.items as item, itemIndex (itemIndex)}
             <li class={{ 'task-list-item': item.task }}>
-              {@render renderBlocks(item.tokens)}
+              {@render renderNodes(nodesFor(item.tokens))}
             </li>
           {/each}
         </ol>
       {:else}
         <ul>
-          {#each token.items as item, itemIndex (itemIndex)}
+          {#each node.token.items as item, itemIndex (itemIndex)}
             <li class={{ 'task-list-item': item.task }}>
-              {@render renderBlocks(item.tokens)}
+              {@render renderNodes(nodesFor(item.tokens))}
             </li>
           {/each}
         </ul>
       {/if}
-    {:else if isBlockquoteToken(token)}
+    {:else if isBlockquoteToken(node.token)}
       <blockquote>
-        {@render renderBlocks(token.tokens)}
+        {@render renderNodes(nodesFor(node.token.tokens))}
       </blockquote>
-    {:else if token.type === 'table'}
-      <!-- Tables need their own horizontal-scroll wrapper: the table sizes to
-           its content (min 100% of the container) so no column is ever
-           starved by a sibling column's long tokens. -->
-      <div class="md-table-wrap">
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-        {@html renderBlockHtml(token)}
-      </div>
-    {:else if token.type !== 'space'}
+    {:else if node.token.type === 'table'}
+      <!-- Tables own their scroll wrapper (the table sizes to its content, min
+           100% of the container, so no column is starved by a sibling column's
+           long tokens) plus the per-table wrap and column-resize controls. -->
+      <MarkdownTable html={renderBlockHtml(node.token)} />
+    {:else if node.token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-      {@html renderBlockHtml(token)}
+      {@html renderBlockHtml(node.token)}
     {/if}
   {/each}
 {/snippet}
@@ -403,7 +449,7 @@
       {#if seg.kind === 'long'}
         <LongTextBlock text={seg.text} />
       {:else}
-        {@render renderBlocks(lexMarkdownCached(seg.text, lexedAllowHtml))}
+        {@render renderNodes(nodesFor(lexMarkdownCached(seg.text, lexedAllowHtml, repository)))}
       {/if}
     {/each}
   </div>

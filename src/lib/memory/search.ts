@@ -3,6 +3,7 @@ import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '.
 export interface SearchFilters {
   category?: MemoryCategory
   priority?: MemoryPriority
+  /** Matches entries whose scope set reaches this scope (an empty set always matches). */
   scope?: MemoryScope
   projectId?: string
   enabledOnly?: boolean
@@ -30,7 +31,7 @@ export function searchEntries(
     if (filters.enabledOnly !== false && !entry.enabled) continue
     if (filters.category && entry.category !== filters.category) continue
     if (filters.priority && entry.priority !== filters.priority) continue
-    if (filters.scope && entry.scope !== filters.scope) continue
+    if (filters.scope && !entry.scopes.includes(filters.scope)) continue
     if (filters.projectId && entry.projectId !== filters.projectId) continue
 
     const { score, matchedFields } = scoreEntry(entry, lowerQuery)
@@ -43,7 +44,10 @@ export function searchEntries(
   return results
 }
 
-function scoreEntry(entry: MemoryEntry, lowerQuery: string): { score: number; matchedFields: string[] } {
+function scoreEntry(
+  entry: MemoryEntry,
+  lowerQuery: string
+): { score: number; matchedFields: string[] } {
   let score = 0
   const matchedFields: string[] = []
 
@@ -91,7 +95,7 @@ export function filterEntries(entries: MemoryEntry[], filters: SearchFilters): M
     if (filters.enabledOnly !== false && !entry.enabled) return false
     if (filters.category && entry.category !== filters.category) return false
     if (filters.priority && entry.priority !== filters.priority) return false
-    if (filters.scope && entry.scope !== filters.scope) return false
+    if (filters.scope && !entry.scopes.includes(filters.scope)) return false
     if (filters.projectId && entry.projectId !== filters.projectId) return false
     return true
   })
@@ -103,7 +107,9 @@ export function filterEntries(entries: MemoryEntry[], filters: SearchFilters): M
 export function formatSearchResults(results: SearchResult[]): string {
   if (results.length === 0) return 'No matching memory entries found.'
 
-  const lines: string[] = [`Found ${results.length} matching ${results.length === 1 ? 'entry' : 'entries'}:`]
+  const lines: string[] = [
+    `Found ${results.length} matching ${results.length === 1 ? 'entry' : 'entries'}:`
+  ]
   for (const result of results) {
     const { entry, score, matchedFields } = result
     lines.push(

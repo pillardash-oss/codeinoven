@@ -1,62 +1,96 @@
-import {
-  stat,
-  lstat,
-  open,
-  access,
-  readFile,
-  writeFile,
-  rename,
-  mkdir,
-  rm,
-  unlink
-} from 'fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'path'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { dirname, relative, resolve } from 'path'
 import { toPosixPath } from '../../lib/paths'
-import { realpathSync } from 'fs'
-import { createHash } from 'node:crypto'
-import { simpleGit } from 'simple-git'
-import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
+import type { LogOptions, SimpleGit } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
-  GitConflictHunk,
+  GitConflictSide,
   GitConflictWorkFile,
-  GitConflictWorkHunkState,
   GitDiff,
   GitFileChange,
-  GitFileStatus,
   GitIdentity,
+  GitIntegrationProbe,
   GitPullStrategy,
+  GitRebaseAction,
   GitRemoteInfo,
+  GitRemoteUpdate,
   GitRestoreTarget,
   GitResetMode,
   GitStashEntry,
   GitStatus,
+  GitSyncDirection,
+  GitSyncPeerTarget,
+  GitSyncResult,
   GitSyncSummary,
   MergeSummary,
   PullRequestCompare,
   PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
-import { parseWorktreePorcelain } from './scope-worktree-service'
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
-}
-
-/** Whether a path exists on disk, symlinks included (broken ones still count). */
-async function pathExists(directory: string, relativePath: string): Promise<boolean> {
-  try {
-    await lstat(resolve(directory, relativePath))
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Upper bound on a single diff payload so the IPC contract never floods. */
-const MAX_DIFF_BYTES = 500 * 1024
+import { GitRefusal, isUncommittedChangesRefusal } from './git-refusal'
+import {
+  createAuthenticatedGitClient,
+  createGitClient,
+  createGitClientWithoutEditor,
+  runGitCommand,
+  validateRepositoryDirectory,
+  withIndexLockRetry
+} from './git/git-service-runtime'
+import type { CommandKind } from './git/git-service-runtime'
+import type { PullRequestComposeContext } from './git/git-service-pull-request'
+import {
+  buildPullRequestComposeContext,
+  comparePullRequestBranches as comparePullRequestRefs
+} from './git/git-service-pull-request'
+import type { ConflictWorkMetadata } from './git/git-service-conflicts'
+import {
+  REMOTE_REF_PREFIX,
+  REMOTE_UPDATE_FORMAT,
+  REMOTE_UPDATE_LIMIT,
+  parseRemoteUpdates
+} from './git/git-service-remote-updates'
+import {
+  buildInitialConflictWorkFile,
+  conflictSourceHash,
+  hasConflictMarkers,
+  parseConflictHunks,
+  parseConflictWorkMetadata,
+  parseConflictWorkState
+} from './git/git-service-conflicts'
+import {
+  MAX_DIFF_BYTES,
+  assertRelativePath as assertRepositoryRelativePath,
+  assertTreeIsh,
+  diffVsParent,
+  fileDiffVsParent,
+  isAncestor,
+  isDirectory,
+  isUntracked,
+  pathExists,
+  readBlob as readGitBlob,
+  refExists as gitRefExists,
+  removePath,
+  untrackedDiff,
+  workingFileContent as readWorkingFileContent
+} from './git/git-service-diffs'
+import type { HistoryLogFields } from './git/git-service-status'
+import {
+  DEFAULT_LOG_LIMIT,
+  detectConflictState,
+  emptyMergeResult,
+  isUnbornBranchLogError,
+  mapCommit,
+  mapMergeResult,
+  mapStatus,
+  parseBranchRefs,
+  parseCommitParents,
+  parseCommitRefs,
+  worktreeBranchPaths
+} from './git/git-service-status'
+import { removeCommitPathChanges } from './git/git-service-commit-rewrite'
 
 // Git read commands opportunistically refresh the index, which takes
 // `.git/index.lock`. This service shares the repository with agent git CLIs,
@@ -69,62 +103,36 @@ const MAX_DIFF_BYTES = 500 * 1024
 // default via buildProcessEnvironment.)
 process.env.GIT_OPTIONAL_LOCKS = process.env.GIT_OPTIONAL_LOCKS ?? '0'
 
-/** Number of commits returned by `git log` by default. */
-const DEFAULT_LOG_LIMIT = 50
+export type { PullRequestComposeContext } from './git/git-service-pull-request'
 
-const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
-const PR_COMPOSE_UNTRACKED_FILES = 24
-const PR_COMPOSE_READ_BATCH = 4
-
-export interface PullRequestComposeContext {
-  source: PrComposeInput['source']
-  baseRef: string
-  headRef: string
-  commits: string
-  diffSummary: string
-  patch: string
-  pendingPushBaseRef: string | null
-  pendingCommits: string
-  pendingDiffSummary: string
-  pendingPatch: string
-  worktreePatch: string
-  untrackedFiles: string
-  truncated: boolean
+/**
+ * Tracked, not-yet-committed files in a checkout: what a rebase refuses and a
+ * merge only tolerates while nothing would be overwritten. Untracked files are
+ * excluded because no integration ever touches them.
+ */
+function uncommittedCount(status: GitStatus): number {
+  return status.changes.filter((change) => change.status !== 'untracked').length
 }
 
-function boundedUtf8(value: string, maximumBytes: number): { text: string; truncated: boolean } {
-  const content = Buffer.from(value, 'utf-8')
-  if (content.byteLength <= maximumBytes) return { text: value, truncated: false }
-  return {
-    text: content.subarray(0, maximumBytes).toString('utf-8'),
-    truncated: true
-  }
-}
+/**
+ * How much of git's own output a failed rebase step keeps in the error log. The
+ * reason the sequencer refused is its last words, while the summary of every
+ * commit it replayed comes first, so the tail is the part worth keeping and the
+ * whole thing would bury the log line.
+ */
+const REBASE_FAILURE_LOG_CHARS = 2000
 
-/** Kind of git command for error classification. */
-type CommandKind = 'read' | 'mutation'
-
-interface GitCommandError extends Error {
-  /** Exit code reported by the git binary. */
-  code?: number
-  /** git's own error output. */
-  gitError?: string
-}
-
-interface ConflictWorkMetadata {
-  version: 1
-  sourceHash: string
-  draftSaved: boolean
-  hunks: GitConflictWorkHunkState[]
-}
-
-const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
-
-function isUnbornBranchLogError(failure: unknown): boolean {
-  if (!(failure instanceof Error)) return false
-  const error = failure as GitCommandError
-  const message = error.gitError ?? error.message
-  return message.includes('does not have any commits yet')
+/**
+ * The tail of git's own output for a rebase step git could not move, for the
+ * error log. A rebase prints a summary for every commit it replayed before the
+ * lines that say why it stopped, so this reads from the end and never hands the
+ * panel the wall of output it would have to render as a message.
+ */
+function rebaseFailureDetail(failure: unknown): string {
+  const text = failure instanceof Error ? failure.message : String(failure)
+  return text.length > REBASE_FAILURE_LOG_CHARS
+    ? `...${text.slice(-REBASE_FAILURE_LOG_CHARS)}`
+    : text
 }
 
 /**
@@ -134,14 +142,51 @@ function isUnbornBranchLogError(failure: unknown): boolean {
  *
  * All repository mutations are serialized per project through a promise queue
  * (the `project-files-service` pattern) so concurrent IPC-driven operations can
- * never interleave and corrupt the working tree.
+ * never interleave and corrupt the working tree. Operations that talk to a
+ * remote get a second lane of their own; see `enqueueRemote`.
  */
+export interface GitServiceOptions {
+  /**
+   * Byte cap on a conflicted file the service reads and writes, resolved per
+   * call so a settings change applies without a restart. Defaults to
+   * {@link DEFAULT_MAX_CONFLICT_FILE_BYTES}.
+   */
+  conflictFileLimit?: () => Promise<number>
+}
+
 export class GitService {
   private readonly queues = new Map<string, Promise<unknown>>()
+  private readonly conflictFileLimit: () => Promise<number>
+
+  constructor(options: GitServiceOptions = {}) {
+    this.conflictFileLimit =
+      options.conflictFileLimit ?? (async () => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+  }
+
+  /**
+   * The remote lane, one per project, deliberately separate from `queues`.
+   *
+   * Fetch is the only git operation that spends its whole life on the network
+   * while touching nothing a user is working with: it writes remote-tracking
+   * refs and `FETCH_HEAD`, never the index or the working tree. On the shared
+   * lane it held every local operation behind it for the length of the round
+   * trip, so a panel-open fetch meant no staging, committing, stashing or even
+   * a diff until the network answered, for work that has nothing to do with the
+   * remote.
+   *
+   * Every remote round trip shares this lane instead: a bare fetch takes it
+   * alone, and a local operation that is also a remote round trip (push, pull,
+   * the peer sync's fetch, the PR-conflict prepare and finish) takes it from
+   * inside the local lane. Two remote round trips in one repository would race
+   * `FETCH_HEAD` and the refs they prune or publish, which is the only thing
+   * they have to be serialized against.
+   */
+  private readonly remoteQueues = new Map<string, Promise<unknown>>()
 
   /**
    * Run `task` against a repository in strict FIFO order per project id.
    * Reads and mutations share the queue so a status read never races a commit.
+   * Remote round trips are not here; see `enqueueRemote`.
    */
   private enqueue<T>(projectId: string, task: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(projectId) ?? Promise.resolve()
@@ -156,90 +201,37 @@ export class GitService {
     return next
   }
 
-  /** Resolve a validated absolute directory, mirroring `RepositoryService`. */
-  private async validatedDirectory(projectPath: string): Promise<string> {
-    const candidate = projectPath.trim()
-    if (!candidate) throw new TypeError('Project path is required')
-    const absolutePath = resolve(candidate)
-    let metadata
-    try {
-      metadata = await stat(absolutePath)
-    } catch {
-      throw new Error(`Project directory does not exist: ${absolutePath}`)
-    }
-    if (!metadata.isDirectory()) {
-      throw new Error(`Project path is not a directory: ${absolutePath}`)
-    }
-    return absolutePath
+  /**
+   * Take this repository's turn to talk to a remote.
+   *
+   * The lane is FIFO, so awaiting it waits for whatever remote round trip is
+   * already running or queued, and holding it keeps every later one behind this
+   * task. Acquisition is always local lane then remote lane, and a task on this
+   * lane never takes the local one, so the two cannot deadlock.
+   */
+  private enqueueRemote<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.remoteQueues.get(projectId) ?? Promise.resolve()
+    const next = previous.then(task, task)
+    this.remoteQueues.set(
+      projectId,
+      next.then(
+        () => undefined,
+        () => undefined
+      )
+    )
+    return next
   }
 
   private client(directory: string, extraConfig: string[] = []): SimpleGit {
-    return simpleGit(directory, {
-      config: extraConfig,
-      maxConcurrentProcesses: 1
-    })
+    return createGitClient(directory, extraConfig)
   }
 
-  /**
-   * Backoff schedule for retries after an `index.lock` contention failure. The
-   * agent's own git CLI and this service are separate processes with no shared
-   * queue, so concurrent `git add`/`commit`/`status` writes race the same lock;
-   * the loser fails immediately with "index.lock: File exists". A short retry
-   * almost always wins once the other side finishes its write.
-   */
-  private static readonly INDEX_LOCK_RETRY_DELAYS_MS = [100, 250, 500, 1000] as const
-  /** A lock file older than this is debris from a crashed or killed git process. */
-  private static readonly STALE_INDEX_LOCK_AGE_MS = 10_000
-
-  private static isIndexLockError(error: unknown): boolean {
-    if (!(error instanceof Error)) return false
-    const causeMessage =
-      error.cause instanceof Error ? error.cause.message : String(error.cause ?? '')
-    return `${error.message}\n${causeMessage}`.includes('index.lock')
+  private clientWithoutEditor(directory: string): SimpleGit {
+    return createGitClientWithoutEditor(directory)
   }
 
-  /**
-   * Remove an abandoned `.git/index.lock` so a crashed git process cannot wedge
-   * every later command forever. Only locks older than the staleness window are
-   * removed   a fresh lock belongs to a live concurrent git write.
-   * `rev-parse --git-path` resolves the correct location even inside worktrees.
-   */
-  private async breakStaleIndexLock(directory: string): Promise<void> {
-    try {
-      const lockPath = (
-        await this.client(directory).raw(['rev-parse', '--git-path', 'index.lock'])
-      ).trim()
-      if (!lockPath) return
-      const absolute = resolve(directory, lockPath)
-      const metadata = await stat(absolute).catch(() => null)
-      if (!metadata || metadata.isDirectory()) return
-      if (Date.now() - metadata.mtimeMs <= GitService.STALE_INDEX_LOCK_AGE_MS) return
-      await rm(absolute, { force: true })
-      Logger.dev(`Removed stale git index lock: ${absolute}`)
-    } catch {
-      // Best effort   the retry loop re-reports the underlying git failure.
-    }
-  }
-
-  /**
-   * Run a git task, retrying with backoff when it loses an `index.lock` race.
-   * A stale lock (left by a crashed git process) is broken before each retry.
-   */
-  private async withIndexLockRetry<T>(directory: string, task: () => Promise<T>): Promise<T> {
-    let attempt = 0
-    for (;;) {
-      try {
-        return await task()
-      } catch (error) {
-        if (
-          attempt >= GitService.INDEX_LOCK_RETRY_DELAYS_MS.length ||
-          !GitService.isIndexLockError(error)
-        )
-          throw error
-        await this.breakStaleIndexLock(directory)
-        await sleep(GitService.INDEX_LOCK_RETRY_DELAYS_MS[attempt++])
-      }
-    }
+  private withAuthHeader(directory: string, token: string): SimpleGit {
+    return createAuthenticatedGitClient(directory, token)
   }
 
   private async wrapError<T>(
@@ -247,23 +239,11 @@ export class GitService {
     kind: CommandKind,
     task: () => Promise<T>
   ): Promise<T> {
-    try {
-      return await this.withIndexLockRetry(projectId, task)
-    } catch (failure) {
-      const error = failure as GitCommandError
-      const message = error.gitError ?? error.message ?? 'Unknown git error'
-      if (error.code === 127 || String(error.code) === 'ENOENT' || message.includes('ENOENT')) {
-        if (kind === 'mutation') {
-          Logger.error(`Git unavailable during mutation for project ${projectId}`)
-        }
-        throw new Error(GIT_UNAVAILABLE_MESSAGE, { cause: failure })
-      }
-      throw new Error(message, { cause: failure })
-    }
+    return runGitCommand(projectId, kind, task)
   }
 
   private async repo(projectPath: string): Promise<string> {
-    return this.validatedDirectory(projectPath)
+    return validateRepositoryDirectory(projectPath)
   }
 
   async getStatus(projectPath: string): Promise<GitStatus> {
@@ -277,7 +257,8 @@ export class GitService {
   private async readStatus(directory: string): Promise<GitStatus> {
     return this.wrapError(directory, 'read', async () => {
       const status = await this.client(directory).status()
-      return this.mapStatus(directory, status)
+      const conflictState = await detectConflictState(this.client(directory), directory)
+      return mapStatus(directory, status, conflictState)
     })
   }
 
@@ -298,9 +279,9 @@ export class GitService {
       return this.wrapError(projectPath, 'read', async () => {
         const safePath = this.assertRelativePath(directory, relativePath)
         const git = this.client(directory)
-        const isUntracked = await this.isUntracked(git, safePath)
-        if (isUntracked && !staged) {
-          return this.untrackedDiff(directory, safePath)
+        const pathIsUntracked = await isUntracked(git, safePath)
+        if (pathIsUntracked && !staged) {
+          return untrackedDiff(directory, safePath)
         }
         const args = staged ? ['--staged', '--', safePath] : ['--', safePath]
         const [content, summary] = await Promise.all([git.diff(args), git.diffSummary(args)])
@@ -405,11 +386,51 @@ export class GitService {
       const safePath = this.assertRelativePath(directory, path)
       const status = await this.client(directory).status()
       if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
-      const file = await this.workingFileContent(directory, safePath)
+      const file = await this.workingFileContent(
+        directory,
+        safePath,
+        await this.conflictFileBytes()
+      )
       if (!file || file.binary || file.truncated) return this.readStatus(directory)
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
         await this.client(directory).add([safePath])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Take one side of every unresolved conflict wholesale and stage it.
+   *
+   * `incoming` keeps the theirs side (stage 3, the branch being integrated),
+   * `current` keeps the ours side (stage 2, what HEAD had)   the same two sides
+   * the per-hunk merge editor names. Each path is written and staged so git
+   * clears its unmerged entry, and the merge editor's scratch document for that
+   * path is removed because it now describes a file that no longer conflicts.
+   *
+   * Refused while no conflict is open, and the whole set is touched in one
+   * queued task so a partial accept can never be observed.
+   */
+  async acceptConflictSide(projectPath: string, side: GitConflictSide): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const status = await this.client(directory).status()
+      const safePaths = status.conflicted.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length === 0) return this.readStatus(directory)
+      const scratch = await Promise.all(
+        safePaths.map((path) => this.conflictWorkPaths(directory, path))
+      )
+      await this.wrapError(directory, 'mutation', async () => {
+        const git = this.client(directory)
+        await git.raw(['checkout', side === 'incoming' ? '--theirs' : '--ours', '--', ...safePaths])
+        await git.add(safePaths)
+        await Promise.all(
+          scratch.flatMap(({ document, metadata }) => [
+            rm(document, { force: true }),
+            rm(metadata, { force: true })
+          ])
+        )
       })
       return this.readStatus(directory)
     })
@@ -426,7 +447,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(projectPath, 'read', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         if (!working)
           return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
         if (working.binary) {
@@ -460,7 +485,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const analysis: GitConflictAnalysis = !working
           ? { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
           : working.binary
@@ -524,7 +553,11 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       await this.wrapError(directory, 'mutation', async () => {
-        const working = await this.workingFileContent(directory, safePath)
+        const working = await this.workingFileContent(
+          directory,
+          safePath,
+          await this.conflictFileBytes()
+        )
         const source = working?.binary ? '' : (working?.content ?? '')
         const hunks = parseConflictWorkState(stateJson, content.length)
         const paths = await this.conflictWorkPaths(directory, safePath)
@@ -644,7 +677,7 @@ export class GitService {
       const directory = await this.repo(projectPath)
       const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
       if (safePaths.length === 0) return this.readStatus(directory)
-      const safeSource = this.assertTreeIsh(source)
+      const safeSource = assertTreeIsh(source)
       const args =
         target === 'staged'
           ? ['restore', '--staged', '--source', safeSource, '--', ...safePaths]
@@ -654,12 +687,6 @@ export class GitService {
       })
       return this.readStatus(directory)
     })
-  }
-
-  /** Reject anything that could be interpreted as an option by `git restore`. */
-  private assertTreeIsh(value: string): string {
-    if (!value || value.startsWith('-')) throw new TypeError('A valid revision is required')
-    return value
   }
 
   async commit(projectPath: string, message: string): Promise<GitStatus> {
@@ -698,10 +725,10 @@ export class GitService {
           git.getRemotes(),
           git.raw(['worktree', 'list', '--porcelain', '-z']).catch(() => '')
         ])
-        return this.parseBranchRefs(
+        return parseBranchRefs(
           Array.isArray(output) ? output.join('\n') : output,
           remotes.map(({ name }) => name),
-          this.worktreeBranchPaths(
+          worktreeBranchPaths(
             Array.isArray(worktreeRaw) ? worktreeRaw.join('\0') : worktreeRaw,
             directory
           )
@@ -783,8 +810,12 @@ export class GitService {
         // that spelling fails with "branch not found".
         const resolves = await git
           .raw(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
-          .then(() => true, () => false)
-        const branchName = resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
+          .then(
+            () => true,
+            () => false
+          )
+        const branchName =
+          resolves || !name.startsWith('heads/') ? name : name.slice('heads/'.length)
         await this.removeWorktreesForBranch(git, branchName)
         await git.deleteLocalBranch(branchName, force)
       })
@@ -793,17 +824,17 @@ export class GitService {
   }
 
   /** `git push <remote> --delete <name>` removes a branch from a remote. */
-  async deleteRemoteBranch(
-    projectPath: string,
-    remote: string,
-    name: string
-  ): Promise<GitStatus> {
+  async deleteRemoteBranch(projectPath: string, remote: string, name: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        const git = this.client(directory)
-        await git.push([remote, '--delete', name])
-      })
+      // A remote mutation, like a push: it publishes against refs a fetch may be
+      // in the middle of pruning, so it takes the remote lane.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const git = this.client(directory)
+          await git.push([remote, '--delete', name])
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -841,6 +872,53 @@ export class GitService {
     }
   }
 
+  /**
+   * Every movement of the current branch's upstream ref, newest first.
+   *
+   * Read from git's reflog for that remote-tracking ref, which is the only
+   * native record of when commits actually reached the remote (a commit's own
+   * dates say when it was written, not when it was published). Each entry names
+   * the commit the ref moved to, so the history view can draw where one push
+   * ended and the next began.
+   *
+   * Returns an empty list rather than failing whenever the answer is simply
+   * unknown: no upstream, an upstream that is not a remote-tracking ref, or a
+   * ref whose reflog was never written or has expired.
+   */
+  async remoteUpdates(projectPath: string): Promise<GitRemoteUpdate[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        // The full name, so a branch that tracks another *local* branch (where
+        // `branch.<name>.remote` is `.`) is not mistaken for a remote. Such a
+        // ref's reflog records local commits, which are not pushes at all.
+        const upstream = await git
+          .raw(['rev-parse', '--symbolic-full-name', '@{upstream}'])
+          .catch(() => '')
+        const fullRef = upstream.trim()
+        if (!fullRef.startsWith(REMOTE_REF_PREFIX)) return []
+        const ref = fullRef.slice(REMOTE_REF_PREFIX.length)
+        try {
+          const raw = await git.raw([
+            'reflog',
+            'show',
+            '-n',
+            String(REMOTE_UPDATE_LIMIT),
+            '--date=iso-strict',
+            `--format=${REMOTE_UPDATE_FORMAT}`,
+            fullRef
+          ])
+          return parseRemoteUpdates(ref, raw)
+        } catch {
+          // No reflog for this ref: the clone never fetched (or reflog writing
+          // is off). The history view then falls back to its plain boundary.
+          return []
+        }
+      })
+    })
+  }
+
   /** `offset` skips the N newest commits   pages in older history for infinite scroll. */
   async log(
     projectPath: string,
@@ -856,13 +934,25 @@ export class GitService {
         if (normalizedQuery && normalizedQuery.length > 256) {
           throw new TypeError('Commit search query must be at most 256 characters')
         }
-        const options: LogOptions & {
+        const options: LogOptions<HistoryLogFields> & {
           '--fixed-strings'?: null
           '--grep'?: string
           '--regexp-ignore-case'?: null
           '--skip'?: number
         } = {
-          maxCount: Math.max(1, Math.min(limit, 200))
+          maxCount: Math.max(1, Math.min(limit, 200)),
+          // Passing a `format` replaces simple-git's default field map, so this
+          // restates exactly what the defaults fetched and adds `%P` for lanes.
+          format: {
+            hash: '%H',
+            date: '%aI',
+            message: '%s',
+            refs: '%D',
+            body: '%b',
+            author_name: '%aN',
+            author_email: '%aE',
+            parents: '%P'
+          }
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
         if (normalizedQuery) {
@@ -872,12 +962,12 @@ export class GitService {
         }
         let history
         try {
-          history = await git.log(options)
+          history = await git.log<HistoryLogFields>(options)
         } catch (failure) {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
         }
-        const matches = history.all.map((entry) => this.mapCommit(entry))
+        const matches = history.all.map((entry) => mapCommit(entry))
 
         // `--grep` searches commit messages, not object IDs. Resolve a hash-like
         // query separately, then pin that exact match above any title matches.
@@ -895,31 +985,24 @@ export class GitService {
     })
   }
 
-  private mapCommit(entry: DefaultLogFields): GitCommitInfo {
-    return {
-      hash: entry.hash,
-      shortHash: entry.hash.slice(0, 7),
-      author: entry.author_name ?? entry.author_email ?? 'unknown',
-      date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-      message: entry.message
-    }
-  }
-
   private async commitForHash(git: SimpleGit, query: string): Promise<GitCommitInfo | null> {
     try {
       const output = await git.show([
         '--no-patch',
-        '--format=%H%x00%aI%x00%aN%x00%s',
+        '--format=%H%x00%P%x00%aI%x00%aN%x00%D%x00%s%x00%b',
         `${query}^{commit}`
       ])
-      const [hash, date, author, message] = output.trim().split('\0')
+      const [hash, parents, date, author, refs, message, body] = output.trim().split('\0')
       if (!hash || !date || !message) return null
       return {
         hash,
         shortHash: hash.slice(0, 7),
         author: author || 'unknown',
         date: new Date(date).getTime(),
-        message
+        message,
+        body: body ?? '',
+        parents: parseCommitParents(parents ?? ''),
+        refs: parseCommitRefs(refs ?? '')
       }
     } catch {
       return null
@@ -930,7 +1013,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.diffVsParent(this.client(directory), hash)
+        diffVsParent(this.client(directory), hash)
       )
     })
   }
@@ -940,7 +1023,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.fileDiffVsParent(this.client(directory), directory, hash, relativePath)
+        fileDiffVsParent(this.client(directory), directory, hash, relativePath)
       )
     })
   }
@@ -950,7 +1033,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.diffVsParent(this.client(directory), id)
+        diffVsParent(this.client(directory), id)
       )
     })
   }
@@ -960,7 +1043,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () =>
-        this.fileDiffVsParent(this.client(directory), directory, id, relativePath)
+        fileDiffVsParent(this.client(directory), directory, id, relativePath)
       )
     })
   }
@@ -972,6 +1055,29 @@ export class GitService {
       await this.wrapError(projectPath, 'mutation', async () => {
         const cleanMessage = message.replace(/\r\n/gu, '\n')
         await this.client(directory).raw(['commit', '--amend', '-m', cleanMessage])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Take the given paths' changes out of one commit. The commit is rewritten so
+   * it holds each path at its parent's version, every commit after it is
+   * replayed with new hashes, and the working tree is left exactly as it was,
+   * so a file that is still on disk keeps its content and its change shows up
+   * as an ordinary unstaged one (untracked when the commit had added the file).
+   */
+  async removeCommitChanges(
+    projectPath: string,
+    hash: string,
+    paths: string[]
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safeHash = assertTreeIsh(hash)
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await removeCommitPathChanges({ directory, target: safeHash, paths: safePaths })
       })
       return this.readStatus(directory)
     })
@@ -995,14 +1101,40 @@ export class GitService {
    * `git rebase --onto <target>^ <target>` replays every commit after `target`
    * onto its parent, skipping `target` itself. Only safe for unpushed commits;
    * pushed commits need a force-push afterwards.
+   *
+   * A replay that conflicts stops the rebase, and that stop is where the drop is
+   * finished from: the conflicts land in this checkout, the panel's Rebase in
+   * progress notice offers Continue, Skip and Abort, and continuing the rebase
+   * completes the drop. It is reported as the step the user owes rather than as
+   * git's own output, which is a summary of every commit it replayed plus three
+   * hints, and a refusal that never started the rebase says so instead of leaving
+   * the panel to guess.
    */
   async deleteCommit(projectPath: string, target: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
-      })
-      return this.readStatus(directory)
+      const short = target.slice(0, 7)
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
+        })
+      } catch (error) {
+        failure = error
+      }
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      Logger.error(`Deleting ${short} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      if (status.conflictState === 'rebase') {
+        throw new GitRefusal(
+          `Deleting ${short} stopped on a conflict in the commits after it. Resolve and continue the rebase to finish the drop, or abort the rebase to keep the commit`
+        )
+      }
+      throw new GitRefusal(
+        isUncommittedChangesRefusal(failure)
+          ? `Deleting ${short} needs a clean working tree. Commit or stash the uncommitted changes, then try again`
+          : `Deleting ${short} could not start, so nothing was changed`
+      )
     })
   }
 
@@ -1083,11 +1215,20 @@ export class GitService {
     })
   }
 
+  /**
+   * Refresh every remote-tracking ref. Runs on the remote lane, so it is queued
+   * behind other remote round trips and behind nothing else: the status read at
+   * the end of this task is the only local git it does, and that read never
+   * takes a lock.
+   */
   async fetch(projectPath: string): Promise<GitStatus> {
-    return this.enqueue(projectPath, async () => {
+    return this.enqueueRemote(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).fetch()
+        // Prune so remote-tracking refs for branches deleted on the server
+        // disappear here too. A plain fetch only ever adds refs, which left
+        // deleted branches listed under Remote forever.
+        await this.client(directory).fetch(['--prune'])
       })
       return this.readStatus(directory)
     })
@@ -1095,7 +1236,7 @@ export class GitService {
 
   /** Updates just one branch's remote-tracking ref   doesn't touch the working tree. */
   async fetchBranch(projectPath: string, remote: string, branch: string): Promise<GitStatus> {
-    return this.enqueue(projectPath, async () => {
+    return this.enqueueRemote(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.client(directory).fetch(remote, branch)
@@ -1107,9 +1248,14 @@ export class GitService {
   async pull(projectPath: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).pull()
-      })
+      // A pull fetches before it integrates, so it takes the remote lane for the
+      // round trip rather than running beside a fetch that is moving the same
+      // remote-tracking refs.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          await this.client(directory).pull()
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1145,7 +1291,10 @@ export class GitService {
         ? this.withAuthHeader(directory, options.token)
         : this.client(directory)
       try {
-        await git.pull(args)
+        // The round trip is the only part that talks to the remote, so it takes
+        // the remote lane; the conflicted-status read and the error mapping in
+        // the catch below are local and stay on this lane.
+        await this.enqueueRemote(projectPath, () => git.pull(args))
       } catch (failure) {
         const status = await this.readStatus(directory).catch(() => null)
         if (status && status.conflicted.length > 0) return status
@@ -1165,17 +1314,502 @@ export class GitService {
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        const args: string[] = []
-        if (options.setUpstream) args.push('--set-upstream')
-        if (options.remote) args.push(options.remote)
-        if (options.branch) args.push(options.branch)
-        const git = options.token
-          ? this.withAuthHeader(directory, options.token)
-          : this.client(directory)
-        await git.push(args)
-      })
+      // Push decides from the remote-tracking refs whether it is a fast-forward
+      // and whether there is anything to send at all, so it takes the remote
+      // lane: a fetch in flight finishes first, and one asked for now waits for
+      // this push. This is the one local operation the panel blocks on a fetch.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const args: string[] = []
+          if (options.setUpstream) args.push('--set-upstream')
+          if (options.remote) args.push(options.remote)
+          if (options.branch) args.push(options.branch)
+          const git = options.token
+            ? this.withAuthHeader(directory, options.token)
+            : this.client(directory)
+          await git.push(args)
+        })
+      )
       return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Sync this checkout with another end, in either direction. The other end is a
+   * peer: another checkout (the project root, or a managed worktree) or a named
+   * local branch. "Sync with main" is the peer that is the project root, so both
+   * of those flows share this one implementation instead of drifting apart.
+   *
+   * `from` reads the peer and writes this checkout: the peer branch's
+   * remote-tracking ref is refreshed first, then integrated. The remote-tracking
+   * ref is preferred only when it strictly contains the local branch - i.e. the
+   * other checkout has not pulled yet. Otherwise the local branch wins, so
+   * commits that exist only in the other checkout are never silently skipped. A
+   * failed remote refresh is reported through `fetched: false`, never treated as
+   * fatal: the local branch is still the repository's authoritative state when
+   * the network is unavailable.
+   *
+   * `to` reads this checkout and writes the peer: this branch's commits are
+   * folded into the branch the peer has checked out. It needs a real checkout to
+   * receive them, and nothing is ever pushed - publishing stays an explicit user
+   * action.
+   *
+   * Both directions fail closed instead of guessing: a peer that is this very
+   * checkout, a detached HEAD, or an integration already in progress all throw
+   * before a single ref moves. A conflicted integration is not an error - the
+   * refreshed status is returned so the renderer hands over to the conflict UI.
+   *
+   * The whole operation holds this checkout's queue, and both ends are mutated
+   * under it; two cross-syncs in opposite directions would still serialise, which
+   * is why a nested acquisition of the peer's queue is deliberately not taken.
+   */
+  async syncWith(
+    projectPath: string,
+    options: {
+      direction: GitSyncDirection
+      /** The other end of the sync, already resolved by the caller. */
+      peer: GitSyncPeerTarget
+      strategy: GitPullStrategy
+      remote?: string
+      token?: string
+    }
+  ): Promise<GitSyncResult> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const peerDirectory = options.peer.path ? await this.repo(options.peer.path) : null
+      const toward = options.direction === 'from' ? 'from' : 'to'
+      if (peerDirectory === directory) {
+        throw new GitRefusal(
+          options.direction === 'from'
+            ? `This checkout is ${options.peer.label}, so there is nothing to sync from`
+            : `This checkout is ${options.peer.label}, so it cannot be synced to itself`
+        )
+      }
+
+      const before = await this.readStatus(directory)
+      // The in-progress integration is reported first because a rebase leaves
+      // HEAD detached: checking the branch first answers a user who is sitting
+      // on a conflict in a branch they do have with "check out a branch", which
+      // is the dead end, and the branch name is recoverable from the rebase's
+      // own state. A merge keeps HEAD on the branch, so for it the two checks
+      // agree either way.
+      if (before.conflictState !== 'none') {
+        throw new GitRefusal(
+          `Finish or abort the in-progress ${before.conflictState} before syncing ${toward} ${options.peer.label}`
+        )
+      }
+      if (before.detached || !before.branch) {
+        throw new GitRefusal(
+          `Check out a branch in this worktree before syncing ${toward} ${options.peer.label}`
+        )
+      }
+      const branch = before.branch
+
+      if (options.direction === 'to') {
+        if (!peerDirectory) {
+          throw new GitRefusal(
+            `${options.peer.label} is not a checkout, so it cannot receive commits. Pick a worktree or the project root to sync to`
+          )
+        }
+        return await this.foldIntoPeer(directory, peerDirectory, before, branch, options)
+      }
+
+      const sourceBranch = peerDirectory
+        ? await this.branchOfCheckout(peerDirectory, options.peer.label)
+        : options.peer.branch
+      if (!sourceBranch) {
+        throw new GitRefusal(`${options.peer.label} has no branch to sync from`)
+      }
+      if (!peerDirectory) {
+        const exists = await this.wrapError(projectPath, 'read', () =>
+          this.refExists(this.client(directory), `refs/heads/${sourceBranch}`)
+        )
+        if (!exists) {
+          throw new GitRefusal(`The branch ${sourceBranch} does not exist in this repository`)
+        }
+      }
+
+      const remoteName = options.remote ?? (await this.primaryRemoteName(directory))
+      let fetched = false
+      if (remoteName) {
+        try {
+          const git = options.token
+            ? this.withAuthHeader(directory, options.token)
+            : this.client(directory)
+          // Through the remote lane, so this refresh cannot overlap a fetch the
+          // panel started. The integration that follows is local and stays on
+          // this lane.
+          await this.enqueueRemote(projectPath, () =>
+            withIndexLockRetry(directory, () => git.fetch(remoteName, sourceBranch))
+          )
+          fetched = true
+        } catch (failure) {
+          // Reported as `fetched: false` - the local branch is still synced.
+          Logger.dev(
+            `Sync ${toward} ${options.peer.label}: refreshing ${remoteName}/${sourceBranch} failed: ${
+              failure instanceof Error ? failure.message : String(failure)
+            }`
+          )
+        }
+      }
+
+      const localRef = `refs/heads/${sourceBranch}`
+      const remoteRef = remoteName ? `refs/remotes/${remoteName}/${sourceBranch}` : null
+      const ref = await this.pickSyncSourceRef(directory, projectPath, localRef, remoteRef)
+      const incoming = await this.countCommitsAhead(directory, projectPath, ref)
+      let probe: GitIntegrationProbe = {
+        danglingReferences: [],
+        changedDependencyManifests: []
+      }
+      if (incoming > 0) {
+        const uncommitted = uncommittedCount(before)
+        // A rebase refuses any tracked change outright, so answer before git
+        // does: its own wording ("cannot rebase: You have unstaged changes...")
+        // names the mechanism instead of what the user has to do about it.
+        if (options.strategy === 'rebase' && uncommitted > 0) {
+          throw new GitRefusal(
+            `This checkout has ${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'}. Commit or stash ${uncommitted === 1 ? 'it' : 'them'} before syncing from ${options.peer.label}`
+          )
+        }
+        const beforeSha = await this.headSha(directory)
+        let outcome: 'done' | 'conflicted'
+        try {
+          outcome = await this.integrateFromRef(directory, projectPath, ref, options.strategy)
+        } catch (failure) {
+          // A merge or fast-forward only refuses for local changes that would
+          // be overwritten, and git answers with the same advice in its own
+          // words. Report the count the refusal is about in the panel's voice.
+          if (uncommitted > 0 && isUncommittedChangesRefusal(failure)) {
+            throw new GitRefusal(
+              `This checkout has ${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'} that would be overwritten. Commit or stash ${uncommitted === 1 ? 'it' : 'them'} before syncing from ${options.peer.label}`
+            )
+          }
+          throw failure
+        }
+        // A conflicted integration is reconciled by hand first, and probing a
+        // half-applied tree would describe the mess rather than the result.
+        if (outcome === 'done') {
+          probe = await this.probeIntegration(directory, projectPath, beforeSha)
+        }
+      }
+
+      return {
+        status: await this.readStatus(directory),
+        direction: 'from',
+        branch,
+        peerBranch: sourceBranch,
+        peerLabel: options.peer.label,
+        ref: ref === remoteRef && remoteName ? `${remoteName}/${sourceBranch}` : sourceBranch,
+        fetched,
+        remote: remoteName ?? null,
+        incoming,
+        peerAhead: 0,
+        danglingReferences: probe.danglingReferences,
+        changedDependencyManifests: probe.changedDependencyManifests
+      }
+    })
+  }
+
+  /** The branch a peer checkout has checked out, refusing a detached HEAD. */
+  private async branchOfCheckout(directory: string, label: string): Promise<string> {
+    const resolved = (
+      await this.client(directory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])
+    ).trim()
+    if (!resolved || resolved === 'HEAD') {
+      throw new GitRefusal(`${label} is not on a branch, so there is nothing to sync from`)
+    }
+    return resolved
+  }
+
+  /**
+   * Fold this worktree's branch into the branch the peer checkout has checked
+   * out ("Sync to" the peer).
+   *
+   * Both checkouts must be committed and idle first: only committed work can
+   * move, so uncommitted work would silently stay behind, and a clean target is
+   * what makes rolling a refused merge back exact.
+   *
+   * `rebase` keeps the peer linear without rewriting it: this branch's commits
+   * are replayed on top of the peer's branch (a conflict stays here, in the
+   * checkout the panel shows, just like `from`), then the peer branch
+   * fast-forwards onto the rebased branch. `merge`/`ff-only` integrate directly
+   * in the peer, and a merge that conflicts is rolled back before the error
+   * surfaces - a one-click action run from a worktree scope must never leave
+   * another checkout mid-merge where the user is not looking.
+   */
+  private async foldIntoPeer(
+    directory: string,
+    peerDirectory: string,
+    before: GitStatus,
+    branch: string,
+    options: { direction: GitSyncDirection; peer: GitSyncPeerTarget; strategy: GitPullStrategy }
+  ): Promise<GitSyncResult> {
+    const label = options.peer.label
+    const dirty = uncommittedCount(before)
+    if (dirty > 0) {
+      throw new GitRefusal(
+        `This checkout has ${dirty} uncommitted file${dirty === 1 ? '' : 's'}. Commit or stash ${dirty === 1 ? 'it' : 'them'} before syncing to ${label}`
+      )
+    }
+
+    const peerStatus = await this.readStatus(peerDirectory)
+    // Same order as the worktree's own check: a rebase in the peer also detaches
+    // its HEAD, and "not on a branch" is not what the user needs to hear while
+    // its rebase is sitting half-finished.
+    if (peerStatus.conflictState !== 'none') {
+      throw new GitRefusal(
+        `Finish or abort the in-progress ${peerStatus.conflictState} in ${label} before syncing to it`
+      )
+    }
+    if (peerStatus.detached || !peerStatus.branch) {
+      throw new GitRefusal(`${label} is not on a branch, so there is nothing to sync to`)
+    }
+    const peerBranch = peerStatus.branch
+    const peerDirty = uncommittedCount(peerStatus)
+    if (peerDirty > 0) {
+      throw new GitRefusal(
+        `${label} has ${peerDirty} uncommitted file${peerDirty === 1 ? '' : 's'}. Commit or stash ${peerDirty === 1 ? 'it' : 'them'} there before syncing to it`
+      )
+    }
+
+    const incoming = await this.countCommitsAhead(
+      peerDirectory,
+      options.peer.path ?? peerDirectory,
+      branch
+    )
+    // The commits land in the peer, so the peer is the checkout to probe.
+    const peerBeforeSha = await this.headSha(peerDirectory)
+    let conflicted = false
+    if (incoming > 0) {
+      if (options.strategy === 'rebase') {
+        const outcome = await this.integrateFromRef(
+          directory,
+          options.peer.path ?? directory,
+          `refs/heads/${peerBranch}`,
+          'rebase'
+        )
+        conflicted = outcome === 'conflicted'
+        if (!conflicted) {
+          await this.foldIntoPeerBranch(peerDirectory, branch, peerBranch, label, 'ff-only')
+        }
+      } else {
+        await this.foldIntoPeerBranch(peerDirectory, branch, peerBranch, label, options.strategy)
+      }
+    }
+
+    const probe: GitIntegrationProbe =
+      incoming > 0 && !conflicted
+        ? await this.probeIntegration(
+            peerDirectory,
+            options.peer.path ?? peerDirectory,
+            peerBeforeSha
+          )
+        : { danglingReferences: [], changedDependencyManifests: [] }
+    return {
+      status: await this.readStatus(directory),
+      direction: 'to',
+      branch,
+      peerBranch,
+      peerLabel: label,
+      ref: branch,
+      fetched: false,
+      remote: null,
+      incoming,
+      peerAhead:
+        incoming > 0 && !conflicted
+          ? (await this.readStatus(peerDirectory)).ahead
+          : peerStatus.ahead,
+      danglingReferences: probe.danglingReferences,
+      changedDependencyManifests: probe.changedDependencyManifests
+    }
+  }
+
+  /**
+   * Integrate `branch` into the branch checked out in the peer checkout. The
+   * caller guarantees a clean, idle target, so a conflicted merge can be rolled
+   * back exactly instead of stranding the peer mid-merge.
+   */
+  private async foldIntoPeerBranch(
+    peerDirectory: string,
+    branch: string,
+    peerBranch: string,
+    label: string,
+    strategy: 'merge' | 'ff-only'
+  ): Promise<void> {
+    const git = this.client(peerDirectory)
+    const args = strategy === 'ff-only' ? ['--no-edit', '--ff-only', branch] : ['--no-edit', branch]
+    const failure = await git.merge(args).then(
+      () => null,
+      (error: unknown) => error
+    )
+    if (!failure) return
+
+    const conflicted = await git.status().then(
+      (status) => status.conflicted.length > 0,
+      () => false
+    )
+    if (conflicted) {
+      const rolledBack = await git.raw(['merge', '--abort']).then(
+        () => true,
+        () => false
+      )
+      throw new GitRefusal(
+        rolledBack
+          ? `Merging ${branch} into ${peerBranch} would conflict. Sync from ${label} in this worktree, resolve the conflicts here, then sync to it again`
+          : `Merging ${branch} into ${peerBranch} conflicted and could not be rolled back. Resolve it in ${label} first`
+      )
+    }
+    if (strategy === 'ff-only') {
+      throw new GitRefusal(
+        `${peerBranch} has diverged from ${branch}, so it cannot fast-forward. Merge instead`
+      )
+    }
+    await this.wrapError(peerDirectory, 'mutation', async () => {
+      throw failure
+    })
+  }
+
+  /** `origin` when present, else the repository's first configured remote. */
+  private async primaryRemoteName(directory: string): Promise<string | null> {
+    const remotes = await this.readRemotes(directory).catch(() => [] as GitRemoteInfo[])
+    return remotes.find((remote) => remote.name === 'origin')?.name ?? remotes[0]?.name ?? null
+  }
+
+  /**
+   * The exact ref to integrate: the remote-tracking ref when it strictly
+   * contains the local branch, else the local branch itself.
+   */
+  private async pickSyncSourceRef(
+    directory: string,
+    projectPath: string,
+    localRef: string,
+    remoteRef: string | null
+  ): Promise<string> {
+    if (!remoteRef) return localRef
+    const git = this.client(directory)
+    return this.wrapError(projectPath, 'read', async () => {
+      if (!(await this.refExists(git, remoteRef))) return localRef
+      if (!(await this.refExists(git, localRef))) return remoteRef
+      return (await isAncestor(git, localRef, remoteRef)) ? remoteRef : localRef
+    })
+  }
+
+  /** Commits reachable from `ref` that this checkout does not have yet. */
+  private async countCommitsAhead(
+    directory: string,
+    projectPath: string,
+    ref: string
+  ): Promise<number> {
+    return this.wrapError(projectPath, 'read', async () => {
+      const output = await this.client(directory).raw(['rev-list', '--count', `HEAD..${ref}`])
+      const parsed = Number.parseInt(output.trim(), 10)
+      return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
+    })
+  }
+
+  /** The commit a checkout is on, or null when it has no commit to read. */
+  private async headSha(directory: string): Promise<string | null> {
+    return await this.client(directory)
+      .raw(['rev-parse', 'HEAD'])
+      .then((sha) => sha.trim() || null)
+      .catch(() => null)
+  }
+
+  /**
+   * Ask what an integration just did to `directory`, beyond whether git was
+   * happy with it: does anything still import a module it removed, and did it
+   * rewrite a dependency manifest without installing anything?
+   *
+   * Read-only and best-effort. A probe that fails must never turn a completed
+   * sync into an error, so it degrades to an empty result and says why in the
+   * dev log.
+   */
+  private async probeIntegration(
+    directory: string,
+    projectPath: string,
+    beforeSha: string | null
+  ): Promise<GitIntegrationProbe> {
+    const nothing: GitIntegrationProbe = {
+      danglingReferences: [],
+      changedDependencyManifests: []
+    }
+    if (!beforeSha) return nothing
+    try {
+      // The probe reads every tracked source file of the checkout, so its module
+      // is imported only once an integration actually removed something, instead
+      // of sitting in the always-loaded feature-IPC graph. That also keeps the
+      // feature-IPC graph emit-able: with this probe inside it, Vite 8's
+      // rolldown rendered the whole graph as an empty chunk (see
+      // refuseEmptyChunks in electron.vite.config.ts).
+      const { changedDependencyManifests, findDanglingReferences, integrationChanges } =
+        await import('./git/git-service-references')
+      const git = this.client(directory)
+      const changes = await integrationChanges(git, beforeSha, await this.headSha(directory))
+      return {
+        danglingReferences:
+          changes.deleted.length === 0
+            ? []
+            : await findDanglingReferences(directory, changes.deleted, git),
+        changedDependencyManifests: changedDependencyManifests(changes)
+      }
+    } catch (failure) {
+      Logger.dev(
+        `Post-integration probe for ${projectPath} failed: ${
+          failure instanceof Error ? failure.message : String(failure)
+        }`
+      )
+      return nothing
+    }
+  }
+
+  /**
+   * Integrate `ref` with the requested strategy. A conflicted merge/rebase is
+   * left in the working tree for the conflict UI (never aborted) and reported
+   * as `conflicted`; a diverged fast-forward fails with an actionable message
+   * instead of raw git output.
+   */
+  private async integrateFromRef(
+    directory: string,
+    projectPath: string,
+    ref: string,
+    strategy: GitPullStrategy
+  ): Promise<'done' | 'conflicted'> {
+    const git = this.client(directory)
+    const conflicted = async (): Promise<boolean> =>
+      await git
+        .status()
+        .then((status) => status.conflicted.length > 0)
+        .catch(() => false)
+
+    if (strategy === 'rebase') {
+      const failure = await git.rebase([ref]).then(
+        () => null,
+        (error: unknown) => error
+      )
+      if (!failure) return 'done'
+      if (await conflicted()) return 'conflicted'
+      return await this.failIntegration(projectPath, failure)
+    }
+
+    const args = strategy === 'ff-only' ? ['--no-edit', '--ff-only', ref] : ['--no-edit', ref]
+    const failure = await git.merge(args).then(
+      () => null,
+      (error: unknown) => error
+    )
+    if (!failure) return 'done'
+    if (await conflicted()) return 'conflicted'
+    if (strategy === 'ff-only') {
+      throw new GitRefusal(
+        `This branch has diverged from ${ref}, so it cannot fast-forward. Merge or rebase instead`
+      )
+    }
+    return await this.failIntegration(projectPath, failure)
+  }
+
+  /** Re-report a failed integration through the standard error path. */
+  private async failIntegration(label: string, failure: unknown): Promise<never> {
+    return this.wrapError(label, 'mutation', async (): Promise<never> => {
+      throw failure
     })
   }
 
@@ -1197,49 +1831,9 @@ export class GitService {
   ): Promise<PullRequestCompare | null> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const git = this.client(directory)
-        const localHead = `refs/heads/${head}`
-        if (!(await this.refExists(git, localHead))) return null
-
-        const remoteBase = `refs/remotes/origin/${base}`
-        const localBase = `refs/heads/${base}`
-        const baseRef = (await this.refExists(git, remoteBase))
-          ? remoteBase
-          : (await this.refExists(git, localBase))
-            ? localBase
-            : null
-        if (!baseRef) return null
-
-        const counts = await git.raw([
-          'rev-list',
-          '--left-right',
-          '--count',
-          `${baseRef}...${localHead}`
-        ])
-        const [behindBy = 0, aheadBy = 0] = counts
-          .trim()
-          .split(/\s+/u)
-          .map((value) => Number.parseInt(value, 10))
-        const status: PullRequestCompare['status'] =
-          aheadBy > 0 && behindBy > 0
-            ? 'diverged'
-            : aheadBy > 0
-              ? 'ahead'
-              : behindBy > 0
-                ? 'behind'
-                : 'identical'
-        const summary = await git.diffSummary([`${baseRef}...${localHead}`])
-        return {
-          source: 'local',
-          status,
-          aheadBy,
-          behindBy,
-          totalCommits: aheadBy,
-          filesChanged: summary.files.length,
-          hasChanges: aheadBy > 0
-        }
-      })
+      return this.wrapError(projectPath, 'read', async () =>
+        comparePullRequestRefs(this.client(directory), base, head)
+      )
     })
   }
 
@@ -1255,92 +1849,9 @@ export class GitService {
   ): Promise<PullRequestComposeContext> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const git = this.client(directory)
-        const remoteBase = `refs/remotes/origin/${input.base}`
-        const localBase = `refs/heads/${input.base}`
-        const baseRef = (await this.refExists(git, remoteBase))
-          ? remoteBase
-          : (await this.refExists(git, localBase))
-            ? localBase
-            : null
-        if (!baseRef) {
-          throw new Error(`The selected base branch ${input.base} is not available locally`)
-        }
-
-        const remoteHead = `refs/remotes/origin/${input.head}`
-        const localHead = `refs/heads/${input.head}`
-        const headRef =
-          input.source === 'remote'
-            ? (await this.refExists(git, remoteHead))
-              ? remoteHead
-              : null
-            : (await this.refExists(git, localHead))
-              ? localHead
-              : null
-        if (!headRef) {
-          const location = input.source === 'remote' ? `origin/${input.head}` : input.head
-          throw new Error(`The selected head branch ${location} is not available locally`)
-        }
-
-        const fullRange = `${baseRef}..${headRef}`
-        const fullDiffRange = `${baseRef}...${headRef}`
-        const pendingPushBaseRef =
-          input.source === 'local' && (await this.refExists(git, remoteHead)) ? remoteHead : null
-        const pendingRange = pendingPushBaseRef ? `${pendingPushBaseRef}..${headRef}` : fullRange
-
-        const readGit = async (args: string[]): Promise<string> => git.raw(args)
-        const [commitsRaw, diffSummary, patchRaw, pendingCommitsRaw, pendingSummary, pendingRaw] =
-          await Promise.all([
-            readGit(['log', '--max-count=100', '--format=%h%x09%s', fullRange]),
-            readGit(['diff', '--stat', fullDiffRange, '--']),
-            readGit(['diff', '--no-ext-diff', '--unified=2', fullDiffRange, '--']),
-            input.source === 'local'
-              ? readGit(['log', '--max-count=100', '--format=%h%x09%s', pendingRange])
-              : Promise.resolve(''),
-            input.source === 'local'
-              ? readGit(['diff', '--stat', pendingRange, '--'])
-              : Promise.resolve(''),
-            input.source === 'local'
-              ? readGit(['diff', '--no-ext-diff', '--unified=2', pendingRange, '--'])
-              : Promise.resolve('')
-          ])
-
-        const includeWorkingTree = input.source === 'local' && input.includeWorkingTree
-        const [worktreeRaw, untracked] = includeWorkingTree
-          ? await Promise.all([
-              readGit(['diff', '--no-ext-diff', '--unified=2', 'HEAD', '--']),
-              this.untrackedComposeContext(directory, git)
-            ])
-          : ['', { text: '', truncated: false }]
-
-        const commits = boundedUtf8(commitsRaw.trim(), 16 * 1024)
-        const patch = boundedUtf8(patchRaw.trim(), 56 * 1024)
-        const pendingCommits = boundedUtf8(pendingCommitsRaw.trim(), 12 * 1024)
-        const pendingPatch = boundedUtf8(pendingRaw.trim(), 20 * 1024)
-        const worktreePatch = boundedUtf8(worktreeRaw.trim(), 20 * 1024)
-        return {
-          source: input.source,
-          baseRef,
-          headRef,
-          commits: commits.text,
-          diffSummary: diffSummary.trim(),
-          patch: patch.text,
-          pendingPushBaseRef,
-          pendingCommits: pendingCommits.text,
-          pendingDiffSummary: pendingSummary.trim(),
-          pendingPatch: pendingPatch.text,
-          worktreePatch: worktreePatch.text,
-          untrackedFiles: untracked.text,
-          truncated:
-            commits.truncated ||
-            patch.truncated ||
-            pendingCommits.truncated ||
-            pendingPatch.truncated ||
-            worktreePatch.truncated ||
-            untracked.truncated
-        }
-      })
+      return this.wrapError(projectPath, 'read', async () =>
+        buildPullRequestComposeContext(this.client(directory), directory, input)
+      )
     })
   }
 
@@ -1366,7 +1877,7 @@ export class GitService {
               } satisfies MergeFailure
             }
           )
-        return this.mapMergeResult(result)
+        return mapMergeResult(result)
       })
     })
   }
@@ -1379,12 +1890,12 @@ export class GitService {
         const failure = await git.rebase([target]).catch((error: unknown) => error)
         if (failure) {
           const status = await git.status()
-          return this.mapMergeResult({
+          return mapMergeResult({
             conflicts: status.conflicted.map((path) => ({ file: path })),
             result: 'Rebase stopped due to conflicts.'
           })
         }
-        return this.emptyMergeResult('Rebase completed.')
+        return emptyMergeResult('Rebase completed.')
       })
     })
   }
@@ -1410,6 +1921,66 @@ export class GitService {
   }
 
   /**
+   * Move a stopped rebase along: `continue` applies the commit git stopped on
+   * and replays the rest, `skip` drops that commit and replays the rest. Either
+   * can stop again on the next commit's conflict, which is not an error   the
+   * refreshed status carries the new conflict state for the panel to show.
+   *
+   * git exits non-zero with the conflict in its output when it stops again, so
+   * that failure is caught here instead of reported: a stop that left conflicted
+   * files is the same state the first stop was, and the panel renders it from
+   * the refreshed status. Only a failure that left no conflict to resolve is
+   * reported, and then as the step the user owes, because git's own output for a
+   * rebase is a summary of every commit it replayed followed by three hints.
+   *
+   * Unresolved conflicts are refused here rather than left to git: `rebase
+   * --continue` reports them on stdout with an empty stderr, and simple-git only
+   * raises a task error when stderr has something in it, so git's refusal would
+   * arrive as a resolved promise and the button would look like it did nothing.
+   * The refusal also names the step the user owes, which git's own three lines
+   * only imply.
+   *
+   * Both run through `clientWithoutEditor`: `--continue` finishes a conflicted
+   * commit by committing it, and committing runs the configured editor   see that
+   * helper for what git does without one.
+   */
+  async rebaseAction(projectPath: string, action: GitRebaseAction): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const before = await this.readStatus(directory)
+      const unresolved = before.conflicted.length
+      if (action === 'continue' && unresolved > 0) {
+        throw new GitRefusal(
+          `Resolve and stage ${unresolved === 1 ? 'the remaining conflicted file' : `the ${String(unresolved)} remaining conflicted files`}, then continue the rebase`
+        )
+      }
+      const verb = action === 'continue' ? 'continue' : 'skip'
+      let failure: unknown = null
+      try {
+        await this.wrapError(projectPath, 'mutation', async () => {
+          await this.clientWithoutEditor(directory).raw([
+            'rebase',
+            action === 'continue' ? '--continue' : '--skip'
+          ])
+        })
+      } catch (error) {
+        failure = error
+      }
+      // Read the state back either way: it is what says whether the action moved
+      // the rebase on, stopped it again, or left nothing to continue.
+      const status = await this.readStatus(directory)
+      if (failure === null) return status
+      if (status.conflictState === 'rebase' && status.conflicted.length > 0) return status
+      Logger.error(`Rebase ${verb} for ${projectPath} failed: ${rebaseFailureDetail(failure)}`)
+      throw new GitRefusal(
+        status.conflictState === 'rebase'
+          ? `Git could not ${verb} the rebase. Resolve and stage what it is holding, skip this commit, or abort the rebase`
+          : `Git could not ${verb} the rebase, and no rebase is in progress any more`
+      )
+    })
+  }
+
+  /**
    * Prepare to resolve a PR's online merge conflicts locally: check out the PR
    * head as a local branch (`pr-<number>`) and merge the current base into it
    * so the conflicts land in the working tree for the conflict UI to resolve.
@@ -1427,21 +1998,26 @@ export class GitService {
       const git = this.client(directory)
       const localBranch = `pr-${options.pullNumber}`
       const baseRef = `${options.remote}/${options.baseBranch}`
-      await this.wrapError(projectPath, 'mutation', async () => {
-        // Check out the PR head as a local branch (force-refresh the ref so a
-        // stale `pr-<n>` from an earlier attempt always tracks the latest head).
-        await git.raw([
-          'fetch',
-          options.remote,
-          `+pull/${options.pullNumber}/head:refs/heads/${localBranch}`
-        ])
-        await git.raw(['checkout', localBranch])
-        // Fetch the latest base and merge it in to reproduce the PR's conflict.
-        await git.raw(['fetch', options.remote, options.baseBranch])
-        // A conflicted merge rejects; the refreshed status below still reports
-        // the conflict state, so this is expected and swallowed.
-        await git.merge([baseRef]).catch(() => {})
-      })
+      // The whole sequence is one remote-owned transaction: a `fetch --prune`
+      // landing between the head fetch and the base fetch could drop the
+      // remote-tracking ref the merge is about to integrate.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          // Check out the PR head as a local branch (force-refresh the ref so a
+          // stale `pr-<n>` from an earlier attempt always tracks the latest head).
+          await git.raw([
+            'fetch',
+            options.remote,
+            `+pull/${options.pullNumber}/head:refs/heads/${localBranch}`
+          ])
+          await git.raw(['checkout', localBranch])
+          // Fetch the latest base and merge it in to reproduce the PR's conflict.
+          await git.raw(['fetch', options.remote, options.baseBranch])
+          // A conflicted merge rejects; the refreshed status below still reports
+          // the conflict state, so this is expected and swallowed.
+          await git.merge([baseRef]).catch(() => {})
+        })
+      )
       return this.readStatus(directory)
     })
   }
@@ -1452,17 +2028,37 @@ export class GitService {
    * updates the PR), check the user's original branch back out, and delete the
    * now-useless temporary branch. The temporary branch exists only to stage
    * the conflict resolution, so nothing is left for the user to do by hand.
+   *
+   * The push resolves credentials the same way `push` does: the caller passes
+   * the vaulted PAT, so finishing works on a repository whose remote the panel
+   * authenticates for rather than depending on ambient git credentials.
    */
   async finishPrResolve(
     projectPath: string,
-    options: { remote: string; pullNumber: number; headBranch: string; returnBranch: string }
+    options: {
+      remote: string
+      pullNumber: number
+      headBranch: string
+      returnBranch: string
+      token?: string
+    }
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      const git = this.client(directory)
       const localBranch = `pr-${options.pullNumber}`
+      // The push publishes to the PR's head branch, so it takes the remote lane;
+      // checking the original branch back out and dropping the temporary one are
+      // local writes and stay on this lane.
+      await this.enqueueRemote(projectPath, () =>
+        this.wrapError(projectPath, 'mutation', async () => {
+          const pushClient = options.token
+            ? this.withAuthHeader(directory, options.token)
+            : this.client(directory)
+          await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
+        })
+      )
       await this.wrapError(projectPath, 'mutation', async () => {
-        await git.raw(['push', options.remote, `${localBranch}:${options.headBranch}`])
+        const git = this.client(directory)
         await git.checkout(options.returnBranch)
         await git.deleteLocalBranch(localBranch, true)
       })
@@ -1504,8 +2100,8 @@ export class GitService {
         const lines = existing ? existing.replace(/\r\n/gu, '\n').split('\n') : []
         const patterns: string[] = []
         for (const path of safePaths) {
-          const isDirectory = await this.isDirectory(directory, path)
-          const pattern = isDirectory ? `${path}/` : path
+          const pathIsDirectory = await isDirectory(directory, path)
+          const pattern = pathIsDirectory ? `${path}/` : path
           if (!lines.includes(pattern)) patterns.push(pattern)
         }
         if (patterns.length > 0) {
@@ -1560,35 +2156,11 @@ export class GitService {
         }
         for (const path of untracked) {
           const absolute = resolve(directory, path)
-          await this.removePath(absolute)
+          await removePath(absolute)
         }
       })
       return this.readStatus(directory)
     })
-  }
-
-  /** True when the path resolves to a directory inside the repository. */
-  private async isDirectory(directory: string, path: string): Promise<boolean> {
-    try {
-      const info = await stat(resolve(directory, path))
-      return info.isDirectory()
-    } catch {
-      return false
-    }
-  }
-
-  /** Recursively remove a file or directory that is not tracked by git. */
-  private async removePath(absolute: string): Promise<void> {
-    try {
-      const info = await stat(absolute)
-      if (info.isDirectory()) {
-        await rm(absolute, { recursive: true, force: true })
-      } else {
-        await unlink(absolute)
-      }
-    } catch {
-      // Nothing to remove   treat as already gone.
-    }
   }
 
   /** List stashes newest-first, e.g. `stash@{0}` → `stash@{n}`. */
@@ -1646,348 +2218,23 @@ export class GitService {
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
-  /** Read small previews of untracked text files without adding them to Git. */
-  private async untrackedComposeContext(
-    directory: string,
-    git: SimpleGit
-  ): Promise<{ text: string; truncated: boolean }> {
-    const status = await git.status()
-    const candidates = status.not_added.slice(0, PR_COMPOSE_UNTRACKED_FILES)
-    let remainingBytes = PR_COMPOSE_UNTRACKED_BYTES
-    let truncated = status.not_added.length > candidates.length
-    const sections: string[] = []
-
-    for (
-      let index = 0;
-      index < candidates.length && remainingBytes > 0;
-      index += PR_COMPOSE_READ_BATCH
-    ) {
-      const batch = candidates.slice(index, index + PR_COMPOSE_READ_BATCH)
-      const previews = await Promise.all(
-        batch.map(async (relativePath) => {
-          const safePath = this.assertRelativePath(directory, relativePath)
-          const absolutePath = resolve(directory, safePath)
-          const metadata = await lstat(absolutePath).catch(() => null)
-          if (!metadata?.isFile() || metadata.isSymbolicLink())
-            return { path: safePath, text: '', binary: true, truncated: false }
-          const maximum = Math.min(8 * 1024, remainingBytes)
-          const handle = await open(absolutePath, 'r')
-          try {
-            const buffer = Buffer.allocUnsafe(maximum)
-            const { bytesRead } = await handle.read(buffer, 0, maximum, 0)
-            const content = buffer.subarray(0, bytesRead)
-            const binary = content.includes(0)
-            return {
-              path: safePath,
-              text: binary ? '' : content.toString('utf-8'),
-              binary,
-              truncated: metadata.size > bytesRead
-            }
-          } finally {
-            await handle.close()
-          }
-        })
-      )
-      for (const preview of previews) {
-        const body = preview.binary ? '[binary or unreadable file]' : preview.text
-        const section = `File ${JSON.stringify(preview.path)}\n${body}`
-        const bounded = boundedUtf8(section, remainingBytes)
-        sections.push(bounded.text)
-        remainingBytes -= Buffer.byteLength(bounded.text, 'utf-8')
-        truncated ||= preview.truncated || bounded.truncated
-        if (bounded.truncated) break
-      }
-    }
-    return { text: sections.join('\n\n'), truncated }
-  }
-
-  /** Files changed by any commit-like ref (hash or `stash@{n}`), vs its first parent. */
-  private async diffVsParent(git: SimpleGit, ref: string): Promise<GitFileChange[]> {
-    const safeRef = ref.trim()
-    const result = await git.show([`${safeRef}^!`, '--stat', '--format='])
-    const lines = result.split('\n').filter((line) => line.trim())
-    const changes: GitFileChange[] = []
-    for (const line of lines) {
-      const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+)/u.exec(line)
-      if (match) {
-        const path = match[1]?.trim() ?? ''
-        const statusChar = match[3]?.[0] ?? 'M'
-        const status: GitFileStatus =
-          statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
-        changes.push({ path, status, staged: false })
-      }
-    }
-    return changes
-  }
-
-  /** Per-file diff for any commit-like ref (hash or `stash@{n}`), vs its first parent. */
-  private async fileDiffVsParent(
-    git: SimpleGit,
-    directory: string,
-    ref: string,
-    relativePath: string
-  ): Promise<GitDiff> {
-    const safeRef = ref.trim()
-    const safePath = this.assertRelativePath(directory, relativePath)
-    const parentRef = `${safeRef}^`
-    const parentExists = await this.refExists(git, parentRef)
-    if (!parentExists) {
-      // Root commit: the whole file is new, reuse the untracked/added shape.
-      const blob = await this.readBlob(git, `${safeRef}:${safePath}`)
-      if (!blob) return this.emptyDiff(safePath, false)
-      const additions = blob.content.length === 0 ? 0 : blob.content.split('\n').length
-      return {
-        path: safePath,
-        staged: false,
-        content: blob.content
-          .split('\n')
-          .map((line) => `+${line}`)
-          .join('\n'),
-        before: '',
-        after: blob.content,
-        binary: blob.content.includes('\0'),
-        additions,
-        deletions: 0,
-        truncated: blob.truncated
-      }
-    }
-    const content = await git.diff([parentRef, safeRef, '--', safePath])
-    const summary = await git.diffSummary([parentRef, safeRef, '--', safePath])
-    const file = summary.files[0]
-    const additions =
-      file && 'insertions' in file && typeof file.insertions === 'number' ? file.insertions : 0
-    const deletions =
-      file && 'deletions' in file && typeof file.deletions === 'number' ? file.deletions : 0
-    const binary = file?.binary ?? false
-    const truncated = Buffer.byteLength(content, 'utf-8') > MAX_DIFF_BYTES
-    const boundedContent = truncated
-      ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
-      : content
-
-    let before: string | undefined
-    let after: string | undefined
-    let sideTruncated = false
-    if (!binary) {
-      const beforeBlob = await this.readBlob(git, `${parentRef}:${safePath}`)
-      const afterBlob = await this.readBlob(git, `${safeRef}:${safePath}`)
-      before = beforeBlob?.content
-      after = afterBlob?.content
-      sideTruncated = (beforeBlob?.truncated ?? false) || (afterBlob?.truncated ?? false)
-    }
-
-    return {
-      path: safePath,
-      staged: false,
-      content: boundedContent,
-      binary,
-      additions,
-      deletions,
-      truncated: truncated || sideTruncated,
-      before,
-      after
-    }
-  }
+  // ─── Private helpers ─────────────────────────────────────────────────────
 
   /** Resolve a project-relative path and forbid escaping the repository root. */
   private assertRelativePath(directory: string, path: string): string {
-    const candidate = path.trim()
-    if (!candidate || candidate.includes('\0')) {
-      throw new TypeError('Invalid repository path')
-    }
-    const absolute = isAbsolute(candidate) ? candidate : resolve(directory, candidate)
-    const relativePath = relative(directory, absolute)
-    if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
-      throw new TypeError('Repository path escapes the project root')
-    }
-    return toPosixPath(relativePath)
+    return assertRepositoryRelativePath(directory, path)
   }
 
-  private async isUntracked(git: SimpleGit, path: string): Promise<boolean> {
-    const status = await git.status()
-    return status.not_added.includes(path)
-  }
-
-  /** True when a rev (e.g. `abc123^`) resolves to an existing commit. */
+  /**
+   * True when a rev (e.g. `abc123^`) resolves to an existing commit.
+   *
+   * Detection is read from stdout on purpose: `rev-parse --verify --quiet`
+   * prints nothing and exits non-zero for a missing rev, but simple-git only
+   * rejects a raw command when it produced error output   so a rejected promise
+   * is not a reliable existence signal here.
+   */
   private async refExists(git: SimpleGit, rev: string): Promise<boolean> {
-    try {
-      await git.raw(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  private async mapStatus(directory: string, status: StatusResult): Promise<GitStatus> {
-    const conflictState = await this.detectConflictState(directory)
-    const conflicted = status.conflicted
-    const changes: GitFileChange[] = []
-    for (const file of status.files) {
-      const path = toPosixPath(file.path)
-      const indexMarker = file.index?.trim() ?? ''
-      const workMarker = file.working_dir?.trim() ?? ''
-      const staged = indexMarker.length > 0 && indexMarker !== '?'
-      const untracked = workMarker === '?' || status.not_added.includes(path)
-
-      const push = (entry: GitFileChange): void => {
-        changes.push(entry)
-      }
-
-      if (conflicted.includes(path)) {
-        push({
-          path,
-          ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
-          status: 'conflicted',
-          staged
-        })
-        continue
-      }
-      if (untracked) {
-        push({ path, status: 'untracked', staged: false })
-        continue
-      }
-
-      const statusKind: GitFileStatus = file.from
-        ? 'renamed'
-        : file.index === 'D' || file.working_dir === 'D'
-          ? 'deleted'
-          : staged
-            ? 'added'
-            : 'modified'
-      push({
-        path,
-        ...(file.from ? { oldPath: toPosixPath(file.from) } : {}),
-        status: statusKind,
-        staged
-      })
-      // git reports a file staged AND modified again as one entry with both
-      // index and worktree markers ("MM"). Surface the unstaged half too so the
-      // panel shows both the staged snapshot and the further modifications.
-      if (staged && workMarker.length > 0 && workMarker !== '?' && workMarker !== 'D') {
-        push({ path, status: 'modified', staged: false })
-      }
-    }
-
-    const stagedChanges = changes.filter(
-      (change) => change.staged && change.status !== 'conflicted'
-    ).length
-    const untrackedChanges = changes.filter((change) => change.status === 'untracked').length
-    const unstagedChanges = changes.filter(
-      (change) => !change.staged && change.status !== 'untracked' && change.status !== 'conflicted'
-    ).length
-
-    return {
-      repositoryRoot: directory,
-      branch: status.current ? status.current : null,
-      detached: Boolean(status.current && status.current === 'HEAD'),
-      upstream: status.tracking ?? null,
-      conflictState,
-      clean: status.isClean(),
-      changes,
-      stagedChanges,
-      unstagedChanges,
-      untrackedChanges,
-      conflicted,
-      ahead: status.ahead ?? 0,
-      behind: status.behind ?? 0
-    }
-  }
-
-  /** Map branch short names to the worktree paths that hold them. The entry for the checkout
-   *  being operated on (`directory`) is skipped: its branch is the panel's current branch and
-   *  already carries `current`, so it must not be double-flagged as a foreign worktree. Every
-   *  other checkout   including the primary repository when viewed from a linked worktree  
-   *  flags its branch, because git refuses checking that branch out anywhere else. */
-  private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
-    const entries = parseWorktreePorcelain(raw).entries
-    const paths = new Map<string, string>()
-    const directoryKey = this.worktreePathKey(directory)
-    for (const entry of entries) {
-      if (!entry.head?.startsWith('refs/heads/')) continue
-      // Git reports realpaths; the operating directory may still contain symlinks, so both
-      // sides are normalized before comparing (lexical fallback for vanished worktrees).
-      if (this.worktreePathKey(entry.path) === directoryKey) continue
-      paths.set(entry.head.slice('refs/heads/'.length), entry.path)
-    }
-    return paths
-  }
-
-  /** Stable comparison key for a worktree path: real location, or lexical resolution when the
-   *  path no longer exists on disk. */
-  private worktreePathKey(path: string): string {
-    try {
-      return realpathSync(path)
-    } catch {
-      return resolve(path)
-    }
-  }
-
-  private parseBranchRefs(
-    raw: string,
-    remoteNames: string[],
-    worktreePaths: ReadonlyMap<string, string>
-  ): GitBranchInfo[] {
-    // `refname:short` disambiguates when a tag shares the branch's name (e.g. a
-    // `nightly` tag and `nightly` branch render as `heads/nightly`), so the
-    // operational branch `name` must be derived from the full ref instead  
-    // `git branch -d heads/nightly` fails with "branch not found".
-    const localRefPrefix = 'refs/heads/'
-    const remoteRefPrefix = 'refs/remotes/'
-    const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
-    const branches: GitBranchInfo[] = []
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue
-      const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
-      if (!fullRef || !ref) continue
-      if (fullRef.startsWith(localRefPrefix)) {
-        const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-        const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-        const name = fullRef.slice(localRefPrefix.length)
-        branches.push({
-          kind: 'local',
-          name,
-          ref,
-          current: head?.trim() === '*',
-          remote: remoteName || null,
-          upstream: upstream || null,
-          ahead: Number.parseInt(ahead, 10) || 0,
-          behind: Number.parseInt(behind, 10) || 0,
-          worktreePath: worktreePaths.get(name) ?? null
-        })
-        continue
-      }
-      if (!fullRef.startsWith(remoteRefPrefix) || symbolicTarget) continue
-      const relativeRef = fullRef.slice(remoteRefPrefix.length)
-      const remote = namesBySpecificity.find((name) => relativeRef.startsWith(`${name}/`))
-      if (!remote) continue
-      const name = relativeRef.slice(remote.length + 1)
-      if (!name || name === 'HEAD') continue
-      branches.push({
-        kind: 'remote',
-        name,
-        ref,
-        current: false,
-        remote,
-        upstream: null,
-        ahead: 0,
-        behind: 0,
-        worktreePath: null
-      })
-    }
-    return branches
-  }
-
-  private emptyDiff(path: string, staged: boolean): GitDiff {
-    return {
-      path,
-      staged,
-      content: '',
-      binary: false,
-      additions: 0,
-      deletions: 0,
-      truncated: false,
-      before: '',
-      after: ''
-    }
+    return gitRefExists(git, rev)
   }
 
   /**
@@ -1999,334 +2246,30 @@ export class GitService {
     git: SimpleGit,
     ref: string
   ): Promise<{ content: string; truncated: boolean } | null> {
-    let size: number | null
-    try {
-      const sizeOutput = await git.raw(['cat-file', '-s', ref])
-      size = Number.parseInt(String(sizeOutput).trim(), 10)
-    } catch {
-      return null
-    }
-    if (size === null || !Number.isFinite(size) || size < 0) return null
-    if (size === 0) return { content: '', truncated: false }
-    if (size > MAX_DIFF_BYTES * 8) return { content: '', truncated: true }
-    let output: unknown
-    try {
-      output = await git.raw(['cat-file', 'blob', ref])
-    } catch {
-      return null
-    }
-    const text = String(output ?? '')
-    const truncated = size > MAX_DIFF_BYTES
-    return { content: truncated ? text.slice(0, MAX_DIFF_BYTES) : text, truncated }
+    return readGitBlob(git, ref)
   }
 
   /**
-   * Read a working-tree file bounded to the diff payload cap, detecting binary
-   * content via NUL bytes (mirrors the old untracked-diff probe).
+   * Read a working-tree file bounded to `maximumBytes`, detecting binary
+   * content via NUL bytes (mirrors the old untracked-diff probe). The diff
+   * bound is the default; the conflict path passes the configured cap.
    */
   private async workingFileContent(
     directory: string,
-    path: string
+    path: string,
+    maximumBytes?: number
   ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
-    const filePath = resolve(directory, path)
-    const metadata = await stat(filePath).catch(() => null)
-    if (!metadata) return null
-
-    const readHead = async (): Promise<string | null> => {
-      const size = Math.min(metadata.size, MAX_DIFF_BYTES + 1)
-      const buffer = Buffer.alloc(size)
-      try {
-        const handle = await open(filePath, 'r')
-        try {
-          await handle.read(buffer, 0, size, 0)
-        } finally {
-          await handle.close()
-        }
-      } catch {
-        return null
-      }
-      return buffer.toString('utf-8')
-    }
-
-    const head = await readHead()
-    if (head === null) return null
-    const truncated = metadata.size > MAX_DIFF_BYTES
-    return {
-      content: truncated ? head.slice(0, MAX_DIFF_BYTES) : head,
-      truncated,
-      binary: head.includes('\0')
-    }
+    return readWorkingFileContent(directory, path, maximumBytes)
   }
 
-  /** Build a bounded `+` diff for an untracked file, detecting binary content. */
-  private async untrackedDiff(directory: string, path: string): Promise<GitDiff> {
-    const file = await this.workingFileContent(directory, path)
-    if (!file) return this.emptyDiff(path, false)
-    if (file.binary) return { ...this.emptyDiff(path, false), binary: true }
-    const additions = file.content.split('\n').length
-    return {
-      path,
-      staged: false,
-      content: file.content
-        .split('\n')
-        .map((line) => `+${line}`)
-        .join('\n'),
-      before: '',
-      after: file.content,
-      binary: false,
-      additions,
-      deletions: 0,
-      truncated: file.truncated
-    }
+  /**
+   * The configured byte cap on a conflicted file, resolved per call so a
+   * settings change applies without a restart. A missing or nonsensical
+   * provider value falls back to the shipped default rather than refusing every
+   * conflict the app can still handle.
+   */
+  private async conflictFileBytes(): Promise<number> {
+    const limit = await this.conflictFileLimit().catch(() => DEFAULT_MAX_CONFLICT_FILE_BYTES)
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_MAX_CONFLICT_FILE_BYTES
   }
-
-  /** Detect an in-progress merge or rebase from git's control files. */
-  private async detectConflictState(directory: string): Promise<'merge' | 'rebase' | 'none'> {
-    const gitDir = resolve(directory, '.git')
-    const probe = async (candidate: string): Promise<boolean> => {
-      try {
-        await access(candidate)
-        return true
-      } catch {
-        return false
-      }
-    }
-    if (await probe(resolve(gitDir, 'MERGE_HEAD'))) return 'merge'
-    if (
-      (await probe(resolve(gitDir, 'rebase-merge'))) ||
-      (await probe(resolve(gitDir, 'rebase-apply')))
-    ) {
-      return 'rebase'
-    }
-    return 'none'
-  }
-
-  private mapMergeResult(result: {
-    conflicts?: Array<{ file?: string | null; reason?: string }>
-    result?: string
-    conflicted?: boolean
-  }): MergeSummary {
-    const conflicts = result.conflicts ?? []
-    const conflictedFiles = conflicts
-      .map((conflict) => ({
-        path: conflict.file ?? '',
-        ...(conflict.reason ? { reason: conflict.reason } : {})
-      }))
-      .filter((entry) => entry.path.length > 0)
-    const resultText = result.result ?? 'Merge completed.'
-    const conflicted = result.conflicted ?? conflictedFiles.length > 0
-    return {
-      conflicted: conflictedFiles,
-      merged: [],
-      result: conflicted ? `${resultText} (${conflictedFiles.length} conflicted)` : resultText,
-      aborted: false
-    }
-  }
-
-  private emptyMergeResult(result: string): MergeSummary {
-    return { conflicted: [], merged: [], result, aborted: false }
-  }
-
-  /** Transient auth header via per-command `-c` config   never persisted, never logged. */
-  private withAuthHeader(directory: string, token: string): SimpleGit {
-    return simpleGit(directory, {
-      maxConcurrentProcesses: 1,
-      config: [`http.extraheader=Authorization: Bearer ${token}`]
-    })
-  }
-}
-
-/**
- * True when a text file still contains git conflict markers. A resolved file
- * has none of the `<<<<<<<`, `=======`, or `>>>>>>>` marker lines, so presence
- * of any of them means resolution is not complete.
- */
-function conflictSourceHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex')
-}
-
-function lineStartOffsets(content: string): number[] {
-  const offsets = [0]
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index] === '\n') offsets.push(index + 1)
-  }
-  return offsets
-}
-
-function buildInitialConflictWorkFile(analysis: GitConflictAnalysis): {
-  content: string
-  hunks: GitConflictWorkHunkState[]
-} {
-  const offsets = lineStartOffsets(analysis.content)
-  const parts: string[] = []
-  const hunks: GitConflictWorkHunkState[] = []
-  let sourceCursor = 0
-  let outputLength = 0
-  for (let index = 0; index < analysis.hunks.length; index += 1) {
-    const hunk = analysis.hunks[index]
-    if (!hunk) continue
-    const sourceFrom = offsets[hunk.startLine - 1] ?? analysis.content.length
-    const sourceTo = offsets[hunk.endLine] ?? analysis.content.length
-    const before = analysis.content.slice(sourceCursor, sourceFrom)
-    parts.push(before)
-    outputLength += before.length
-    const from = outputLength
-    parts.push(hunk.ours)
-    outputLength += hunk.ours.length
-    const to = outputLength
-    if (sourceTo < analysis.content.length && !hunk.ours.endsWith('\n')) {
-      parts.push('\n')
-      outputLength += 1
-    }
-    hunks.push({
-      index,
-      from,
-      to,
-      acceptedIncoming: false,
-      acceptedCurrent: false,
-      edited: false
-    })
-    sourceCursor = sourceTo
-  }
-  parts.push(analysis.content.slice(sourceCursor))
-  return { content: parts.join(''), hunks }
-}
-
-function isConflictWorkHunkState(
-  value: unknown,
-  contentLength: number
-): value is GitConflictWorkHunkState {
-  if (!value || typeof value !== 'object') return false
-  const state = value as Record<string, unknown>
-  return (
-    Number.isInteger(state.index) &&
-    typeof state.index === 'number' &&
-    state.index >= 0 &&
-    Number.isInteger(state.from) &&
-    typeof state.from === 'number' &&
-    state.from >= 0 &&
-    Number.isInteger(state.to) &&
-    typeof state.to === 'number' &&
-    state.to >= state.from &&
-    state.to <= contentLength &&
-    typeof state.acceptedIncoming === 'boolean' &&
-    typeof state.acceptedCurrent === 'boolean' &&
-    typeof state.edited === 'boolean'
-  )
-}
-
-function parseConflictWorkState(
-  stateJson: string,
-  contentLength: number
-): GitConflictWorkHunkState[] {
-  const parsed: unknown = JSON.parse(stateJson)
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every((item) => isConflictWorkHunkState(item, contentLength))
-  ) {
-    throw new TypeError('Conflict work state is invalid')
-  }
-  return parsed
-}
-
-function parseConflictWorkMetadata(
-  metadataText: string,
-  sourceHash: string,
-  hunkCount: number,
-  contentLength: number
-): ConflictWorkMetadata | null {
-  const parsed: unknown = JSON.parse(metadataText)
-  if (!parsed || typeof parsed !== 'object') return null
-  const metadata = parsed as Record<string, unknown>
-  if (
-    metadata.version !== 1 ||
-    metadata.sourceHash !== sourceHash ||
-    metadata.draftSaved !== true ||
-    !Array.isArray(metadata.hunks) ||
-    metadata.hunks.length !== hunkCount ||
-    !metadata.hunks.every((item) => isConflictWorkHunkState(item, contentLength))
-  ) {
-    return null
-  }
-  return {
-    version: 1,
-    sourceHash,
-    draftSaved: true,
-    hunks: metadata.hunks
-  }
-}
-
-function hasConflictMarkers(content: string): boolean {
-  return /^(?:<<<<<<<[ \t].*|=======$|>>>>>>>[ \t].*)$/mu.test(content)
-}
-
-/**
- * Parse the well-formed conflict blocks (`<<<<<<<` … `>>>>>>>`) out of a
- * working file so the resolution panel can render each one. Handles both the
- * classic two-way shape and the diff3 shape (a `|||||||` base block between
- * ours and theirs). Returns hunks with 1-based inclusive line spans covering
- * the whole block including its markers.
- */
-function parseConflictHunks(content: string): GitConflictHunk[] {
-  const lines = content.split('\n')
-  const hunks: GitConflictHunk[] = []
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i] ?? ''
-    if (!line.startsWith('<<<<<<<')) {
-      i += 1
-      continue
-    }
-    const startLine = i + 1
-    const oursLabel = line.replace(/^<{7,}(?: |$)/u, '') || 'ours'
-    const ours: string[] = []
-    let base: string[] | null = null
-    const theirs: string[] = []
-    let j = i + 1
-    // Ours side: everything up to `=======` or a diff3 `|||||||` base marker.
-    while (
-      j < lines.length &&
-      !(lines[j] ?? '').startsWith('=======') &&
-      !(lines[j] ?? '').startsWith('|||||||')
-    ) {
-      ours.push(lines[j] ?? '')
-      j += 1
-    }
-    // Diff3 base: between `|||||||` and `=======`.
-    if (j < lines.length && (lines[j] ?? '') !== '=======') {
-      j += 1
-      const baseLines: string[] = []
-      while (j < lines.length && !(lines[j] ?? '').startsWith('=======')) {
-        baseLines.push(lines[j] ?? '')
-        j += 1
-      }
-      base = baseLines
-    }
-    if (j >= lines.length) {
-      i = startLine
-      continue // Malformed block   skip forward so we never loop forever.
-    }
-    j += 1 // consume `=======`
-    while (j < lines.length && !(lines[j] ?? '').startsWith('>>>>>>>')) {
-      theirs.push(lines[j] ?? '')
-      j += 1
-    }
-    if (j >= lines.length) {
-      i = startLine
-      continue // Unclosed block   not a usable hunk.
-    }
-    const endLine = j + 1
-    const theirsLabel = (lines[j] ?? '').replace(/^>{7,}(?: |$)/u, '') || 'theirs'
-    hunks.push({
-      startLine,
-      endLine,
-      oursLabel,
-      theirsLabel,
-      ours: ours.join('\n'),
-      theirs: theirs.join('\n'),
-      base: base === null ? null : base.join('\n')
-    })
-    i = j + 1
-  }
-  return hunks
 }

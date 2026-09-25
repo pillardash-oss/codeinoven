@@ -69,7 +69,6 @@ jobs:
     timeout-minutes: 60
     needs: validate
     env:
-      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false
@@ -150,7 +149,7 @@ jobs:
       - name: Launch packaged application through workspace readiness
         shell: bash
         run: |
-          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output ".cio/tmp/startup-smoke-${{ matrix.target }}.json")
           exit_code=0
           for attempt in 1 2 3; do
             if [ "${{ matrix.target }}" = "linux" ]; then
@@ -179,7 +178,7 @@ jobs:
             dist/*.deb
             dist/*.blockmap
             dist/*.yml
-            agent-out/startup-smoke-*.json
+            .cio/tmp/startup-smoke-*.json
           if-no-files-found: error
 
   release:
@@ -189,6 +188,9 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      # The mirror run is dispatched at the end of this job (workflow_dispatch
+      # needs Actions write on the token).
+      actions: write
 
     steps:
       - name: Check out repository
@@ -276,3 +278,20 @@ jobs:
             sleep 10
           done
           exit "$publish_exit"
+
+      - name: Dispatch the download mirror
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # This release is published with GITHUB_TOKEN, and GitHub does not
+          # start a workflow from an event a GITHUB_TOKEN caused, so the mirror
+          # workflow's `release: published` trigger never fires for it.
+          # workflow_dispatch is the documented exception, so ask for the mirror
+          # run explicitly (see .github/workflows/download-mirror.yml).
+          if [ -z "${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}" ]; then
+            echo "::warning::Download mirror: DOWNLOAD_MIRROR_S3_ENDPOINT is not set, so $TAG was not mirrored."
+            exit 0
+          fi
+          gh workflow run download-mirror.yml -f tag="$TAG" -f channel=stable
+          echo "::notice::Download mirror: dispatched for $TAG (stable)."

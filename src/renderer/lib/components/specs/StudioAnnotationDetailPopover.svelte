@@ -6,6 +6,7 @@
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
+  import { formatDateTimeCompact } from '$shared/date-time-format'
   import type { SpeechScope } from '../../../../lib/speech/types'
 
   type CallbackResult = void | Promise<void>
@@ -56,15 +57,6 @@
   function speechTarget() {
     return editor?.speechEditorTarget(speechTargetId) ?? null
   }
-
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
 </script>
 
 <div
@@ -114,7 +106,7 @@
     <p class="mt-3 text-xs leading-relaxed text-foreground">{annotation.body}</p>
   {/if}
   <p class="mt-1 text-[0.625rem] text-dimmed">
-    {annotation.author} · {formatDate(annotation.createdAt)}
+    {annotation.author} · {formatDateTimeCompact(annotation.createdAt)}
   </p>
   <div class="mt-3 flex items-center justify-between">
     {#if canEdit && onResolve}

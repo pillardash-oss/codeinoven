@@ -1,7 +1,7 @@
 .git
 .github
 .env
-agent-out
+.cio
 dist
 node_modules
 out

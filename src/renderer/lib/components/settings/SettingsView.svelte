@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import {
     FONT_FAMILY_OPTIONS,
@@ -11,19 +12,22 @@
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
-  import type {
-    AppConfig,
-    AppConfigPatch,
-    GitPullPreference,
-    PrMergeMethod,
-    SkillMarketEntry,
-    SlashCommandMode,
-    ThemePreference
+  import {
+    MAX_MAX_CONFLICT_FILE_BYTES,
+    MIN_MAX_CONFLICT_FILE_BYTES,
+    type AppConfig,
+    type AppConfigPatch,
+    type GitPullPreference,
+    type PrMergeMethod,
+    type SkillMarketEntry,
+    type SlashCommandMode,
+    type ThemePreference
   } from '$shared/types'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { flashElement } from '$lib/reveal-flash'
   import {
     AlertCircle,
     AlertTriangle,
@@ -48,18 +52,19 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import ProvidersView from '../providers/ProvidersView.svelte'
-  import UtilitiesView from './UtilitiesView.svelte'
+  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
-  import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
+  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
@@ -102,15 +107,28 @@
   let channelBusy = $state(false)
 
   type UtilitiesRoute =
-    { page: 'catalog' } | { page: 'marketplace' } | { page: 'skill'; entry: SkillMarketEntry }
+    | { page: 'catalog'; tab: UtilitiesTab }
+    | { page: 'marketplace' }
+    | { page: 'skill'; entry: SkillMarketEntry }
 
   interface SettingsHistoryEntry {
     section: SettingsSection
     utilitiesRoute: UtilitiesRoute
   }
 
-  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog' })
+  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog', tab: 'all' })
   let settingsHistory = $state<SettingsHistoryEntry[]>([])
+
+  /**
+   * True from the moment the marketplace is opened until the utilities section is
+   * left again. It keeps the marketplace mounted (invisibly) behind the catalog and
+   * behind a skill page, so Back restores the results instead of rebuilding them.
+   */
+  let marketplaceVisited = $state(false)
+
+  /** The mounted catalog, so returning to it can re-read what the marketplace
+   *  may have installed or uninstalled while the catalog sat behind it. */
+  let utilitiesCatalog: UtilitiesView | undefined = $state(undefined)
 
   function currentSettingsLocation(): SettingsHistoryEntry {
     return { section, utilitiesRoute }
@@ -124,13 +142,41 @@
       return
     }
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
-    utilitiesRoute = { page: 'catalog' }
+    utilitiesRoute = { page: 'catalog', tab: 'all' }
+    marketplaceVisited = false
     onNavigateSection(nextSection)
   }
 
   function navigateUtilities(nextRoute: UtilitiesRoute): void {
     settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    if (nextRoute.page === 'marketplace') marketplaceVisited = true
+    applyUtilitiesRoute(nextRoute)
+  }
+
+  /** Moves the utilities route and re-reads the catalog when the route returns to
+   *  it, because the marketplace can change what belongs in the list. */
+  function applyUtilitiesRoute(nextRoute: UtilitiesRoute): void {
+    const returningToCatalog = utilitiesRoute.page !== 'catalog' && nextRoute.page === 'catalog'
     utilitiesRoute = nextRoute
+    if (returningToCatalog) utilitiesCatalog?.reload()
+  }
+
+  /** Section tabs are one page, so switching them replaces the route, never the history. */
+  function selectUtilitiesTab(tab: UtilitiesTab): void {
+    if (utilitiesRoute.page !== 'catalog') return
+    utilitiesRoute = { page: 'catalog', tab }
+  }
+
+  /** Utilities section on screen. The catalog route owns it, so Back stays truthful. */
+  let catalogTab = $derived<UtilitiesTab>(
+    utilitiesRoute.page === 'catalog' ? utilitiesRoute.tab : 'all'
+  )
+
+  /** Where the skill page's back control returns to, and what it is called. */
+  function skillDetailBackLabel(): string {
+    return settingsHistory.at(-1)?.utilitiesRoute.page === 'marketplace'
+      ? 'Back to results'
+      : 'Back to utilities'
   }
 
   function goBack(): void {
@@ -140,12 +186,13 @@
       return
     }
     settingsHistory = settingsHistory.slice(0, -1)
-    utilitiesRoute = previous.utilitiesRoute
+    applyUtilitiesRoute(previous.utilitiesRoute)
+    if (previous.utilitiesRoute.page === 'marketplace') marketplaceVisited = true
     if (previous.section !== section) onNavigateSection(previous.section)
   }
 
   const escHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+    if (keymapState.matches('nav-settings-back', e)) {
       // The settings spotlight owns Escape while it is open, and so does any
       // open overlay (modal, palette): Escape closes only the topmost surface,
       // never the settings page underneath. bits-ui palettes preventDefault the
@@ -178,21 +225,14 @@
     }))
   )
 
-  /** Flashes a block's border three times to draw the eye after navigation. */
-  function flashElement(element: HTMLElement): void {
-    element.classList.remove('settings-flash')
-    void element.offsetWidth // restart cleanly if a flash is already mid-run
-    element.classList.add('settings-flash')
-    element.addEventListener('animationend', () => element.classList.remove('settings-flash'), {
-      once: true
-    })
-  }
-
   async function handleSettingsSearch(selection: ActionSelection): Promise<void> {
     const entry = settingsSearchIndex.get(selection.action.id)
     if (!entry) return
 
     navigateSection(entry.section)
+    // A card inside a tab is not on screen until that tab is selected, so the
+    // tab is chosen before the reveal looks for the block.
+    if (entry.harnessesTab) settingsUiState.harnessesTab = entry.harnessesTab
     await tick()
     // One frame so the freshly swapped section content has laid out.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
@@ -228,6 +268,7 @@
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
+      settingsUiState.harnessesTab = 'harnesses'
     }
   })
 
@@ -299,6 +340,19 @@
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
   }
 
+  function saveAgentQuestionCap(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < 1 || value > 10) {
+      input.value = String(config.agentQuestionCap)
+      return
+    }
+
+    void updateConfig({ agentQuestionCap: value })
+  }
+
   function saveMaxDiffLines(event: Event): void {
     const input = event.currentTarget
     if (!(input instanceof HTMLInputElement)) return
@@ -310,6 +364,32 @@
     }
 
     void updateConfig({ maxDiffLines: value })
+  }
+
+  /** The conflicted-file limit is stored in bytes and shown in MiB, which is
+   *  how the file editor states its own text cap. */
+  const MEBIBYTE = 1024 * 1024
+  /** The stored limit as the MiB number the input shows. Two decimals, because
+   *  a typed 1.7 MiB is stored as whole bytes and is not exactly representable
+   *  in MiB. */
+  let conflictFileLimitMib = $derived(Number((config.maxConflictFileBytes / MEBIBYTE).toFixed(2)))
+
+  function saveMaxConflictFileBytes(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const mebibytes = Number(input.value)
+    const bytes = Math.round(mebibytes * MEBIBYTE)
+    if (
+      !Number.isFinite(mebibytes) ||
+      bytes < MIN_MAX_CONFLICT_FILE_BYTES ||
+      bytes > MAX_MAX_CONFLICT_FILE_BYTES
+    ) {
+      input.value = String(conflictFileLimitMib)
+      return
+    }
+
+    void updateConfig({ maxConflictFileBytes: bytes })
   }
 
   async function exportDiagnostics(): Promise<void> {
@@ -363,6 +443,14 @@
     void invoke('notification:openSettings')
   }
 
+  /** Toggle one in-app alert group; the two groups are independent. */
+  function setInAppNotificationSound(group: 'success' | 'issue', enabled: boolean): void {
+    const next = { ...config.inAppNotificationSound }
+    if (group === 'success') next.success = enabled
+    else next.issue = enabled
+    void updateConfig({ inAppNotificationSound: next })
+  }
+
   onMount(() => {
     void refreshNotificationPermission()
     // The main process re-verifies a 'denied' state on every permission query
@@ -370,7 +458,7 @@
     const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
       notificationPermission = status
     })
-    // The user may have just toggled notifications in System Settings  
+    // The user may have just toggled notifications in System Settings
     // returning to the app must re-derive the state instead of showing a
     // stale warning.
     const onWindowFocus = (): void => {
@@ -687,6 +775,44 @@
                 Test notification
               </button>
             </div>
+
+            <div class="mt-4 border-t pt-4">
+              <p class="text-sm font-medium">In-app notification sounds</p>
+              <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                A softer alert with the in-app toast, played only when that toast actually appears
+                while the app is in front. The off-app alert for the same event is unchanged.
+              </p>
+              <div class="mt-3 space-y-3">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Success</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent finished, a chat replied, or a specification is ready to review
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.success}
+                    onchange={(checked) => setInAppNotificationSound('success', checked)}
+                    aria-label="Toggle the in-app notification sound for success notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Needs attention or failed</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent is waiting on you or a run stopped with an error
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.issue}
+                    onchange={(checked) => setInAppNotificationSound('issue', checked)}
+                    aria-label="Toggle the in-app notification sound for attention and error notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Browser -->
@@ -709,6 +835,7 @@
                 disabled={!settingsReady}
               />
             </div>
+            <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
           </div>
 
           <!-- Power -->
@@ -840,6 +967,29 @@
                   lines
                 </label>
               </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Merge editor file limit</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Conflicted files larger than this open in the file editor instead of the merge
+                    editor
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
+                    max={MAX_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
+                    step="0.25"
+                    value={conflictFileLimitMib}
+                    disabled={!settingsReady}
+                    aria-label="Merge editor file limit in MiB"
+                    onchange={saveMaxConflictFileBytes}
+                  />
+                  MiB
+                </label>
+              </div>
             </div>
           </div>
 
@@ -911,12 +1061,44 @@
                   seconds
                 </label>
               </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium">Max questions per ask</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    How many questions one agent question card can carry
+                  </p>
+                </div>
+                <input
+                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={config.agentQuestionCap}
+                  disabled={!settingsReady}
+                  aria-label="Maximum questions per agent question card"
+                  onchange={saveAgentQuestionCap}
+                />
+              </div>
             </div>
           </div>
         </div>
       </div>
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
+    {:else if section === 'design'}
+      <div class="p-6 pb-24">
+        <div class="mb-6">
+          <h1 class="text-xl font-bold tracking-tight">Design</h1>
+          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          {#if error}
+            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+              {error}
+            </p>
+          {/if}
+        </div>
+        <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
+      </div>
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
     {:else if section === 'heartbeat'}
@@ -938,17 +1120,48 @@
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
-      {#if utilitiesRoute.page === 'catalog'}
-        <UtilitiesView onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })} />
-      {:else if utilitiesRoute.page === 'marketplace'}
-        <SkillsMarketplaceView
-          onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
-        />
-      {:else}
-        {#key utilitiesRoute.entry.id}
-          <SkillMarketplaceDetail entry={utilitiesRoute.entry} />
-        {/key}
-      {/if}
+      <!--
+        Every utilities page stays mounted once visited: the active one is painted,
+        the others wait invisibly with their query, results, and scroll intact. That
+        is what lets Back restore the exact page the user left, and what makes the
+        bookmarks shortcut on the marketplace a round trip instead of a reset.
+      -->
+      <div class="relative h-full min-h-0 overflow-hidden">
+        <div
+          class="absolute inset-0 overflow-y-auto {utilitiesRoute.page === 'catalog'
+            ? ''
+            : 'invisible'}"
+        >
+          <UtilitiesView
+            bind:this={utilitiesCatalog}
+            activeTab={catalogTab}
+            onSelectTab={selectUtilitiesTab}
+            onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })}
+            onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+          />
+        </div>
+        {#if marketplaceVisited}
+          <div class="absolute inset-0 {utilitiesRoute.page === 'marketplace' ? '' : 'invisible'}">
+            <SkillsMarketplaceView
+              onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+              onOpenBookmarks={() => navigateUtilities({ page: 'catalog', tab: 'bookmarks' })}
+            />
+          </div>
+        {/if}
+        {#if utilitiesRoute.page === 'skill'}
+          <!-- The skill page owns its scrolling: a pinned identity header and a body
+               pane that scrolls under it. -->
+          <div class="absolute inset-0 overflow-hidden bg-app">
+            {#key utilitiesRoute.entry.id}
+              <SkillMarketplaceDetail
+                entry={utilitiesRoute.entry}
+                backLabel={skillDetailBackLabel()}
+                onBack={goBack}
+              />
+            {/key}
+          </div>
+        {/if}
+      </div>
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
     {:else if section === 'sound'}
@@ -957,8 +1170,6 @@
       <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
-    {:else if section === 'remote'}
-      <RemoteSettingsTab />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
@@ -982,6 +1193,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
+              data-external-url={WEBSITE_URL}
               onclick={() => void openInBrowser(WEBSITE_URL)}
             >
               <VendorIcon name="CodeInOven" size={15} />
@@ -991,6 +1203,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
+              data-external-url={GITHUB_URL}
               onclick={() => void openInBrowser(GITHUB_URL)}
             >
               <VendorIcon name="GitHub" size={15} />
@@ -1000,6 +1213,7 @@
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
+              data-external-url={X_URL}
               onclick={() => void openInBrowser(X_URL)}
             >
               <svg

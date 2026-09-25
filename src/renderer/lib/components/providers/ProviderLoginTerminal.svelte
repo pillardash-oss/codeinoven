@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
+  import type { ITheme, Terminal } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
   import { patchSelectionCopy } from '$lib/terminal/selection-copy'
   import { registerTerminalHost } from '$lib/terminal/host-registry'
+  import { loadGhosttyWeb } from '$lib/terminal/runtime'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -59,10 +60,11 @@
 
   async function init(container: HTMLDivElement): Promise<void> {
     try {
-      const ghostty = await Ghostty.load()
+      const ghosttyWeb = await loadGhosttyWeb()
+      const ghostty = await ghosttyWeb.Ghostty.load()
       if (destroyed) return
-      patchSelectionCopy()
-      const terminal = new Terminal({
+      await patchSelectionCopy()
+      const terminal = new ghosttyWeb.Terminal({
         ghostty,
         cursorBlink: true,
         cursorStyle: 'bar',
@@ -73,7 +75,7 @@
         smoothScrollDuration: 80,
         theme: terminalTheme()
       })
-      const fit = new FitAddon()
+      const fit = new ghosttyWeb.FitAddon()
       terminal.loadAddon(fit)
 
       const host = document.createElement('div')

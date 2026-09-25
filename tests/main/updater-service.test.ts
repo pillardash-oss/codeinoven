@@ -3,6 +3,7 @@ import type { AppConfig } from '../../src/lib/types'
 import type { StorageEngine } from '../../src/main/storage/storage-engine'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -55,29 +56,36 @@ function defaultConfig(): AppConfig {
     theme: 'system',
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
-  fontWeight: 200,
+    fontWeight: 200,
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,
+    agentQuestionCap: 3,
     keybindings: {},
     slashCommandMode: 'app',
     preferredEditor: 'system',
     openLocalhostInCioBrowser: true,
+    allowPrototypeExternalCdn: true,
+    prototypeCdnAllowlist: [],
+    inAppNotificationSound: { success: true, issue: true },
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    auxiliaryAgents: {},
+    design: { assignments: [] },
+    rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
-    keepAwakeWhileRemoteConnected: true,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
     defaultPullStrategy: 'ask',
     maxDiffLines: 100,
+    maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }
@@ -195,12 +203,12 @@ describe('UpdaterService session-safe install', () => {
     expect(service.status.state).toBe('idle')
   })
 
-  it('treats a live remote session as active work', async () => {
+  it('treats a live activity source as active work', async () => {
     const storage = makeStorage()
     const service = new UpdaterService(storage)
     service.setChatEngine(makeChatEngine(() => 0))
-    const remote = { blockedQuit: true }
-    service.addActivitySource({ activeSessionCount: () => (remote.blockedQuit ? 1 : 0) })
+    const source = { active: true }
+    service.addActivitySource({ activeSessionCount: () => (source.active ? 1 : 0) })
 
     await emitDownloaded()
 
@@ -210,8 +218,8 @@ describe('UpdaterService session-safe install', () => {
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
 
-    // Unblocking the remote session lets the deferred install proceed.
-    remote.blockedQuit = false
+    // A source going idle lets the deferred install proceed.
+    source.active = false
     await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
     expect(service.status.state).toBe('idle')

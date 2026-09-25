@@ -5,6 +5,7 @@
     Copy,
     Eraser,
     ExternalLink,
+    Globe2,
     Link,
     Scissors,
     TextSelect
@@ -12,9 +13,11 @@
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { canOpenInCioBrowser, openInCioBrowser } from '$lib/open-in-browser'
   import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -34,6 +37,9 @@
   let menuEl: HTMLDivElement | null = $state(null)
   let menuWidth = $state(0)
   let menuHeight = $state(0)
+  /** The in-app browser takes a page only while a project thread is on screen to
+   *  own the tab, so the link item is offered exactly when it can work. */
+  const cioBrowserAvailable = $derived(canOpenInCioBrowser())
 
   const itemClass =
     'flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus-visible:bg-elevated disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
@@ -47,14 +53,44 @@
     return `left: ${Math.max(8, left)}px; top: ${Math.max(8, top)}px;`
   })
 
-  function safeExternalUrl(href: string): string | null {
+  /**
+   * Absolute web address as this app's menus mean it: something the default
+   * browser can be handed.
+   *
+   * Relative and fragment-only hrefs are refused rather than resolved against
+   * the app's own origin: the renderer has no web-facing address, so
+   * `new URL('#fn-2', location.href)` would offer "Copy Link" for a footnote a
+   * reader could never open.
+   */
+  function externalUrl(value: string): string | null {
     try {
-      const url = new URL(href, window.location.href)
+      const url = new URL(value)
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
       return url.toString()
     } catch {
       return null
     }
+  }
+
+  /**
+   * The external address an element stands for, when it is not a link.
+   *
+   * An "open on GitHub" control is a button: it has no `href` for a context menu
+   * to read, so it declares the address it opens in a `data-external-url`
+   * attribute instead, and right-clicking it offers exactly the items a real
+   * link gets. Reading it from the closest ancestor lets a decorative icon sit
+   * inside the declaring control without breaking the lookup.
+   */
+  function declaredExternalUrl(element: Element): string | null {
+    const declaring = element.closest('[data-external-url]')
+    if (!(declaring instanceof HTMLElement)) return null
+    const value = declaring.dataset.externalUrl
+    return value ? externalUrl(value) : null
+  }
+
+  /** The external address of an anchor, ignoring links that stay in the app. */
+  function anchorExternalUrl(anchor: HTMLAnchorElement): string | null {
+    return externalUrl(anchor.getAttribute('href') ?? '')
   }
 
   function selectionText(): string {
@@ -139,7 +175,7 @@
     }
 
     const text = selectionText()
-    const linkHref = anchor ? safeExternalUrl(anchor.getAttribute('href') ?? '') : null
+    const linkHref = anchor ? anchorExternalUrl(anchor) : declaredExternalUrl(element)
 
     // Only take over when there is something selected or a link was hit;
     // otherwise the native menu is more useful (e.g. spellcheck, inspect).
@@ -174,7 +210,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close()
+    if (keymapState.matches('palette-close', event)) close()
   }
 
   function refocusEditable(element: TextMenuTarget['editable']): void {
@@ -261,6 +297,18 @@
       toast.error('Failed to open link in browser')
     }
     close()
+  }
+
+  /**
+   * Load the link in the in-app browser instead of handing it to the system
+   * one. The menu is dismissed first: the browser renders a native view
+   * composited above every DOM surface, so a menu still on screen would be
+   * painted underneath the page that replaces it.
+   */
+  function openLinkInCioBrowser(href: string): void {
+    close()
+    if (openInCioBrowser(href)) return
+    toast.error('The CIO browser has no project thread to open this link in')
   }
 
   async function pasteIntoTerminal(t: TextMenuTarget): Promise<void> {
@@ -408,6 +456,18 @@
           <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
           Open in Default Browser
         </button>
+        {#if cioBrowserAvailable}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            title="Open in the CIO browser tab for this project"
+            onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+          >
+            <Globe2 class="size-3.5 shrink-0 text-text-muted" />
+            Open in CIO Browser
+          </button>
+        {/if}
         <button
           type="button"
           class={itemClass}

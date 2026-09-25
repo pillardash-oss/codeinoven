@@ -1,0 +1,304 @@
+import { SvelteMap } from 'svelte/reactivity'
+import { invoke, subscribe } from '$lib/ipc.svelte'
+import {
+  nextRunAt,
+  type CreateRoutineInput,
+  type MissedRun,
+  type Routine,
+  type RoutineDeletionResult,
+  type RoutineSchedule,
+  type Thread,
+  type UpdateRoutineInput
+} from '$shared/types'
+
+/** Value compare for two resolved icon maps, so an unchanged refresh publishes
+ *  nothing and leaves icon consumers untouched. */
+function mapsEqual(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
+  if (a.size !== b.size) return false
+  for (const [key, value] of a) {
+    if (b.get(key) !== value) return false
+  }
+  return true
+}
+
+/**
+ * AssistantRoutines   the renderer's live view of assistant routines and the
+ * pending missed scheduled runs.
+ *
+ * Both lists arrive as full snapshots from the main process: routine mutations
+ * broadcast the whole list, and the scheduler broadcasts the whole pending
+ * missed-run list. Batched full-list replacement keeps badge counts consistent
+ * without per-item reconcile churn.
+ */
+class AssistantRoutinesState {
+  routines: Routine[] = $state([])
+  missedRuns: MissedRun[] = $state([])
+  /** Custom icon data URLs for routines that store one, keyed by routine id. */
+  iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /**
+   * Getting started checkpoints by routine id: what the authoring interview has
+   * agreed so far. `null` means the interview has not saved one yet. Pushed by
+   * `routine:checkpointChanged` and read on demand by the how-to panel, so an
+   * open panel follows the interview instead of waiting to be reopened.
+   */
+  checkpoints: SvelteMap<string, string | null> = $state(new SvelteMap())
+  /** Routine id -> stored icon filename. A mutation both broadcasts
+   *  `routine:changed` and runs an explicit `refresh()`, so without this every
+   *  mutation re-fetched each routine's icon over IPC twice. */
+  private iconSignatures = new Map<string, string>()
+  private initialized = false
+  private disposers: Array<() => void> = []
+  /**
+   * Routine ids the user already removed from the UI while the main process
+   * finishes the background cleanup. A routine list pushed in that window (a
+   * scheduler tick, a checkpoint write, another window's mutation) must not
+   * resurrect the container the user just removed.
+   */
+  private removing = new Set<string>()
+
+  initialize(): void {
+    if (this.initialized) return
+    this.initialized = true
+    this.disposers.push(
+      subscribe('routine:changed', (routines) => {
+        this.publishRoutines(routines)
+        void this.refreshIcons()
+      }),
+      subscribe('assistant:missedRunsChanged', (runs) => {
+        this.missedRuns = runs
+      }),
+      subscribe('routine:checkpointChanged', (routineId) => {
+        void this.refreshCheckpoint(routineId)
+      })
+    )
+    void this.ensureSpace().catch(() => undefined)
+    void this.refresh()
+    void this.refreshMissedRuns()
+  }
+
+  dispose(): void {
+    for (const dispose of this.disposers) dispose()
+    this.disposers = []
+    this.initialized = false
+  }
+
+  async refresh(): Promise<void> {
+    this.publishRoutines(await invoke('routine:list'))
+    await this.refreshIcons()
+  }
+
+  /**
+   * Publish a routine list from the main process, minus any routine the user
+   * already removed from the UI and whose cleanup is still running.
+   */
+  private publishRoutines(routines: Routine[]): void {
+    this.routines =
+      this.removing.size === 0
+        ? routines
+        : routines.filter((routine) => !this.removing.has(routine.id))
+  }
+
+  /**
+   * Load custom icon data URLs for the routines that declare one. Batched into
+   * one pass so a routine mutation never triggers a per-row IPC storm, and
+   * diffed against the stored icon filename so a routine whose icon did not
+   * change is served from the previous result instead of a second IPC round.
+   */
+  private async refreshIcons(): Promise<void> {
+    const next = new SvelteMap<string, string>()
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const signatures = new Map<string, string>()
+    await Promise.all(
+      this.routines.map(async (routine) => {
+        const signature = routine.icon ?? ''
+        signatures.set(routine.id, signature)
+        if (!signature) return
+        const cached =
+          this.iconSignatures.get(routine.id) === signature
+            ? this.iconUrls.get(routine.id)
+            : undefined
+        if (cached !== undefined) {
+          next.set(routine.id, cached)
+          return
+        }
+        try {
+          const url = await invoke('routine:getIcon', routine.id)
+          if (url) next.set(routine.id, url)
+        } catch {
+          // Icon loading is best-effort; the row falls back to its SVG/Workflow icon.
+        }
+      })
+    )
+    this.iconSignatures = signatures
+    if (!mapsEqual(this.iconUrls, next)) this.iconUrls = next
+  }
+
+  async refreshMissedRuns(): Promise<void> {
+    this.missedRuns = await invoke('assistant:listMissedRuns')
+  }
+
+  /** Ensure the hidden assistant-space container exists. */
+  ensureSpace(): Promise<{ id: string }> {
+    return invoke('routine:ensureSpace')
+  }
+
+  routineForTask(task: Thread | null | undefined): Routine | null {
+    if (!task?.routineId) return null
+    return this.routines.find((routine) => routine.id === task.routineId) ?? null
+  }
+
+  /** The schedule a task runs on: its override when set, else its routine's. */
+  scheduleForTask(task: Thread): RoutineSchedule | null {
+    if (task.scheduleOverride) return task.scheduleOverride
+    return this.routineForTask(task)?.schedule ?? null
+  }
+
+  /** Next intended fire for a task, or null when it is not scheduled. */
+  nextRunForTask(task: Thread, now = Date.now()): number | null {
+    return nextRunAt(this.scheduleForTask(task), now)
+  }
+
+  /** Pending missed runs belonging to one task. */
+  missedForTask(threadId: string): MissedRun[] {
+    return this.missedRuns.filter((run) => run.threadId === threadId)
+  }
+
+  /** Pending missed runs belonging to any task of one routine. */
+  missedForRoutine(routineId: string): MissedRun[] {
+    return this.missedRuns.filter((run) => run.routineId === routineId)
+  }
+
+  hasMissedForRoutine(routineId: string): boolean {
+    return this.missedRuns.some((run) => run.routineId === routineId)
+  }
+
+  async createRoutine(input: CreateRoutineInput): Promise<Routine> {
+    const routine = await invoke('routine:create', input)
+    await this.refresh()
+    return routine
+  }
+
+  async updateRoutine(routineId: string, input: UpdateRoutineInput): Promise<Routine> {
+    const routine = await invoke('routine:update', routineId, input)
+    await this.refresh()
+    return routine
+  }
+
+  /** Store a custom icon image for a routine, mirroring project icons. */
+  async setRoutineIcon(routineId: string, sourcePath: string): Promise<Routine> {
+    const routine = await invoke('routine:setIcon', routineId, sourcePath)
+    await this.refresh()
+    return routine
+  }
+
+  /** Remove a routine's custom icon image. */
+  async clearRoutineIcon(routineId: string): Promise<Routine> {
+    const routine = await invoke('routine:clearIcon', routineId)
+    await this.refresh()
+    return routine
+  }
+
+  /**
+   * Remove a routine: the container and its pending missed runs leave the UI at
+   * once, and the main process does the cleanup in the background   its threads
+   * and their runs, the scheduler's records, the database rows, and the
+   * routine's artifact folder. The promise resolves with what the sweep removed
+   * so the caller can report it, and a failed sweep puts the routine back rather
+   * than leaving a container that silently reappears on the next refresh.
+   */
+  async removeRoutine(routineId: string): Promise<RoutineDeletionResult> {
+    this.removing.add(routineId)
+    this.routines = this.routines.filter((routine) => routine.id !== routineId)
+    this.missedRuns = this.missedRuns.filter((run) => run.routineId !== routineId)
+    this.checkpoints.delete(routineId)
+    try {
+      return await invoke('routine:delete', routineId)
+    } catch (error) {
+      // The main process still has the routine, so restore it instead of
+      // pretending it is gone.
+      this.removing.delete(routineId)
+      await this.refresh()
+      await this.refreshMissedRuns()
+      throw error
+    } finally {
+      this.removing.delete(routineId)
+    }
+  }
+
+  async setRoutinePinned(routineId: string, pinned: boolean): Promise<Routine> {
+    const routine = await invoke('routine:setPinned', routineId, pinned)
+    await this.refresh()
+    return routine
+  }
+
+  async reorderRoutines(orderedIds: string[]): Promise<void> {
+    await invoke('routine:reorder', orderedIds)
+    await this.refresh()
+  }
+
+  async setTaskRoutine(threadId: string, routineId: string | null): Promise<Thread> {
+    return invoke('assistant:setTaskRoutine', threadId, routineId)
+  }
+
+  /**
+   * A routine's how-to ("Getting started") thread, hidden or not. Hidden rows
+   * never reach the hydrated thread list, so the how-to panel asks for its own
+   * routine's thread here instead of reading the workspace's rows.
+   */
+  howToThread(routineId: string): Promise<Thread | null> {
+    return invoke('assistant:howToThread', routineId)
+  }
+
+  /**
+   * The routine's Getting started checkpoint, or null while the interview has
+   * not saved one. Read-only: the authoring agent's own turn writes it.
+   */
+  gettingStartedCheckpoint(routineId: string): Promise<string | null> {
+    return invoke('routine:gettingStartedCheckpoint', routineId)
+  }
+
+  /**
+   * Load one routine's checkpoint into the store. Best-effort: a read that fails
+   * leaves the last known value in place rather than blanking a panel that is
+   * showing the interview's agreed state.
+   */
+  async refreshCheckpoint(routineId: string): Promise<void> {
+    try {
+      this.checkpoints.set(routineId, await this.gettingStartedCheckpoint(routineId))
+    } catch {
+      // Nothing to surface: the panel simply keeps what it already shows.
+    }
+  }
+
+  /** Hide or reveal a routine's how-to thread. It stays pinned either way. */
+  setHowToHidden(routineId: string, hidden: boolean): Promise<Thread> {
+    return invoke('assistant:setHowToHidden', routineId, hidden)
+  }
+
+  /**
+   * Post the saved-how-to next-steps turn into a routine's Getting started
+   * thread. Hidden internal turn; a no-op when that thread is hidden or gone.
+   */
+  postSetup(routineId: string): Promise<void> {
+    return invoke('assistant:postSetup', routineId)
+  }
+
+  async setTaskSchedule(threadId: string, schedule: RoutineSchedule | null): Promise<Thread> {
+    return invoke('assistant:setTaskSchedule', threadId, schedule)
+  }
+
+  async dismissMissedRun(id: string): Promise<void> {
+    await invoke('assistant:dismissMissedRun', id)
+  }
+
+  async runMissedRunNow(id: string): Promise<Thread | null> {
+    return invoke('assistant:runMissedRunNow', id)
+  }
+
+  /** Run a routine now, returning the fresh run threads it created. */
+  runRoutineNow(routineId: string): Promise<Thread[]> {
+    return invoke('assistant:runRoutineNow', routineId)
+  }
+}
+
+export const assistantRoutines = new AssistantRoutinesState()

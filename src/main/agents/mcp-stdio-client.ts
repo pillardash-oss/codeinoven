@@ -5,6 +5,12 @@ import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 export const MCP_TIMEOUT_MS = 30_000
 
+/** How much child stderr is kept so a startup failure can say why it failed. */
+const STDERR_TAIL_LIMIT = 2_000
+
+/** Share of the retained stderr that one error message carries. */
+const STDERR_REPORT_LIMIT = 600
+
 export interface JsonRpcResponse {
   jsonrpc: '2.0'
   id: number
@@ -18,10 +24,29 @@ export interface McpTool {
   inputSchema?: Record<string, unknown>
 }
 
+/** What a server reported about itself while answering `initialize`. */
+export interface McpServerInfo {
+  name?: string
+  version?: string
+}
+
 export interface McpClient {
   listTools(): Promise<McpTool[]>
   callTool(name: string, input: Record<string, unknown>): Promise<unknown>
   close(): Promise<void>
+  /** Filled once the handshake completes; a connection test reports it back. */
+  readonly serverInfo?: McpServerInfo
+}
+
+/** Read `result.serverInfo` from an `initialize` response, ignoring a malformed one. */
+export function parseMcpServerInfo(result: unknown): McpServerInfo {
+  if (!isRecord(result)) return {}
+  const info = result['serverInfo']
+  if (!isRecord(info)) return {}
+  return {
+    ...(typeof info['name'] === 'string' ? { name: info['name'] } : {}),
+    ...(typeof info['version'] === 'string' ? { version: info['version'] } : {})
+  }
 }
 
 /**
@@ -30,16 +55,28 @@ export interface McpClient {
  * owns one spawned child process.
  */
 export class StdioMcpClient implements McpClient {
+  serverInfo: McpServerInfo = {}
+
   private nextId = 1
   private buffer = ''
+  private stderrTail = ''
   private pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
   >()
 
-  private constructor(private readonly child: ChildProcessWithoutNullStreams) {
+  private constructor(
+    private readonly child: ChildProcessWithoutNullStreams,
+    private readonly command: string
+  ) {
     child.stdout.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
-    child.on('exit', () => this.rejectPending(new Error('MCP process exited')))
+    // An unread stderr pipe eventually fills and blocks the child, so always drain it.
+    // Keeping a bounded tail is what turns "the process died" into the reason it died:
+    // a stdio MCP that exits over a missing credential reports that on stderr alone.
+    child.stderr.on('data', (chunk: Buffer) => this.recordStderr(chunk.toString()))
+    // `close` rather than `exit`: it fires once the stdio streams are drained, so the
+    // tail above is complete by the time the failure is reported.
+    child.on('close', (code, signal) => this.rejectPending(this.exitError(code, signal)))
     child.on('error', (error) => this.rejectPending(error))
   }
 
@@ -52,13 +89,16 @@ export class StdioMcpClient implements McpClient {
       spawn(command, args, {
         env: { ...buildProcessEnvironment(), ...environment },
         stdio: ['pipe', 'pipe', 'pipe']
+      }),
+      command
+    )
+    client.serverInfo = parseMcpServerInfo(
+      await client.request('initialize', {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
       })
     )
-    await client.request('initialize', {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
-    })
     client.notify('notifications/initialized', {})
     return client
   }
@@ -133,6 +173,23 @@ export class StdioMcpClient implements McpClient {
     } catch {
       // Ignore non-protocol stdout from third-party MCP processes.
     }
+  }
+
+  private recordStderr(text: string): void {
+    const combined = this.stderrTail + text
+    this.stderrTail =
+      combined.length > STDERR_TAIL_LIMIT ? combined.slice(-STDERR_TAIL_LIMIT) : combined
+  }
+
+  /** The failure an agent can act on: how the process died, and what it said first. */
+  private exitError(code: number | null, signal: NodeJS.Signals | null): Error {
+    const how = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
+    const detail = this.stderrTail.trim()
+    const reported =
+      detail.length > STDERR_REPORT_LIMIT ? `...${detail.slice(-STDERR_REPORT_LIMIT)}` : detail
+    return new Error(
+      `MCP server \`${this.command}\` exited with ${how}${reported ? `: ${reported}` : ''}`
+    )
   }
 
   private rejectPending(error: Error): void {

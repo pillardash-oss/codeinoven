@@ -5,6 +5,12 @@ import { dirname, join } from 'path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { isOpenCodeV2Version } from '../../lib/opencode-version'
+import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
+import {
+  cachedOpenCodeInstallation,
+  detectOpenCodeInstallation
+} from '../agents/opencode-installation'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -13,6 +19,7 @@ import type {
   HarnessLoginOptions
 } from '../drivers/driver.interface'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { readOpenCodeV2ActiveCredentialIds } from '../drivers/opencode-account-usage'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 import {
   HarnessCommandError,
@@ -26,7 +33,6 @@ import { listPiCatalogProviders } from './pi-catalog'
 import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
-import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { Logger } from '../system/logger'
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
@@ -61,10 +67,24 @@ interface AuthDefinition {
   /** CLI arguments that remove a provider's stored credentials. */
   logoutArgs?(providerId?: string): string[]
   /**
+   * CLI arguments that make one stored credential the active one, for harnesses
+   * whose own store holds several accounts per integration (OpenCode V2's
+   * `auth switch <integration> <credential>`). Absent when the harness has no
+   * switch command, which is what gates the `accountActivation` capability.
+   */
+  activateArgs?(providerId: string, credentialId: string): string[]
+  /**
    * Maps a stored slug id (and optionally the account's display name) to the
    * credential identifier the harness CLI actually accepts at logout time.
    */
   resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
+  /**
+   * Version line whose credential store holds the account state, for harnesses
+   * that keep several credentials in their own store. Only V2 OpenCode does, and
+   * its `auth list` output does not say which credential is active, so the store
+   * has to be read to know. Absent for a single-credential harness.
+   */
+  nativeStore?: 'v2'
   /**
    * Whether the bare login command shows the harness's own interactive provider
    * picker (so the UI skips its in-app provider list and lets the user choose).
@@ -145,6 +165,124 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
   }
 }
 
+/**
+ * Read `opencode auth list --format json` (V2's credential store).
+ *
+ * The observed shape is an array of integrations, each carrying a
+ * `connections` array; one connection is one stored credential, so an
+ * integration that holds two keys reports two accounts. `type: 'env'`
+ * connections are not stored credentials and are skipped, matching V1's
+ * `auth list`. The parser stays tolerant of the `{credentials|accounts: [...]}`
+ * container form and of a flat per-credential entry, and anything it cannot
+ * read reports `unknown` rather than claiming the account is signed out.
+ */
+export function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthStatus {
+  const clean = stripAnsi(output).trim()
+  if (clean.length === 0) {
+    return {
+      state: succeeded ? 'unauthenticated' : 'error',
+      accounts: [],
+      ...(succeeded ? {} : { detail: 'OpenCode V2 did not report a credential status.' })
+    }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(clean) as unknown
+  } catch {
+    return {
+      state: succeeded ? 'unknown' : 'error',
+      accounts: [],
+      detail: 'OpenCode V2 did not report credentials as JSON.'
+    }
+  }
+  const accounts = openCodeV2Entries(parsed).flatMap((entry) => openCodeV2Accounts(entry))
+  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
+}
+
+/** Integration objects in any of the shapes the credential list has printed. */
+function openCodeV2Entries(parsed: unknown): Record<string, unknown>[] {
+  if (Array.isArray(parsed)) return parsed.filter(isRecord)
+  if (!isRecord(parsed)) return []
+  for (const key of ['integrations', 'credentials', 'accounts'] as const) {
+    const list = parsed[key]
+    if (Array.isArray(list)) return list.filter(isRecord)
+  }
+  return []
+}
+
+/** Every stored credential one integration entry reports, as account rows. */
+function openCodeV2Accounts(entry: Record<string, unknown>): HarnessAuthAccount[] {
+  const providerId =
+    firstAuthString(entry['id']) ??
+    firstAuthString(entry['integrationID']) ??
+    firstAuthString(entry['providerID']) ??
+    firstAuthString(entry['provider'])
+  if (!providerId) return []
+  const integrationName = firstAuthString(entry['name']) ?? firstAuthString(entry['label'])
+  if (!Array.isArray(entry['connections'])) {
+    // Tolerant fallback for a flat credential row that names its provider.
+    const label = integrationName ?? providerId
+    const method = firstAuthString(entry['method'])
+    return [
+      {
+        id: accountId(label),
+        providerId,
+        label,
+        ...(method ? { method } : {}),
+        ...(entry['active'] === true || entry['activated'] === true ? { active: true } : {})
+      }
+    ]
+  }
+  return entry['connections'].filter(isRecord).flatMap((connection) => {
+    if (connection['type'] === 'env') return []
+    const label = firstAuthString(connection['label']) ?? integrationName ?? providerId
+    const credentialId = firstAuthString(connection['id'])
+    const method = firstAuthString(connection['method'])
+    return [
+      {
+        // The credential id is unique per connection, so two keys on one
+        // integration stay tellable; a slug is the fallback for older output.
+        id: credentialId ?? accountId(label),
+        providerId,
+        label,
+        ...(method ? { method } : {})
+      }
+    ]
+  })
+}
+
+/**
+ * Stamp the account whose credential the harness itself has active.
+ *
+ * A native multi-account store (OpenCode V2) knows which credential a turn will
+ * use, but `auth list --format json` never reports it, so the flag is read from
+ * the store and put on the matching row. Without it the app could list every
+ * account the user created inside OpenCode but not say which one is in effect.
+ */
+async function markNativeActiveAccounts(
+  definition: AuthDefinition,
+  status: HarnessAuthStatus,
+  environment: NodeJS.ProcessEnv
+): Promise<HarnessAuthStatus> {
+  if (definition.nativeStore !== 'v2' || status.accounts.length === 0) return status
+  const active = await readOpenCodeV2ActiveCredentialIds(environment)
+  if (active.size === 0) return status
+  return {
+    ...status,
+    accounts: status.accounts.map((account) =>
+      active.has(account.id) ? { ...account, active: true } : account
+    )
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function firstAuthString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
 function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatus {
   try {
     const parsed = JSON.parse(output) as unknown
@@ -182,7 +320,7 @@ function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatu
 /** Real credential keys from OpenCode's own auth store (empty when unreadable). */
 async function readOpencodeCredentialKeys(): Promise<string[]> {
   const remote = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
-  const content = typeof remote === 'string' ? remote : await readConfigOrEmpty(OPENCODE_AUTH_PATH)
+  const content = typeof remote === 'string' ? remote : await readFileOrEmpty(OPENCODE_AUTH_PATH)
   try {
     const parsed = JSON.parse(content) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
@@ -511,46 +649,96 @@ async function readMuseStatus(
   }
 }
 
-/** Provider ids listed under `disabled_providers` in OpenCode's global config. */
-async function readHiddenProviders(): Promise<string[]> {
+/** One `experimental.policies` statement in an OpenCode V2 config. */
+export interface OpenCodeV2Policy {
+  action: string
+  resource: string
+  effect: string
+}
+
+/** The global config file both OpenCode lines read (`.jsonc` also works). */
+const OPENCODE_CONFIG_RELATIVE_PATH = '.config/opencode/opencode.json'
+
+/**
+ * Provider ids hidden from OpenCode's model picker.
+ *
+ * V1 lists them in `disabled_providers`. V2 replaced that list with
+ * `experimental.policies` statements, documented as "Use provider.use instead
+ * of the V1 enabled_providers and disabled_providers lists":
+ * `{action:'provider.use', resource:<id>, effect:'deny'}`. A denied provider
+ * disappears from the catalog and model selection even with valid credentials.
+ * Both forms live in the same global config file, and a V2 install still
+ * translates a `disabled_providers` list it finds, so a V2 read is the union of
+ * the two: a list written before the upgrade keeps hiding its providers.
+ */
+async function readHiddenProviders(v2: boolean): Promise<string[]> {
   try {
-    const wslRaw = await readHarnessHomeFile('opencode', '.config/opencode/opencode.json')
-    const raw = wslRaw === undefined ? await readConfigOrEmpty(OPENCODE_CONFIG_PATH) : wslRaw
+    const raw = await readOpenCodeConfig()
     if (raw === null) return []
-    const errors: ParseError[] = []
-    const parsed = parse(raw, errors, { allowTrailingComma: true })
-    if (errors.length === 0 && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const list = (parsed as Record<string, unknown>)['disabled_providers']
-      if (Array.isArray(list)) {
-        return Array.from(
-          new Set(list.filter((entry): entry is string => typeof entry === 'string'))
-        )
-      }
-    }
-    return []
+    const config = parseOpenCodeConfig(raw)
+    if (!config) return []
+    return readHiddenProviderIds(config, v2)
   } catch {
     return []
   }
 }
 
 /**
- * Merge `disabled_providers` into OpenCode's global config with a targeted text
- * edit, so the rest of the file (comments, trailing commas, other keys)
- * round-trips untouched. Written atomically so a harness config is never left
- * half-written.
+ * Hidden provider ids in one parsed config, for the detected line. V1 reads
+ * `disabled_providers`; V2 reads the union of both forms, because a V2 install
+ * still translates a V1 list it finds.
  */
-async function writeHiddenProviders(providers: string[]): Promise<void> {
-  const wslRaw = await readHarnessHomeFile('opencode', '.config/opencode/opencode.json')
-  const raw =
-    wslRaw === undefined ? await readConfigOrEmpty(OPENCODE_CONFIG_PATH) : (wslRaw ?? '{}\n')
-  const edited = applyEdits(
-    raw,
-    modify(raw, ['disabled_providers'], providers, {
-      formattingOptions: OPENCODE_CONFIG_FORMAT
-    })
+export function readHiddenProviderIds(config: Record<string, unknown>, v2: boolean): string[] {
+  if (!v2) return readHiddenProvidersFromDisabledList(config)
+  return Array.from(
+    new Set([
+      ...readHiddenProvidersFromDisabledList(config),
+      ...readHiddenProvidersFromPolicies(config)
+    ])
   )
+}
+
+/** Provider ids denied by `provider.use` policy statements, in written order. */
+export function readHiddenProvidersFromPolicies(config: Record<string, unknown>): string[] {
+  const experimental = config['experimental']
+  if (!isRecord(experimental)) return []
+  const policies = experimental['policies']
+  if (!Array.isArray(policies)) return []
+  const hidden: string[] = []
+  for (const entry of policies) {
+    if (!isRecord(entry)) continue
+    if (entry['action'] !== 'provider.use' || entry['effect'] !== 'deny') continue
+    const resource = entry['resource']
+    if (typeof resource === 'string' && resource.trim()) hidden.push(resource.trim())
+  }
+  return Array.from(new Set(hidden))
+}
+
+/** Provider ids listed in the V1 `disabled_providers` array. */
+export function readHiddenProvidersFromDisabledList(config: Record<string, unknown>): string[] {
+  const list = config['disabled_providers']
+  return Array.isArray(list)
+    ? Array.from(new Set(list.filter((entry): entry is string => typeof entry === 'string')))
+    : []
+}
+
+/**
+ * Persist the hidden-provider list with a targeted text edit, so the rest of
+ * the file (comments, trailing commas, other keys) round-trips untouched.
+ * Written atomically so a harness config is never left half-written.
+ */
+async function writeHiddenProviders(providers: string[], v2: boolean): Promise<void> {
+  const raw = (await readOpenCodeConfig()) ?? '{}\n'
+  const edited = v2
+    ? openCodeV2HiddenConfig(raw, providers)
+    : applyEdits(
+        raw,
+        modify(raw, ['disabled_providers'], providers, {
+          formattingOptions: OPENCODE_CONFIG_FORMAT
+        })
+      )
   const content = edited.endsWith('\n') ? edited : `${edited}\n`
-  if (await writeHarnessHomeFile('opencode', '.config/opencode/opencode.json', content)) return
+  if (await writeHarnessHomeFile('opencode', OPENCODE_CONFIG_RELATIVE_PATH, content)) return
 
   const configDir = dirname(OPENCODE_CONFIG_PATH)
   await mkdir(configDir, { recursive: true })
@@ -568,7 +756,100 @@ async function writeHiddenProviders(providers: string[]): Promise<void> {
   }
 }
 
-async function readConfigOrEmpty(filePath: string): Promise<string> {
+/**
+ * The V2 policy list to persist: every non-`provider.use` statement and every
+ * `provider.use` allow kept as written, then one deny per hidden provider.
+ * Denies come last because the last matching statement wins, so a provider the
+ * user hid stays hidden even when an allow for it already exists. An empty list
+ * removes the key instead of leaving `policies: []` behind.
+ */
+export function openCodeV2HiddenPolicies(
+  raw: string,
+  providers: string[]
+): OpenCodeV2Policy[] | undefined {
+  const config = parseOpenCodeConfig(raw)
+  const experimental = config?.['experimental']
+  const existing =
+    isRecord(experimental) && Array.isArray(experimental['policies'])
+      ? experimental['policies']
+      : []
+  const kept: OpenCodeV2Policy[] = []
+  for (const entry of existing) {
+    if (!isRecord(entry)) continue
+    const action = entry['action']
+    const resource = entry['resource']
+    const effect = entry['effect']
+    if (typeof action !== 'string' || typeof resource !== 'string' || typeof effect !== 'string') {
+      continue
+    }
+    if (action === 'provider.use' && effect === 'deny') continue
+    kept.push({ action, resource, effect })
+  }
+  const policies = [
+    ...kept,
+    ...providers.map((resource) => ({ action: 'provider.use', resource, effect: 'deny' }))
+  ]
+  return policies.length > 0 ? policies : undefined
+}
+
+/**
+ * The V2 config text for a hidden-provider set.
+ *
+ * Two things are written. The native form is `experimental.policies` deny
+ * statements, which is what V2 documents. The V1 `disabled_providers` list is
+ * kept mirrored to the same set: a V2 install translates that list into the
+ * same denies anyway (verified against the binary), so mirroring changes
+ * nothing at the V2 line while keeping the user's hiding intact if the machine
+ * later runs a V1 install. A list the user already had is rewritten rather than
+ * dropped, and the key is removed once nothing is hidden.
+ */
+export function openCodeV2HiddenConfig(raw: string, providers: string[]): string {
+  const config = parseOpenCodeConfig(raw)
+  const hadLegacyList = config !== null && Array.isArray(config['disabled_providers'])
+  let edited = applyEdits(
+    raw,
+    modify(raw, ['experimental', 'policies'], openCodeV2HiddenPolicies(raw, providers), {
+      formattingOptions: OPENCODE_CONFIG_FORMAT
+    })
+  )
+  if (hadLegacyList || providers.length > 0) {
+    edited = applyEdits(
+      edited,
+      modify(edited, ['disabled_providers'], providers.length > 0 ? providers : undefined, {
+        formattingOptions: OPENCODE_CONFIG_FORMAT
+      })
+    )
+  }
+  return edited
+}
+
+/** The OpenCode global config, or `null` when it does not exist yet. */
+async function readOpenCodeConfig(): Promise<string | null> {
+  const wslRaw = await readHarnessHomeFile('opencode', OPENCODE_CONFIG_RELATIVE_PATH)
+  if (wslRaw !== undefined) return wslRaw
+  try {
+    return await readFile(OPENCODE_CONFIG_PATH, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Parse the config as JSONC; `null` when it is unreadable or not an object. */
+function parseOpenCodeConfig(raw: string): Record<string, unknown> | null {
+  const errors: ParseError[] = []
+  const parsed = parse(raw, errors, { allowTrailingComma: true })
+  return errors.length === 0 && isRecord(parsed) ? parsed : null
+}
+
+/** Whether the OpenCode install the app will drive is the V2 line. */
+async function isOpenCodeV2Installed(): Promise<boolean> {
+  const installation = cachedOpenCodeInstallation() ?? (await detectOpenCodeInstallation())
+  return installation !== null && isOpenCodeV2Version(installation.version)
+}
+
+/** Read a config file as text, or `{}` when it does not exist. */
+async function readFileOrEmpty(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, 'utf8')
   } catch (error) {
@@ -577,22 +858,73 @@ async function readConfigOrEmpty(filePath: string): Promise<string> {
   }
 }
 
-const AUTH_DEFINITIONS: AuthDefinition[] = [
-  {
+/**
+ * OpenCode V1 auth: `opencode auth list`, with a `--provider` login target and
+ * a credential store CodeInOven can edit directly (`~/.local/share/opencode`).
+ */
+const OPENCODE_V1_AUTH: AuthDefinition = {
+  id: 'opencode',
+  name: 'OpenCode',
+  command: 'opencode',
+  statusArgs: ['auth', 'list'],
+  parseStatus: parseOpenCodeStatus,
+  loginArgs: (options) => [
+    'auth',
+    'login',
+    ...(options.providerId ? ['--provider', options.providerId] : [])
+  ],
+  logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+  resolveLogoutTarget: resolveOpencodeLogoutTarget,
+  pickerLogin: true
+}
+
+/**
+ * OpenCode V2 auth: credentials live in its own SQLite store and are read with
+ * `auth list --format json`, while login/logout take a positional provider id.
+ */
+function openCodeV2Auth(command: string): AuthDefinition {
+  return {
     id: 'opencode',
     name: 'OpenCode',
-    command: 'opencode',
-    statusArgs: ['auth', 'list'],
-    parseStatus: parseOpenCodeStatus,
-    loginArgs: (options) => [
-      'auth',
-      'login',
-      ...(options.providerId ? ['--provider', options.providerId] : [])
-    ],
+    command,
+    statusArgs: ['auth', 'list', '--format', 'json'],
+    parseStatus: parseOpenCodeV2Status,
+    loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
-    resolveLogoutTarget: resolveOpencodeLogoutTarget,
+    // V2 keeps several credentials per integration and switches the active one
+    // by id or label (`opencode auth switch <integration> <credential>`).
+    activateArgs: (providerId, credentialId) => ['auth', 'switch', providerId, credentialId],
+    // The active credential lives in V2's own store, and `auth list` does not
+    // report it, so account state is read from the store itself.
+    nativeStore: 'v2',
     pickerLogin: true
-  },
+  }
+}
+
+/**
+ * The auth definition for whichever OpenCode line is installed. One harness id
+ * (`opencode`) covers both, so the CLI grammar is chosen from the detected
+ * version instead of a second harness entry. A cold cache runs the bounded
+ * probe here, so a V2-only machine never falls back to a V1 command.
+ */
+async function openCodeAuthDefinition(): Promise<AuthDefinition> {
+  const installation = cachedOpenCodeInstallation() ?? (await detectOpenCodeInstallation())
+  if (installation && isOpenCodeV2Version(installation.version)) {
+    return openCodeV2Auth(installation.command)
+  }
+  return OPENCODE_V1_AUTH
+}
+
+/** Version-aware definition without spawning a probe (for existence checks). */
+function openCodeAuthDefinitionCached(): AuthDefinition {
+  const installation = cachedOpenCodeInstallation()
+  if (installation && isOpenCodeV2Version(installation.version)) {
+    return openCodeV2Auth(installation.command)
+  }
+  return OPENCODE_V1_AUTH
+}
+
+const AUTH_DEFINITIONS: AuthDefinition[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
@@ -673,13 +1005,22 @@ export class ProviderAccountOrchestrator {
     }
   >()
 
-  capabilities(harnessId: string): HarnessAuthCapabilities | null {
-    const definition = this.definition(harnessId)
+  /**
+   * Authentication capabilities for one harness. Account activation is
+   * advertised only when the harness declares native multi-account support in
+   * its manifest AND the installed line actually exposes a switch command
+   * (OpenCode V2's `auth switch`; V1 has none).
+   */
+  async capabilities(harnessId: string): Promise<HarnessAuthCapabilities | null> {
+    const definition = await this.resolveDefinitionOrUndefined(harnessId)
     if (!definition) return null
+    const multipleAccounts = harnessSupportsMultipleAccounts(harnessId)
     return {
       ...READ_AND_HANDOFF_ONLY,
       logout:
         definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
+      multipleAccounts,
+      accountActivation: multipleAccounts && definition.activateArgs !== undefined,
       pickerLogin: definition.pickerLogin === true,
       apiKeyEntry: definition.apiKeyEntry === true
     }
@@ -692,7 +1033,7 @@ export class ProviderAccountOrchestrator {
     apiKey: string,
     environment: NodeJS.ProcessEnv = {}
   ): Promise<void> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
     if (harnessId === 'pi' && piAgentDir) {
       await new PiAuthConfigService(join(piAgentDir, 'auth.json')).setApiKey(providerId, apiKey)
@@ -790,7 +1131,6 @@ export class ProviderAccountOrchestrator {
     for (const win of BrowserWindow.getAllWindows()) {
       sendToRenderer(win.webContents, 'providerAccounts:oauthEvent', { loginId, ...payload })
     }
-    forwardRemoteEvent('providerAccounts:oauthEvent', { loginId, ...payload })
   }
 
   async getStatus(
@@ -799,9 +1139,13 @@ export class ProviderAccountOrchestrator {
     environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessAuthStatus> {
     return this.enqueueStatus(async () => {
-      const definition = this.requireDefinition(harnessId)
+      const definition = await this.resolveDefinition(harnessId)
       if (definition.readStatus) {
-        return definition.readStatus(projectPath, environment)
+        return markNativeActiveAccounts(
+          definition,
+          await definition.readStatus(projectPath, environment),
+          environment
+        )
       }
       const result = await this.run(
         definition.command,
@@ -817,7 +1161,11 @@ export class ProviderAccountOrchestrator {
         }
       }
       const output = result.stdout.trim() || result.stderr.trim()
-      const status = definition.parseStatus(output, result.succeeded)
+      const status = await markNativeActiveAccounts(
+        definition,
+        definition.parseStatus(output, result.succeeded),
+        environment
+      )
       if (status.state === 'error' && result.error) {
         return { ...status, detail: result.error }
       }
@@ -828,17 +1176,29 @@ export class ProviderAccountOrchestrator {
   async beginLogin(
     harnessId: string,
     options: HarnessLoginOptions = {},
-    environment: NodeJS.ProcessEnv = {}
+    environment: NodeJS.ProcessEnv = {},
+    /** Account whose credential home this login writes into, when main resolved one. */
+    accountId?: string
   ): Promise<HarnessLoginHandoff> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
+    const loginOptions: HarnessLoginOptions = { ...options }
+    // A custom base-URL provider lives in CodeInOven's own id namespace and means
+    // nothing to a harness CLI, so it never reaches a login command.
+    if (
+      loginOptions.providerId !== undefined &&
+      isCodeInOvenCustomProviderId(loginOptions.providerId)
+    ) {
+      delete loginOptions.providerId
+    }
     const prepared = await prepareHarnessTerminalHandoff(
       definition.command,
-      definition.loginArgs(options)
+      definition.loginArgs(loginOptions)
     )
     return {
       kind: 'terminal',
       command: prepared.command,
       args: prepared.args,
+      ...(accountId ? { accountId } : {}),
       ...(Object.keys(environment).length > 0
         ? { environment: environment as Record<string, string> }
         : {}),
@@ -854,7 +1214,7 @@ export class ProviderAccountOrchestrator {
     environment: NodeJS.ProcessEnv = {},
     providerHint?: string
   ): Promise<void> {
-    const definition = this.requireDefinition(harnessId)
+    const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
     if (harnessId === 'pi' && piAgentDir) {
       if (!providerId) throw new Error('pi requires a provider to disconnect.')
@@ -891,6 +1251,41 @@ export class ProviderAccountOrchestrator {
         result.exitCode === undefined
           ? `Logout failed: ${detail || 'unknown error'}`
           : `Logout failed (${definition.command} exited with code ${result.exitCode}): ${detail || 'no error output'}`
+      )
+    }
+  }
+
+  /**
+   * Make one stored credential the active one for its integration. Only
+   * harnesses whose store holds several accounts (OpenCode V2) support this;
+   * the credential id comes from the account's `sourceId`.
+   */
+  async activateAccount(
+    harnessId: string,
+    providerId: string,
+    credentialId: string,
+    environment: NodeJS.ProcessEnv = {}
+  ): Promise<void> {
+    const definition = await this.resolveDefinition(harnessId)
+    if (!definition.activateArgs) {
+      throw new Error(`${harnessId} does not support switching its active account.`)
+    }
+    const result = await this.run(
+      definition.command,
+      definition.activateArgs(providerId, credentialId),
+      homedir(),
+      environment
+    )
+    if (!result.succeeded) {
+      const detail = stripAnsi(
+        result.exitCode === undefined
+          ? (result.error ?? 'unknown error')
+          : result.stderr.trim() || result.stdout.trim()
+      )
+      throw new Error(
+        result.exitCode === undefined
+          ? `Account switch failed: ${detail || 'unknown error'}`
+          : `Account switch failed (${definition.command} exited with code ${result.exitCode}): ${detail || 'no error output'}`
       )
     }
   }
@@ -1015,10 +1410,14 @@ export class ProviderAccountOrchestrator {
   /** Provider IDs currently hidden from the harness (via its own config). */
   async getHiddenProviders(harnessId: string): Promise<string[]> {
     if (harnessId !== 'opencode') return []
-    return readHiddenProviders()
+    return readHiddenProviders(await isOpenCodeV2Installed())
   }
 
-  /** Add or remove a provider id in the harness's disabled_providers config. */
+  /**
+   * Add or remove a provider id from the harness's hidden set. OpenCode V1 uses
+   * `disabled_providers`; V2 uses a `provider.use` deny policy. Both land in the
+   * same global config file, chosen by the detected install.
+   */
   async setProviderHidden(
     harnessId: string,
     providerId: string,
@@ -1027,7 +1426,8 @@ export class ProviderAccountOrchestrator {
     if (harnessId !== 'opencode') {
       throw new Error(`${harnessId} does not support hiding providers from its config file.`)
     }
-    const current = await readHiddenProviders()
+    const v2 = await isOpenCodeV2Installed()
+    const current = await readHiddenProviders(v2)
     const next = new Set(current)
     if (hidden) {
       next.add(providerId)
@@ -1035,21 +1435,32 @@ export class ProviderAccountOrchestrator {
       next.delete(providerId)
     }
     const list = Array.from(next)
-    await writeHiddenProviders(list)
+    await writeHiddenProviders(list, v2)
     return list
-  }
-
-  async activateAccount(harnessId: string, _accountId: string): Promise<void> {
-    this.requireDefinition(harnessId)
-    void _accountId
-    throw new Error(
-      `${harnessId} account activation is not available without an isolated credential profile.`
-    )
   }
 
   // ─── Offered-provider catalog ──────────────────────────────────────────────
 
   private definition(harnessId: string): AuthDefinition | undefined {
+    if (harnessId === 'opencode') return openCodeAuthDefinitionCached()
+    return AUTH_DEFINITIONS.find((definition) => definition.id === harnessId)
+  }
+
+  /**
+   * Version-aware definition for operations that spawn the CLI. OpenCode's
+   * grammar depends on the detected install, so a cold cache resolves it here
+   * instead of silently assuming V1.
+   */
+  private async resolveDefinition(harnessId: string): Promise<AuthDefinition> {
+    if (harnessId === 'opencode') return openCodeAuthDefinition()
+    return this.requireDefinition(harnessId)
+  }
+
+  /** Version-aware definition, or `undefined` for a harness with no auth support. */
+  private async resolveDefinitionOrUndefined(
+    harnessId: string
+  ): Promise<AuthDefinition | undefined> {
+    if (harnessId === 'opencode') return openCodeAuthDefinition()
     return AUTH_DEFINITIONS.find((definition) => definition.id === harnessId)
   }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { RefreshCw } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
@@ -150,21 +150,21 @@
       value: 'merge-delete',
       label: 'Merge & delete scope',
       description:
-        'Merge into the target, then delete this scope. Deletes its threads, the worktree, and the cio/ branch.',
+        'Merge into the target, then delete the source scope, its threads, the worktree, and its branch.',
       destructive: true
     },
     {
       value: 'merge-keep',
       label: 'Merge & keep scope',
       description:
-        'Merge into the target and keep this scope. Use to update the default scope while work continues on the worktree.',
+        'Merge into the target and keep this scope. Use to update the target scope while work continues on the worktree.',
       destructive: false
     },
     {
       value: 'merge-move-to-default',
       label: 'Merge, delete & move threads',
       description:
-        'Merge into the target, then delete this scope but move its threads into Default, evicting the oldest Default threads to respect the thread limit.',
+        "Merge into the target, then delete this scope but move its threads into the target, evicting the target's oldest threads to respect the thread limit.",
       destructive: true
     }
   ]
@@ -195,15 +195,20 @@
   )
 </script>
 
-<Modal {open} title="Merge scope into project" onClose={close} footer={footerSnippet}>
+<ConfirmDialog
+  {open}
+  size="lg"
+  title="Merge scope into project"
+  onCancel={close}
+  onConfirm={confirm}
+  confirmLabel={mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
+  variant={mode === 'merge-keep' ? 'primary' : 'danger'}
+  disabled={!preflightMatches}
+  busy={working}
+>
   <div class="space-y-5">
-    <p class="text-sm text-muted">
-      Merge <span class="font-medium text-foreground">{sourceBucket?.name ?? 'this scope'}</span>
-      back into the project. The merge target defaults to the Default scope.
-    </p>
-
     <div>
-      <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Merge into</p>
+      <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Target Scope</p>
       <select
         class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
         value={mergeTargetBucketId}
@@ -218,6 +223,11 @@
         {/each}
       </select>
     </div>
+
+    <p>
+      Merge <span class="font-medium text-foreground">{sourceBucket?.name ?? 'this scope'}</span>
+      into <span class="font-medium text-foreground">{targetLabel(mergeTargetBucketId)}</span> scope.
+    </p>
 
     <div>
       <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">After merging</p>
@@ -254,7 +264,7 @@
         />
       {/if}
       <p class="flex items-center justify-between pr-4">
-        <span>Merge branch</span>
+        <span>Source branch</span>
         <span class="font-medium text-foreground tabular-nums">
           {preflight?.sourceBranch ?? '\u2014'}
         </span>
@@ -312,27 +322,4 @@
       <p class="text-xs text-danger" role="alert">{error}</p>
     {/if}
   </div>
-</Modal>
-
-{#snippet footerSnippet()}
-  <button
-    type="button"
-    class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
-    onclick={close}
-  >
-    Cancel
-  </button>
-  <button
-    type="button"
-    class={[
-      'rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50',
-      mode === 'merge-keep'
-        ? 'bg-primary text-on-primary hover:bg-primary-hover'
-        : 'bg-danger text-on-danger hover:bg-danger-hover'
-    ].join(' ')}
-    disabled={!preflightMatches || working}
-    onclick={() => void confirm()}
-  >
-    {working ? 'Merging…' : mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
-  </button>
-{/snippet}
+</ConfirmDialog>

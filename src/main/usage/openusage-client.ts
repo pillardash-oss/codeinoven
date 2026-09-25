@@ -19,6 +19,38 @@ const OPENUSAGE_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   'z-ai': 'zai'
 }
 
+/**
+ * OpenUsage ids that belong to a HARNESS rather than to the provider an account
+ * reports, for harnesses whose plan quota is keyed by the harness itself.
+ *
+ * Antigravity presents every account as provider `google`, and `google` aliases
+ * to `gemini_api`, which is the Gemini API key product instead of the
+ * Antigravity subscription. Claude Code and Codex have the same shape: their
+ * accounts report `anthropic` and `openai` while OpenUsage keys the plan quota
+ * as `claude` and `codex`.
+ */
+const OPENUSAGE_HARNESS_PROVIDER_IDS: Readonly<Record<string, string>> = {
+  antigravity: 'antigravity',
+  'claude-code': 'claude',
+  codex: 'codex'
+}
+
+/**
+ * OpenUsage provider ids to try for one harness/provider pair, most specific
+ * first: the harness-scoped plan id, then the provider the account reports,
+ * then that provider's canonical OpenUsage alias.
+ */
+export function openUsageProviderCandidates(
+  harnessId: string | undefined,
+  providerId: string
+): string[] {
+  const harnessScoped = harnessId ? OPENUSAGE_HARNESS_PROVIDER_IDS[harnessId] : undefined
+  return [harnessScoped, providerId, OPENUSAGE_PROVIDER_ALIASES[providerId]].filter(
+    (candidate, index, all): candidate is string =>
+      typeof candidate === 'string' && candidate.length > 0 && all.indexOf(candidate) === index
+  )
+}
+
 interface OpenUsageTelemetry {
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
@@ -243,15 +275,20 @@ export class OpenUsageClient {
   private readonly cache = new Map<string, CachedTelemetry>()
   private readonly inflight = new Map<string, Promise<OpenUsageTelemetry | null>>()
 
+  /**
+   * Read one account's quota from OpenUsage, trying `providerIds` in order and
+   * returning the first candidate that reports rate-limit windows. Candidates
+   * are ordered by the caller (see {@link openUsageProviderCandidates}) because
+   * only the caller knows which harness is asking.
+   */
   async readProviderUsage(
-    providerId: string,
-    fallbackProviderIds: readonly string[] = [],
+    providerIds: readonly string[],
     accountKey = 'default',
     environment: NodeJS.ProcessEnv = {}
   ): Promise<OpenUsageTelemetry | null> {
-    const candidates = [providerId, OPENUSAGE_PROVIDER_ALIASES[providerId], ...fallbackProviderIds]
-      .filter((candidate): candidate is string => Boolean(candidate))
-      .filter((candidate, index, all) => all.indexOf(candidate) === index)
+    const candidates = providerIds.filter(
+      (candidate, index, all) => Boolean(candidate) && all.indexOf(candidate) === index
+    )
     let credits: AgentUsageCredits | undefined
     for (const candidate of candidates) {
       const telemetry = await this.readExactProviderUsage(candidate, accountKey, environment)

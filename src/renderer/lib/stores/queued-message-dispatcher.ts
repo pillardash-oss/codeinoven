@@ -22,13 +22,18 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
+  isTerminalThread,
+  resolveThreadDeliverySettings,
+  threadAgentIsIdle,
+  threadHasPendingGate
+} from '$lib/stores/thread-delivery'
+import {
   rendererRecovery,
   type QueuedMessageEntry,
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
-import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { messageId as createMessageId } from '$shared/id'
-import { INBOX_PROJECT_ID, type AgentEvent, type Thread, type ThreadSettings } from '$shared/types'
+import type { AgentEvent, Thread } from '$shared/types'
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -90,9 +95,9 @@ class QueuedMessageDispatcher {
     try {
       // The thread's own agent must be genuinely idle — never send into a turn
       // that is still working, waiting on the provider, or gone entirely.
-      if (!(await this.#isIdle(projectId, threadId))) return
-      if (await this.#hasPendingGate(projectId, threadId)) return
-      const settings = await this.#resolveSettings(projectId, threadId)
+      if (!(await threadAgentIsIdle(projectId, threadId))) return
+      if (await threadHasPendingGate(projectId, threadId)) return
+      const settings = await resolveThreadDeliverySettings(projectId, threadId)
       // Nothing may have changed while we waited — verify before dispatching.
       if (this.#mounted.has(key)) return
       const entry = rendererRecovery.queuedMessageFor(projectId, threadId)
@@ -103,7 +108,7 @@ class QueuedMessageDispatcher {
       ) {
         return
       }
-      if (!(await this.#isIdle(projectId, threadId))) return
+      if (!(await threadAgentIsIdle(projectId, threadId))) return
       dispatched = entry
       userMessageId = createMessageId()
       // Clear the persisted queue first: repeated idle events must not see it
@@ -150,20 +155,7 @@ class QueuedMessageDispatcher {
     }
   }
 
-  /** The thread's authoritative agent state, read from the main process. */
-  async #isIdle(projectId: string, threadId: string): Promise<boolean> {
-    try {
-      const status = await invoke('agent:getSessionStatus', projectId, threadId)
-      if (status) return status.state === 'idle'
-      const thread = await invoke('thread:get', projectId, threadId)
-      return thread !== null && !['planning', 'executing'].includes(thread.status)
-    } catch {
-      // Be conservative when state cannot be read: keep the queue parked and
-      // let the next idle transition (or opening the thread) retry.
-      return false
-    }
-  }
-
+  /** True when every thread this parked message waits on has settled. */
   async #isStartAfterSatisfied(
     projectId: string,
     references: StartAfterThreadReference[]
@@ -172,48 +164,10 @@ class QueuedMessageDispatcher {
       const threads = await Promise.all(
         references.map((reference) => invoke('thread:get', projectId, reference.id))
       )
-      return threads.every((thread) => thread === null || this.#isTerminalThread(thread))
+      return threads.every((thread) => thread === null || isTerminalThread(thread))
     } catch {
       return false
     }
-  }
-
-  #isTerminalThread(thread: Thread): boolean {
-    return (
-      thread.status === 'completed' || thread.status === 'failed' || thread.status === 'interrupted'
-    )
-  }
-
-  /** A user decision gate keeps the queue parked until the user resolves it. */
-  async #hasPendingGate(projectId: string, threadId: string): Promise<boolean> {
-    try {
-      const permissions = await invoke('agent:listPermissions', projectId, threadId)
-      if (permissions.length > 0) return true
-      const imageDescriptorErrors = await invoke(
-        'agent:listImageDescriptorErrors',
-        projectId,
-        threadId
-      )
-      if (imageDescriptorErrors.length > 0) return true
-      const questions = await invoke('agent:listQuestions', projectId, threadId)
-      if (questions.length > 0) return true
-    } catch {
-      // Be conservative when gate state cannot be read: keep the queue parked
-      // and let the next idle transition (or opening the thread) retry.
-      return true
-    }
-    return false
-  }
-
-  /** The thread's persisted settings, else the appropriate defaults. */
-  async #resolveSettings(projectId: string, threadId: string): Promise<ThreadSettings> {
-    try {
-      const thread = await invoke('thread:get', projectId, threadId)
-      if (thread?.settings) return { ...DEFAULT_SETTINGS, ...thread.settings }
-    } catch {
-      // Fall through to the defaults when the thread record cannot be read.
-    }
-    return projectId === INBOX_PROJECT_ID ? { ...CHAT_DEFAULT_SETTINGS } : { ...DEFAULT_SETTINGS }
   }
 }
 

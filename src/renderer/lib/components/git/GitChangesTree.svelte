@@ -5,6 +5,7 @@
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
   import FileDiffView from '../files/FileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     sections: Array<{ title: string; files: GitFileChange[] }>
@@ -276,7 +277,7 @@
     >
       <div
         class={[
-          'group flex h-8 w-full cursor-pointer items-center gap-2 pr-2 text-left transition-colors',
+          'group flex h-7 w-full cursor-pointer items-center gap-1.5 pr-1.5 text-left transition-colors',
           selectedPaths[change.path] ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
         role="button"
@@ -294,7 +295,7 @@
           onToggleDiff(change)
         }}
         onkeydown={(e: KeyboardEvent) => {
-          if (e.key === 'Enter') {
+          if (keymapState.matches('git-toggle-diff', e)) {
             if (change.status === 'conflicted') onResolveConflict?.(change.path)
             else onToggleDiff(change)
           }
@@ -368,18 +369,18 @@
   {#if expanded[key]}
     <div class="border-t border-border bg-app/50 pl-7">
       {#if loadingDiff[key]}
-        <p class="px-3 py-4 text-[0.625rem] text-dimmed">Loading diff…</p>
+        <p class="px-2 py-3 text-[0.625rem] text-dimmed">Loading diff…</p>
       {:else if diffErrors[key]}
-        <p class="px-3 py-4 text-[0.625rem] text-danger" role="alert">{diffErrors[key]}</p>
+        <p class="px-2 py-3 text-[0.625rem] text-danger" role="alert">{diffErrors[key]}</p>
       {:else if viewDiff}
         <FileDiffView diff={viewDiff} maxHeight="18rem" />
         {#if viewDiff.truncated}
-          <p class="border-t border-border px-3 py-1 text-[0.5625rem] text-dimmed">
+          <p class="border-t border-border px-2 py-1 text-[0.5625rem] text-dimmed">
             Diff truncated to a bounded preview
           </p>
         {/if}
       {:else}
-        <p class="px-3 py-4 text-[0.625rem] text-dimmed">No diff available.</p>
+        <p class="px-2 py-3 text-[0.625rem] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}
@@ -400,7 +401,7 @@
       <button
         type="button"
         class={[
-          'flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left transition-colors',
+          'flex h-7 w-full cursor-pointer items-center gap-1.5 px-2 text-left transition-colors',
           dirSelected ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
         style="padding-left: {indent}px"
@@ -475,7 +476,7 @@
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
   <div class="overflow-hidden rounded-lg border border-border bg-surface">
-    <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+    <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
       {#if !isConflicts}
         <span
           class="shrink-0"

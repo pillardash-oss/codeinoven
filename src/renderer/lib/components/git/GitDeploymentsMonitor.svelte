@@ -4,16 +4,15 @@
     CircleDot,
     CircleX,
     Clock3,
-    ExternalLink,
     GitBranch,
     Loader2,
     Minus,
     PackageCheck,
-    RefreshCw,
     Rocket
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
+  import { githubAppInstallUrl } from '$lib/github-references'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
@@ -43,6 +42,13 @@
       job: GitHubDeploymentJob,
       log: GitHubDeploymentJobLog | null
     ) => void
+    /**
+     * The deployment whose page replaces the overview, and the workflow run that
+     * does the same. The panel owns both so its action row can name what is open;
+     * this view is the one that opens and closes them.
+     */
+    selectedDeployment?: GitHubDeployment | null
+    selectedRun?: GitHubWorkflowRun | null
   }
 
   let {
@@ -53,14 +59,12 @@
     requestedRunId = null,
     onRequestedRunOpened,
     onAgentDiagnoseRun,
-    onAgentDiagnoseDeployment
+    onAgentDiagnoseDeployment,
+    selectedDeployment = $bindable(null),
+    selectedRun = $bindable(null)
   }: Props = $props()
 
   let error = $state('')
-  /** When set, the in-app deployment detail view replaces the list. */
-  let selectedDeployment = $state<GitHubDeployment | null>(null)
-  /** When set, the in-app workflow-run detail view replaces the list. */
-  let selectedRun = $state<GitHubWorkflowRun | null>(null)
   /** Non-reactive dedupe guard for direct navigation from a PR check. */
   let openingRequestedRunId: number | null = null
 
@@ -192,7 +196,6 @@
         {projectId}
         {identity}
         run={selectedRun}
-        onBack={() => (selectedRun = null)}
         onAgentDiagnose={onAgentDiagnoseRun}
       />
     {:else if selectedDeployment && identity}
@@ -200,7 +203,6 @@
         {projectId}
         {identity}
         deployment={selectedDeployment}
-        onBack={() => (selectedDeployment = null)}
         onAgentDiagnose={onAgentDiagnoseDeployment}
       />
     {:else if loading && !overview}
@@ -212,7 +214,9 @@
       <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <CircleX size={20} class="text-danger" />
         <div>
-          <p class="text-[0.6875rem] font-medium text-foreground">Deployment activity unavailable</p>
+          <p class="text-[0.6875rem] font-medium text-foreground">
+            Deployment activity unavailable
+          </p>
           <p class="mt-1 max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {#if permissionMissing}
               Install CodeInOven on this repository and grant Actions, Deployments, and Environments
@@ -226,8 +230,8 @@
           <button
             type="button"
             class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() =>
-              void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
+            data-external-url={githubAppInstallUrl()}
+            onclick={() => void openInBrowser(githubAppInstallUrl())}
           >
             Install GitHub App
           </button>
@@ -249,29 +253,14 @@
             <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Workflow runs
             </h3>
+            <!--
+              The count is the only thing this heading adds now: the external
+              link and the refresh live in the panel's header, where every view
+              keeps its actions, so this row does not repeat them.
+            -->
             <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
               {overview.workflowRuns.length}
             </span>
-            <button
-              type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              title="View workflow runs on GitHub"
-              aria-label="View workflow runs on GitHub"
-              onclick={() =>
-                void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/actions`)}
-            >
-              <ExternalLink size={11} />
-            </button>
-            <button
-              type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              title="Refresh deployments"
-              aria-label="Refresh deployments"
-              disabled={loading}
-              onclick={() => void load(true)}
-            >
-              <RefreshCw size={11} class={loading ? 'animate-spin' : ''} />
-            </button>
           </div>
           {#if overview.workflowRuns.length === 0}
             <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">

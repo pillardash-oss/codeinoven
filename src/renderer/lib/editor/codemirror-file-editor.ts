@@ -33,8 +33,8 @@ export interface FileEditorRangeViewportRect {
  * content layer, so there is nothing to desync.
  *
  * All CodeMirror modules are loaded through dynamic `import()`, so they land in
- * a lazy chunk fetched only when a file editor opens; the eager renderer bundle
- * and the PWA initial closure are untouched.
+ * a lazy chunk fetched only when a file editor opens, so the eager renderer
+ * bundle stays untouched.
  */
 
 export interface FileEditorController {
@@ -100,6 +100,8 @@ interface CodeMirrorApi {
   defaultKeymap: (typeof import('@codemirror/commands'))['defaultKeymap']
   history: (typeof import('@codemirror/commands'))['history']
   historyKeymap: (typeof import('@codemirror/commands'))['historyKeymap']
+  indentMore: (typeof import('@codemirror/commands'))['indentMore']
+  indentLess: (typeof import('@codemirror/commands'))['indentLess']
   undo: (typeof import('@codemirror/commands'))['undo']
   redo: (typeof import('@codemirror/commands'))['redo']
   invertedEffects: (typeof import('@codemirror/commands'))['invertedEffects']
@@ -140,14 +142,24 @@ export async function createFileEditor(
     key: 'Tab',
     run: (view: EditorView): boolean => {
       if (view.state.readOnly) return false
-      const selection = view.state.selection.main
-      view.dispatch({
-        changes: { from: selection.from, to: selection.to, insert: TAB_INSERT },
-        selection: api.EditorSelection.cursor(selection.from + TAB_INSERT.length),
-        scrollIntoView: true,
-        userEvent: 'input'
-      })
-      return true
+      // Single cursor with no selection: insert the indent unit so Tab still
+      // inserts spaces. Any selection (or multi-cursor): indent the whole
+      // block like every other editor.
+      if (view.state.selection.ranges.every((range) => range.empty)) {
+        const selection = view.state.selection.main
+        view.dispatch({
+          changes: { from: selection.from, to: selection.to, insert: TAB_INSERT },
+          selection: api.EditorSelection.cursor(selection.from + TAB_INSERT.length),
+          scrollIntoView: true,
+          userEvent: 'input'
+        })
+        return true
+      }
+      return api.indentMore(view)
+    },
+    shift: (view: EditorView): boolean => {
+      if (view.state.readOnly) return false
+      return api.indentLess(view)
     }
   }
 
@@ -522,6 +534,8 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     defaultKeymap: commandModule.defaultKeymap,
     history: commandModule.history,
     historyKeymap: commandModule.historyKeymap,
+    indentMore: commandModule.indentMore,
+    indentLess: commandModule.indentLess,
     undo: commandModule.undo,
     redo: commandModule.redo,
     invertedEffects: commandModule.invertedEffects,

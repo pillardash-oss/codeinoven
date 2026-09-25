@@ -1,5 +1,6 @@
 import { powerSaveBlocker } from 'electron'
 import type { Thread } from '../../lib/types'
+import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
 import { Logger } from './logger'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
@@ -14,18 +15,10 @@ import type { RetrySchedulerService } from './retry-scheduler-service'
 const IDLE_RELEASE_DELAY_MS = 5_000
 
 /**
- * Upper bound for an unattended scheduled auto-retry wait that justifies
- * keeping the device awake: waits under six hours are worth powering through so
- * the reset fires on time; longer waits fall back to normal sleep behavior.
- */
-const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
-
-/**
  * PowerWakeService   prevents the system and display from sleeping while
- * work is in progress, while a scheduled auto-retry (usage/rate-limit reset) is
- * due within six hours, or while a remote phone has opened the desktop
- * workspace. Thread/retry work and remote sessions have independent persisted
- * preferences so either source can keep the workstation available.
+ * work is in progress or a scheduled auto-retry (usage/rate-limit reset) is due
+ * within the shared wake window. The window itself lives in `provider-issue.ts`
+ * so the renderer's working-activity badge classifies the same threshold.
  */
 export class PowerWakeService {
   /** Blocker that keeps the whole system (CPU) from sleeping. */
@@ -34,8 +27,6 @@ export class PowerWakeService {
   private displayBlockerId: number | null = null
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private enabled = false
-  private remoteEnabled = true
-  private remoteSessionActive = false
   private retryScheduler: RetrySchedulerService | null = null
   private readonly retryWakeWindows = new Map<string, number>()
 
@@ -48,19 +39,12 @@ export class PowerWakeService {
   async start(): Promise<void> {
     const config = await this.storage.getConfig()
     this.enabled = config.keepAwakeWhileWorking === true
-    this.remoteEnabled = config.keepAwakeWhileRemoteConnected !== false
     this.refresh()
   }
 
   /** Apply a config change without re-reading storage. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled
-    this.refresh(!enabled)
-  }
-
-  /** Apply the Remote-page keep-awake preference without re-reading storage. */
-  setRemoteEnabled(enabled: boolean): void {
-    this.remoteEnabled = enabled
     this.refresh(!enabled)
   }
 
@@ -89,12 +73,6 @@ export class PowerWakeService {
     this.retryScheduler = scheduler
   }
 
-  /** Keep the desktop awake while a phone is actively using its workspace. */
-  setRemoteSessionActive(active: boolean): void {
-    this.remoteSessionActive = active
-    this.refresh()
-  }
-
   /** Release the blocker on shutdown. */
   stop(): void {
     this.cancelScheduledRelease()
@@ -119,10 +97,7 @@ export class PowerWakeService {
   }
 
   private shouldKeepAwake(): boolean {
-    return (
-      (this.remoteEnabled && this.remoteSessionActive) ||
-      (this.enabled && (this.hasActiveThread() || this.hasScheduledRetry()))
-    )
+    return this.enabled && (this.hasActiveThread() || this.hasScheduledRetry())
   }
 
   /**

@@ -52,6 +52,17 @@ export interface ReapOrphansResult {
   skipped: number[]
 }
 
+export interface ReapOrphansOptions {
+  /**
+   * Kill a journaled root only when its app-ownership marker is positively
+   * verified, instead of accepting an orphaned parent as proof of ownership.
+   * The repeating sweep needs this: a pid the OS recycled between sweeps must
+   * never be signalled on a guess. The one-shot startup reap keeps the orphan
+   * fallback, because its journal was written moments before it runs.
+   */
+  requireOwnershipProof?: boolean
+}
+
 type ProcessSnapshotter = () => Promise<ProcessSnapshotEntry[]>
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -466,8 +477,12 @@ export class AgentProcessService implements AgentProcessObserver {
    * leaves its roots journaled behind). Reaping such a root would SIGTERM a
    * harness the sibling is actively using, so the entry stays journaled for a
    * future launch once that instance is gone.
+   *
+   * Pass `requireOwnershipProof` from the repeated running sweep
+   * (`ChatEngine.sweepOrphanedProcesses`) so only marker-verified roots are
+   * signalled; an unproven entry stays journaled for the next launch instead.
    */
-  async reapOrphans(): Promise<ReapOrphansResult> {
+  async reapOrphans(options: ReapOrphansOptions = {}): Promise<ReapOrphansResult> {
     if (!this.journal) return { killed: [], skipped: [] }
     const roots = await this.journal.load()
     const snapshot = await this.snapshotter().catch(() => [])
@@ -495,6 +510,25 @@ export class AgentProcessService implements AgentProcessObserver {
         // a future launch must still be able to reap it.
         continue
       }
+      if (options.requireOwnershipProof) {
+        // An adopted daemon (see OwnedRoot.adopted) is an app-marked orphan too,
+        // but the running app may be talking to it; only a launch reaps those.
+        if (root.adopted === true) continue
+        const marker = await this.processHasMarker(root.pid)
+        if (marker === true) {
+          await this.killTree(root.pid)
+          killed.push(root.pid)
+          this.journal.unregister(root.pid)
+        } else if (marker === false) {
+          // The live process carries no ownership marker, so this journaled pid
+          // was recycled by the OS. Forget the entry instead of signalling it.
+          this.journal.unregister(root.pid)
+        }
+        // `null` means the platform cannot tell: keep the entry journaled for a
+        // launch that can fall back to the orphan check.
+        continue
+      }
+
       const owned = await this.isOwnedOrOrphaned(root.pid, parentPid, alive)
       if (owned) {
         await this.killTree(root.pid)
@@ -515,8 +549,10 @@ export class AgentProcessService implements AgentProcessObserver {
     // a dev server whose root already died   including one leaked after a *clean*
     // shutdown (when the journal is already cleared). On macOS/Windows env is not
     // readable, so we rely on the journaled, orphaned roots above (which covers
-    // the common crash-leak of a live `opencode serve` root).
-    if (process.platform === 'linux') {
+    // the common crash-leak of a live `opencode serve` root). The repeating sweep
+    // skips it: an adopted daemon (for example an `adb` fork-server) is an
+    // app-marked orphan too, so a launch-only reclaim of those is deliberate.
+    if (process.platform === 'linux' && !options.requireOwnershipProof) {
       const markedOrphans = await this.sweepMarkedOrphans(snapshot, alive)
       for (const pid of markedOrphans) {
         if (killed.includes(pid)) continue
@@ -570,11 +606,9 @@ export class AgentProcessService implements AgentProcessObserver {
       for (let index = 0; index < pids.length; index += OWNERSHIP_PROBE_CHUNK) {
         const chunk = pids.slice(index, index + OWNERSHIP_PROBE_CHUNK)
         try {
-          const { stdout } = await execFileAsync(
-            'ps',
-            ['-E', '-p', chunk.map(String).join(',')],
-            { timeout: PORT_SCAN_TIMEOUT_MS }
-          )
+          const { stdout } = await execFileAsync('ps', ['-E', '-p', chunk.map(String).join(',')], {
+            timeout: PORT_SCAN_TIMEOUT_MS
+          })
           for (const line of stdout.split(/\r?\n/u)) {
             const pid = Number(line.trim().split(/\s+/u)[0])
             if (!Number.isFinite(pid) || pid <= 0 || result.has(pid)) continue
@@ -757,6 +791,12 @@ export class AgentProcessService implements AgentProcessObserver {
     )
     if (candidates.length === 0) return
     const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
+    // Journal an adopted daemon only when no entry exists yet: an entry written
+    // by the process that spawned it carries the real command and cwd and stays a
+    // swept root, while overwriting it as "adopted" would hide it from the
+    // running orphan sweep.
+    const existingRoots = (await this.journal?.load()) ?? []
+    const journalled = new Set(existingRoots.map((root) => root.pid))
     const adoptedScopes = new Set<string>()
     for (const entry of candidates) {
       const owner = ownership.get(entry.pid)
@@ -784,7 +824,10 @@ export class AgentProcessService implements AgentProcessObserver {
       })
       // Journal the adopted daemon so reapOrphans can still kill it after the
       // app closes without a clean shutdown.
-      this.journal?.register(entry.pid, entry.command, '')
+      if (this.journal && !journalled.has(entry.pid)) {
+        this.journal.registerAdopted(entry.pid, entry.command)
+        journalled.add(entry.pid)
+      }
       adoptedScopes.add(scope)
     }
     for (const scope of adoptedScopes) {

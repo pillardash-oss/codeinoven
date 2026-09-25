@@ -63,6 +63,15 @@ class HarnessAccountCache {
     return accounts
   }
 
+  /**
+   * Make an account the harness's active credential. Best-effort by design: a
+   * harness whose own store holds one credential has nothing to switch, and a
+   * failed switch must not block the account selection that triggered it.
+   */
+  async activate(account: HarnessAccount): Promise<void> {
+    await invoke('providerAccounts:activate', account.id)
+  }
+
   /** Reconcile account registries whenever the matching model catalogs refresh. */
   async refreshHarnesses(harnessIds: Iterable<string>): Promise<void> {
     const targets = [...new Set(harnessIds)]

@@ -1,10 +1,12 @@
 <script lang="ts">
   import { Copy, MonitorCog, Pencil, Play, Plus, Square, Trash2, Variable, X } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type {
     ProjectAction,
     ProjectActionInput,
@@ -14,7 +16,9 @@
   interface Props {
     projectId: string
     threadId: string
-    scopeBucketId?: string
+    /** Scope bucket the open thread is on: the scope a newly started run must
+     *  execute in. */
+    scopeBucketId: string
   }
   let { projectId, threadId, scopeBucketId }: Props = $props()
   let editorOpen = $state(false)
@@ -34,6 +38,19 @@
     void projectActionsState.load(projectId)
   })
   let actions = $derived(projectActionsState.actions(projectId))
+
+  /** A run keeps the scope it was launched in for its whole life (its shell's
+   *  working directory is fixed when the PTY spawns), so while the open thread
+   *  sits in another scope this panel is showing a shell in a different
+   *  checkout. Only a live run can be typed into and can still be writing files,
+   *  so only a live run raises the notice: a finished run's output is history and
+   *  the notice clears itself the moment the process exits. */
+  let scopeStale = $derived(
+    actions.some((action) => {
+      const run = projectActionsState.run(action.id)
+      return run?.running === true && run.scopeBucketId !== scopeBucketId
+    })
+  )
 
   function openEditor(action: ProjectAction | null = null): void {
     editing = action
@@ -70,7 +87,7 @@
   }
   function requestRun(action: ProjectAction): void {
     if (action.variables.length === 0) {
-      projectActionsState.start(action, {})
+      projectActionsState.start(action, {}, scopeBucketId)
       return
     }
     runValues = Object.fromEntries(action.variables.map((variable) => [variable.name, '']))
@@ -78,7 +95,7 @@
   }
   function startRun(): void {
     if (!runTarget) return
-    projectActionsState.start(runTarget, runValues)
+    projectActionsState.start(runTarget, runValues, scopeBucketId)
     runTarget = null
   }
   function duplicate(action: ProjectAction): void {
@@ -146,6 +163,7 @@
 </script>
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Actions">
+  <StalePanelNotice stale={scopeStale} reason="run" />
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
     <div class="flex items-center gap-2">
       <MonitorCog size={15} />
@@ -194,7 +212,7 @@
               tabindex="0"
               onclick={() => run && projectActionsState.toggle(action.id)}
               onkeydown={(event) => {
-                if (run && (event.key === 'Enter' || event.key === ' '))
+                if (run && keymapState.matches('ui-activate', event))
                   projectActionsState.toggle(action.id)
                 else if (event.altKey && event.key === 'ArrowUp') {
                   event.preventDefault()
@@ -280,9 +298,10 @@
                     terminalId={run.terminalId}
                     {projectId}
                     {threadId}
-                    {scopeBucketId}
+                    scopeBucketId={run.scopeBucketId}
                     script={run.script}
                     variables={run.variables}
+                    live={run.running}
                   />{/key}
               </div>
             {/if}
@@ -332,7 +351,7 @@
         </span>
       </div>
       <p class="mt-1.5 text-[0.6875rem] text-muted">
-        The colour shows as the entry's left border   group similar scripts together.
+        The colour shows as the entry's left border group similar scripts together.
       </p>
     </div>
     <div>

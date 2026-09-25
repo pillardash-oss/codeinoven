@@ -8,6 +8,7 @@ import {
   type ScopeWorktreeHealth
 } from '../../lib/types'
 import { getScopeRootPath } from '../../lib/utils'
+import { scopeWorktreeUnavailableMessage } from '../../lib/scope-worktree-health'
 
 /** One registration reported by `git worktree list --porcelain`. */
 export interface WorktreeRegistration {
@@ -33,7 +34,7 @@ export type ScopeResolution =
 /** Thrown instead of falling back when a managed scope root is unhealthy. */
 export class ScopeRootUnavailableError extends Error {
   constructor(readonly health: ScopeWorktreeHealth) {
-    super(`Managed scope root unavailable (${health.category}): ${health.detail ?? ''}`)
+    super(scopeWorktreeUnavailableMessage(health))
     this.name = 'ScopeRootUnavailableError'
   }
 }

@@ -1,0 +1,259 @@
+<script lang="ts">
+  /**
+   * Per-comment actions. Most match the set github.com offers on one of its own
+   * comments; Explain, Quick chat and Assign to an agent are this app's own
+   * additions. The first two open a read-only side chat anchored on the comment,
+   * while the third hands it to an agent with a worktree and a report to write.
+   * Reply here is the one that answers the comment where it stands instead of in
+   * the panel's composer.
+   *
+   * Two rules shape what appears. GitHub only lets an author edit or delete a
+   * comment, so those rows exist only for the viewer's own; and blocking is
+   * meaningless on yourself, which is why the viewer login decides whether the
+   * row is drawn at all rather than disabling a row that could never work.
+   *
+   * The two abuse actions leave the app on purpose. The account's OAuth scope is
+   * `repo`, and blocking an account needs `user`, so github.com is where those
+   * have to happen; the rows stay here so the menu is complete and the user is
+   * not left wondering where the action went.
+   */
+  import {
+    Ban,
+    Bot,
+    ClipboardCopy,
+    Flag,
+    Link2,
+    MessageCircleDashed,
+    MessageSquareDashed,
+    MessageSquareQuote,
+    MessageSquarePlus,
+    MessageSquareReply,
+    Pencil,
+    Trash2
+  } from '@lucide/svelte'
+  import { DropdownMenu as Menu } from 'bits-ui'
+  import { githubDisplayLogin } from '$lib/format/github-login'
+  import type { PrMinimizeReason } from '$shared/types'
+
+  interface Props {
+    /** Login that wrote the comment. */
+    author: string
+    /** The signed-in account, or null while it is unknown. */
+    viewerLogin: string | null
+    /** Whether Edit is offered: your own comment, and the body is editable. */
+    canEdit: boolean
+    /** Whether Delete is offered. A description has no delete, only an edit. */
+    canDelete: boolean
+    /**
+     * Whether Hide is offered. GitHub minimises a comment by its GraphQL node id,
+     * which a description does not expose here.
+     */
+    canHide: boolean
+    busy?: boolean
+    /**
+     * Where the three rows that leave the app actually go. Declared rather than
+     * built here because only the caller knows the comment they belong to, and a
+     * row that opens a URL has to declare it for the shared right-click menu to
+     * offer the same actions a link offers.
+     */
+    externalUrls: {
+      /** The new-issue page, prefilled with this comment as a reference. */
+      reference: string
+      /** GitHub's abuse-report form. */
+      report: string
+      /** The blocked-accounts settings, where blocking an account lives. */
+      block: string
+    }
+    onCopyLink: () => void
+    onCopyMarkdown: () => void
+    onQuote: () => void
+    /**
+     * Answer this exact comment where it stands. Omitted when the surface has no
+     * reply box to open, so the row is never drawn for an action that could not
+     * run.
+     */
+    onReply?: () => void
+    /** Open a read-only temporary side chat that explains this comment.
+     *  Omitted when the entry has no body to anchor a chat on (an empty review). */
+    onExplain?: () => void
+    /** Open an empty read-only temporary side chat with this comment attached.
+     *  Omitted for the same reason as `onExplain`. */
+    onQuickChat?: () => void
+    /**
+     * Hand this comment to an agent as an assignment: a real thread of its own, a
+     * worktree to test in, and a brief built from this comment. Omitted for the same
+     * reason as `onExplain`, since a comment with no body is nothing to hand over.
+     */
+    onAssignAgent?: () => void
+    onReferenceInNewIssue: () => void
+    onEdit: () => void
+    onDelete: () => void
+    onHide: (reason: PrMinimizeReason) => void
+    onReport: () => void
+    onBlock: () => void
+  }
+
+  let {
+    author,
+    viewerLogin,
+    canEdit,
+    canDelete,
+    canHide,
+    busy = false,
+    externalUrls,
+    onCopyLink,
+    onCopyMarkdown,
+    onQuote,
+    onReply,
+    onExplain,
+    onQuickChat,
+    onAssignAgent,
+    onReferenceInNewIssue,
+    onEdit,
+    onDelete,
+    onHide,
+    onReport,
+    onBlock
+  }: Props = $props()
+
+  const itemClass =
+    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+
+  /**
+   * Hiding is always explained by a reason: GitHub's classifier decides how the
+   * collapse reads to everyone else ("This comment was marked as off-topic"), so
+   * the reason is a submenu rather than a silent default.
+   */
+  const hideReasons: Array<{ id: PrMinimizeReason; label: string; hint: string }> = [
+    { id: 'OFF_TOPIC', label: 'Off-topic', hint: 'unrelated to the discussion' },
+    { id: 'OUTDATED', label: 'Outdated', hint: 'superseded by later work' },
+    { id: 'RESOLVED', label: 'Resolved', hint: 'already handled' },
+    { id: 'SPAM', label: 'Spam', hint: 'unsolicited advertising' },
+    { id: 'ABUSE', label: 'Abuse', hint: 'reported to GitHub' }
+  ]
+
+  /** Blocking yourself is not an action GitHub offers, and never should be. */
+  const canBlock = $derived(viewerLogin !== null && viewerLogin !== author)
+</script>
+
+<!--
+  The side-chat and assignment rows sit above the clipboard rows: they are the only
+  actions here that do something inside the app rather than hand the comment off, so
+  they read first. A review with no body has nothing to anchor a chat or an
+  assignment on, so all three rows disappear together there.
+-->
+{#if onExplain}
+  <Menu.Item class={itemClass} onSelect={onExplain} disabled={busy}>
+    <MessageCircleDashed size={12} class="shrink-0 text-dimmed" />
+    Explain
+  </Menu.Item>
+{/if}
+{#if onQuickChat}
+  <Menu.Item class={itemClass} onSelect={onQuickChat} disabled={busy}>
+    <MessageSquareDashed size={12} class="shrink-0 text-dimmed" />
+    Quick chat
+  </Menu.Item>
+{/if}
+{#if onAssignAgent}
+  <Menu.Item class={itemClass} onSelect={onAssignAgent} disabled={busy}>
+    <Bot size={12} class="shrink-0 text-dimmed" />
+    Assign to an agent
+  </Menu.Item>
+{/if}
+{#if onExplain || onQuickChat || onAssignAgent}
+  <Menu.Separator class="my-1 h-px bg-border" />
+{/if}
+
+<Menu.Item class={itemClass} onSelect={onCopyLink} disabled={busy}>
+  <Link2 size={12} class="shrink-0 text-dimmed" />
+  Copy link
+</Menu.Item>
+<Menu.Item class={itemClass} onSelect={onCopyMarkdown} disabled={busy}>
+  <ClipboardCopy size={12} class="shrink-0 text-dimmed" />
+  Copy Markdown
+</Menu.Item>
+<Menu.Item class={itemClass} onSelect={onQuote} disabled={busy}>
+  <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
+  Quote reply
+</Menu.Item>
+{#if onReply}
+  <Menu.Item class={itemClass} onSelect={onReply} disabled={busy}>
+    <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+    Reply here
+  </Menu.Item>
+{/if}
+<Menu.Item
+  class={itemClass}
+  data-external-url={externalUrls.reference}
+  onSelect={onReferenceInNewIssue}
+  disabled={busy}
+>
+  <MessageSquarePlus size={12} class="shrink-0 text-dimmed" />
+  Reference in new issue
+</Menu.Item>
+
+{#if canEdit || canDelete || canHide}
+  <Menu.Separator class="my-1 h-px bg-border" />
+{/if}
+
+{#if canEdit}
+  <Menu.Item class={itemClass} onSelect={onEdit} disabled={busy}>
+    <Pencil size={12} class="shrink-0 text-dimmed" />
+    Edit
+  </Menu.Item>
+{/if}
+
+{#if canHide}
+  <Menu.Sub>
+    <Menu.SubTrigger class={itemClass} disabled={busy}>
+      <Ban size={12} class="shrink-0 text-dimmed" />
+      Hide
+    </Menu.SubTrigger>
+    <Menu.SubContent
+      class="z-50 min-w-56 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+      sideOffset={4}
+    >
+      {#each hideReasons as reason (reason.id)}
+        <Menu.Item class={itemClass} onSelect={() => onHide(reason.id)} disabled={busy}>
+          <span class="w-3 text-center text-[0.625rem] text-dimmed">·</span>
+          {reason.label}
+          <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed">{reason.hint}</span>
+        </Menu.Item>
+      {/each}
+    </Menu.SubContent>
+  </Menu.Sub>
+{/if}
+
+{#if canDelete}
+  <Menu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+    onSelect={onDelete}
+    disabled={busy}
+  >
+    <Trash2 size={12} class="shrink-0" />
+    Delete
+  </Menu.Item>
+{/if}
+
+<Menu.Separator class="my-1 h-px bg-border" />
+
+<Menu.Item
+  class={itemClass}
+  data-external-url={externalUrls.report}
+  onSelect={onReport}
+  disabled={busy}
+>
+  <Flag size={12} class="shrink-0 text-dimmed" />
+  Report content
+</Menu.Item>
+{#if canBlock}
+  <Menu.Item
+    class={itemClass}
+    data-external-url={externalUrls.block}
+    onSelect={onBlock}
+    disabled={busy}
+  >
+    <Ban size={12} class="shrink-0 text-dimmed" />
+    Block @{githubDisplayLogin(author)}
+  </Menu.Item>
+{/if}

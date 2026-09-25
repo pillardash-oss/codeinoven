@@ -5,14 +5,17 @@
  */
 import type { Project, Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+import { DEFAULT_SCOPE_BUCKET_ID, activeThreadRowId } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
-import { rendererRecovery } from './renderer-recovery.svelte'
+import { rendererRecovery, type SelectedThreadReference } from './renderer-recovery.svelte'
+import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
 import { openComposerFocusWindow } from '$lib/focus/composer-focus'
+import { scheduleDeferredWork } from '$lib/deferred-work'
+import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
@@ -98,6 +101,19 @@ class WorkspaceState {
   projectIdToEdit: string | null = $state(null)
   /** Globally ordered task visits, newest first, independent of project. */
   recentThreadVisits: string[] = $state(loadRecentThreadVisits())
+  /**
+   * The thread each content-view family (Projects, Chats, Assistant) was last
+   * showing. Switching views restores the family's own thread instead of a
+   * single global selection, so leaving Assistant for Projects never costs the
+   * project thread that was open, and vice versa. In-memory only: a restart
+   * re-selects from the recovery snapshot and the recent-visit list.
+   */
+  private contentViewThreadRefs: Record<ContentThreadFamily, SelectedThreadReference | null> =
+    $state({
+      projects: null,
+      chats: null,
+      assistant: null
+    })
 
   // ─── Terminal ──────────────────────────────────────────────────────────
   /** True only while a view that hosts a terminal panel is mounted. */
@@ -157,11 +173,37 @@ class WorkspaceState {
   loadUserMessageHistory: (() => Promise<void>) | null = null
   historyActions: HistoryMessageActions | null = $state(null)
 
+  /**
+   * Remember the thread a content-view family is showing. Called on every open
+   * so each view can restore its own thread when the shell returns to it.
+   */
+  rememberContentViewThread(thread: Thread): void {
+    const family = contentThreadFamily(thread)
+    const current = this.contentViewThreadRefs[family]
+    if (current?.projectId === thread.projectId && current.threadId === thread.id) return
+    this.contentViewThreadRefs = {
+      ...this.contentViewThreadRefs,
+      [family]: { projectId: thread.projectId, threadId: thread.id }
+    }
+  }
+
+  /** The thread a content-view family was last showing, if any. */
+  contentViewThreadRef(family: ContentThreadFamily): SelectedThreadReference | null {
+    return this.contentViewThreadRefs[family]
+  }
+
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
     // The chat composer owns keyboard focus after any thread switch. Open the
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
     openComposerFocusWindow()
+    // Start the message read in the same tick as the selection, before the
+    // conversation view mounts. Every switch path (sidebar click, Ctrl+Tab,
+    // notification, restore) then opens against an in-flight load instead of
+    // starting one only after mount, which is what made cold switches show
+    // "Loading conversation…". In-flight loads are shared, so the view's own
+    // load never duplicates this read.
+    void threadMessages.preload(thread.projectId, thread.id)
     const visitKey = threadVisitKey(thread)
     this.recentThreadVisits = [
       visitKey,
@@ -171,9 +213,16 @@ class WorkspaceState {
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
+    this.rememberContentViewThread(thread)
     this.sourceProcessCount = 0
-    void this.refreshSourceProcessCount(thread.projectId, thread.id)
-    contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
+    // A worker/auditor child opens the coordinator's sidebar context: its own
+    // row is the Sr. Engineer, and that is where the coordinator panel is docked.
+    contextSidebarState.activateThread(
+      thread.projectId,
+      thread.id,
+      thread.title,
+      activeThreadRowId(thread) ?? thread.id
+    )
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
     // terminal, and action roots follow the thread's scope bucket).
@@ -185,6 +234,12 @@ class WorkspaceState {
     // The moment a thread is opened its notifications are stale — drop them so
     // an error/completion that was already seen never lingers in the panel.
     notificationPanelState.dismissForThread(thread.projectId, thread.id)
+    // The live process count is a badge, and reading it walks a session's
+    // process table. It must never share the switch instant with the
+    // conversation mount.
+    scheduleDeferredWork('workspace:sourceProcessCount', () => {
+      void this.refreshSourceProcessCount(thread.projectId, thread.id)
+    })
   }
 
   /** The project's active scope bucket: the open thread's bucket when it belongs
@@ -290,6 +345,51 @@ class WorkspaceState {
     return true
   }
 
+  /** Incremented to signal Workspace to create an assistant task. */
+  requestAssistantTaskCount = $state(0)
+  private consumedAssistantTaskRequestCount = 0
+
+  requestAssistantTask(): void {
+    this.requestAssistantTaskCount++
+  }
+
+  consumeAssistantTaskRequest(): boolean {
+    if (this.consumedAssistantTaskRequestCount === this.requestAssistantTaskCount) return false
+    this.consumedAssistantTaskRequestCount = this.requestAssistantTaskCount
+    return true
+  }
+
+  /** Incremented to signal Workspace to start the new-routine flow. */
+  requestAssistantRoutineCount = $state(0)
+  private consumedAssistantRoutineRequestCount = 0
+
+  requestAssistantRoutine(): void {
+    this.requestAssistantRoutineCount++
+  }
+
+  consumeAssistantRoutineRequest(): boolean {
+    if (this.consumedAssistantRoutineRequestCount === this.requestAssistantRoutineCount)
+      return false
+    this.consumedAssistantRoutineRequestCount = this.requestAssistantRoutineCount
+    return true
+  }
+
+  /** Incremented to signal Workspace to toggle its right (context) sidebar. */
+  requestToggleContextSidebarCount = $state(0)
+  private consumedToggleContextSidebarRequestCount = 0
+
+  requestToggleContextSidebar(): void {
+    this.requestToggleContextSidebarCount++
+  }
+
+  consumeToggleContextSidebarRequest(): boolean {
+    if (this.consumedToggleContextSidebarRequestCount === this.requestToggleContextSidebarCount) {
+      return false
+    }
+    this.consumedToggleContextSidebarRequestCount = this.requestToggleContextSidebarCount
+    return true
+  }
+
   /** Cross-project file result that Workspace should reveal in its file sidebar. */
   pendingProjectFileOpen: ProjectFileOpenRequest | null = $state(null)
   requestProjectFileOpenCount = $state(0)
@@ -304,17 +404,6 @@ class WorkspaceState {
     if (this.consumedProjectFileOpenCount === this.requestProjectFileOpenCount) return null
     this.consumedProjectFileOpenCount = this.requestProjectFileOpenCount
     return this.pendingProjectFileOpen
-  }
-
-  /** Incremented to signal Workspace that a thread was moved to a different project. */
-  pendingMoveThreadId: string | null = $state(null)
-  pendingMoveThread: Thread | null = $state(null)
-  moveThreadCount = $state(0)
-
-  requestMoveThread(oldThreadId: string, newThread: Thread): void {
-    this.pendingMoveThreadId = oldThreadId
-    this.pendingMoveThread = newThread
-    this.moveThreadCount++
   }
 
   /** Incremented to signal ProjectCreateControl to open the add-project dialog. */

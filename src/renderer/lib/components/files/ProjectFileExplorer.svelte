@@ -1,38 +1,59 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import { AlertDialog, Dialog } from 'bits-ui'
+  import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
-  import {
-    ChevronDown,
-    ChevronRight,
-    ChevronsDown,
-    ChevronsUp,
-    FileDiff,
-    FolderOpen,
-    GitMerge,
-    Loader2,
-    RefreshCw,
-    Search,
-    X
-  } from '@lucide/svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
-  import { posixDirname } from '$shared/paths'
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { copyText } from '$lib/copy-text'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import FileTypeIcon from './FileTypeIcon.svelte'
-  import FolderTypeIcon from './FolderTypeIcon.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
+  import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
+  import ProjectFileExplorerFilters from './ProjectFileExplorerFilters.svelte'
+  import ProjectFileExplorerHeader from './ProjectFileExplorerHeader.svelte'
+  import ProjectFileExplorerTreeRow from './ProjectFileExplorerTreeRow.svelte'
+  import {
+    buildEntryIndexFromEntries,
+    buildEntryRowIndex,
+    buildRowIndexByKey,
+    buildTreeRows,
+    collectAncestorDirectories,
+    collectSearchResultDirectories,
+    computeFilterMatchesByDirectory,
+    computeVirtualTree,
+    droppedFilePaths,
+    parentDirectory,
+    pasteDirectory,
+    pastedFilePaths,
+    selectionLabel,
+    selectionPathsFor,
+    TREE_ROW_HEIGHT,
+    TREE_VERTICAL_PADDING,
+    visibleEntries,
+    type InlineEdit
+  } from './project-file-explorer-tree'
 
   interface Props {
     projectId: string
     projectName: string
+    /** Label beside the root icon; empty when the root names itself with the
+     *  icon alone (a routine root). */
+    projectLabel?: string
+    /** Root icon image for the tree header (a routine's own icon), or null for
+     *  the generic mark. */
+    projectIconUrl?: string | null
+    /** True when the tree's root is a routine, which draws the routine default
+     *  mark when the routine has no icon of its own. */
+    routineRoot?: boolean
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. */
+    projectAccentColor?: string | null
     projectState: ProjectFilesState
     onWidthChange: (width: number, persist: boolean) => void
     selectedPath: string | null
@@ -49,45 +70,16 @@
     /** Whether the Conflicts filter is active (shared with the git panel routing). */
     conflictsOnly?: boolean
     onToggleConflicts?: () => void
-    onFileSelect?: (path: string) => void
+    onFileSelect?: (path: string, mode: 'normal' | 'preview') => void
   }
-
-  interface EntryTreeRow {
-    kind: 'entry'
-    key: string
-    entry: ProjectFileEntry
-    depth: number
-  }
-
-  interface CreateTreeRow {
-    kind: 'create'
-    key: string
-    directory: string
-    depth: number
-  }
-
-  interface ErrorTreeRow {
-    kind: 'error'
-    key: string
-    entry: ProjectFileEntry
-    depth: number
-    message: string
-  }
-
-  type TreeRow = EntryTreeRow | CreateTreeRow | ErrorTreeRow
-
-  interface VirtualTreeRow {
-    row: TreeRow
-    offset: number
-  }
-
-  const TREE_ROW_HEIGHT = 28
-  const TREE_VERTICAL_PADDING = 4
-  const TREE_OVERSCAN = 8
 
   let {
     projectId,
     projectName,
+    projectLabel = projectName,
+    projectIconUrl = null,
+    routineRoot = false,
+    projectAccentColor = null,
     projectState,
     onWidthChange,
     selectedPath,
@@ -129,14 +121,10 @@
    *  fresh results are available and the local fallback filter applies. */
   let searchResultsQuery = ''
   let lastAppliedCheckpointId = $state<string | null>(null)
-  let inlineEdit = $state<
-    | { kind: 'create'; directory: string; value: string }
-    | { kind: 'create-directory'; directory: string; value: string }
-    | { kind: 'rename'; entry: ProjectFileEntry; value: string }
-    | null
-  >(null)
-  let inlineInput = $state<HTMLInputElement | null>(null)
+  let inlineEdit = $state<InlineEdit | null>(null)
   let operationPending = $state(false)
+  /** Guards the browser preview action while a loopback server is starting. */
+  let browserPreviewPending = $state(false)
   let deleteTarget = $state<{ paths: string[]; label: string } | null>(null)
   let info = $state<ProjectFileInfo | null>(null)
   let treeScroll = $state<HTMLDivElement | null>(null)
@@ -159,43 +147,30 @@
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
   const conflictPathSet = $derived(new Set(conflictPaths))
 
-  /** Flatten the expanded tree into fixed-height display rows. Keeping the full
-   *  model in memory is cheap; the virtual slice below limits component and DOM
-   *  creation to the viewport plus overscan. */
-  let treeRows = $derived.by((): TreeRow[] => {
-    const rows: TreeRow[] = []
-    const walk = (directory: string, depth: number): void => {
-      if (
-        (inlineEdit?.kind === 'create' || inlineEdit?.kind === 'create-directory') &&
-        inlineEdit.directory === directory
-      ) {
-        rows.push({
-          kind: 'create',
-          key: `create:${directory}`,
-          directory,
-          depth
-        })
-      }
-      for (const entry of visibleEntries(directory)) {
-        rows.push({ kind: 'entry', key: `entry:${entry.path}`, entry, depth })
-        if (entry.kind !== 'directory') continue
-        const error = projectState.directoryErrors[entry.path]
-        if (projectState.expandedDirectories[entry.path] && error) {
-          rows.push({
-            kind: 'error',
-            key: `error:${entry.path}`,
-            entry,
-            depth,
-            message: error
-          })
-        } else if (shouldRenderDirectory(entry.path)) {
-          walk(entry.path, depth + 1)
-        }
-      }
-    }
-    walk('', 0)
-    return rows
+  let searchResultDirectories = $derived(collectSearchResultDirectories(searchResultPaths))
+
+  let treeFilterInput = $derived({
+    entriesByDirectory: projectState.entriesByDirectory,
+    expandedDirectories: projectState.expandedDirectories,
+    directoryErrors: projectState.directoryErrors,
+    inlineEdit,
+    filterQuery,
+    lastTurnOnly,
+    conflictsOnly,
+    lastTurnPathSet,
+    conflictPathSet,
+    filterOpen,
+    includeCio: cioSearchVisibility.includeCio,
+    searchResultPaths,
+    searchResultsQuery,
+    searchResultDirectories,
+    collapsedOverrides
   })
+  let filterMatchesByDirectory = $derived(computeFilterMatchesByDirectory(treeFilterInput))
+  let treeRows = $derived(buildTreeRows(treeFilterInput, filterMatchesByDirectory))
+  let topLevelVisibleEntries = $derived(
+    visibleEntries('', treeFilterInput, filterMatchesByDirectory)
+  )
 
   /** Entry-only view preserves the existing keyboard and range-selection model. */
   let visibleRows = $derived.by((): ProjectFileEntry[] => {
@@ -206,44 +181,11 @@
     return entries
   })
 
-  let rowIndexByPath = $derived.by((): Map<string, number> => {
-    const indexByPath = new SvelteMap<string, number>()
-    visibleRows.forEach((entry, index) => indexByPath.set(entry.path, index))
-    return indexByPath
-  })
+  let rowIndexByPath = $derived(buildEntryIndexFromEntries(visibleRows))
+  let treeRowIndexByPath = $derived(buildEntryRowIndex(treeRows))
+  let treeRowIndexByKey = $derived(buildRowIndexByKey(treeRows))
 
-  let treeRowIndexByPath = $derived.by((): Map<string, number> => {
-    const indexByPath = new SvelteMap<string, number>()
-    treeRows.forEach((row, index) => {
-      if (row.kind === 'entry') indexByPath.set(row.entry.path, index)
-    })
-    return indexByPath
-  })
-
-  let treeRowIndexByKey = $derived.by((): Map<string, number> => {
-    const indexByKey = new SvelteMap<string, number>()
-    treeRows.forEach((row, index) => indexByKey.set(row.key, index))
-    return indexByKey
-  })
-
-  let virtualTree = $derived.by((): { rows: VirtualTreeRow[]; total: number } => {
-    const total = treeRows.length * TREE_ROW_HEIGHT
-    if (treeRows.length === 0) return { rows: [], total }
-    const viewport = Math.max(treeViewportHeight, TREE_ROW_HEIGHT)
-    const maxScrollTop = Math.max(0, total + TREE_VERTICAL_PADDING * 2 - viewport)
-    const effectiveTop = Math.min(treeScrollTop, maxScrollTop)
-    const contentTop = Math.max(0, effectiveTop - TREE_VERTICAL_PADDING)
-    const start = Math.max(0, Math.floor(contentTop / TREE_ROW_HEIGHT) - TREE_OVERSCAN)
-    const end = Math.min(
-      treeRows.length,
-      Math.ceil((contentTop + viewport) / TREE_ROW_HEIGHT) + TREE_OVERSCAN
-    )
-    const rows: VirtualTreeRow[] = []
-    for (let index = start; index < end; index += 1) {
-      rows.push({ row: treeRows[index], offset: index * TREE_ROW_HEIGHT })
-    }
-    return { rows, total }
-  })
+  let virtualTree = $derived(computeVirtualTree(treeRows, treeScrollTop, treeViewportHeight))
 
   $effect(() => {
     const checkpointId = activeCheckpointId
@@ -282,7 +224,7 @@
             query,
             'all',
             workspaceState.activeScopeBucketIdFor(projectId),
-            projectState.chatThreadId ?? undefined
+            projectState.mountThreadId ?? undefined
           )
         ).filter((entry) => includeCio || !isCioScratchPath(entry.path))
         if (requestId !== searchRequestId) return
@@ -429,15 +371,6 @@
     if (clearReveal) revealedSearchPath = null
   }
 
-  function parentDirectory(path: string): string {
-    return posixDirname(path)
-  }
-
-  function pasteDirectory(entry: ProjectFileEntry | null): string {
-    if (!entry) return ''
-    return entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)
-  }
-
   function canPaste(): boolean {
     return projectFilesWorkspace.clipboard !== null
   }
@@ -574,7 +507,7 @@
 
     if (entry.kind === 'file') {
       if (onFileSelect) {
-        onFileSelect(entry.path)
+        onFileSelect(entry.path, mode)
       } else if (lastTurnOnly && activeCheckpointId && activeCheckpointPaths.includes(entry.path)) {
         await projectFilesWorkspace.openCheckpointFile(
           projectId,
@@ -665,7 +598,7 @@
       return
     }
     const key = event.key
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && key.toLocaleLowerCase() === 'n') {
+    if (keymapState.matches('nav-new-thread', event)) {
       event.preventDefault()
       void startCreate(createTargetDirectory(event.target), 'untitled.txt')
       return
@@ -747,16 +680,6 @@
     }
   }
 
-  function selectionPathsFor(entry: ProjectFileEntry | null): string[] {
-    if (!entry) return projectState.selectedPaths
-    if (projectState.selectedPaths.includes(entry.path)) return projectState.selectedPaths
-    return [entry.path]
-  }
-
-  function selectionLabel(paths: string[]): string {
-    return paths.length === 1 ? 'Item' : `${paths.length} items`
-  }
-
   async function copyForPaste(paths: string[], mode: ProjectFileTransferMode): Promise<void> {
     const label = selectionLabel(paths)
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
@@ -781,6 +704,16 @@
     }
   }
 
+  /** Focus the row's inline editor input, which lives inside the virtualised
+   *  tree, after the tree has re-rendered around the new edit row. */
+  async function focusInlineInput(select: boolean): Promise<void> {
+    await tick()
+    const input = treeScroll?.querySelector<HTMLInputElement>('[data-inline-input]')
+    if (!input) return
+    input.focus()
+    if (select) input.select()
+  }
+
   async function startCreate(directory: string, value = ''): Promise<void> {
     if (directory) {
       projectFilesWorkspace.markDirectoryExpanded(projectId, directory)
@@ -789,9 +722,7 @@
     inlineEdit = { kind: 'create', directory, value }
     await tick()
     scrollTreeKeyIntoView(`create:${directory}`)
-    await tick()
-    inlineInput?.focus()
-    inlineInput?.select()
+    await focusInlineInput(true)
   }
 
   async function startCreateFolder(directory: string): Promise<void> {
@@ -802,15 +733,12 @@
     inlineEdit = { kind: 'create-directory', directory, value: '' }
     await tick()
     scrollTreeKeyIntoView(`create:${directory}`)
-    await tick()
-    inlineInput?.focus()
+    await focusInlineInput(false)
   }
 
   async function startRename(entry: ProjectFileEntry): Promise<void> {
     inlineEdit = { kind: 'rename', entry, value: entry.name }
-    await tick()
-    inlineInput?.focus()
-    inlineInput?.select()
+    await focusInlineInput(true)
   }
 
   async function commitInlineEdit(): Promise<void> {
@@ -836,9 +764,8 @@
       }
       inlineEdit = null
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file operation failed')
-      await tick()
-      inlineInput?.focus()
+      reportError(error, 'The file operation failed')
+      await focusInlineInput(false)
     } finally {
       operationPending = false
     }
@@ -848,7 +775,7 @@
     if (event.key === 'Escape') {
       event.preventDefault()
       inlineEdit = null
-    } else if (event.key === 'Enter') {
+    } else if (keymapState.matches('files-rename', event)) {
       event.preventDefault()
       void commitInlineEdit()
     }
@@ -859,7 +786,7 @@
       await projectFilesWorkspace.pasteFile(projectId, directory)
       toast.success('Pasted')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The item could not be pasted')
+      reportError(error, 'The item could not be pasted')
     }
   }
 
@@ -874,7 +801,7 @@
           : `Imported ${entries.length} files or folders`
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The files could not be imported')
+      reportError(error, 'The files could not be imported')
     }
   }
 
@@ -888,13 +815,13 @@
           : `Dropped ${results.length} items`
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The files could not be dropped')
+      reportError(error, 'The files could not be dropped')
     }
   }
 
   function handleFilePointerDown(entry: ProjectFileEntry): void {
     suppressScrollForPointer()
-    const paths = selectionPathsFor(entry)
+    const paths = selectionPathsFor(entry, projectState.selectedPaths)
     if (!projectState.selectedPaths.includes(entry.path)) {
       projectFilesWorkspace.setSelection(projectId, paths)
       projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -902,13 +829,13 @@
   }
 
   function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
-    const paths = [...selectionPathsFor(entry)].map(String)
+    const paths = [...selectionPathsFor(entry, projectState.selectedPaths)].map(String)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
     event.preventDefault()
     try {
       window.api.startFileDrag(projectId, paths)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Native dragging is unavailable')
+      reportError(error, 'Native dragging is unavailable')
     }
   }
 
@@ -941,39 +868,6 @@
     } finally {
       treeBusy = false
     }
-  }
-
-  /** Resolve absolute paths for OS-dropped File objects (folder/file). */
-  function droppedFilePaths(files: FileList | null): string[] {
-    if (!files) return []
-    const paths: string[] = []
-    for (const file of Array.from(files)) {
-      try {
-        const path = window.api.getPathForFile(file)
-        if (path) paths.push(path)
-      } catch {
-        // Not a local file; skip.
-      }
-    }
-    return paths
-  }
-
-  /** Resolve absolute paths from an OS file paste (uses items, like the composer). */
-  function pastedFilePaths(data: DataTransfer | null): string[] {
-    if (!data) return []
-    const paths: string[] = []
-    for (const item of Array.from(data.items)) {
-      if (item.kind !== 'file') continue
-      const file = item.getAsFile()
-      if (!file) continue
-      try {
-        const path = window.api.getPathForFile(file)
-        if (path) paths.push(path)
-      } catch {
-        // Pasted item is not a local file; skip.
-      }
-    }
-    return paths
   }
 
   function activeDirectory(): string {
@@ -1118,7 +1012,7 @@
       deleteTarget = null
       toast.success(count === 1 ? 'Item moved to Trash' : `${count} items moved to Trash`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The items could not be deleted')
+      reportError(error, 'The items could not be deleted')
     } finally {
       operationPending = false
     }
@@ -1128,7 +1022,7 @@
     try {
       info = await projectFilesWorkspace.fileInfo(projectId, entry.path)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'File information is unavailable')
+      reportError(error, 'File information is unavailable')
     }
   }
 
@@ -1138,128 +1032,28 @@
       const revealed = await invoke('shell:revealPath', info.absolutePath)
       if (!revealed) toast.error('The item could not be revealed in the file manager')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The item could not be revealed')
+      reportError(error, 'The item could not be revealed')
     }
   }
 
-  function directoryContainsLastTurnFile(path: string): boolean {
-    const prefix = path ? `${path}/` : ''
-    return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
-  }
-
-  function directoryContainsConflictFile(path: string): boolean {
-    const prefix = path ? `${path}/` : ''
-    return conflictPaths.some((conflictedPath) => conflictedPath.startsWith(prefix))
-  }
-
-  /** Directories that contain (or are) a backend search result, derived once
-   *  per result set instead of per row per render. */
-  let searchResultDirectories = $derived.by((): SvelteSet<string> => {
-    const directories = new SvelteSet<string>()
-    for (const resultPath of searchResultPaths) {
-      const segments = resultPath.split('/')
-      segments.pop()
-      for (let index = 1; index <= segments.length; index++) {
-        directories.add(segments.slice(0, index).join('/'))
-      }
+  /** Serve a directory (or the directory holding one HTML file) over a loopback
+   *  origin and open it in a browser, so scripts, stylesheets, and relative and
+   *  absolute asset URLs all resolve the way a static host serves them. */
+  async function openEntryInBrowser(entry: ProjectFileEntry | null): Promise<void> {
+    if (browserPreviewPending) return
+    browserPreviewPending = true
+    try {
+      const session = await projectFilesWorkspace.openDirectoryPreview(projectId, entry?.path ?? '')
+      await openInBrowser(session.url)
+    } catch (error) {
+      reportError(error, 'The directory could not be served for browser preview')
+    } finally {
+      browserPreviewPending = false
     }
-    return directories
-  })
-
-  /** Whether an entry survives the active filter session (search + last turn +
-   *  conflicts). Directories survive when any descendant matches. */
-  function matchesActiveFilter(
-    entry: ProjectFileEntry,
-    query: string,
-    queryMatches: Record<string, boolean>
-  ): boolean {
-    // While a search session is open with `.cio` excluded, hide every entry
-    // inside the scratch directory regardless of the query.
-    if (!cioSearchVisibility.includeCio && filterOpen && isCioScratchPath(entry.path)) {
-      return false
-    }
-    const matchesLastTurn =
-      !lastTurnOnly ||
-      (entry.kind === 'file'
-        ? lastTurnPathSet.has(entry.path)
-        : directoryContainsLastTurnFile(entry.path))
-    if (!matchesLastTurn) return false
-    const matchesConflicts =
-      !conflictsOnly ||
-      (entry.kind === 'file'
-        ? conflictPathSet.has(entry.path)
-        : directoryContainsConflictFile(entry.path))
-    if (!matchesConflicts) return false
-    if (!query) return true
-    // Fresh backend results are the source of truth: files match by result
-    // membership, directories by being (or containing) a result. This keeps
-    // intention-based queries ("settings/", "settings/*") showing the files
-    // inside a matched directory, which local name matching would hide.
-    if (searchResultsQuery === query) {
-      return entry.kind === 'file'
-        ? searchResultPaths.has(entry.path)
-        : searchResultPaths.has(entry.path) || searchResultDirectories.has(entry.path)
-    }
-    // Fallback while the backend search is still in flight: match names
-    // locally so the tree does not flash empty between keystrokes.
-    return (
-      entry.name.toLocaleLowerCase().includes(query) ||
-      (entry.kind === 'directory' && (queryMatches[entry.path] ?? false))
-    )
-  }
-
-  /** For every loaded directory, whether any entry in its subtree matches the
-   *  active filter. Computed once bottom-up (deepest folders first, so a
-   *  parent's result reuses its children's) per filter change instead of being
-   *  re-derived recursively on every tree render   the recursion ran per row
-   *  per render and made each directory expansion quadratic. */
-  let filterMatchesByDirectory = $derived.by((): Record<string, boolean> => {
-    const matches: Record<string, boolean> = {}
-    const query = filterQuery.trim().toLocaleLowerCase()
-    const loaded = projectState.entriesByDirectory
-    if (!query) return matches
-
-    const directories = Object.keys(loaded).sort(
-      (left, right) => right.split('/').length - left.split('/').length
-    )
-    for (const directory of directories) {
-      const children = loaded[directory] ?? []
-      matches[directory] = children.some((entry) => matchesActiveFilter(entry, query, matches))
-    }
-    return matches
-  })
-
-  function visibleEntries(directory: string): ProjectFileEntry[] {
-    const query = filterQuery.trim().toLocaleLowerCase()
-    const entries = projectState.entriesByDirectory[directory] ?? []
-    return entries.filter((entry) => matchesActiveFilter(entry, query, filterMatchesByDirectory))
-  }
-
-  function shouldRenderDirectory(path: string): boolean {
-    // A deliberate fold during a filter session hides the subtree even when
-    // the filter would otherwise force-render it as a matching ancestor.
-    if (collapsedOverrides.has(path)) return false
-    if (projectState.expandedDirectories[path]) return true
-    if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
-    if (conflictsOnly && directoryContainsConflictFile(path)) return true
-    // Search matching controls which directory rows are visible. The search
-    // effect already expands and loads every ancestor of each result, so a
-    // matching but collapsed directory must not render its descendants.
-    return false
   }
 
   async function loadAncestorDirectories(paths: string[]): Promise<void> {
-    const directories = new SvelteSet<string>()
-    for (const entry of paths) {
-      const segments = entry.split('/')
-      segments.pop()
-      for (let index = 0; index < segments.length; index += 1) {
-        directories.add(segments.slice(0, index + 1).join('/'))
-      }
-    }
-    for (const directory of [...directories].sort(
-      (left, right) => left.split('/').length - right.split('/').length
-    )) {
+    for (const directory of collectAncestorDirectories(paths)) {
       await projectFilesWorkspace.loadDirectory(projectId, directory)
     }
   }
@@ -1282,161 +1076,6 @@
   })
 </script>
 
-{#snippet createTreeRow(row: CreateTreeRow)}
-  {#if inlineEdit?.kind === 'create'}
-    <div
-      class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
-      style:padding-left={`${22 + row.depth * 14}px`}
-    >
-      <FileTypeIcon path={inlineEdit.value} />
-      <input
-        bind:this={inlineInput}
-        bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
-        aria-label="New file name"
-        placeholder="filename.ext"
-        disabled={operationPending}
-        onkeydown={handleInlineKeydown}
-        onblur={() => void commitInlineEdit()}
-      />
-    </div>
-  {/if}
-  {#if inlineEdit?.kind === 'create-directory' && inlineEdit.directory === row.directory}
-    <div
-      class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
-      style:padding-left={`${22 + row.depth * 14}px`}
-    >
-      <FolderTypeIcon name={inlineEdit.value} size={13} />
-      <input
-        bind:this={inlineInput}
-        bind:value={inlineEdit.value}
-        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
-        aria-label="New folder name"
-        placeholder="folder-name"
-        disabled={operationPending}
-        onkeydown={handleInlineKeydown}
-        onblur={() => void commitInlineEdit()}
-      />
-    </div>
-  {/if}
-{/snippet}
-
-{#snippet errorTreeRow(row: ErrorTreeRow)}
-  <div
-    class="flex h-7 items-center gap-2 pr-2 text-[0.625rem] text-danger"
-    style:padding-left={`${22 + row.depth * 14}px`}
-  >
-    <span class="min-w-0 flex-1 truncate">{row.message}</span>
-    <button
-      type="button"
-      class="shrink-0 font-medium text-foreground hover:underline"
-      onclick={() => void projectFilesWorkspace.loadDirectory(projectId, row.entry.path, true)}
-    >
-      Retry
-    </button>
-  </div>
-{/snippet}
-
-{#snippet entryTreeRow(row: EntryTreeRow)}
-  {@const entry = row.entry}
-  <ProjectFileContextMenu
-    {entry}
-    selectedPaths={projectState.selectedPaths}
-    canPaste={canPaste()}
-    onCreateFile={() => void startCreate(entry.path)}
-    onCreateFolder={() =>
-      void startCreateFolder(entry.kind === 'directory' ? entry.path : parentDirectory(entry.path))}
-    onCopy={() => void copyForPaste(selectionPathsFor(entry), 'copy')}
-    onCopyPath={() => void copyPaths(selectionPathsFor(entry))}
-    onCut={() => void copyForPaste(selectionPathsFor(entry), 'move')}
-    onPaste={() => void pasteInto(pasteDirectory(entry))}
-    onRename={() => void startRename(entry)}
-    onDelete={() => {
-      const paths = selectionPathsFor(entry)
-      deleteTarget = {
-        paths,
-        label: paths.length === 1 ? entry.name : `${paths.length} items`
-      }
-    }}
-    onInfo={() => void showInfo(entry)}
-    onReveal={() => void revealInFileManager(entry)}
-  >
-    {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
-      <div
-        class="flex h-7 items-center gap-1.5 pr-2 text-[0.6875rem] text-foreground"
-        style:padding-left={`${22 + row.depth * 14}px`}
-      >
-        {#if inlineEdit.entry.kind === 'directory'}
-          <FolderTypeIcon name={inlineEdit.value} size={13} />
-        {:else}
-          <FileTypeIcon path={inlineEdit.value} />
-        {/if}
-        <input
-          bind:this={inlineInput}
-          bind:value={inlineEdit.value}
-          class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] text-foreground outline-none"
-          aria-label={`Rename ${entry.name}`}
-          disabled={operationPending}
-          onkeydown={handleInlineKeydown}
-          onblur={() => void commitInlineEdit()}
-        />
-      </div>
-    {:else}
-      <button
-        type="button"
-        data-tree-path={entry.path}
-        draggable="true"
-        class={[
-          'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[0.6875rem] transition-colors hover:bg-elevated',
-          isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
-          dropFolder === entry.path ? 'bg-primary/10' : ''
-        ]}
-        style:padding-left={`${8 + row.depth * 14}px`}
-        title={entry.path}
-        onclick={(event: MouseEvent) => handleRowClick(entry, event)}
-        ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
-        oncontextmenu={() => handleRowContextMenu(entry)}
-        onpointerdown={() => handleFilePointerDown(entry)}
-        ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
-      >
-        <div
-          class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
-            entry.path && dropIndicator.position === 'before'
-            ? 'bg-primary opacity-100'
-            : 'opacity-0'}"
-        ></div>
-        <div
-          class="pointer-events-none absolute bottom-0 left-0 right-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
-            entry.path && dropIndicator.position === 'after'
-            ? 'bg-primary opacity-100'
-            : 'opacity-0'}"
-        ></div>
-        {#if entry.kind === 'directory'}
-          {#if projectState.loadingDirectories[entry.path]}
-            <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
-          {:else if projectState.expandedDirectories[entry.path]}
-            <ChevronDown size={12} class="shrink-0 text-dimmed" />
-          {:else}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
-          {/if}
-          {#if projectState.expandedDirectories[entry.path]}
-            <FolderTypeIcon name={entry.name} open size={13} />
-          {:else}
-            <FolderTypeIcon name={entry.name} size={13} />
-          {/if}
-        {:else}
-          <span class="w-3 shrink-0"></span>
-          <FileTypeIcon path={entry.path} />
-        {/if}
-        <span class="min-w-0 flex-1 truncate">{entry.name}</span>
-        {#if entry.kind === 'file' && projectState.sessions[entry.path] && projectState.sessions[entry.path].draft !== projectState.sessions[entry.path].source.content}
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"></span>
-        {/if}
-      </button>
-    {/if}
-  </ProjectFileContextMenu>
-{/snippet}
-
 <aside
   class="relative flex h-full min-h-0 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
   style:width={`${projectState.explorerWidth}px`}
@@ -1447,151 +1086,44 @@
   ondrop={handleDrop}
   onpaste={handlePaste}
 >
-  <button
-    type="button"
-    class="absolute inset-y-0 -left-0.5 z-20 w-1.5 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20 {resizing
-      ? 'bg-primary/30'
-      : ''}"
-    tabindex="0"
-    aria-label={`Resize file tree, ${projectState.explorerWidth} pixels wide`}
-    title="Resize file tree"
-    onpointerdown={startResize}
-    onkeydown={handleResizeKeydown}
-  ></button>
-  {#if dropActive}
-    <div
-      class="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center"
-      aria-hidden="true"
-    >
-      <span
-        class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
-        >{dropFolder ? `Drop into ${dropFolder || ''}` : 'Drop to import'}</span
-      >
-    </div>
-  {/if}
-  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2">
-    <FolderOpen size={13} class="shrink-0 text-primary" />
-    <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground">
-      {projectName}
-    </span>
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
-      title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
-      disabled={treeBusy}
-      onclick={() => void toggleExpandAll()}
-    >
-      {#if anyDirExpanded}
-        <ChevronsUp size={12} />
-      {:else}
-        <ChevronsDown size={12} />
-      {/if}
-    </button>
-    <button
-      type="button"
-      class={[
-        'flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
-        filterOpen ? 'bg-elevated text-foreground' : ''
-      ]}
-      aria-label="Search project files"
-      title="Search project files (Cmd/Ctrl+F)"
-      aria-pressed={filterOpen}
-      onclick={() => (filterOpen ? closeFilter() : void openFilter())}
-    >
-      <Search size={12} />
-    </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      aria-label="Refresh project files"
-      title="Refresh files"
-      disabled={Boolean(projectState.loadingDirectories[''])}
-      onclick={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
-    >
-      <RefreshCw size={12} class={projectState.loadingDirectories[''] ? 'animate-spin' : ''} />
-    </button>
-  </div>
+  <ProjectFileExplorerHeader
+    {projectName}
+    {projectLabel}
+    {projectIconUrl}
+    {routineRoot}
+    {projectAccentColor}
+    explorerWidth={projectState.explorerWidth}
+    {resizing}
+    {dropActive}
+    {dropFolder}
+    {anyDirExpanded}
+    {treeBusy}
+    {filterOpen}
+    rootLoading={Boolean(projectState.loadingDirectories[''])}
+    onStartResize={startResize}
+    onResizeKeydown={handleResizeKeydown}
+    onToggleExpandAll={() => void toggleExpandAll()}
+    onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
+    onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
+  />
 
-  {#if filterOpen}
-    <div
-      class="absolute left-2 right-2 top-7 z-20 rounded-xl border border-border bg-surface shadow-xl"
-      role="search"
-      aria-label="Search project files"
-    >
-      <div class="flex items-center border-b border-border px-2.5 py-1">
-        <Switch
-          checked={cioSearchVisibility.includeCio}
-          label="Toggle .cio visibility"
-          class="text-[0.625rem] font-semibold text-dimmed"
-          title="Include the .cio directory in search results"
-          aria-label="Include the .cio directory in search results"
-          onchange={(checked: boolean) => cioSearchVisibility.setIncludeCio(checked)}
-        />
-      </div>
-      <div class="flex items-center gap-1 p-1.5">
-        <Search size={13} class="shrink-0 text-dimmed" />
-        <input
-          bind:this={filterInput}
-          type="search"
-          class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search files and folders…"
-          value={filterQuery}
-          oninput={handleFilterInput}
-          onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
-        />
-        <button
-          type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
-          aria-label="Close file search"
-          title="Close file search (Escape)"
-          onclick={() => closeFilter()}
-        >
-          <X size={12} />
-        </button>
-      </div>
-    </div>
-  {/if}
-
-  <div class="shrink-0 border-b border-border p-2">
-    <button
-      type="button"
-      class={[
-        'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        lastTurnOnly
-          ? 'border-primary/40 bg-primary/10 text-primary'
-          : 'border-border text-muted hover:bg-elevated hover:text-foreground'
-      ]}
-      aria-label="Filter files changed in the last turn"
-      aria-pressed={lastTurnOnly}
-      title="Show only files changed in the last completed turn"
-      disabled={lastTurnPaths.length === 0 && !lastTurnOnly}
-      onclick={toggleLastTurnFilter}
-    >
-      <FileDiff size={12} />
-      <span class="flex-1 text-left">Last turn</span>
-      <span class="tabular-nums text-dimmed">{lastTurnPaths.length}</span>
-    </button>
-    {#if conflictPaths.length > 0 || conflictsOnly}
-      <button
-        type="button"
-        class={[
-          'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors',
-          conflictsOnly
-            ? 'border-warning/40 bg-warning/10 text-warning'
-            : 'border-border text-muted hover:bg-elevated hover:text-foreground'
-        ]}
-        aria-label="Filter files that need conflict resolution"
-        aria-pressed={conflictsOnly}
-        title="Show only files that still need conflict resolution"
-        onclick={toggleConflictsFilter}
-      >
-        <GitMerge size={12} />
-        <span class="flex-1 text-left">Conflicts</span>
-        <span class="tabular-nums text-dimmed">{conflictPaths.length}</span>
-      </button>
-    {/if}
-  </div>
+  <ProjectFileExplorerFilters
+    {filterOpen}
+    {filterQuery}
+    includeCio={cioSearchVisibility.includeCio}
+    {lastTurnOnly}
+    lastTurnCount={lastTurnPaths.length}
+    lastTurnDisabled={lastTurnPaths.length === 0 && !lastTurnOnly}
+    {conflictsOnly}
+    conflictCount={conflictPaths.length}
+    showConflicts={conflictPaths.length > 0 || conflictsOnly}
+    onFilterInputElement={(element) => (filterInput = element)}
+    onFilterInput={handleFilterInput}
+    onCloseFilter={() => closeFilter()}
+    onToggleCio={(checked) => cioSearchVisibility.setIncludeCio(checked)}
+    onToggleLastTurn={toggleLastTurnFilter}
+    onToggleConflicts={toggleConflictsFilter}
+  />
 
   <ProjectFileContextMenu
     entry={null}
@@ -1607,6 +1139,7 @@
     onDelete={() => undefined}
     onInfo={() => undefined}
     onReveal={() => undefined}
+    onOpenInBrowser={() => void openEntryInBrowser(null)}
   >
     <div
       {@attach attachTreeScroll}
@@ -1619,7 +1152,9 @@
     >
       {#if projectState.directoryErrors['']}
         <div class="px-3 py-3">
-          <p class="text-[0.6875rem] leading-relaxed text-danger">{projectState.directoryErrors['']}</p>
+          <p class="text-[0.6875rem] leading-relaxed text-danger">
+            {projectState.directoryErrors['']}
+          </p>
           <button
             type="button"
             class="mt-2 text-[0.6875rem] font-medium text-foreground hover:underline"
@@ -1630,7 +1165,7 @@
         </div>
       {:else if (projectState.entriesByDirectory[''] ?? []).length === 0 && !inlineEdit}
         <p class="px-3 py-3 text-[0.6875rem] text-dimmed">This project directory is empty.</p>
-      {:else if visibleEntries('').length === 0 && !inlineEdit}
+      {:else if topLevelVisibleEntries.length === 0 && !inlineEdit}
         <p class="px-3 py-3 text-[0.6875rem] text-dimmed">
           {conflictsOnly
             ? 'No conflicted files match this filter.'
@@ -1645,13 +1180,48 @@
               class="absolute inset-x-0 top-0 h-7"
               style:transform={`translateY(${virtualRow.offset}px)`}
             >
-              {#if virtualRow.row.kind === 'entry'}
-                {@render entryTreeRow(virtualRow.row)}
-              {:else if virtualRow.row.kind === 'create'}
-                {@render createTreeRow(virtualRow.row)}
-              {:else}
-                {@render errorTreeRow(virtualRow.row)}
-              {/if}
+              <ProjectFileExplorerTreeRow
+                row={virtualRow.row}
+                {inlineEdit}
+                {operationPending}
+                {projectState}
+                {dropFolder}
+                {dropIndicator}
+                canPaste={canPaste()}
+                {isRowActive}
+                onCommitInline={() => void commitInlineEdit()}
+                onInlineKeydown={handleInlineKeydown}
+                onRetryLoad={(path) =>
+                  void projectFilesWorkspace.loadDirectory(projectId, path, true)}
+                onCreateFile={(directory) => void startCreate(directory)}
+                onCreateFolder={(entry) =>
+                  void startCreateFolder(
+                    entry.kind === 'directory' ? entry.path : parentDirectory(entry.path)
+                  )}
+                onCopy={(entry) =>
+                  void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'copy')}
+                onCopyPath={(entry) =>
+                  void copyPaths(selectionPathsFor(entry, projectState.selectedPaths))}
+                onCut={(entry) =>
+                  void copyForPaste(selectionPathsFor(entry, projectState.selectedPaths), 'move')}
+                onPaste={(entry) => void pasteInto(pasteDirectory(entry))}
+                onRename={(entry) => void startRename(entry)}
+                onDelete={(entry) => {
+                  const paths = selectionPathsFor(entry, projectState.selectedPaths)
+                  deleteTarget = {
+                    paths,
+                    label: paths.length === 1 ? entry.name : `${paths.length} items`
+                  }
+                }}
+                onInfo={(entry) => void showInfo(entry)}
+                onReveal={(entry) => void revealInFileManager(entry)}
+                onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
+                onRowClick={handleRowClick}
+                onRowDoubleClick={handleRowDoubleClick}
+                onRowContextMenu={handleRowContextMenu}
+                onRowPointerDown={handleFilePointerDown}
+                onRowDragStart={handleFileDragStart}
+              />
             </div>
           {/each}
         </div>
@@ -1660,73 +1230,11 @@
   </ProjectFileContextMenu>
 </aside>
 
-<AlertDialog.Root bind:open={() => deleteTarget !== null, (open) => !open && (deleteTarget = null)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground"
-        >Delete {deleteTarget?.paths.length === 1
-          ? 'this item'
-          : `${deleteTarget?.paths.length ?? 0} items`}?</AlertDialog.Title
-      >
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        {deleteTarget?.label} will be moved to Trash. Open tabs for the deleted items will close.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-          disabled={operationPending}
-          onclick={() => void deleteSelected()}
-        >
-          Move to Trash
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
-
-<Dialog.Root bind:open={() => info !== null, (open) => !open && (info = null)}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <Dialog.Title class="text-sm font-semibold text-foreground">File info</Dialog.Title>
-      <Dialog.Description class="sr-only"
-        >Information about the selected project file</Dialog.Description
-      >
-      {#if info}
-        <dl class="mt-4 grid grid-cols-[6rem_1fr] gap-x-3 gap-y-2 text-xs">
-          <dt class="text-dimmed">Name</dt>
-          <dd class="truncate text-foreground">{info.name}</dd>
-          <dt class="text-dimmed">Path</dt>
-          <dd class="break-all font-mono text-foreground">{info.absolutePath}</dd>
-          <dt class="text-dimmed">Type</dt>
-          <dd class="capitalize text-foreground">{info.kind}</dd>
-          <dt class="text-dimmed">Size</dt>
-          <dd class="text-foreground">
-            {info.size === undefined ? ' ' : `${info.size.toLocaleString()} bytes`}
-          </dd>
-          <dt class="text-dimmed">Modified</dt>
-          <dd class="text-foreground">{new Date(info.modifiedAt ?? 0).toLocaleString()}</dd>
-          <dt class="text-dimmed">Created</dt>
-          <dd class="text-foreground">{new Date(info.createdAt).toLocaleString()}</dd>
-        </dl>
-      {/if}
-      <div class="mt-5 flex justify-end">
-        <Dialog.Close
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Close
-        </Dialog.Close>
-      </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<ProjectFileExplorerDialogs
+  {deleteTarget}
+  {operationPending}
+  onClearDeleteTarget={() => (deleteTarget = null)}
+  onConfirmDelete={() => void deleteSelected()}
+  {info}
+  onClearInfo={() => (info = null)}
+/>

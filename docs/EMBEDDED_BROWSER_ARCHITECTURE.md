@@ -57,7 +57,7 @@ There must be no bridge from remote page JavaScript to privileged application AP
 
 ### Session and profile storage
 
-- Use a dedicated persistent `session.fromPath(...)` session, never `session.defaultSession` and never the same session as cloud authentication or remote mode.
+- Use a dedicated persistent `session.fromPath(...)` session, never `session.defaultSession` and never the same session as cloud authentication.
 - Keep browser profile data under CodeInOven's config directory. Provide visible data size and one-click Clear browsing data / Delete profile actions.
 - Do not duplicate cookies into `SecretVault`; Chromium's session store owns browser state. The application must not maintain a second cookie database.
 - Browser profile identifiers are opaque random IDs. Profile display names and bookmarks may be stored through the atomic storage engine.
@@ -105,7 +105,22 @@ If cookie migration remains a hard requirement after the browser workspace prove
 
 - Start with one live tab. Cap live tabs (recommended initial cap: 3); overflow tabs are serialized as URL/title and recreated on selection.
 - Destroy closed tab `webContents` immediately. Do not merely hide them indefinitely.
-- Stop page audio and present a visible indicator; default autoplay off for remote content.
+- Stop page audio and present a visible indicator; default autoplay off for remote content. The indicator is implemented on the tab strip: a tab that is audible
+  shows a speaker in place of its favicon, clicking it mutes that tab through
+  `browser:setMuted`, and `BrowserPageState` carries `audible`/`muted` so the
+  state is always main's answer rather than the renderer's assumption.
+- A tab that holds a live microphone, camera or screen capture shows a recording
+  indicator. Electron exposes no capture state for a `WebContentsView` and this
+  design forbids a preload, so `browser/browser-service/browser-capture.ts`
+  injects a track-counting `getUserMedia`/`getDisplayMedia` observer into each
+  frame's own world over the same `executeJavaScript` boundary the labeled-dialog
+  shim uses. The observer counts tracks only: it reads no stream, no media and no
+  page data, and it gives page script no way to reach privileged APIs.
+- Downloads are visible in the browser toolbar, not only in a menu: the button
+  carries the active-download count and opens the list in normal layout flow.
+  The page is a native view composited above the DOM, so the list takes layout
+  space and resizes the view instead of floating over it, and each finished
+  download can be revealed in the operating system's file manager.
 - Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
 - Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
 - Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.
@@ -141,7 +156,7 @@ When Browser is active, agent work continues in the background and its status re
 
 ## Delivery plan
 
-### Phase 0   Spike and measurement (2-4 engineering days)
+### Phase 0: Spike and measurement (2-4 engineering days)
 
 - Create a disposable `WebContentsView` from main with a temporary, in-memory session.
 - Prove bounds synchronization, focus/keyboard behavior, navigation, popup interception, permission denial, crash isolation, and teardown.
@@ -150,7 +165,7 @@ When Browser is active, agent work continues in the background and its status re
 
 Exit gate: closing the spike leaves no browser renderer process; an unresponsive/crashed page does not affect a running agent turn.
 
-### Phase 1   Secure manual browser MVP (1-2 engineering weeks)
+### Phase 1: Secure manual browser MVP (1-2 engineering weeks)
 
 - Main-process `BrowserWorkspaceService`, typed IPC, main view/navigation entry, one persistent profile, one live tab.
 - HTTPS navigation, origin display, popup policy, permission default-deny, production DevTools policy, crash/reload UX, clean disposal.
@@ -160,14 +175,14 @@ Exit gate: closing the spike leaves no browser renderer process; an unresponsive
 
 Exit gate: external security review of the remote-content boundary and packaged-app smoke tests on macOS, Windows, and Linux.
 
-### Phase 2   Usability and bounded tabs (about 1 engineering week)
+### Phase 2: Usability and bounded tabs (about 1 engineering week)
 
 - Small capped tab model, sleeping/serialized inactive tabs, download manager, per-origin permission settings, session restore, keyboard shortcuts, accessibility.
 - Performance telemetry kept local and privacy-redacted.
 
 Exit gate: documented resource budgets hold during simultaneous terminal output, one agent stream, and representative dashboards.
 
-### Phase 3   Optional agent browser (separate project)
+### Phase 3: Optional agent browser (separate project)
 
 - Ephemeral thread-scoped profiles, explicit grants, domain boundaries, audit events, stop/revoke, and human-visible control state.
 - Do not reuse the manual authenticated profile by default.

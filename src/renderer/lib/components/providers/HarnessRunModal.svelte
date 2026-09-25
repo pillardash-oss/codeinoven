@@ -3,8 +3,10 @@
   import { type Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
   import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { APP_SLUG } from '$shared/brand'
   import {
     harnessLifecycleStore,
     type HarnessRun,
@@ -12,6 +14,9 @@
   } from '$lib/stores/harness-lifecycle.svelte'
 
   const store = harnessLifecycleStore
+
+  /** Shared with the panel placement, so the dock belongs to this panel alone. */
+  const PANEL_STORAGE_KEY = `${APP_SLUG}.harnessTasksPanel.v1`
 
   /** TerminalId → run card element, filled by the {@attach registerRun} attachment. */
   const runElements = new SvelteMap<string, HTMLDivElement>()
@@ -90,9 +95,11 @@
   }
 
   function footerNote(): string {
+    // A docked panel has no keyboard way back on purpose, so the note points at
+    // the dock chip, the one control that restores it.
     return store.finishedCount === store.runs.length
-      ? 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back.'
-      : 'Tasks keep running while you work   click the dock in the bottom-right corner or press Escape to bring them back, and close once all of them finish.'
+      ? 'Tasks keep running while you work   click the dock to bring them back.'
+      : 'Tasks keep running while you work   click the dock to bring them back, and close once all of them finish.'
   }
 </script>
 
@@ -103,68 +110,70 @@
   closable={store.hasFinished}
   onMinimize={() => store.minimize()}
   onClose={() => store.close()}
-  onExpand={() => store.expandAll()}
+  storageKey={PANEL_STORAGE_KEY}
 >
   {#snippet dock()}
-    <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
-      <button
-        class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Show all harness tasks"
-        title="Show all harness tasks"
-        onclick={() => store.expandAll()}
-      >
-        {dockLabel()}
-      </button>
-      <span class="h-5 w-px bg-border"></span>
-      {#each visibleRuns as run (run.terminalId)}
+    <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked harness tasks">
+      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
         <button
-          class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-elevated"
-          title={dockTitle(run)}
-          aria-label={dockTitle(run)}
-          onclick={() => store.focusRun(run.harnessId)}
+          class="rounded-lg px-2 py-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Show all harness tasks"
+          title="Show all harness tasks"
+          onclick={() => store.expandAll()}
         >
-          <AgentIcon agentId={run.harnessId} label={run.harnessName} size={16} />
-          {#if run.exitCode === undefined}
-            <span
-              class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-info"
-              aria-hidden="true"
-            ></span>
-          {:else if run.exitCode === 0}
-            <CheckCircle2
-              size={10}
-              class="absolute -right-1 -top-1 rounded-full bg-surface text-success"
-              aria-hidden="true"
-            />
-          {:else}
-            <XCircle
-              size={10}
-              class="absolute -right-1 -top-1 rounded-full bg-surface text-danger"
-              aria-hidden="true"
-            />
-          {/if}
+          {dockLabel()}
         </button>
-      {/each}
-      {#if overflowCount > 0}
-        <span
-          class="flex h-6 min-w-6 items-center justify-center rounded-full bg-elevated px-1.5 font-mono text-[0.625rem] font-semibold text-muted"
-          title={overflowTitle(overflowCount)}
-          aria-label={overflowTitle(overflowCount)}
-        >
-          +{overflowCount}
-        </span>
-      {/if}
-      {#if store.hasFinished}
         <span class="h-5 w-px bg-border"></span>
-        <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Close tasks"
-          title="Close tasks"
-          onclick={() => store.close()}
-        >
-          <X size={14} />
-        </button>
-      {/if}
-    </div>
+        {#each visibleRuns as run (run.terminalId)}
+          <button
+            class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-elevated"
+            title={dockTitle(run)}
+            aria-label={dockTitle(run)}
+            onclick={() => store.focusRun(run.harnessId)}
+          >
+            <AgentIcon agentId={run.harnessId} label={run.harnessName} size={16} />
+            {#if run.exitCode === undefined}
+              <span
+                class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-info"
+                aria-hidden="true"
+              ></span>
+            {:else if run.exitCode === 0}
+              <CheckCircle2
+                size={10}
+                class="absolute -right-1 -top-1 rounded-full bg-surface text-success"
+                aria-hidden="true"
+              />
+            {:else}
+              <XCircle
+                size={10}
+                class="absolute -right-1 -top-1 rounded-full bg-surface text-danger"
+                aria-hidden="true"
+              />
+            {/if}
+          </button>
+        {/each}
+        {#if overflowCount > 0}
+          <span
+            class="flex h-6 min-w-6 items-center justify-center rounded-full bg-elevated px-1.5 font-mono text-[0.625rem] font-semibold text-muted"
+            title={overflowTitle(overflowCount)}
+            aria-label={overflowTitle(overflowCount)}
+          >
+            +{overflowCount}
+          </span>
+        {/if}
+        {#if store.hasFinished}
+          <span class="h-5 w-px bg-border"></span>
+          <button
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Close tasks"
+            title="Close tasks"
+            onclick={() => store.close()}
+          >
+            <X size={14} />
+          </button>
+        {/if}
+      </div>
+    </DockRow>
   {/snippet}
 
   {#if store.runs.length === 0}
@@ -195,12 +204,16 @@
                 {activeLabel(run.kind)}
               </span>
             {:else if run.exitCode === 0}
-              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success">
+              <span
+                class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success"
+              >
                 <CheckCircle2 size={11} />
                 {finishedLabel(run.kind)}
               </span>
             {:else}
-              <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger">
+              <span
+                class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger"
+              >
                 <XCircle size={11} /> Exited with code {run.exitCode}
               </span>
             {/if}

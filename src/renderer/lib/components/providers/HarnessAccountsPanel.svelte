@@ -14,9 +14,11 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
+  import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -40,6 +42,14 @@
 
   type AccountSortKey = 'harness' | 'provider' | 'label'
 
+  /** Quota telemetry column. Not sortable, so the cell snippet identifies it by
+   *  reference instead of a sort key. */
+  const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
+    key: null,
+    header: 'Usage',
+    width: 'w-72'
+  }
+
   const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
     {
       key: 'harness',
@@ -57,6 +67,7 @@
       header: 'Label',
       sortValue: (account) => account.label.toLocaleLowerCase('en-US')
     },
+    usageColumn,
     { key: null, header: 'Actions', headerClass: 'sr-only' }
   ]
 
@@ -138,11 +149,32 @@
     accounts = sortAccounts([...groups.values()].flat())
   }
 
+  /** Usage hydration progress, shown beside the account refresh progress. */
+  let usageHydrating = $derived(harnessAccountUsageCache.hydrating)
+  let usageProbed = $derived(
+    Math.max(0, harnessAccountUsageCache.probingTotal - harnessAccountUsageCache.probingRemaining)
+  )
+  let usageTotal = $derived(harnessAccountUsageCache.probingTotal)
+
+  /** Drop one row in place. Reloading the whole list swaps the table for the
+   *  loading state, which collapses the page height and throws the user's
+   *  scroll position away; removing the single entry leaves the rest untouched. */
+  function dropAccount(accountId: string): void {
+    accounts = accounts.filter((account) => account.id !== accountId)
+    harnessAccountUsageCache.prune(accounts.map((account) => account.id))
+  }
+
+  /** Swap one row's payload in place, preserving its position and scroll offset. */
+  function replaceAccount(updated: HarnessAccount): void {
+    accounts = accounts.map((account) => (account.id === updated.id ? updated : account))
+  }
+
   async function loadStoredAccounts(): Promise<void> {
     loading = true
     error = ''
     try {
       accounts = sortAccounts(await invoke('providerAccounts:list'))
+      harnessAccountUsageCache.prune(accounts.map((account) => account.id))
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Accounts could not be loaded.'
     } finally {
@@ -207,9 +239,24 @@
     }
   }
 
+  /** Refresh accounts and their quota together: the account list updates as
+   *  probes finish, and usage hydrates in its own bounded batches so the tab
+   *  never blocks on either. */
+  async function refreshAll(): Promise<void> {
+    harnessAccountUsageCache.schedule(accounts, { force: true })
+    await refreshAccounts()
+    // A forced account read can surface a newly created account; queue it now
+    // so usage covers every row the table shows.
+    harnessAccountUsageCache.schedule(accounts)
+  }
+
   async function initializeAccounts(): Promise<void> {
     await loadStoredAccounts()
+    // Quota hydrates immediately in small batches: cached snapshots paint first
+    // and each account's live values land as its probe completes.
+    harnessAccountUsageCache.schedule(accounts)
     await refreshAccounts()
+    harnessAccountUsageCache.schedule(accounts)
   }
 
   function openEdit(account: HarnessAccount): void {
@@ -227,10 +274,10 @@
     saving = true
     error = ''
     try {
-      await invoke('providerAccounts:rename', editTarget.id, label)
-      harnessAccountCache.invalidate(editTarget.harnessId)
+      const updated = await invoke('providerAccounts:rename', editTarget.id, label)
+      harnessAccountCache.invalidate(updated.harnessId)
+      replaceAccount(updated)
       editTarget = null
-      await loadStoredAccounts()
     } catch (saveError) {
       error = saveError instanceof Error ? saveError.message : 'The account label was not saved.'
     } finally {
@@ -247,6 +294,7 @@
         ...accounts.filter((candidate) => candidate.harnessId !== account.harnessId),
         ...updated
       ])
+      await harnessAccountCache.activate(account)
     } catch (setDefaultError) {
       error =
         setDefaultError instanceof Error
@@ -269,8 +317,8 @@
       )
       await invoke('providerAccounts:remove', account.id)
       harnessAccountCache.invalidate(account.harnessId)
+      dropAccount(account.id)
       disconnectTarget = null
-      await loadStoredAccounts()
     } catch (disconnectError) {
       error =
         disconnectError instanceof Error
@@ -302,14 +350,20 @@
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title="Refresh accounts"
+      title="Refresh accounts and usage"
       disabled={loading || refreshing}
-      onclick={() => void refreshAccounts()}
+      onclick={() => void refreshAll()}
     >
       <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} /> Refresh
     </button>
-    <span class="w-10 text-right text-xs tabular-nums text-dimmed" aria-live="polite">
-      {refreshing ? `${refreshCompleted}/${refreshTotal}` : ''}
+    <span class="min-w-28 text-right text-xs tabular-nums text-dimmed" aria-live="polite">
+      {#if refreshing && usageHydrating}
+        {refreshCompleted}/{refreshTotal} · usage {usageProbed}/{usageTotal}
+      {:else if refreshing}
+        {refreshCompleted}/{refreshTotal}
+      {:else if usageHydrating}
+        usage {usageProbed}/{usageTotal}
+      {/if}
     </span>
   </div>
 
@@ -433,6 +487,8 @@
               </span>
             {/if}
           </span>
+        {:else if column === usageColumn}
+          <HarnessAccountUsageCell {account} />
         {:else}
           <div class="flex items-center gap-1">
             {#if hasSiblingAccounts(account) && !account.isDefault}

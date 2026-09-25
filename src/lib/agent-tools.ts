@@ -8,6 +8,7 @@ import { GATEWAY_TOOLS } from './gateway-tools'
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
 export const BRAINSTORM_DOCUMENT_TOOL_NAME = 'cio_brainstorm_doc'
 export const PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME = 'cio_prd'
+export const ASSIGNMENT_PLAN_TOOL_NAME = 'cio_assignment'
 export const FEATURE_AUDIT_TOOL_NAME = 'request_audit'
 export const AUDIT_REPORT_TOOL_NAME = 'audit_report'
 export const PROPOSE_MEMORY_TOOL_NAME = 'propose_memory'
@@ -252,6 +253,7 @@ export const AUDIT_REPORT_SCHEMA: Record<string, unknown> = {
               status: { type: 'string', enum: ['passed', 'failed', 'not_applicable'] },
               exitCode: { type: 'number' },
               evidence: { type: 'string', minLength: 1 },
+              justification: { type: 'string', minLength: 1 },
               findingIds: { type: 'array', items: { type: 'string', minLength: 1 } }
             },
             required: ['id', 'kind', 'command', 'files', 'status', 'evidence', 'findingIds']
@@ -301,7 +303,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     propose: {
       type: 'boolean',
       description:
-        'True only for information expected to govern future turns after the current task is complete. False for concrete implementation requests and other one-off work.'
+        'True only when the user stated something lasting that must govern future turns after the current task ends. False for one-off requests, for a request the user repeated in this task because earlier attempts missed it, and for frustration with no lasting rule in it.'
     },
     title: {
       type: 'string',
@@ -311,7 +313,8 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     content: {
       type: 'string',
       maxLength: 4_096,
-      description: 'Self-contained durable information when propose is true; otherwise empty.'
+      description:
+        'Self-contained lasting information when propose is true; otherwise empty. Never store the artifact the user was requesting.'
     },
     category: {
       type: 'string',
@@ -337,7 +340,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: PROPOSE_MEMORY_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Decide whether a user message warrants a durable ${APP_NAME} memory proposal. Propose only recurring standing preferences, reusable rules, or stable facts that remain useful after the current task not concrete implementation requests, conversational continuations, confirmations, questions, or other one-off work. When uncertain, do not propose. This is an isolated application workflow: never announce or discuss it in the task agent's user-facing response. The application validates affirmative proposals and requests approval separately before persistence.`,
+    description: `Evaluate whether a user message states lasting ${APP_NAME} information worth proposing for persistent memory, and weight the user's wording: remember, from now on, always, never, every time, "I have told you before", or "why do you always" count only when they point at a rule that outlives the current task. Propose only recurring standing preferences, reusable rules, or stable facts. Never propose a one-off request, a conversational continuation, a confirmation, a question, or a request the user repeated in this task because earlier attempts missed it, and never turn frustration into memory. When uncertain, do not propose. This is an isolated application workflow: never announce or discuss it in the task agent's user-facing response. The application validates affirmative proposals and requests approval separately before persistence.`,
     inputSchema: PROPOSE_MEMORY_SCHEMA,
     source: 'application',
     sentWhen: 'An isolated agent decision after each completed user-and-assistant turn'
@@ -372,6 +375,14 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     inputSchema: SPEC_GENERATION_SCHEMA,
     source: 'application',
     sentWhen: 'Initial specification generation and every later engineering discussion or review'
+  },
+  {
+    name: ASSIGNMENT_PLAN_TOOL_NAME,
+    transportName: 'StructuredOutput',
+    description: `Submit the complete Assignment task graph for ${APP_NAME} to validate and persist as the thread's unsigned Assignment draft. The draft decomposes either the approved specification or the thread conversation, and the user signs it off before any worker starts.`,
+    inputSchema: ASSIGNMENT_PLAN_SCHEMA,
+    source: 'application',
+    sentWhen: 'Assignment generation and every Assignment discussion turn before sign-off'
   },
   {
     name: FEATURE_AUDIT_TOOL_NAME,

@@ -42,7 +42,8 @@
     for (const file of visibleFiles) {
       const project = projects.find((candidate) => candidate.id === file.projectId) ?? {
         id: file.projectId,
-        name: `Project ${file.projectId}`,
+        // Files opened straight from the operating system belong to no project.
+        name: file.projectId ? `Project ${file.projectId}` : 'Opened files',
         path: '',
         source: 'local' as const
       }

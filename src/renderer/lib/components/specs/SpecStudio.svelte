@@ -1,20 +1,5 @@
 <script lang="ts">
-  import {
-    AlertCircle,
-    ArrowRight,
-    Check,
-    FileText,
-    MessageSquare,
-    MessageSquarePlus,
-    MessageSquareText,
-    Paperclip,
-    Plus,
-    Search,
-    ShieldCheck,
-    Upload,
-    X
-  } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { AlertCircle, ArrowRight, MessageSquare, ShieldCheck, X } from '@lucide/svelte'
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
@@ -22,7 +7,6 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import EditableMarkdown from './EditableMarkdown.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
@@ -31,11 +15,30 @@
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
+  import SpecStudioDocument from './SpecStudioDocument.svelte'
   import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
   import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'
+  import { markdownLineForQuote, selectionOccurrence } from './spec-studio-document-anchors'
+  import { SpecStudioContextPickerController } from './spec-studio-context-picker.svelte'
+  import { statusClass, statusLabel } from './spec-studio-formatting'
+  import {
+    addSpecArrayItem,
+    addSpecCheckpoint,
+    addSpecFileOperation,
+    addSpecPhase,
+    removeSpecArrayItem,
+    removeSpecPhase,
+    setSpecArrayItem,
+    setSpecCheckpointField,
+    setSpecFileOperationField,
+    setSpecPhaseField,
+    setSpecString,
+    type SpecDraftEdits
+  } from './spec-studio-draft-edits'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     CapturableSpecContextType,
@@ -133,28 +136,6 @@
     ) => CallbackResult
   }
 
-  const contextTypes: Array<{
-    type: CapturableSpecContextType
-    label: string
-    description: string
-  }> = [
-    {
-      type: 'project_file',
-      label: 'Tag project file',
-      description: 'Tell the agent which project path to use'
-    },
-    {
-      type: 'project_rule',
-      label: 'Add rule or skill',
-      description: 'Include project instructions in the run'
-    },
-    {
-      type: 'attachment',
-      label: 'Attach file',
-      description: 'Copy an external file into this specification'
-    }
-  ]
-
   const allSections: Array<{ id: SpecSectionId; label: string; shortLabel: string }> = [
     { id: 'problem', label: 'Problem', shortLabel: 'Problem' },
     { id: 'resolution', label: 'Resolution & phases', shortLabel: 'Resolution' },
@@ -169,17 +150,6 @@
       shortLabel: 'Guardrails'
     }
   ]
-  const markdownSectionHeadings: Record<SpecSectionId, string> = {
-    problem: 'Problem',
-    resolution: 'Resolution',
-    success_criteria: 'Success Criteria',
-    test_strategy: 'Test Strategy',
-    documentation: 'Documentation',
-    additional_info: 'Additional Info',
-    commit_pattern: 'Commit Pattern',
-    constraints_risks: 'Constraints & Risks'
-  }
-
   let {
     spec,
     validation,
@@ -230,6 +200,10 @@
     onSubmit
   }: Props = $props()
 
+  const contextPicker = new SpecStudioContextPickerController({
+    search: (type, query) => onSearchContext(type, query)
+  })
+
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
 
   function chooseAuditModel(
@@ -261,7 +235,6 @@
       (section) => section.id !== 'additional_info' || draft.content.additionalInfo !== undefined
     )
   )
-  const decisionComments = $derived(draft.decisionComments ?? [])
   // svelte-ignore state_referenced_locally
   let loadedSpecKey = $state(`${spec.id}:${spec.version}:${spec.updatedAt}`)
   // svelte-ignore state_referenced_locally
@@ -291,15 +264,6 @@
   }
   let documentScroller = $state<HTMLElement | null>(null)
   let shellElement = $state<HTMLElement | null>(null)
-  let contextPickerType = $state<Exclude<CapturableSpecContextType, 'attachment'> | null>(null)
-  let contextQuery = $state('')
-  let contextResults = $state<ProjectFileEntry[]>([])
-  let contextSearchBusy = $state(false)
-  let contextSearchError = $state('')
-  let contextSearchRequest = 0
-  let contextSearchTimer: ReturnType<typeof setTimeout> | undefined
-  let contextDropActive = $state(false)
-
   const sortedVersions = $derived(
     [...versions]
       .filter((candidate) => candidate.id === spec.id)
@@ -317,14 +281,6 @@
   const selectedSectionIssues = $derived(
     currentValidation.issues.filter((issue) => issue.section === selectedSection)
   )
-  const selectedContextPaths = $derived(
-    new Set(
-      draft.context
-        .map((reference) => reference.path)
-        .filter((path): path is string => typeof path === 'string')
-    )
-  )
-
   const shellSections = $derived.by<StudioShellSection<SpecSectionId>[]>(() => {
     return sections.map((section) => {
       const annotationCount = annotationsFor(section.id).length
@@ -390,7 +346,7 @@
     dirty = history.dirty
     closePendingAnnotation()
     overlay.closeEditing()
-    closeContextPicker()
+    contextPicker.close()
     void refreshAnnotationMarkers()
   }
 
@@ -401,183 +357,60 @@
     dirty = history.dirty
     closePendingAnnotation()
     overlay.closeEditing()
-    closeContextPicker()
+    contextPicker.close()
     void refreshAnnotationMarkers()
   }
 
-  async function searchContext(
-    type: Exclude<CapturableSpecContextType, 'attachment'>,
-    query: string
-  ): Promise<void> {
-    const request = ++contextSearchRequest
-    contextSearchBusy = true
-    contextSearchError = ''
-    try {
-      const results = await onSearchContext(type, query)
-      if (request === contextSearchRequest) contextResults = results
-    } catch (error) {
-      if (request === contextSearchRequest) {
-        contextResults = []
-        contextSearchError =
-          error instanceof Error ? error.message : 'Project files could not be searched.'
-      }
-    } finally {
-      if (request === contextSearchRequest) contextSearchBusy = false
-    }
-  }
-
-  async function openContextPicker(
-    type: Exclude<CapturableSpecContextType, 'attachment'>
-  ): Promise<void> {
-    contextPickerType = type
-    contextQuery = ''
-    contextResults = []
-    contextSearchError = ''
-    await searchContext(type, '')
-  }
-
-  function focusContextSearch(input: HTMLInputElement): void {
-    input.focus()
-  }
-
-  function closeContextPicker(): void {
-    clearTimeout(contextSearchTimer)
-    contextSearchRequest += 1
-    contextPickerType = null
-    contextQuery = ''
-    contextResults = []
-    contextSearchBusy = false
-    contextSearchError = ''
-  }
-
-  function updateContextQuery(event: Event): void {
-    const target = event.currentTarget
-    if (!(target instanceof HTMLInputElement) || !contextPickerType) return
-    contextQuery = target.value
-    clearTimeout(contextSearchTimer)
-    const type = contextPickerType
-    contextSearchTimer = setTimeout(() => void searchContext(type, contextQuery), 160)
-  }
-
-  async function selectContextPath(
-    type: Exclude<CapturableSpecContextType, 'attachment'>,
-    path: string
-  ): Promise<void> {
-    if (selectedContextPaths.has(path)) return
-    await onAddContext(type, path)
-  }
-
-  function hasDroppedFiles(dataTransfer: DataTransfer | null): boolean {
-    return Array.from(dataTransfer?.types ?? []).includes('Files')
-  }
-
-  function onContextDragOver(event: DragEvent): void {
-    if (!hasDroppedFiles(event.dataTransfer)) return
-    event.preventDefault()
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-    contextDropActive = true
-  }
-
-  function onContextDragLeave(event: DragEvent): void {
-    if (
-      event.clientX <= 0 ||
-      event.clientY <= 0 ||
-      event.clientX >= window.innerWidth ||
-      event.clientY >= window.innerHeight
-    ) {
-      contextDropActive = false
-    }
-  }
-
-  async function captureDroppedFiles(dataTransfer: DataTransfer | null): Promise<void> {
-    const files = Array.from(dataTransfer?.files ?? [])
-    for (const file of files) {
-      try {
-        const filePath = window.api.getPathForFile(file)
-        if (filePath) await onAddContext('attachment', filePath)
-      } catch {
-        // Browser-only and remote drag sources do not expose a safe local path.
-      }
-    }
-  }
-
-  function onContextDrop(event: DragEvent): void {
-    if (!hasDroppedFiles(event.dataTransfer)) return
-    event.preventDefault()
-    contextDropActive = false
-    void captureDroppedFiles(event.dataTransfer)
-  }
-
   onDestroy(() => {
-    clearTimeout(contextSearchTimer)
+    contextPicker.dispose()
     overlay.clearHighlight()
   })
 
-  function setString(
-    key: 'problem' | 'resolutionSummary' | 'testStrategy' | 'additionalInfo' | 'commitPattern',
-    value: string
-  ): void {
-    draft.content[key] = value
-    markDirty()
-  }
-
-  function setArrayItem(
-    key: 'successCriteria' | 'documentationRequirements' | 'constraints' | 'risks',
-    index: number,
-    value: string
-  ): void {
-    draft.content[key][index] = value
-    markDirty()
-  }
-
-  function addArrayItem(
-    key: 'successCriteria' | 'documentationRequirements' | 'constraints' | 'risks'
-  ): void {
-    draft.content[key] = [...draft.content[key], 'New item']
-    markDirty()
-  }
-
-  function removeArrayItem(
-    key: 'successCriteria' | 'documentationRequirements' | 'constraints' | 'risks',
-    index: number
-  ): void {
-    draft.content[key] = draft.content[key].filter((_, itemIndex) => itemIndex !== index)
-    markDirty()
-  }
-
-  function addPhase(): void {
-    const ordinal = draft.content.phases.length + 1
-    draft.content.phases.push({
-      id: crypto.randomUUID(),
-      title: `Phase ${ordinal}`,
-      objective: 'Describe the phase objective.',
-      checkpoints: [],
-      fileOperations: [],
-      commit: ''
-    })
-    markDirty()
-  }
-
-  function addCheckpoint(phaseId: string): void {
-    const phase = draft.content.phases.find((candidate) => candidate.id === phaseId)
-    if (!phase) return
-    phase.checkpoints.push({
-      id: crypto.randomUUID(),
-      description: 'Describe the checkpoint.',
-      evidence: 'Describe the required evidence.'
-    })
-    markDirty()
-  }
-
-  function addFileOperation(phaseId: string): void {
-    const phase = draft.content.phases.find((candidate) => candidate.id === phaseId)
-    if (!phase) return
-    phase.fileOperations.push({
-      path: 'project/relative/path',
-      operation: 'edit',
-      reason: 'Reason'
-    })
-    markDirty()
+  const draftEdits: SpecDraftEdits = {
+    setString: (key, value) => {
+      setSpecString(draft, key, value)
+      markDirty()
+    },
+    setArrayItem: (key, index, value) => {
+      setSpecArrayItem(draft, key, index, value)
+      markDirty()
+    },
+    addArrayItem: (key) => {
+      addSpecArrayItem(draft, key)
+      markDirty()
+    },
+    removeArrayItem: (key, index) => {
+      removeSpecArrayItem(draft, key, index)
+      markDirty()
+    },
+    addPhase: () => {
+      addSpecPhase(draft)
+      markDirty()
+    },
+    removePhase: (phaseId) => {
+      removeSpecPhase(draft, phaseId)
+      markDirty()
+    },
+    addCheckpoint: (phaseId) => {
+      addSpecCheckpoint(draft, phaseId)
+      markDirty()
+    },
+    addFileOperation: (phaseId) => {
+      addSpecFileOperation(draft, phaseId)
+      markDirty()
+    },
+    setPhaseField: (phaseId, field, value) => {
+      setSpecPhaseField(draft, phaseId, field, value)
+      markDirty()
+    },
+    setCheckpointField: (phaseId, checkpointId, field, value) => {
+      setSpecCheckpointField(draft, phaseId, checkpointId, field, value)
+      markDirty()
+    },
+    setFileOperationField: (phaseId, index, field, value) => {
+      setSpecFileOperationField(draft, phaseId, index, field, value)
+      markDirty()
+    }
   }
 
   function annotationsFor(section: SpecSectionId): SpecAnnotation[] {
@@ -619,61 +452,6 @@
     void selectAndScroll(sections[nextIndex].id)
   }
 
-  function occurrenceIndexes(source: string, quote: string): number[] {
-    if (!quote) return []
-    const indexes: number[] = []
-    let offset = 0
-    while (offset <= source.length - quote.length) {
-      const index = source.indexOf(quote, offset)
-      if (index < 0) break
-      indexes.push(index)
-      offset = index + Math.max(quote.length, 1)
-    }
-    return indexes
-  }
-
-  function selectionOccurrence(sectionElement: HTMLElement, range: Range, quote: string): number {
-    const prefix = document.createRange()
-    prefix.selectNodeContents(sectionElement)
-    try {
-      prefix.setEnd(range.startContainer, range.startOffset)
-    } catch {
-      return 0
-    }
-    return occurrenceIndexes(prefix.toString(), quote).length
-  }
-
-  function markdownLineForQuote(
-    quote: string,
-    sectionId: SpecSectionId,
-    occurrence = 0
-  ): { startLine: number; endLine: number } {
-    const markdown = exportEngineeringSpecMarkdown(draft)
-    const heading = `## ${markdownSectionHeadings[sectionId]}`
-    const sectionStart = markdown.indexOf(heading)
-    if (sectionStart < 0) return { startLine: 1, endLine: 1 }
-    const nextHeading = markdown.indexOf('\n## ', sectionStart + heading.length)
-    const sectionEnd = nextHeading < 0 ? markdown.length : nextHeading
-    const sectionMarkdown = markdown.slice(sectionStart, sectionEnd)
-    const escapedQuote = JSON.stringify(quote).slice(1, -1)
-    const variants = [...new Set([quote, escapedQuote])]
-
-    for (const variant of variants) {
-      const matches = occurrenceIndexes(sectionMarkdown, variant)
-      const match = matches[occurrence]
-      if (match === undefined) continue
-      const absoluteIndex = sectionStart + match
-      const startLine = markdown.slice(0, absoluteIndex).split('\n').length
-      return {
-        startLine,
-        endLine: startLine + variant.split('\n').length - 1
-      }
-    }
-
-    const sectionLine = markdown.slice(0, sectionStart).split('\n').length
-    return { startLine: sectionLine, endLine: sectionLine }
-  }
-
   function captureDocumentSelection(): void {
     if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
     const selection = window.getSelection()
@@ -689,6 +467,7 @@
     if (!sectionElement || !sectionId || !quote) return
     const rect = range.getBoundingClientRect()
     const lines = markdownLineForQuote(
+      draft,
       quote,
       sectionId,
       selectionOccurrence(sectionElement, range, quote)
@@ -721,7 +500,7 @@
     const anchor: PendingAnnotation = {
       section: sectionId,
       quote,
-      ...markdownLineForQuote(quote, sectionId),
+      ...markdownLineForQuote(draft, quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
       ...clampPendingPosition(rect),
       sectionLevel: true,
@@ -744,7 +523,7 @@
     const anchor: PendingAnnotation = {
       section: sectionId,
       quote,
-      ...markdownLineForQuote(quote, sectionId),
+      ...markdownLineForQuote(draft, quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
       ...clampPendingPosition(rect),
       sectionLevel: false,
@@ -768,7 +547,7 @@
     const anchor: PendingAnnotation = {
       section: issue.section,
       quote,
-      ...markdownLineForQuote(quote, issue.section),
+      ...markdownLineForQuote(draft, quote, issue.section),
       ...offsetsForQuote(sectionElement, quote),
       ...clampPendingPosition(rect),
       sectionLevel: true,
@@ -917,39 +696,14 @@
     }
   }
 
-  function statusLabel(status: EngineeringSpec['status']): string {
-    return status.replace('_', ' ')
-  }
-
-  function statusClass(status: EngineeringSpec['status']): string {
-    if (status === 'approved') return 'bg-success/10 text-success'
-    if (status === 'in_review') return 'bg-info/10 text-info'
-    if (status === 'superseded') return 'bg-raised text-dimmed'
-    return 'bg-warning/10 text-warning'
-  }
-
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
-
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('studio-cancel-annotation', event)) {
       closePendingAnnotation()
       closeAnnotation()
       pendingAction = null
       return
     }
-    const saveShortcut =
-      event.key.toLowerCase() === 's' &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      !event.shiftKey
-    if (!saveShortcut || event.repeat || event.isComposing) return
+    if (!keymapState.matches('studio-save', event) || event.repeat || event.isComposing) return
     const activeElement = document.activeElement
     event.preventDefault()
     if (
@@ -965,25 +719,6 @@
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} onresize={() => void refreshAnnotationMarkers()} />
-<svelte:document
-  ondragover={onContextDragOver}
-  ondragleave={onContextDragLeave}
-  ondrop={onContextDrop}
-/>
-
-{#if contextDropActive}
-  <div
-    class="pointer-events-none fixed inset-0 z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm"
-    role="region"
-    aria-label="Drop files into specification context"
-  >
-    <div class="flex flex-col items-center gap-2 text-primary">
-      <Upload size={32} />
-      <span class="text-base font-medium">Drop files into specification context</span>
-    </div>
-  </div>
-{/if}
-
 <StudioShell
   ariaLabel="Specification studio"
   scrollerLabel="Rendered specification"
@@ -1271,552 +1006,17 @@
     {/each}
   {/snippet}
 
-  <div class="px-6 py-6 md:px-14 md:py-8">
-    <article class="space-y-12 text-[0.8125rem] leading-8">
-      <section id="spec-section-tldr" class="scroll-mt-5">
-        <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
-        <EditableMarkdown
-          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-          text={draft.content.resolutionSummary}
-          ariaLabel="Specification TL;DR"
-          onChange={(value) => setString('resolutionSummary', value)}
-        />
-      </section>
-
-      <section id="spec-section-problem" data-spec-section="problem" class="scroll-mt-5">
-        <button
-          class="group flex items-center gap-2 text-left"
-          title="Annotate the Problem section"
-          onclick={(event: MouseEvent) => openSectionAnnotation('problem', event)}
-        >
-          <span class="text-xl font-semibold tracking-tight">Problem</span>
-          <MessageSquarePlus
-            size={14}
-            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-          />
-        </button>
-        <EditableMarkdown
-          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-          text={draft.content.problem}
-          ariaLabel="Problem statement"
-          onChange={(value) => setString('problem', value)}
-        />
-        {@render AnnotationBubbles({
-          annotations: annotationsFor('problem'),
-          onOpen: openAnnotation
-        })}
-      </section>
-
-      <section id="spec-section-resolution" data-spec-section="resolution" class="scroll-mt-5">
-        <div class="flex items-center justify-between gap-3">
-          <button
-            class="group flex items-center gap-2 text-left"
-            title="Annotate the Resolution section"
-            onclick={(event: MouseEvent) => openSectionAnnotation('resolution', event)}
-          >
-            <span class="text-xl font-semibold tracking-tight">Resolution & phases</span>
-            <MessageSquarePlus
-              size={14}
-              class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-            />
-          </button>
-          <button
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay hover:text-foreground"
-            title="Add phase"
-            onclick={addPhase}
-          >
-            <Plus size={11} />
-            Phase
-          </button>
-        </div>
-        <ol class="mt-5 space-y-4">
-          {#each draft.content.phases as phase, phaseIndex (phase.id)}
-            <li class="rounded-xl border bg-surface p-4">
-              <div class="flex items-start gap-3">
-                <span
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[0.6875rem] font-semibold text-on-primary"
-                >
-                  {phaseIndex + 1}
-                </span>
-                <div class="min-w-0 flex-1">
-                  <EditableMarkdown
-                    class="font-semibold outline-none focus:bg-elevated"
-                    text={phase.title}
-                    fallback="Untitled phase"
-                    ariaLabel={`Phase ${phaseIndex + 1} title`}
-                    onChange={(value) => {
-                      phase.title = value
-                      markDirty()
-                    }}
-                  />
-                  <EditableMarkdown
-                    class="mt-1 text-muted outline-none focus:bg-elevated"
-                    text={phase.objective}
-                    fallback="No objective."
-                    ariaLabel={`Phase ${phaseIndex + 1} objective`}
-                    onChange={(value) => {
-                      phase.objective = value
-                      markDirty()
-                    }}
-                  />
-                </div>
-                <button
-                  class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
-                  aria-label={`Remove phase ${phaseIndex + 1}`}
-                  title={`Remove phase ${phaseIndex + 1}`}
-                  onclick={() => {
-                    draft.content.phases = draft.content.phases.filter(
-                      (candidate) => candidate.id !== phase.id
-                    )
-                    markDirty()
-                  }}
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                <div>
-                  <div class="flex items-center justify-between">
-                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-                      Checkpoints
-                    </p>
-                    <button
-                      class="text-[0.6875rem] text-accent hover:underline"
-                      title="Add checkpoint"
-                      onclick={() => addCheckpoint(phase.id)}>Add</button
-                    >
-                  </div>
-                  <div class="mt-1.5 space-y-1.5">
-                    {#each phase.checkpoints as checkpoint, checkpointIndex (checkpoint.id)}
-                      <div class="rounded-lg bg-elevated p-2 text-xs">
-                        <EditableMarkdown
-                          class="font-medium outline-none focus:bg-surface"
-                          text={checkpoint.description}
-                          ariaLabel={`Checkpoint ${checkpointIndex + 1}`}
-                          onChange={(value) => {
-                            checkpoint.description = value
-                            markDirty()
-                          }}
-                        />
-                        <EditableMarkdown
-                          class="mt-0.5 text-muted outline-none focus:bg-surface"
-                          text={checkpoint.evidence}
-                          ariaLabel={`Checkpoint ${checkpointIndex + 1} evidence`}
-                          onChange={(value) => {
-                            checkpoint.evidence = value
-                            markDirty()
-                          }}
-                        />
-                      </div>
-                    {:else}
-                      <p class="text-[0.6875rem] text-dimmed">No checkpoints.</p>
-                    {/each}
-                  </div>
-                </div>
-                <div>
-                  <div class="flex items-center justify-between">
-                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-                      File operations
-                    </p>
-                    <button
-                      class="text-[0.6875rem] text-accent hover:underline"
-                      title="Add file operation"
-                      onclick={() => addFileOperation(phase.id)}>Add</button
-                    >
-                  </div>
-                  <div class="mt-1.5 space-y-1.5">
-                    {#each phase.fileOperations as operation, operationIndex (`${phase.id}:${operationIndex}`)}
-                      <div class="rounded-lg bg-elevated p-2 text-xs">
-                        <div class="flex items-center gap-2">
-                          <select
-                            class="rounded border bg-surface px-1.5 py-1 text-[0.6875rem]"
-                            bind:value={operation.operation}
-                            onchange={markDirty}
-                            aria-label={`File operation ${operationIndex + 1} type`}
-                          >
-                            <option value="create">Create</option>
-                            <option value="edit">Edit</option>
-                            <option value="delete">Delete</option>
-                          </select>
-                          <EditableMarkdown
-                            class="min-w-0 flex-1 font-mono outline-none focus:bg-surface"
-                            text={operation.path}
-                            ariaLabel={`File operation ${operationIndex + 1} path`}
-                            onChange={(value) => {
-                              operation.path = value
-                              markDirty()
-                            }}
-                          />
-                        </div>
-                        <EditableMarkdown
-                          class="mt-1 text-muted outline-none focus:bg-surface"
-                          text={operation.reason}
-                          ariaLabel={`File operation ${operationIndex + 1} reason`}
-                          onChange={(value) => {
-                            operation.reason = value
-                            markDirty()
-                          }}
-                        />
-                      </div>
-                    {:else}
-                      <p class="text-[0.6875rem] text-dimmed">No file operations.</p>
-                    {/each}
-                  </div>
-                </div>
-              </div>
-              <EditableMarkdown
-                class="mt-3 block rounded-md bg-elevated px-2 py-1 font-mono text-xs outline-none"
-                text={phase.commit}
-                fallback="No commit specified."
-                ariaLabel={`Phase ${phaseIndex + 1} commit`}
-                onChange={(value) => {
-                  phase.commit = value
-                  markDirty()
-                }}
-              />
-            </li>
-          {/each}
-        </ol>
-        {@render AnnotationBubbles({
-          annotations: annotationsFor('resolution'),
-          onOpen: openAnnotation
-        })}
-      </section>
-
-      {@render EditableListSection({
-        id: 'success_criteria',
-        title: 'Success criteria',
-        items: draft.content.successCriteria,
-        annotations: annotationsFor('success_criteria'),
-        onHeading: openSectionAnnotation,
-        onEdit: (index, value) => setArrayItem('successCriteria', index, value),
-        onAdd: () => addArrayItem('successCriteria'),
-        onRemove: (index) => removeArrayItem('successCriteria', index),
-        onOpenAnnotation: openAnnotation
-      })}
-
-      <section
-        id="spec-section-test_strategy"
-        data-spec-section="test_strategy"
-        class="scroll-mt-5"
-      >
-        <button
-          class="group flex items-center gap-2 text-left"
-          title="Annotate Test strategy"
-          onclick={(event: MouseEvent) => openSectionAnnotation('test_strategy', event)}
-        >
-          <span class="text-xl font-semibold tracking-tight">Test strategy</span>
-          <MessageSquarePlus
-            size={14}
-            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-          />
-        </button>
-        <EditableMarkdown
-          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-          text={draft.content.testStrategy}
-          ariaLabel="Test strategy"
-          onChange={(value) => setString('testStrategy', value)}
-        />
-        {@render AnnotationBubbles({
-          annotations: annotationsFor('test_strategy'),
-          onOpen: openAnnotation
-        })}
-      </section>
-
-      {@render EditableListSection({
-        id: 'documentation',
-        title: 'Documentation',
-        items: draft.content.documentationRequirements,
-        annotations: annotationsFor('documentation'),
-        onHeading: openSectionAnnotation,
-        onEdit: (index, value) => setArrayItem('documentationRequirements', index, value),
-        onAdd: () => addArrayItem('documentationRequirements'),
-        onRemove: (index) => removeArrayItem('documentationRequirements', index),
-        onOpenAnnotation: openAnnotation
-      })}
-
-      {#if draft.content.additionalInfo !== undefined}
-        <section
-          id="spec-section-additional_info"
-          data-spec-section="additional_info"
-          class="scroll-mt-5"
-        >
-          <button
-            class="group flex items-center gap-2 text-left"
-            title="Annotate Additional info"
-            onclick={(event: MouseEvent) => openSectionAnnotation('additional_info', event)}
-          >
-            <span class="text-xl font-semibold tracking-tight">Additional info</span>
-            <MessageSquarePlus
-              size={14}
-              class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-            />
-          </button>
-          <EditableMarkdown
-            class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-            text={draft.content.additionalInfo}
-            ariaLabel="Additional info"
-            onChange={(value) => setString('additionalInfo', value)}
-            onAnnotateMermaid={(code, event) =>
-              openDiagramAnnotation('additional_info', code, event)}
-          />
-          {@render AnnotationBubbles({
-            annotations: annotationsFor('additional_info'),
-            onOpen: openAnnotation
-          })}
-        </section>
-      {/if}
-
-      <section
-        id="spec-section-commit_pattern"
-        data-spec-section="commit_pattern"
-        class="scroll-mt-5"
-      >
-        <button
-          class="group flex items-center gap-2 text-left"
-          title="Annotate Commit pattern"
-          onclick={(event: MouseEvent) => openSectionAnnotation('commit_pattern', event)}
-        >
-          <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
-          <MessageSquarePlus
-            size={14}
-            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-          />
-        </button>
-        <EditableMarkdown
-          class="mt-3 block rounded-lg bg-surface px-3 py-2 font-mono text-xs outline-none"
-          text={draft.content.commitPattern}
-          ariaLabel="Commit pattern"
-          onChange={(value) => setString('commitPattern', value)}
-        />
-        {@render AnnotationBubbles({
-          annotations: annotationsFor('commit_pattern'),
-          onOpen: openAnnotation
-        })}
-      </section>
-
-      <section
-        id="spec-section-constraints_risks"
-        data-spec-section="constraints_risks"
-        class="scroll-mt-5"
-      >
-        <button
-          class="group flex items-center gap-2 text-left"
-          title="Annotate Constraints and risks"
-          onclick={(event: MouseEvent) => openSectionAnnotation('constraints_risks', event)}
-        >
-          <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
-          <MessageSquarePlus
-            size={14}
-            class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-          />
-        </button>
-        <div class="mt-4 grid gap-5 sm:grid-cols-2">
-          {@render EditableMiniList({
-            title: 'Constraints',
-            items: draft.content.constraints,
-            onEdit: (index, value) => setArrayItem('constraints', index, value),
-            onAdd: () => addArrayItem('constraints'),
-            onRemove: (index) => removeArrayItem('constraints', index)
-          })}
-          {@render EditableMiniList({
-            title: 'Risks',
-            items: draft.content.risks,
-            onEdit: (index, value) => setArrayItem('risks', index, value),
-            onAdd: () => addArrayItem('risks'),
-            onRemove: (index) => removeArrayItem('risks', index)
-          })}
-        </div>
-        {@render AnnotationBubbles({
-          annotations: annotationsFor('constraints_risks'),
-          onOpen: openAnnotation
-        })}
-      </section>
-    </article>
-
-    <section class="mt-12 border-t pt-6" aria-label="Specification context">
-      <div class="flex items-center justify-between">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Context</h2>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] hover:bg-overlay"
-            title="Add context to this specification"
-          >
-            <Plus size={11} />
-            Add context
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              strategy="fixed"
-              class="z-50 w-64 rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each contextTypes as item (item.type)}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
-                  textValue={item.label}
-                  title={item.description}
-                  onSelect={() => {
-                    if (item.type === 'attachment') {
-                      void onAddContext(item.type)
-                    } else {
-                      void openContextPicker(item.type)
-                    }
-                  }}
-                >
-                  {#if item.type === 'project_file'}
-                    <Search size={13} class="mt-0.5 shrink-0 text-muted" />
-                  {:else if item.type === 'project_rule'}
-                    <ShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
-                  {:else}
-                    <Paperclip size={13} class="mt-0.5 shrink-0 text-muted" />
-                  {/if}
-                  <span class="min-w-0">
-                    <span class="block text-xs font-medium">{item.label}</span>
-                    <span class="mt-0.5 block text-[0.625rem] leading-tight text-dimmed">
-                      {item.description}
-                    </span>
-                  </span>
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      </div>
-      {#if contextPickerType}
-        {@const activeContextPickerType = contextPickerType}
-        <div class="mt-3 rounded-lg border bg-surface p-3">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <h3 class="text-xs font-semibold">
-                {contextPickerType === 'project_rule'
-                  ? 'Add a rule or skill'
-                  : 'Tag a project file'}
-              </h3>
-              <p class="mt-0.5 text-[0.625rem] text-dimmed">
-                The project-relative path will be included in review and implementation.
-              </p>
-            </div>
-            <button
-              type="button"
-              class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
-              title="Close context search"
-              aria-label="Close context search"
-              onclick={closeContextPicker}
-            >
-              <X size={13} />
-            </button>
-          </div>
-          <label class="relative mt-3 block">
-            <span class="sr-only">Search project files</span>
-            <Search
-              size={13}
-              class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-            />
-            <input
-              {@attach focusContextSearch}
-              value={contextQuery}
-              class="h-8 w-full rounded-md border bg-app pl-8 pr-3 text-xs outline-none"
-              placeholder={contextPickerType === 'project_rule'
-                ? 'Search AGENTS.md, SKILL.md, rules…'
-                : 'Search files by name or path…'}
-              oninput={updateContextQuery}
-            />
-          </label>
-          <div class="mt-2 max-h-52 overflow-y-auto">
-            {#if contextSearchBusy && contextResults.length === 0}
-              <p class="px-2 py-3 text-center text-xs text-dimmed">Searching project…</p>
-            {:else if contextSearchError}
-              <p class="px-2 py-3 text-center text-xs text-danger">{contextSearchError}</p>
-            {:else if contextResults.length === 0}
-              <p class="px-2 py-3 text-center text-xs text-dimmed">
-                {contextPickerType === 'project_rule'
-                  ? 'No project rules or skills match this search.'
-                  : 'No project files match this search.'}
-              </p>
-            {:else}
-              {#each contextResults as entry (entry.path)}
-                {@const selected = selectedContextPaths.has(entry.path)}
-                <button
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
-                  title={selected ? `${entry.path} is already included` : `Include ${entry.path}`}
-                  disabled={selected || busy}
-                  onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
-                >
-                  <FileText size={12} class="shrink-0 text-muted" />
-                  <span class="min-w-0 flex-1 truncate">{entry.path}</span>
-                  {#if selected}
-                    <Check size={12} class="shrink-0 text-success" />
-                  {/if}
-                </button>
-              {/each}
-            {/if}
-          </div>
-        </div>
-      {/if}
-      <div class="mt-3 grid gap-2 sm:grid-cols-2">
-        {#each draft.context as reference (reference.id)}
-          <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-xs font-medium">{reference.label}</span>
-              <span class="block truncate text-[0.625rem] text-dimmed"
-                >{reference.type.replace('_', ' ')}{reference.path
-                  ? ` · ${reference.path}`
-                  : ''}</span
-              >
-            </span>
-            <button
-              class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
-              aria-label={`Remove context ${reference.label}`}
-              title={`Remove ${reference.label}`}
-              onclick={() => void onRemoveContext(reference.id)}
-            >
-              <X size={12} />
-            </button>
-          </div>
-        {:else}
-          <p
-            class="col-span-full rounded-lg border border-dashed p-4 text-center text-xs text-dimmed"
-          >
-            Tag project files, add rules or skills, attach external files, or drop files anywhere in
-            the Studio.
-          </p>
-        {/each}
-      </div>
-      <div class="mt-6 border-t pt-4">
-        <div class="flex items-center gap-1.5">
-          <MessageSquareText size={13} class="text-muted" />
-          <h3 class="text-xs font-semibold">Previous comments</h3>
-        </div>
-        {#if decisionComments.length > 0}
-          <div class="mt-3 space-y-3">
-            {#each decisionComments as comment (comment.id)}
-              <div class="border-l-2 border-border pl-3">
-                <div class="mb-1 flex items-center gap-2 text-[0.625rem] text-dimmed">
-                  <span class="font-semibold uppercase tracking-wide text-muted">
-                    {comment.action === 'review' ? 'Review' : 'Implement'}
-                  </span>
-                  <span>·</span>
-                  <span>{formatDate(comment.createdAt)}</span>
-                </div>
-                <div class="text-xs text-foreground">
-                  <MarkdownView text={comment.body} />
-                </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <p class="mt-2 text-xs text-dimmed">
-            No Review or Implement comments were submitted for this version.
-          </p>
-        {/if}
-      </div>
-    </section>
-  </div>
+  <SpecStudioDocument
+    {draft}
+    edits={draftEdits}
+    {busy}
+    {contextPicker}
+    onAnnotate={(section, event) => openSectionAnnotation(section, event)}
+    onAnnotateDiagram={(section, code, event) => openDiagramAnnotation(section, code, event)}
+    onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+    {onAddContext}
+    {onRemoveContext}
+  />
 </StudioShell>
 
 {#if pendingAnnotation}
@@ -1873,124 +1073,3 @@
     {/snippet}
   </StudioAnnotationDetailPopover>
 {/if}
-
-{#snippet AnnotationBubbles(props: {
-  annotations: SpecAnnotation[]
-  onOpen: (annotation: SpecAnnotation) => void
-})}
-  {#if props.annotations.length}
-    <div class="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="Section annotations">
-      {#each props.annotations as annotation (annotation.id)}
-        <button
-          class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
-          title="Open annotation"
-          onclick={() => props.onOpen(annotation)}
-        >
-          <span class="line-clamp-2 text-xs leading-relaxed">{annotation.body}</span>
-          <span class="mt-1 block text-[0.625rem] text-dimmed">{annotation.author}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
-{/snippet}
-
-{#snippet EditableListSection(props: {
-  id: SpecSectionId
-  title: string
-  items: string[]
-  annotations: SpecAnnotation[]
-  onHeading: (section: SpecSectionId, event: MouseEvent) => void
-  onEdit: (index: number, value: string) => void
-  onAdd: () => void
-  onRemove: (index: number) => void
-  onOpenAnnotation: (annotation: SpecAnnotation) => void
-})}
-  <section id={`spec-section-${props.id}`} data-spec-section={props.id} class="scroll-mt-5">
-    <div class="flex items-center justify-between gap-3">
-      <button
-        class="group flex items-center gap-2 text-left"
-        title={`Annotate ${props.title}`}
-        onclick={(event: MouseEvent) => props.onHeading(props.id, event)}
-      >
-        <span class="text-xl font-semibold tracking-tight">{props.title}</span>
-        <MessageSquarePlus
-          size={14}
-          class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
-        />
-      </button>
-      <button
-        class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
-        title={`Add ${props.title.toLowerCase()} item`}
-        onclick={props.onAdd}
-      >
-        <Plus size={11} />
-        Add
-      </button>
-    </div>
-    <ul class="mt-3 space-y-2">
-      {#each props.items as item, index (`${props.id}:${index}`)}
-        <li class="group flex items-start gap-2 rounded-lg px-2 py-1 text-muted hover:bg-surface">
-          <Check size={13} class="mt-1.5 shrink-0 text-success" />
-          <EditableMarkdown
-            class="min-w-0 flex-1 outline-none focus:text-foreground"
-            text={item}
-            ariaLabel={`${props.title} item ${index + 1}`}
-            onChange={(value) => props.onEdit(index, value)}
-          />
-          <button
-            class="mt-0.5 rounded p-1 text-dimmed opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
-            aria-label={`Remove item ${index + 1}`}
-            title={`Remove item ${index + 1}`}
-            onclick={() => props.onRemove(index)}
-          >
-            <X size={11} />
-          </button>
-        </li>
-      {:else}
-        <li class="text-muted">Not defined.</li>
-      {/each}
-    </ul>
-    {@render AnnotationBubbles({ annotations: props.annotations, onOpen: props.onOpenAnnotation })}
-  </section>
-{/snippet}
-
-{#snippet EditableMiniList(props: {
-  title: string
-  items: string[]
-  onEdit: (index: number, value: string) => void
-  onAdd: () => void
-  onRemove: (index: number) => void
-})}
-  <div class="rounded-xl border bg-surface p-4">
-    <div class="flex items-center justify-between">
-      <h3 class="font-semibold">{props.title}</h3>
-      <button
-        class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
-        aria-label={`Add ${props.title.toLowerCase()}`}
-        title={`Add ${props.title.toLowerCase()}`}
-        onclick={props.onAdd}><Plus size={12} /></button
-      >
-    </div>
-    <ul class="mt-2 space-y-1.5">
-      {#each props.items as item, index (`${props.title}:${index}`)}
-        <li class="group flex items-start gap-2 text-muted">
-          <span>•</span>
-          <EditableMarkdown
-            class="min-w-0 flex-1 outline-none focus:text-foreground"
-            text={item}
-            ariaLabel={`${props.title} item ${index + 1}`}
-            onChange={(value) => props.onEdit(index, value)}
-          />
-          <button
-            class="rounded p-1 text-dimmed opacity-0 hover:text-danger group-hover:opacity-100"
-            aria-label={`Remove ${props.title} item ${index + 1}`}
-            title="Remove item"
-            onclick={() => props.onRemove(index)}><X size={10} /></button
-          >
-        </li>
-      {:else}
-        <li class="text-muted">None recorded.</li>
-      {/each}
-    </ul>
-  </div>
-{/snippet}

@@ -1,7 +1,6 @@
 /// <reference types="node" />
 
 import { performance, monitorEventLoopDelay } from 'node:perf_hooks'
-import type { IntervalHistogram } from 'node:perf_hooks'
 import { Logger } from './logger'
 
 /**
@@ -70,7 +69,10 @@ export class StartupTelemetry {
   private readonly marked = new Set<StartupPhase>()
   private phases: StartupPhaseRecord[] = []
   private previousAt: number
-  private loopHistogram: IntervalHistogram | null = null
+  // Derived from the API rather than naming the histogram interface directly:
+  // @types/node renamed it (IntervalHistogram -> ELDHistogram), and a rename
+  // must not be able to break the type check again.
+  private loopHistogram: ReturnType<typeof monitorEventLoopDelay> | null = null
 
   constructor(options: { now?: () => number } = {}) {
     this.now = options.now ?? (() => performance.now())

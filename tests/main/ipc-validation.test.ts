@@ -22,6 +22,7 @@ import {
   validateMergeMethod,
   validateMergeTarget,
   validatePrCreateInput,
+  validatePrListRequest,
   validatePrNumber,
   validatePushOptions,
   validateRemoteName,
@@ -245,6 +246,37 @@ describe('IPC git validation', () => {
     expect(() => validateBranchName('../evil')).toThrow(TypeError)
     expect(() => validateBranchName('a b')).toThrow(TypeError)
     expect(() => validateBranchName('')).toThrow(TypeError)
+  })
+
+  it('validates a pull request listing request', () => {
+    expect(validatePrListRequest({ filter: 'all', sort: 'updated', cursor: null })).toEqual({
+      filter: 'all',
+      sort: 'updated',
+      cursor: null
+    })
+    // The cursor is optional, and absent has to mean the first page rather than
+    // reaching the provider as `undefined` inside the GraphQL variables.
+    expect(validatePrListRequest({ filter: 'involves', sort: 'created' })).toEqual({
+      filter: 'involves',
+      sort: 'created',
+      cursor: null
+    })
+    expect(
+      validatePrListRequest({
+        filter: 'review-requested',
+        sort: 'updated',
+        cursor: 'Y3Vyc29yOnYyOpHOAAAB'
+      })
+    ).toEqual({ filter: 'review-requested', sort: 'updated', cursor: 'Y3Vyc29yOnYyOpHOAAAB' })
+    expect(() => validatePrListRequest({ filter: 'mine', sort: 'updated' })).toThrow(TypeError)
+    expect(() => validatePrListRequest({ filter: 'all', sort: 'oldest' })).toThrow(TypeError)
+    expect(() => validatePrListRequest('all')).toThrow(TypeError)
+    expect(() => validatePrListRequest({ filter: 'all', sort: 'updated', cursor: '' })).toThrow(
+      TypeError
+    )
+    expect(() =>
+      validatePrListRequest({ filter: 'all', sort: 'updated', cursor: null, page: 2 })
+    ).toThrow('Unsupported pull request list request field')
   })
 
   it('validates commit messages without trimming or collapsing newlines', () => {

@@ -7,7 +7,6 @@ import { Readable } from 'node:stream'
 import { extname, join, sep } from 'path'
 import { realpath } from 'fs/promises'
 import { getConfigRoot } from '../../lib/utils'
-import { INBOX_PROJECT_ID } from '../../lib/types'
 import { Logger } from '../system/logger'
 import type { ProjectFilesService } from './project-files-service'
 
@@ -197,10 +196,15 @@ function decodeSegments(pathname: string): string[] {
  *
  * - `appfile://project/<projectId>/<relativePath>`   resolved against the
  *   project root through {@link ProjectFilesService#resolveForExternalEditor}
- * - `appfile://chat/<threadId>/<relativePath>`   resolved against the chat
- *   thread's own `chats-artifacts/<threadId>` artifact directory
+ * - `appfile://thread/<projectId>/<threadId>/<relativePath>`   resolved against
+ *   the conversation's own app-owned workspace directory (a chat's
+ *   `chats-artifacts/<threadId>`, an assistant task's
+ *   `assistant-cwd/<routineId ?? threadId>`)
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage
+ * - `appfile://standalone/file?path=<absolute>&name=<label>`   a single file
+ *   the user opened through the operating system, authorized by the scoped
+ *   path resolver (the same grants privileged IPC uses)
  *
  * The handler is installed via a lazy {@link ProjectFilesService} resolver so
  * it can be registered before the main window loads (the packaged renderer
@@ -208,7 +212,8 @@ function decodeSegments(pathname: string): string[] {
  * any later makes those requests fail with `ERR_UNKNOWN_URL_SCHEME`).
  */
 export function installFilePreviewProtocol(
-  getProjectFiles: () => ProjectFilesService | null
+  getProjectFiles: () => ProjectFilesService | null,
+  resolveScopedPath?: (value: unknown) => Promise<string>
 ): void {
   protocol.handle(SCHEME, async (request) => {
     try {
@@ -224,30 +229,42 @@ export function installFilePreviewProtocol(
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
-        const absolutePath = await projectFiles.resolveForExternalEditor(
-          projectId,
-          relativePath
-        )
+        const absolutePath = await projectFiles.resolveForExternalEditor(projectId, relativePath)
         return serveFile(absolutePath, type, request)
       }
 
-      if (url.host === 'chat') {
+      if (url.host === 'thread') {
         const segments = decodeSegments(url.pathname)
-        const threadId = segments[0] ?? ''
+        const projectId = segments[0] ?? ''
+        if (!PROJECT_ID_PATTERN.test(projectId)) return notFound()
+        const threadId = segments[1] ?? ''
         if (!THREAD_ID_PATTERN.test(threadId)) return notFound()
-        const relativePath = segments.slice(1).join('/')
+        const relativePath = segments.slice(2).join('/')
         if (!relativePath) return notFound()
         const type = typeFromPath(relativePath)
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
         const absolutePath = await projectFiles.resolveForExternalEditor(
-          INBOX_PROJECT_ID,
+          projectId,
           relativePath,
           undefined,
           threadId
         )
         return serveFile(absolutePath, type, request)
+      }
+
+      if (url.host === 'standalone') {
+        const absolutePath = url.searchParams.get('path') ?? ''
+        const name = url.searchParams.get('name') ?? absolutePath
+        if (!absolutePath) return notFound()
+        const type = typeFromPath(name)
+        if (!type) return notFound()
+        // Authorization is shared with privileged IPC: only paths the user
+        // opened (or picked in a dialog) resolve to a canonical path here.
+        if (!resolveScopedPath) return notFound()
+        const safePath = await resolveScopedPath(absolutePath)
+        return serveFile(safePath, type, request)
       }
 
       if (url.host === 'attachment') {

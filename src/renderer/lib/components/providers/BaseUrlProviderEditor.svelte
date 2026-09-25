@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, RefreshCw, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -467,7 +468,7 @@
       toast.success(draft.id ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
-      toast.error(saveError instanceof Error ? saveError.message : 'Failed to save provider.')
+      reportError(saveError, 'Failed to save provider.')
     }
   }
 
@@ -482,7 +483,7 @@
       draft.models = [...draft.models, modelToDraft(model)]
       toast.success(`Added “${model.name || model.id}” from clipboard.`)
     } catch (pasteError) {
-      toast.error(pasteError instanceof Error ? pasteError.message : 'Clipboard paste failed.')
+      reportError(pasteError, 'Clipboard paste failed.')
     }
   }
 
@@ -506,7 +507,7 @@
       await invoke('baseUrlProviders:copyProviderToClipboard', request)
       toast.success(`Copied “${draft.name || 'provider'}”.`)
     } catch (copyError) {
-      toast.error(copyError instanceof Error ? copyError.message : 'Clipboard copy failed.')
+      reportError(copyError, 'Clipboard copy failed.')
     }
   }
 
@@ -530,7 +531,7 @@
       }
       toast.success(`Pasted “${provider.name}”.`)
     } catch (pasteError) {
-      toast.error(pasteError instanceof Error ? pasteError.message : 'Clipboard paste failed.')
+      reportError(pasteError, 'Clipboard paste failed.')
     }
   }
 
@@ -559,7 +560,7 @@
       await copyTextToClipboard(text)
       toast.success(successMessage)
     } catch (copyError) {
-      toast.error(copyError instanceof Error ? copyError.message : 'Clipboard copy failed.')
+      reportError(copyError, 'Clipboard copy failed.')
     }
   }
 </script>
@@ -621,7 +622,7 @@
       />
       {#if addingHarnessWithoutKey}
         <p class="text-[0.6875rem] text-warning">
-          Newly-added harnesses won't get the stored API key   re-enter it below to apply it there
+          Newly-added harnesses won't get the stored API key re-enter it below to apply it there
           too.
         </p>
       {/if}
@@ -821,8 +822,8 @@
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
             <p class="text-[0.6875rem] font-medium text-dimmed">
-              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'}   click
-              to add
+              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} click to
+              add
             </p>
             <div class="flex flex-wrap gap-1.5">
               {#each discoveredModels as model (model.id)}

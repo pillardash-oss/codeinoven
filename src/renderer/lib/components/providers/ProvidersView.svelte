@@ -4,12 +4,15 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { displayShortcutLabel } from '$lib/shortcut-display'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { canRestartHarness, canUninstallHarness } from '$shared/harness-actions'
+  import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
-    BaseUrlProvider,
     HarnessManifestEntry,
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
@@ -27,28 +30,28 @@
     Plug,
     Plug2,
     RefreshCw,
+    RotateCcw,
     Search,
     Trash2,
     X
   } from '@lucide/svelte'
   import { onMount } from 'svelte'
-  import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade, slide } from 'svelte/transition'
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
-  import AddProviderModal from './AddProviderModal.svelte'
-  import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
+  import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
+  import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
 
-  /** Where users can browse existing PRs / open one for a V2 support effort. */
-  const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
-  /** Human copy shown for an installed-but-unsupported harness. */
-  const OPENCODE_V2_NOTICE =
-    'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
+  import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
+  import ProviderConnectFlow from './ProviderConnectFlow.svelte'
+
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
   /** How long a copy confirmation stays visible on the Path column. */
@@ -56,38 +59,25 @@
   /** Breathing room between background hydration jobs on low-end machines. */
   const BACKGROUND_BATCH_DELAY_MS = 50
 
-  /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
-  let baseUrlHarnesses = $derived(
-    providerStore.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
-    )
-  )
-
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
-  /** Tab the Add-provider modal opens on   'custom' when returning there via
-   *  the editor's Back button, so the user lands back on the list they left. */
-  let addTargetInitialTab = $state<'connect' | 'custom'>('connect')
-  let customEditorFor = $state<string | null>(null)
-  /** Provider being edited in the custom base-URL editor, or null when creating one. */
-  let customEditorProvider = $state<BaseUrlProvider | null>(null)
-  /** Set only when the editor was opened from the Add-provider modal, so its
-   *  footer Back button can return there instead of closing everything. */
-  let customEditorReturnTo = $state<ProviderConnectionInfo | null>(null)
   /** Harness awaiting uninstall confirmation, with its resolved handoff command. */
   let uninstallTarget = $state<ProviderConnectionInfo | null>(null)
   let uninstallCommand = $state<string>('')
   let uninstallLoading = $state(false)
   let uninstallError = $state('')
   let uninstallBusy = $state(false)
+  /** Harness awaiting a restart confirmation, whose in-session threads may stop. */
+  let restartTarget = $state<ProviderConnectionInfo | null>(null)
+  let restartBusy = $state(false)
   /** Confirmed/effective harness behavior manifests, keyed by harness id. */
   let manifestEntries = $state.raw<Record<string, HarnessManifestEntry>>({})
   let manifestSaving = $state<Record<string, boolean>>({})
   /** Per-harness "update automatically on launch" preference, keyed by harness id. */
   let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
-  /** Which top-level tab is on screen. */
-  let activeTab = $state<'harnesses' | 'accounts' | 'custom'>('harnesses')
+  /** Which top-level tab is on screen. Shared, so settings search can open one. */
+  const activeTab = $derived(settingsUiState.harnessesTab)
   /** Per-harness advanced-info disclosure (Settings for ready harnesses, Details for errored ones), collapsed by default. */
   let expandedSettings = $state<Record<string, boolean>>({})
   /** Free-text filter over harness name/command/path. */
@@ -170,6 +160,14 @@
     )
   }
 
+  /**
+   * True when this row is an OpenCode V2 install. One `opencode` harness covers
+   * both lines, so the V2-only catalog panel is gated on the detected version.
+   */
+  function isOpenCodeV2Row(provider: ProviderConnectionInfo): boolean {
+    return provider.id === 'opencode' && isOpenCodeV2Version(provider.version ?? '')
+  }
+
   function manifestFor(harnessId: string): HarnessManifestEntry | undefined {
     return manifestEntries[harnessId]
   }
@@ -183,13 +181,6 @@
 
   /** Single, mutually-exclusive status badge per harness row. */
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
-    if (provider.unsupportedReason === 'opencode-v2') {
-      return {
-        Icon: AlertTriangle,
-        label: 'Not supported yet',
-        classes: 'border-warning/30 bg-warning/10 text-warning'
-      }
-    }
     if (provider.status === 'error') {
       return {
         Icon: AlertTriangle,
@@ -255,14 +246,18 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
-    if (provider.unsupportedReason === 'opencode-v2') {
+    if (canRestartHarness(provider) || canUninstallHarness(provider)) {
+      items.push({ label: `divider-${provider.id}`, divider: true })
+    }
+    if (canRestartHarness(provider)) {
       items.push({
-        label: 'Check PRs',
-        onClick: () => void openInBrowser(OPENCODE_V2_PRS_URL)
+        label: 'Restart harness',
+        icon: RotateCcw,
+        disabled: harnessLifecycleStore.isRunning(provider.id),
+        onClick: () => requestRestart(provider)
       })
     }
-    if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
-      items.push({ label: `divider-${provider.id}`, divider: true })
+    if (canUninstallHarness(provider)) {
       items.push({
         label: 'Uninstall',
         icon: Trash2,
@@ -293,11 +288,7 @@
       const entries = await invoke('harnessManifest:list')
       manifestEntries = Object.fromEntries(entries.map((entry) => [entry.harnessId, entry]))
     } catch (manifestError) {
-      toast.error(
-        manifestError instanceof Error
-          ? manifestError.message
-          : 'Harness behavior manifests could not be loaded.'
-      )
+      reportError(manifestError, 'Harness behavior manifests could not be loaded.')
     }
   }
 
@@ -311,9 +302,7 @@
       await invoke('harnessManifest:confirm', { harnessId, behavior, value })
       await loadManifests()
     } catch (manifestError) {
-      toast.error(
-        manifestError instanceof Error ? manifestError.message : 'Behavior confirmation failed.'
-      )
+      reportError(manifestError, 'Behavior confirmation failed.')
     } finally {
       manifestSaving[harnessId] = false
     }
@@ -325,7 +314,7 @@
       await invoke('harnessManifest:reset', { harnessId, behavior })
       await loadManifests()
     } catch (manifestError) {
-      toast.error(manifestError instanceof Error ? manifestError.message : 'Manifest reset failed.')
+      reportError(manifestError, 'Manifest reset failed.')
     } finally {
       manifestSaving[harnessId] = false
     }
@@ -340,11 +329,7 @@
     try {
       autoUpdatePrefs = await invoke('harnessAutoUpdate:list')
     } catch (autoUpdateError) {
-      toast.error(
-        autoUpdateError instanceof Error
-          ? autoUpdateError.message
-          : 'Harness auto-update preferences could not be loaded.'
-      )
+      reportError(autoUpdateError, 'Harness auto-update preferences could not be loaded.')
     }
   }
 
@@ -354,11 +339,7 @@
       await invoke('harnessAutoUpdate:set', { harnessId, value })
       await loadAutoUpdatePrefs()
     } catch (autoUpdateError) {
-      toast.error(
-        autoUpdateError instanceof Error
-          ? autoUpdateError.message
-          : 'Auto-update preference could not be saved.'
-      )
+      reportError(autoUpdateError, 'Auto-update preference could not be saved.')
     } finally {
       autoUpdateSaving[harnessId] = false
     }
@@ -369,9 +350,7 @@
       const info = await invoke('harnessInstall:getInfo', provider.id)
       await openInBrowser(info.pageUrl)
     } catch (installError) {
-      toast.error(
-        installError instanceof Error ? installError.message : 'Install page unavailable.'
-      )
+      reportError(installError, 'Install page unavailable.')
     }
   }
 
@@ -413,6 +392,33 @@
     uninstallTarget = null
     uninstallCommand = ''
     uninstallError = ''
+  }
+
+  /**
+   * Replace the harness process CodeInOven holds so the version installed on
+   * disk is the one the next turn runs. Always confirmed first: restarting takes
+   * the transport away from any thread that is mid-turn.
+   */
+  function requestRestart(provider: ProviderConnectionInfo): void {
+    if (harnessLifecycleStore.isRunning(provider.id)) return
+    restartTarget = provider
+  }
+
+  async function confirmRestart(): Promise<void> {
+    const target = restartTarget
+    if (!target || restartBusy) return
+    restartBusy = true
+    try {
+      await harnessLifecycleStore.restartHarnessNow(target.id)
+      restartTarget = null
+    } finally {
+      restartBusy = false
+    }
+  }
+
+  function cancelRestart(): void {
+    if (restartBusy) return
+    restartTarget = null
   }
 
   function customCountFor(harnessId: string): number {
@@ -476,13 +482,12 @@
   }
 
   function canAddProvider(provider: ProviderConnectionInfo): boolean {
-    return provider.integration === 'ready' && provider.status === 'available'
+    return providerStore.canAddProvider(provider)
   }
-
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (activeTab !== 'harnesses') return
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', event)) {
       event.preventDefault()
       event.stopPropagation()
       searchInputEl?.focus()
@@ -563,7 +568,7 @@
       role="tab"
       aria-selected={activeTab === 'harnesses'}
       title="Show connected harnesses"
-      onclick={() => (activeTab = 'harnesses')}
+      onclick={() => (settingsUiState.harnessesTab = 'harnesses')}
     >
       Harnesses
     </button>
@@ -576,9 +581,22 @@
       role="tab"
       aria-selected={activeTab === 'accounts'}
       title="Manage harness accounts"
-      onclick={() => (activeTab = 'accounts')}
+      onclick={() => (settingsUiState.harnessesTab = 'accounts')}
     >
       Accounts
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      'auxiliary'
+        ? 'bg-surface text-foreground shadow-sm'
+        : 'text-muted hover:text-foreground'}"
+      role="tab"
+      aria-selected={activeTab === 'auxiliary'}
+      title="Assign the model each harness uses for background work"
+      onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
+    >
+      Auxiliary Agents
     </button>
     <button
       type="button"
@@ -589,7 +607,7 @@
       role="tab"
       aria-selected={activeTab === 'custom'}
       title="Manage custom base URL providers"
-      onclick={() => (activeTab = 'custom')}
+      onclick={() => (settingsUiState.harnessesTab = 'custom')}
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
@@ -874,10 +892,7 @@
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
                   disabled={!canAddProvider(provider)}
-                  onclick={() => {
-                    addTargetInitialTab = 'connect'
-                    addTarget = provider
-                  }}
+                  onclick={() => (addTarget = provider)}
                 >
                   <Plug2 size={13} /> Manage providers
                 </button>
@@ -907,15 +922,6 @@
               {/if}
             </div>
           </div>
-
-          {#if provider.unsupportedReason === 'opencode-v2'}
-            <div class="mt-3 flex items-start gap-1.5 border-t border-border pt-2">
-              <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
-              <span class="min-w-0 break-words text-xs font-medium text-warning">
-                {OPENCODE_V2_NOTICE}
-              </span>
-            </div>
-          {/if}
 
           {#if expanded}
             <div
@@ -990,6 +996,11 @@
                     />
                   </div>
                 </div>
+                {#if isOpenCodeV2Row(provider)}
+                  <div class="border-t border-border pt-2.5">
+                    <OpenCodeV2CatalogPanel harnessName={provider.name} />
+                  </div>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -1037,56 +1048,37 @@
     </div>
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
+  {:else if activeTab === 'auxiliary'}
+    <div class="space-y-4">
+      <TypesafeDecisionsCard />
+      <AuxiliaryAgentsPanel />
+    </div>
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}
 </div>
 
 {#if addTarget}
-  <AddProviderModal
-    harness={addTarget}
-    initialTab={addTargetInitialTab}
-    onClose={() => (addTarget = null)}
-    onAddCustom={(harnessId) => {
-      customEditorReturnTo = addTarget
-      customEditorFor = harnessId
-      customEditorProvider = null
-      addTarget = null
-    }}
-    onEditCustom={(provider) => {
-      customEditorReturnTo = addTarget
-      customEditorFor = provider.harnessId
-      customEditorProvider = provider
-      addTarget = null
-    }}
-  />
+  <ProviderConnectFlow harness={addTarget} onClose={() => (addTarget = null)} />
 {/if}
 
-{#if customEditorFor}
-  <BaseUrlProviderEditor
-    provider={customEditorProvider}
-    harnesses={baseUrlHarnesses}
-    defaultHarnessId={customEditorFor}
-    onClose={() => {
-      customEditorFor = null
-      customEditorProvider = null
-      customEditorReturnTo = null
-    }}
-    onSaved={() => {
-      customEditorFor = null
-      customEditorProvider = null
-      customEditorReturnTo = null
-    }}
-    onBack={customEditorReturnTo
-      ? () => {
-          addTargetInitialTab = 'custom'
-          addTarget = customEditorReturnTo
-          customEditorFor = null
-          customEditorProvider = null
-          customEditorReturnTo = null
-        }
-      : undefined}
-  />
+{#if restartTarget}
+  <ConfirmDialog
+    open
+    title={`Restart ${restartTarget.name}?`}
+    confirmLabel="Restart harness"
+    variant="danger"
+    busy={restartBusy}
+    onCancel={cancelRestart}
+    onConfirm={confirmRestart}
+    note="Any thread that is actively in session may stop working."
+  >
+    <p>
+      This closes the {restartTarget.name} process {APP_NAME} is holding and starts a fresh one from the
+      version installed on your machine, so an update takes effect without restarting {APP_NAME}.
+    </p>
+    <p>Threads keep their conversations; a turn that is running right now is interrupted.</p>
+  </ConfirmDialog>
 {/if}
 
 {#if uninstallTarget}

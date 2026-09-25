@@ -1,34 +1,24 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, createReadStream, watch } from 'node:fs'
-import type { FSWatcher } from 'node:fs'
+import { existsSync, createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { homedir, tmpdir } from 'os'
+import { tmpdir } from 'os'
 import { join } from 'path'
-import { readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'url'
 import type {
   AgentMessage,
   AgentPart,
-  AgentQuestion,
   AgentRateLimitWindow,
   AgentUsageCredits,
-  AgentSubagentActivity,
-  AgentTokenUsage,
   AgentToolStatus,
-  PromptAttachment,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
+import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
-import {
-  CIO_SPAWN_AGENT_TOOL_NAME,
-  CIO_SUBAGENT_DONE_MESSAGE_TYPE,
-  CIO_SUBAGENT_STREAM_STATUS_KEY
-} from '../../lib/core-tools'
-import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
+import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -38,6 +28,7 @@ import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import type {
+  CompactionFallbackContext,
   GenerateTitleOptions,
   HarnessCapabilities,
   SendPromptOptions,
@@ -47,11 +38,7 @@ import type {
 } from './driver.interface'
 import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
-import {
-  classifyProviderIssue,
-  extractProviderErrorEnvelope,
-  parseUsageResetAt
-} from '../../lib/provider-issue'
+import { classifyProviderIssue, presentProviderError } from '../../lib/provider-issue'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -60,15 +47,9 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import { apiKeyEnvVarFor } from '../providers/base-url-provider-service'
-import {
-  CIO_PERMISSION_MARKER,
-  CIO_QUESTION_MARKER,
-  CIO_SUBAGENT_MARKER
-} from './pi-core-tools-extension'
 import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
 import { PI_COMPACTION_EXTENSION_KEY } from './pi-compaction-extension'
 import {
@@ -86,6 +67,41 @@ import {
   runHarnessCommand
 } from './harness-runtime'
 
+import {
+  emptyStopRequest,
+  messageTimestamp,
+  numberValue,
+  record,
+  stringValue,
+  utilityKey,
+  withTimeout
+} from './pi/pi-values'
+import {
+  isUsagelessAssistantStatsError,
+  mapPiRateLimitHeaders,
+  piUsageProviderId,
+  refreshSessionUsageFromStats
+} from './pi/pi-usage'
+import { isOversizedRequestError } from './pi/pi-errors'
+import { TERMINAL_SUBAGENT_STATUSES, subagentTimeRange } from './pi/pi-subagent'
+import { latestPiTurnIndex, mapPiRecord } from './pi/pi-stream-fold'
+import type { PiStreamContext, PiTurnState } from './pi/pi-stream-types'
+import {
+  findNativePiSessionFile,
+  loadNativeSubagentMessages,
+  nativePiSessionDir,
+  parseNativePiSession,
+  prefillTranscriptEntries,
+  reconcileNativeCompactions
+} from './pi/pi-native-session'
+import { composePiAttachments } from './pi/pi-prompt-assembly'
+import { permissionMarkerPayload, questionMarkerPayload } from './pi/pi-ui-markers'
+
+export { isContinuableFinishReasonError, isOversizedRequestError } from './pi/pi-errors'
+export { mapPiRateLimitHeaders } from './pi/pi-usage'
+export { mapPiRecord } from './pi/pi-stream-fold'
+export type { PiStreamContext } from './pi/pi-stream-types'
+
 const THINKING_PRESETS = PI_THINKING_PRESETS
 const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 /**
@@ -95,6 +111,44 @@ const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
  * recent few rather than the whole app session.
  */
 const PI_CHILD_STREAM_MAX = 16
+
+/**
+ * How long an idle thread may keep its pi process resident. Every live harness
+ * process owns its own heap (tens to hundreds of megabytes) for as long as it
+ * exists, and a thread that is not running a turn does not need one: the next
+ * turn spawns a fresh process and resumes the persisted native transcript
+ * (see `resumeNativePiSession`), the same path an app restart and a crash use.
+ * Nothing is evicted while a turn, a worker, or a pending card still owns the
+ * session.
+ */
+const PI_SESSION_IDLE_DISPOSE_MS = 5 * 60_000
+
+/** Cadence of the idle sweep. One timer serves every session of the driver. */
+const PI_SESSION_IDLE_SWEEP_MS = 60_000
+
+/**
+ * How long a child transcript stays watched after the app last asked for it.
+ * An open sub-agent view polls its child every few seconds, so a visible
+ * transcript keeps its own entry fresh; a view the user closed lapses on its
+ * own and the worker's token stream stops being forwarded.
+ */
+const PI_SUBAGENT_WATCH_WINDOW_MS = 45_000
+
+/**
+ * How long a stopped session may keep streaming before the driver kills its pi
+ * process. A stop must be authoritative: pi's abort RPC is the graceful path,
+ * but a run that ignores it (or a wedged process) would otherwise keep working
+ *   with its nested worker sessions   after the user pressed stop.
+ */
+const PI_ABORT_ENFORCE_MS = 3_000
+const PI_ABORT_ENFORCE_INTERVAL_MS = 500
+/** Bound on the post-abort `get_state` probe so a busy process cannot stall the
+ *  stop behind the RPC client's full request timeout. */
+const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+/** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
+ *  own refresh after 15s and reports the failure, so this only bounds a process
+ *  that never exits. */
+const PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 20_000
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -121,12 +175,6 @@ function piThinkingLevel(value: string): 'minimal' | 'low' | 'medium' | 'high' |
   return 'medium'
 }
 
-interface PiImageContent {
-  type: 'image'
-  data: string
-  mimeType: string
-}
-
 /** Fallback catalog used when the pi runtime reports no models. */
 const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
@@ -147,603 +195,6 @@ const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
   }
 ]
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function utilityKey(value: string): string {
-  return (
-    value
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/gu, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/gu, '-')
-      .replace(/^-+|-+$/gu, '') || 'utility'
-  )
-}
-
-/** Parse a Pi token/cost accounting object into the shared usage shape. */
-function mapPiUsage(value: unknown): AgentTokenUsage | undefined {
-  const usage = record(value)
-  if (!usage) return undefined
-  const input = numberValue(usage['input']) ?? 0
-  const output = numberValue(usage['output']) ?? 0
-  const cacheRead = numberValue(usage['cacheRead']) ?? 0
-  const cacheWrite = numberValue(usage['cacheWrite']) ?? 0
-  const reasoning = numberValue(usage['reasoning']) ?? 0
-  return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheWrite,
-    total: input + output + reasoning + cacheRead + cacheWrite
-  }
-}
-
-/** Extract assistant cost in USD from a Pi usage object. */
-function mapPiCost(value: unknown): number | undefined {
-  const usage = record(value)
-  const cost = record(usage?.['cost'])
-  if (typeof cost?.['total'] === 'number') return cost['total']
-  if (typeof usage?.['total'] === 'number') return usage['total']
-  return undefined
-}
-
-/**
- * Matches the error pi's `get_session_stats` RPC returns when its stats walk
- * crashes on an assistant history entry that carries no `usage` object
- * (pi's addUsageToTotals reads `usage.input` unguarded, pi 0.85.1 and
- * earlier). In such sessions the RPC fails identically on every call, so the
- * driver falls back to mirrored per-message accounting instead of retrying.
- */
-function isUsagelessAssistantStatsError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /cannot read properties of undefined \(reading 'input'\)/iu.test(error.message)
-  )
-}
-
-/** Sum the per-message cost mirrored into a session's assistant messages so
- *  sessions with a broken native stats RPC still receive cumulative cost. */
-function mirroredSessionCost(session: PersistentCliSession): number | undefined {
-  let total: number | undefined
-  let unmirrored = false
-  for (const message of session.messages) {
-    if (message.role !== 'assistant') continue
-    if (typeof message.cost === 'number') total = (total ?? 0) + message.cost
-    else unmirrored = true
-  }
-  // Costless assistant turns (aborted, errored, or pre-usage mirrors) make a
-  // partial sum misleading but still better than nothing; both stay falsy
-  // when nothing was reported at all.
-  if (unmirrored && total === undefined) return undefined
-  return total
-}
-
-/** Last provider-reported context occupancy from the session's mirrored
- *  assistant messages: the final turn's usage total (input + cache + output)
- *  is the prompt size the provider actually processed, so it is the honest
- *  occupancy signal when pi's own contextUsage stats cannot answer (gateway
- *  models pi has no contextWindow for, broken stats RPC, post-compaction
- *  silence). Errored/aborted turns report zero usage and are skipped. */
-function mirroredContextUsed(messages: readonly AgentMessage[]): number | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message.role !== 'assistant') continue
-    if (message.error !== undefined) continue
-    const total = message.tokens?.total
-    if (typeof total === 'number' && Number.isFinite(total) && total > 0) return total
-  }
-  return undefined
-}
-
-function errorText(value: Record<string, unknown>): string {
-  return (
-    stringValue(value['errorMessage']) ??
-    stringValue(value['error']) ??
-    stringValue(value['message']) ??
-    'Pi turn failed'
-  )
-}
-
-/** Numeric header value ('1234' → 1234); non-numeric returns undefined. */
-function headerNumber(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
-/**
- * Parse a rate-limit reset value. Providers send either a relative duration
- * ('1s', '6m0s', '1h0m30s') or an absolute ISO timestamp; both resolve to an
- * absolute reset epoch, undefined when unparseable.
- */
-function headerResetAt(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined
-  if (/^\d/u.test(value)) {
-    let seconds = 0
-    for (const [, amount, unit] of value.matchAll(/(\d+(?:\.\d+)?)([hms])/gu)) {
-      const n = Number(amount)
-      if (!Number.isFinite(n)) return undefined
-      seconds += unit === 'h' ? n * 3600 : unit === 'm' ? n * 60 : n
-    }
-    if (seconds > 0) return Date.now() + seconds * 1_000
-    return undefined
-  }
-  const epoch = Date.parse(value)
-  return Number.isFinite(epoch) ? epoch : undefined
-}
-
-/** Build a usage bar window from remaining/limit header pairs. */
-function windowFromHeaders(
-  id: string,
-  label: string,
-  headers: Record<string, string>,
-  remainingKey: string,
-  limitKey: string,
-  resetKey?: string,
-  extra?: Partial<AgentRateLimitWindow>
-): AgentRateLimitWindow | null {
-  const remaining = headerNumber(headers[remainingKey])
-  const limit = headerNumber(headers[limitKey])
-  if (remaining === undefined && limit === undefined) return null
-  const usedPercent =
-    remaining !== undefined && limit !== undefined && limit > 0
-      ? Math.min(100, Math.max(0, ((limit - remaining) / limit) * 100))
-      : undefined
-  const resetsAt = resetKey ? headerResetAt(headers[resetKey]) : undefined
-  if (remaining === undefined && limit === undefined && resetsAt === undefined) return null
-  return {
-    id,
-    label,
-    ...(remaining !== undefined ? { remaining } : {}),
-    ...(limit !== undefined ? { limit } : {}),
-    ...(usedPercent !== undefined ? { usedPercent } : {}),
-    ...(resetsAt !== undefined ? { resetsAt } : {}),
-    ...extra
-  }
-}
-
-/**
- * The pi provider id the captured headers came from, taken from the usage
- * extension's payload (`ctx.model.provider`   the same id space as thread
- * settings' providerId). Used to key persisted windows per provider.
- */
-function piUsageProviderId(payload: unknown): string | undefined {
-  const provider = record(payload)?.['provider']
-  return typeof provider === 'string' && provider.length > 0 ? provider : undefined
-}
-
-/**
- * Map the usage extension's captured provider response headers into display
- * usage bars. Recognizes the Anthropic subscription unified windows (5-hour,
- * 7-day, with overage state), Anthropic per-minute request/token buckets, and
- * the OpenAI-compatible `x-ratelimit-*` family (OpenAI, OpenRouter, most
- * base-URL providers). Unrecognized headers are ignored.
- */
-export function mapPiRateLimitHeaders(payload: unknown): AgentRateLimitWindow[] {
-  const envelope = record(payload)
-  const headers = record(envelope?.['headers'])
-  if (!headers) return []
-  const stringHeaders: Record<string, string> = {}
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'string') stringHeaders[key.toLowerCase()] = value
-  }
-  const windows: AgentRateLimitWindow[] = []
-
-  // Anthropic subscription unified windows   the quota Claude Pro/Max usage
-  // bars show. Status and overage fields live on the 5-hour window, matching
-  // how Claude Code surfaces them.
-  const unifiedStatus = stringHeaders['anthropic-ratelimit-unified-5h-status']
-  const fiveHour = windowFromHeaders(
-    'pi-unified-5h',
-    '5-hour limit',
-    stringHeaders,
-    'anthropic-ratelimit-unified-5h-remaining',
-    'anthropic-ratelimit-unified-5h-limit',
-    'anthropic-ratelimit-unified-5h-reset',
-    {
-      windowMinutes: 300,
-      ...(unifiedStatus !== undefined ? { status: unifiedStatus } : {}),
-      ...(stringHeaders['anthropic-ratelimit-unified-overage-status'] !== undefined
-        ? { overageStatus: stringHeaders['anthropic-ratelimit-unified-overage-status'] }
-        : {}),
-      ...(stringHeaders['anthropic-ratelimit-unified-overage-disabled-reason'] !== undefined
-        ? {
-            overageDisabledReason:
-              stringHeaders['anthropic-ratelimit-unified-overage-disabled-reason']
-          }
-        : {})
-    }
-  )
-  if (fiveHour) windows.push(fiveHour)
-  const sevenDay = windowFromHeaders(
-    'pi-unified-7d',
-    '7-day limit',
-    stringHeaders,
-    'anthropic-ratelimit-unified-7d-remaining',
-    'anthropic-ratelimit-unified-7d-limit',
-    'anthropic-ratelimit-unified-7d-reset',
-    { windowMinutes: 10_080 }
-  )
-  if (sevenDay) windows.push(sevenDay)
-
-  // Anthropic per-minute buckets.
-  const requests = windowFromHeaders(
-    'pi-requests',
-    'Requests',
-    stringHeaders,
-    'anthropic-ratelimit-requests-remaining',
-    'anthropic-ratelimit-requests-limit',
-    'anthropic-ratelimit-requests-reset'
-  )
-  if (requests) windows.push(requests)
-  const inputTokens = windowFromHeaders(
-    'pi-input-tokens',
-    'Input tokens',
-    stringHeaders,
-    'anthropic-ratelimit-input-tokens-remaining',
-    'anthropic-ratelimit-input-tokens-limit',
-    'anthropic-ratelimit-input-tokens-reset'
-  )
-  if (inputTokens) windows.push(inputTokens)
-
-  // OpenAI-compatible family (OpenAI, OpenRouter, OpenAI-compatible proxies).
-  const openAiRequests = windowFromHeaders(
-    'pi-openai-requests',
-    'Requests',
-    stringHeaders,
-    'x-ratelimit-remaining-requests',
-    'x-ratelimit-limit-requests',
-    'x-ratelimit-reset-requests'
-  )
-  if (openAiRequests) windows.push(openAiRequests)
-  const openAiTokens = windowFromHeaders(
-    'pi-openai-tokens',
-    'Tokens',
-    stringHeaders,
-    'x-ratelimit-remaining-tokens',
-    'x-ratelimit-limit-tokens',
-    'x-ratelimit-reset-tokens'
-  )
-  if (openAiTokens) windows.push(openAiTokens)
-
-  return windows
-}
-
-function messageTimestamp(value: Record<string, unknown>): number {
-  return numberValue(value['timestamp']) ?? Date.now()
-}
-
-/**
- * True when a Pi failure is a finish-reason flake the model can recover from by
- * simply being asked to continue. pi's provider adapter maps any unrecognized
- * provider `finish_reason` to `stopReason: "error"` with the message
- * `Provider finish_reason: <reason>`   a transient stream/provider issue, not a
- * terminal outcome. `content_filter` is the exception: re-prompting past a
- * moderation stop is wrong, so it stays a real error.
- */
-export function isContinuableFinishReasonError(error: string): boolean {
-  const match = error.match(/^Provider finish_reason: (.+)$/u)
-  return match !== null && match[1] !== 'content_filter'
-}
-
-/**
- * True when a provider rejected the request because the serialized body exceeds
- * a hard byte limit (e.g. "Upstream request failed: [invalid_request_error]
- * Request body exceeds the 4.5 MiB limit."), or because it carries more media
- * parts than the provider accepts per request (e.g. "Too many images in
- * request: 31 > 30"). Token-based auto-compaction never sees either coming
- *   images and large tool results blow the byte budget or the media-part cap
- * long before the token window fills   so the driver recovers by compacting
- * the transcript (which replaces bulky history with a summary) and re-prompting
- * with the oversized-recovery armed, which strips image parts and oversized
- * text from the request copy only.
- */
-export function isOversizedRequestError(error: string): boolean {
-  return /request body exceeds[\w\s.]*limit|too many images in request/iu.test(error)
-}
-
-/** The extension tool whose calls render as sub-agent activity cards. */
-const CIO_SPAWN_TOOL = CIO_SPAWN_AGENT_TOOL_NAME
-
-/** Build a sub-agent activity part for one spawn-tool call. */
-function cioSubagentPart(
-  messageId: string,
-  callID: string,
-  input: Record<string, unknown> | null | undefined,
-  patch?: Partial<AgentSubagentActivity>
-): Extract<AgentPart, { type: 'subagent' }> {
-  const purpose = stringValue(input?.['purpose']) ?? 'sub-agent'
-  return {
-    type: 'subagent',
-    id: `pi-subagent-${callID}`,
-    messageID: messageId,
-    callID,
-    activity: {
-      status: 'pending',
-      agent: purpose,
-      description: purpose,
-      prompt: stringValue(input?.['instructions']),
-      background: input?.['background'] === true,
-      ...patch
-    }
-  }
-}
-
-/** Find the running sub-agent part for a spawn call id. */
-function findSubagentPart(
-  context: PiStreamContext,
-  callId: string
-): Extract<AgentPart, { type: 'subagent' }> | undefined {
-  for (const message of [...context.session.messages].reverse()) {
-    const part = message.parts.find(
-      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
-        candidate.type === 'subagent' && candidate.callID === callId
-    )
-    if (part) return part
-  }
-  return undefined
-}
-
-/** Find a sub-agent part by its child session id (spawn call id may be unknown). */
-function findSubagentPartByChildSession(
-  context: PiStreamContext,
-  childSessionId: string | undefined
-): Extract<AgentPart, { type: 'subagent' }> | undefined {
-  if (!childSessionId) return undefined
-  for (const message of [...context.session.messages].reverse()) {
-    const part = message.parts.find(
-      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
-        candidate.type === 'subagent' && candidate.activity.childSessionId === childSessionId
-    )
-    if (part) return part
-  }
-  return undefined
-}
-
-/**
- * Activity fields one structured sub-agent payload contributes. Partial on
- * purpose: the immediate spawn acknowledgement carries no `purpose`, and a
- * patch that named the task 'sub-agent' would overwrite the real task type
- * (the spawn tool's own arguments already knew it) for the worker's whole run.
- */
-type SubagentActivityPatch = Partial<AgentSubagentActivity>
-
-/**
- * Time range for one sub-agent activity snapshot. Only a terminal worker
- * freezes its end: a background spawn returns immediately from its tool call
- * while the worker keeps running, and stamping an end there would both show a
- * stuck duration and make the card look finished to every terminal-state
- * check in the UI.
- */
-function subagentTimeRange(
-  base: AgentSubagentActivity,
-  status: AgentToolStatus
-): AgentSubagentActivity['time'] {
-  const start = base.time?.start ?? Date.now()
-  // An end that is already recorded is the worker's real finish; a later
-  // snapshot of the same terminal state must not stretch the duration.
-  return status === 'completed' || status === 'error'
-    ? { start, end: base.time?.end ?? Date.now() }
-    : { start }
-}
-
-/**
- * Parse a `cio-subagent:` marker payload (structured sub-agent progress
- * streamed through tool-execution updates) into activity fields.
- */
-function parseSubagentPayload(output: string | undefined): SubagentActivityPatch | undefined {
-  if (!output || !output.startsWith(CIO_SUBAGENT_MARKER)) return undefined
-  return subagentActivityFromPayload(parseRecord(output.slice(CIO_SUBAGENT_MARKER.length)))
-}
-
-/** Activity fields from the extension's structured sub-agent payload. */
-function subagentActivityFromPayload(
-  payload: Record<string, unknown> | undefined
-): SubagentActivityPatch | undefined {
-  if (!payload || !stringValue(payload['agentId'])) return undefined
-  const status = stringValue(payload['status'])
-  const purpose = stringValue(payload['purpose'])
-  const childSessionId = stringValue(payload['childSessionId'])
-  const modelId = stringValue(payload['model'])
-  const output = stringValue(payload['output'])
-  const error = stringValue(payload['error'])
-  const sessionFile = stringValue(payload['sessionFile'])
-  const files = Array.isArray(payload['files'])
-    ? payload['files'].filter((file): file is string => typeof file === 'string')
-    : undefined
-  return {
-    status:
-      status === 'completed' || status === 'error'
-        ? status
-        : status === 'running'
-          ? 'running'
-          : 'pending',
-    // Only the payload that names the task may label the card.
-    ...(purpose ? { agent: purpose, description: purpose } : {}),
-    ...(childSessionId ? { childSessionId } : {}),
-    ...(modelId ? { modelId } : {}),
-    ...(files && files.length > 0 ? { files } : {}),
-    ...(output ? { output } : {}),
-    ...(error ? { error } : {}),
-    ...(sessionFile ? { metadata: { sessionFile } } : {})
-  }
-}
-
-/**
- * Activity patch for a spawn call whose tool result is a plain failure object
- * (`{ spawned: false, error }`) instead of a `cio-subagent:` marker payload.
- * Failed spawns carry no agentId, so subagentActivityFromPayload skips them  
- * without this patch the driver would mark the card 'completed' with no error,
- * hiding why the sub-agent never ran.
- */
-function spawnFailurePatch(output: string | undefined): AgentSubagentActivity | undefined {
-  if (!output) return undefined
-  const payload = parseRecord(output)
-  if (!payload || stringValue(payload['agentId'])) return undefined
-  const error = stringValue(payload['error'])
-  if (!error) return undefined
-  return {
-    status: 'error',
-    agent: 'sub-agent',
-    description: 'sub-agent',
-    background: false,
-    error
-  }
-}
-
-/**
- * Close a sub-agent card from the `cio-subagent-done` custom message. Once a
- * background spawn's tool call has returned, pi drops tool-execution updates
- * (`acceptingUpdates` is false after execute resolves), so the extension's
- * terminal marker payload can never arrive through the tool channel and the
- * card would stay "Working" forever. The extension therefore rides the
- * completion notification   a display:false custom message the model still
- * needs for its final output   with the structured payload in `details`.
- */
-function spawnDoneCustomEvent(
-  message: Record<string, unknown>,
-  context: PiStreamContext
-): CliLineParseResult | null {
-  if (stringValue(message['customType']) !== CIO_SUBAGENT_DONE_MESSAGE_TYPE) {
-    return { events: [] }
-  }
-  const payload = record(message['details']) ?? undefined
-  const activity = subagentActivityFromPayload(payload)
-  const existing = findSubagentPartByChildSession(context, stringValue(payload?.['childSessionId']))
-  if (!activity || !existing) return { events: [] }
-  const status: AgentToolStatus = activity.status ?? existing.activity.status
-  return {
-    events: [
-      {
-        type: 'message.part.updated',
-        sessionId: context.sessionId,
-        part: {
-          type: 'subagent',
-          id: existing.id,
-          messageID: existing.messageID,
-          callID: existing.callID,
-          activity: {
-            ...existing.activity,
-            ...activity,
-            status,
-            background: existing.activity.background,
-            time: subagentTimeRange(existing.activity, status)
-          }
-        }
-      }
-    ]
-  }
-}
-
-/** Map one Pi content block into a CodeInOven AgentPart. */
-function mapPiContentBlock(
-  blockValue: unknown,
-  messageId: string,
-  index: number,
-  callID: string
-): AgentPart | null {
-  const block = record(blockValue)
-  if (!block) return null
-  const type = stringValue(block['type'])
-  if (type === 'text') {
-    return {
-      type: 'text',
-      id: `${messageId}:text:${index}`,
-      messageID: messageId,
-      text: stringValue(block['text']) ?? ''
-    }
-  }
-  if (type === 'thinking') {
-    const summary = stringValue(block['summary'])
-    return {
-      type: 'reasoning',
-      id: `${messageId}:reasoning:${index}`,
-      messageID: messageId,
-      text: stringValue(block['thinking']) ?? '',
-      ...(summary ? { summary } : {})
-    }
-  }
-  if (type === 'toolCall') {
-    if (stringValue(block['name']) === CIO_SPAWN_TOOL) {
-      return cioSubagentPart(messageId, callID, record(block['arguments']))
-    }
-    return {
-      type: 'tool',
-      id: `${messageId}:tool:${callID}`,
-      messageID: messageId,
-      callID,
-      tool: stringValue(block['name']) ?? 'tool',
-      state: {
-        status: 'pending',
-        input: record(block['arguments']) ?? {}
-      }
-    }
-  }
-  return null
-}
-
-function toolCallId(blockValue: unknown): string {
-  const block = record(blockValue)
-  return stringValue(block?.['id']) ?? ''
-}
-
-/** Serialize the `content` of a Pi message or tool result into plain text. */
-function serializeContent(value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) {
-    const text = value
-      .map((entry) => {
-        if (typeof entry === 'string') return entry
-        const item = record(entry)
-        return (
-          stringValue(item?.['text']) ?? stringValue(item?.['thinking']) ?? JSON.stringify(item)
-        )
-      })
-      .filter((entry): entry is string => Boolean(entry))
-      .join('\n')
-    return text || undefined
-  }
-  return undefined
-}
-
-/** Find the running tool part for a call id so results preserve its input. */
-function findToolPart(
-  context: PiStreamContext,
-  callId: string
-): Extract<AgentPart, { type: 'tool' }> | undefined {
-  for (const message of [...context.session.messages].reverse()) {
-    const part = message.parts.find(
-      (candidate): candidate is Extract<AgentPart, { type: 'tool' }> =>
-        candidate.type === 'tool' && candidate.callID === callId
-    )
-    if (part) return part
-  }
-  return undefined
-}
-
-/**
- * The minimum a Pi record mapper needs from its host: the app session id the
- * produced events belong to, plus the transcript accumulated so far so tool
- * results and sub-agent cards correlate with the parts that opened them. A
- * root turn passes its CLI session record; a delegated child session (which
- * has no app session record of its own) passes a plain message list.
- */
-export interface PiStreamContext {
-  sessionId: string
-  session: { messages: AgentMessage[] }
-}
-
 /**
  * Live transcript of one delegated child pi session, fed by the core-tools
  * extension's streamed `setStatus` records. The child session runs in-process
@@ -755,66 +206,14 @@ export interface PiStreamContext {
 interface PiChildStreamState {
   context: PiStreamContext
   turnState: PiTurnState
+  /** Root session that spawned this child. Kept here so a stop (or a process
+   *  death) can close every child transcript of the stopped parent without a
+   *  second index. */
+  parentSessionId: string
   /** True once a working status was emitted for this child. */
   announcedWorking: boolean
   /** True once the child reported its terminal settle record. */
   settled: boolean
-}
-
-/** Turn-scoped state kept so parts of one assistant message can be correlated. */
-interface PiTurnState {
-  assistantMessageId: string | null
-  turnIndex: number
-  /** Streamed part ids already announced with a placeholder
-   *  `message.part.updated`, so their first delta only needs the delta. */
-  announcedStreamParts?: Set<string>
-  /** Set while a driver-initiated compaction runs. The compaction is part of
-   *  the working trace but produces no assistant response of its own, so its
-   *  `agent_settled` must not finalize the outer turn. */
-  compacting?: boolean
-}
-
-/**
- * Announce a streamed text/reasoning part with an empty placeholder
- * `message.part.updated` before its first delta. Pi's RPC stream emits
- * `message.part.delta` records without ever publishing the part they append
- * to (`message_start` carries no parts), and every downstream mirror drops
- * deltas for a part that does not exist yet   so pi's streaming text and
- * reasoning never appeared live and the working trace stayed empty until
- * `message_end`, with the final output often beating any visible trace.
- * The claude-code and codex drivers announce parts up front
- * (`content_block_start` / `item.started`); this gives pi the same behavior.
- */
-function announceStreamPart(
-  sessionId: string,
-  turnState: PiTurnState,
-  part: AgentPart
-): SessionAgentEvent[] {
-  let announced = turnState.announcedStreamParts
-  if (!announced) {
-    announced = new Set<string>()
-    turnState.announcedStreamParts = announced
-  }
-  if (announced.has(part.id)) return []
-  announced.add(part.id)
-  return [{ type: 'message.part.updated', sessionId, part }]
-}
-
-/** Highest driver-generated assistant index already present for this app
- *  session. Pi's RPC process restarts its own turn counter when an old native
- *  transcript is resumed, but CodeInOven message and part IDs must remain
- *  unique across the full persisted session. */
-function latestPiTurnIndex(messages: readonly AgentMessage[], sessionId: string): number {
-  const prefix = `pi-${sessionId}-`
-  let latest = 0
-  for (const message of messages) {
-    if (message.role !== 'assistant' || !message.id.startsWith(prefix)) continue
-    const suffix = message.id.slice(prefix.length)
-    if (!/^\d+$/u.test(suffix)) continue
-    const index = Number(suffix)
-    if (Number.isSafeInteger(index)) latest = Math.max(latest, index)
-  }
-  return latest
 }
 
 interface PiUiRequest {
@@ -838,859 +237,10 @@ const SILENT_CONTINUE_MAX_ATTEMPTS = 10
 /** Compact-and-continue recoveries per turn for oversized request bodies. */
 const OVERSIZED_COMPACT_MAX_ATTEMPTS = 3
 
-/** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
-export function mapPiRecord(
-  value: unknown,
-  context: PiStreamContext,
-  turnState: PiTurnState
-): CliLineParseResult | null {
-  const entry = record(value)
-  if (!entry) return null
-  const type = stringValue(entry['type'])
-
-  if (type === 'turn_start') {
-    turnState.turnIndex += 1
-    turnState.assistantMessageId = null
-    turnState.announcedStreamParts?.clear()
-    return { events: [] }
-  }
-
-  if (type === 'message_start' && entry['message']) {
-    const message = record(entry['message'])
-    if (message?.['role'] === 'assistant') {
-      turnState.assistantMessageId = `pi-${context.sessionId}-${turnState.turnIndex}`
-    }
-    return { events: [] }
-  }
-
-  if (type === 'message_update') {
-    const message = record(entry['message'])
-    const event = record(entry['assistantMessageEvent'])
-    const messageId =
-      stringValue(message?.['id']) ??
-      turnState.assistantMessageId ??
-      `pi-${context.sessionId}-${turnState.turnIndex}`
-    const eventType = stringValue(event?.['type'])
-    const contentIndex = numberValue(event?.['contentIndex']) ?? 0
-    if (eventType === 'text_delta') {
-      const delta = stringValue(event?.['delta'])
-      if (!delta) return { events: [] }
-      const partId = `${messageId}:text:${contentIndex}`
-      return {
-        events: [
-          ...announceStreamPart(context.sessionId, turnState, {
-            type: 'text',
-            id: partId,
-            messageID: messageId,
-            text: ''
-          }),
-          {
-            type: 'message.part.delta',
-            sessionId: context.sessionId,
-            messageId,
-            partId,
-            field: 'text',
-            delta
-          }
-        ]
-      }
-    }
-    if (eventType === 'thinking_delta') {
-      const delta = stringValue(event?.['delta'])
-      if (!delta) return { events: [] }
-      const partId = `${messageId}:reasoning:${contentIndex}`
-      return {
-        events: [
-          ...announceStreamPart(context.sessionId, turnState, {
-            type: 'reasoning',
-            id: partId,
-            messageID: messageId,
-            text: ''
-          }),
-          {
-            type: 'message.part.delta',
-            sessionId: context.sessionId,
-            messageId,
-            partId,
-            field: 'text',
-            delta
-          }
-        ]
-      }
-    }
-    return { events: [] }
-  }
-
-  if (type === 'message_end' && entry['message']) {
-    const message = record(entry['message'])
-    if (message?.['role'] === 'custom') return spawnDoneCustomEvent(message, context)
-    if (message?.['role'] !== 'assistant') return { events: [] }
-    return buildAssistantMessage(message, context.sessionId, turnState)
-  }
-
-  if (type === 'tool_execution_start' || type === 'tool_execution_update') {
-    const callId = stringValue(entry['toolCallId'])
-    const messageId =
-      turnState.assistantMessageId ?? `pi-${context.sessionId}-${turnState.turnIndex}`
-    if (!callId) return { events: [] }
-    const toolName = stringValue(entry['toolName']) ?? 'tool'
-    const partialResult = record(entry['partialResult'])
-    const partialOutput = serializeContent(partialResult?.['content'])
-    if (toolName === CIO_SPAWN_TOOL) {
-      const args = record(entry['args'])
-      const existing = findSubagentPart(context, callId)
-      const base = existing?.activity ?? cioSubagentPart(messageId, callId, args).activity
-      const payloadPatch =
-        type === 'tool_execution_update' ? parseSubagentPayload(partialOutput) : undefined
-      return {
-        events: [
-          {
-            type: 'message.part.updated',
-            sessionId: context.sessionId,
-            part: {
-              type: 'subagent',
-              id: existing?.id ?? `pi-subagent-${callId}`,
-              messageID: existing?.messageID ?? messageId,
-              callID: callId,
-              activity: {
-                ...base,
-                ...(payloadPatch ?? {}),
-                status: payloadPatch?.status ?? 'running',
-                background: base.background,
-                time: base.time ?? { start: Date.now() }
-              }
-            }
-          }
-        ]
-      }
-    }
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId: context.sessionId,
-          part: {
-            type: 'tool',
-            id: `${messageId}:tool:${callId}`,
-            messageID: messageId,
-            callID: callId,
-            tool: toolName,
-            state: {
-              status: 'running',
-              input: record(entry['args']) ?? {},
-              ...(partialOutput ? { output: partialOutput } : {})
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'tool_execution_end') {
-    const callId = stringValue(entry['toolCallId'])
-    const messageId =
-      turnState.assistantMessageId ?? `pi-${context.sessionId}-${turnState.turnIndex}`
-    if (!callId) return { events: [] }
-    const toolName = stringValue(entry['toolName']) ?? 'tool'
-    const failed = entry['isError'] === true
-    const result = record(entry['result'])
-    const output = serializeContent(result?.['content']) ?? stringValue(result?.['text'])
-    if (toolName === CIO_SPAWN_TOOL) {
-      const existing = findSubagentPart(context, callId)
-      const base =
-        existing?.activity ?? cioSubagentPart(messageId, callId, record(entry['args'])).activity
-      // The final result carries the full structured sub-agent payload.
-      const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
-      const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
-      const status: AgentToolStatus = failed
-        ? 'error'
-        : (payloadPatch?.status ?? failurePatch?.status ?? 'completed')
-      return {
-        events: [
-          {
-            type: 'message.part.updated',
-            sessionId: context.sessionId,
-            part: {
-              type: 'subagent',
-              id: existing?.id ?? `pi-subagent-${callId}`,
-              messageID: existing?.messageID ?? messageId,
-              callID: callId,
-              activity: {
-                ...base,
-                ...(payloadPatch ?? failurePatch ?? {}),
-                status,
-                background: base.background,
-                time: subagentTimeRange(base, status)
-              }
-            }
-          }
-        ]
-      }
-    }
-    // The end event may not repeat `args`; never wipe the input captured at start.
-    const existing = findToolPart(context, callId)
-    const endArgs = record(entry['args'])
-    const input =
-      endArgs && Object.keys(endArgs).length > 0 ? endArgs : (existing?.state.input ?? {})
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId: context.sessionId,
-          part: {
-            type: 'tool',
-            id: `${messageId}:tool:${callId}`,
-            messageID: messageId,
-            callID: callId,
-            tool: toolName,
-            state: {
-              status: failed ? 'error' : 'completed',
-              input,
-              ...(output ? { output } : {}),
-              ...(failed ? { error: stringValue(result?.['error']) } : {})
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'turn_end' && entry['message']) {
-    const rawMessage = record(entry['message'])
-    if (!rawMessage) return { events: [] }
-    const message = rawMessage
-    const messageId =
-      stringValue(message?.['id']) ??
-      turnState.assistantMessageId ??
-      `pi-${context.sessionId}-${turnState.turnIndex}`
-    const events: SessionAgentEvent[] = []
-    const toolResults = Array.isArray(entry['toolResults']) ? entry['toolResults'] : []
-    for (const resultValue of toolResults) {
-      const result = record(resultValue)
-      const callId = stringValue(result?.['toolCallId'])
-      if (!callId) continue
-      const failed = result?.['isError'] === true
-      const output = serializeContent(result?.['content'])
-      const existingToolPart = findToolPart(context, callId)
-      if ((stringValue(result?.['toolName']) ?? existingToolPart?.tool) === CIO_SPAWN_TOOL) {
-        const existingSubagent = findSubagentPart(context, callId)
-        const base =
-          existingSubagent?.activity ?? cioSubagentPart(messageId, callId, undefined).activity
-        const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
-        const failurePatch = payloadPatch ? undefined : spawnFailurePatch(output)
-        const status: AgentToolStatus = failed
-          ? 'error'
-          : (payloadPatch?.status ?? failurePatch?.status ?? 'completed')
-        events.push({
-          type: 'message.part.updated',
-          sessionId: context.sessionId,
-          part: {
-            type: 'subagent',
-            id: existingSubagent?.id ?? `pi-subagent-${callId}`,
-            messageID: existingSubagent?.messageID ?? messageId,
-            callID: callId,
-            activity: {
-              ...base,
-              ...(payloadPatch ?? failurePatch ?? {}),
-              status,
-              background: base.background,
-              time: subagentTimeRange(base, status)
-            }
-          }
-        })
-        continue
-      }
-      const existing = existingToolPart
-      events.push({
-        type: 'message.part.updated',
-        sessionId: context.sessionId,
-        part: {
-          type: 'tool',
-          id: existing?.id ?? `${messageId}:tool:${callId}`,
-          messageID: existing?.messageID ?? messageId,
-          callID: callId,
-          tool: existing?.tool ?? stringValue(result?.['toolName']) ?? 'tool',
-          state: {
-            status: failed ? 'error' : 'completed',
-            input: existing?.state.input ?? {},
-            ...(output ? { output } : {}),
-            ...(failed ? { error: serializeContent(result?.['content']) } : {})
-          }
-        }
-      })
-    }
-    const usage = mapPiUsage(message['usage'])
-    const cost = mapPiCost(message['usage'])
-    const rawError = errorText(message)
-    const continuable =
-      message['stopReason'] === 'error' &&
-      (isContinuableFinishReasonError(rawError) || isOversizedRequestError(rawError))
-    const failed =
-      (message['stopReason'] === 'error' && !continuable) || message['stopReason'] === 'aborted'
-    const completed: SessionAgentEvent = {
-      type: 'message.completed',
-      sessionId: context.sessionId,
-      messageId,
-      ...(usage ? { tokens: usage } : {}),
-      ...(cost !== undefined ? { cost } : {}),
-      // A continuable finish-reason flake is neutralized here; the driver
-      // reads the marker back when deciding whether to silently re-prompt.
-      ...(continuable ? { silentContinue: { error: rawError } } : failed ? { error: rawError } : {})
-    }
-    events.push(completed)
-    return { events }
-  }
-
-  if (
-    type === 'compaction_start' ||
-    type === 'compaction_end' ||
-    type === 'auto_compaction_start' ||
-    type === 'auto_compaction_end'
-  ) {
-    const result = record(entry['result'])
-    const summary =
-      type.endsWith('_end') && entry['aborted'] !== true
-        ? stringValue(result?.['summary'])
-        : undefined
-    const messageId = `pi-${context.sessionId}-compaction-${turnState.turnIndex}`
-    const part: AgentPart = {
-      type: 'compaction',
-      id: `${messageId}:compaction`,
-      messageID: messageId,
-      auto:
-        type.startsWith('auto_') ||
-        entry['reason'] === 'threshold' ||
-        entry['reason'] === 'overflow',
-      ...(summary?.trim()
-        ? {
-            summary,
-            firstKeptEntryId: stringValue(result?.['firstKeptEntryId']),
-            firstKeptCreatedAt: numberValue(entry['firstKeptCreatedAt'])
-          }
-        : {})
-    }
-    return {
-      messages: [
-        {
-          id: messageId,
-          role: 'assistant',
-          origin: 'compaction',
-          visibility: 'working_trace',
-          createdAt: Date.now(),
-          parts: [part]
-        }
-      ],
-      events: [
-        { type: 'message.part.updated', sessionId: context.sessionId, part },
-        ...(type.endsWith('_end')
-          ? [
-              {
-                type: 'message.completed' as const,
-                sessionId: context.sessionId,
-                messageId,
-                compaction: true
-              }
-            ]
-          : [])
-      ]
-    }
-  }
-
-  if (type === 'auto_retry_start') {
-    const message = stringValue(entry['errorMessage']) ?? 'Pi is waiting to retry'
-    // When the retry is driven by a usage window, the message carries a
-    // parseable reset so the card can show a concrete countdown and the
-    // scheduler can resume at the right moment instead of guessing.
-    const retryAt = parseUsageResetAt(message)
-    return {
-      events: [
-        {
-          type: 'session.status',
-          sessionId: context.sessionId,
-          status: {
-            state: 'waiting',
-            issue: {
-              kind: 'provider_unavailable',
-              message,
-              harnessId: 'pi',
-              retryable: true,
-              ...(retryAt === undefined ? {} : { retryAt })
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'auto_retry_end') {
-    const success = entry['success'] === true
-    if (success) {
-      return {
-        events: [
-          {
-            type: 'session.status',
-            sessionId: context.sessionId,
-            status: { state: 'working' }
-          }
-        ]
-      }
-    }
-    const finalError =
-      stringValue(entry['finalError']) ?? stringValue(entry['errorMessage']) ?? 'Pi retries failed'
-    // An oversized request body is claimed by the driver's compact-and-continue
-    // recovery (armed stripping + re-prompt)   surfacing it here would flash an
-    // error card on every recovery attempt before the turn resumes. The
-    // terminal failure after the recovery cap still surfaces via the claimed
-    // message.completed error, so nothing is hidden permanently.
-    if (isOversizedRequestError(finalError)) return { events: [] }
-    // When the retries were exhausted against a usage window, the final error
-    // still classifies as a reset wait   surface it with a concrete retryAt so
-    // the engine converts it into the will-retry card and auto-resumes later,
-    // instead of parking the thread on a terminal error.
-    const kind = classifyProviderIssue(finalError)
-    const message = extractProviderErrorEnvelope(finalError).message
-    const retryAt =
-      kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
-    return {
-      events: [
-        {
-          type: 'session.status',
-          sessionId: context.sessionId,
-          status: {
-            state: 'error',
-            issue: {
-              kind,
-              message,
-              rawError: finalError,
-              harnessId: 'pi',
-              retryable: retryAt !== undefined,
-              ...(retryAt === undefined ? {} : { retryAt }),
-              ...(numberValue(entry['attempt']) ? { attempt: numberValue(entry['attempt']) } : {})
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'agent_settled') {
-    const session = context.session
-    const lastAssistant = [...session.messages].reverse().find((message) => {
-      return message.role === 'assistant'
-    })
-    if (lastAssistant?.error) {
-      // Oversized request bodies are driver-recoverable (silent compact,
-      // arm stripping, re-prompt); surfacing them here would flash an error
-      // card after every compaction before the turn resumes. The recovery-cap
-      // terminal failure still surfaces through the claimed message.completed
-      // error, so a permanently oversized request is never hidden.
-      if (isOversizedRequestError(lastAssistant.error)) return { events: [] }
-      const kind = classifyProviderIssue(lastAssistant.error)
-      const message = extractProviderErrorEnvelope(lastAssistant.error).message
-      const retryAt =
-        kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
-      return {
-        events: [
-          {
-            type: 'session.status',
-            sessionId: context.sessionId,
-            status: {
-              state: 'error',
-              issue: {
-                kind,
-                message,
-                rawError: lastAssistant.error,
-                harnessId: 'pi',
-                retryable: retryAt !== undefined,
-                ...(retryAt === undefined ? {} : { retryAt })
-              }
-            }
-          }
-        ]
-      }
-    }
-    return { events: [] }
-  }
-
-  if (type === 'extension_error') {
-    return {
-      events: [
-        {
-          type: 'session.error',
-          sessionId: context.sessionId,
-          error: stringValue(entry['error']) ?? 'A Pi extension failed'
-        }
-      ]
-    }
-  }
-
-  if (type === 'agent_end') {
-    // Never finalize here: a transient failure is followed by `auto_retry_start`.
-    // Only `agent_settled` signals that no retry or queued continuation remains.
-    return { events: [] }
-  }
-
-  return { events: [] }
-}
-
-/** Build the full assistant message and its part events from a Pi message object. */
-function buildAssistantMessage(
-  message: Record<string, unknown>,
-  sessionId: string,
-  turnState: PiTurnState
-): CliLineParseResult | null {
-  const content = Array.isArray(message['content']) ? message['content'] : []
-  const messageId = `pi-${sessionId}-${turnState.turnIndex}`
-  const now = messageTimestamp(message)
-  const parts: AgentPart[] = []
-  const events: SessionAgentEvent[] = []
-  content.forEach((blockValue, index) => {
-    const callId = toolCallId(blockValue) || `call-${index}`
-    const part = mapPiContentBlock(blockValue, messageId, index, callId)
-    if (!part) return
-    parts.push(part)
-    events.push({ type: 'message.part.updated', sessionId, part })
-  })
-  const usage = mapPiUsage(message['usage'])
-  const cost = mapPiCost(message['usage'])
-  const rawError = errorText(message)
-  const continuableError =
-    message['stopReason'] === 'error' &&
-    (isContinuableFinishReasonError(rawError) || isOversizedRequestError(rawError))
-      ? rawError
-      : null
-  const failed =
-    (message['stopReason'] === 'error' && continuableError === null) ||
-    message['stopReason'] === 'aborted'
-  const completed: AgentMessage = {
-    id: messageId,
-    role: 'assistant',
-    parts,
-    createdAt: now,
-    harnessId: 'pi',
-    modelId: stringValue(message['model']),
-    providerId: stringValue(message['provider']),
-    ...(usage ? { tokens: usage } : {}),
-    ...(cost !== undefined ? { cost } : {}),
-    // A continuable finish-reason flake must not mark the mirrored message as
-    // failed: the driver silently re-prompts and the turn keeps going.
-    ...(failed ? { error: rawError } : {})
-  }
-  return { events, messages: [completed] }
-}
-
-function piAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR
-  if (envDir) {
-    if (envDir === '~') return homedir()
-    if (envDir.startsWith('~/')) return join(homedir(), envDir.slice(2))
-    return envDir
-  }
-  return join(homedir(), '.pi', 'agent')
-}
-
 /** pi rejects `set_model` for models outside its availability snapshot; the
  *  only recovery is a fresh process with a regenerated providers extension. */
 function isPiModelNotFoundError(error: unknown): boolean {
   return error instanceof Error && /^Model not found: /u.test(error.message)
-}
-
-/** Mirror pi's own session-dir encoding (`--<cwd>--` under the agent dir). */
-function nativePiSessionDir(projectPath: string): string {
-  const safePath = `--${projectPath.replace(/^[/\\]/u, '').replace(/[/\\:]/gu, '-')}--`
-  return join(piAgentDir(), 'sessions', safePath)
-}
-
-/**
- * Find a native pi session transcript by session id. Pi names files
- * `<timestamp>_<sessionId>.jsonl`; the newest match wins.
- */
-async function findNativePiSessionFile(
-  projectPath: string,
-  sessionId: string
-): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath)
-  let entries: string[]
-  try {
-    entries = await readdir(dir)
-  } catch {
-    return null
-  }
-  const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
-  const latest = matches.at(-1)
-  return latest ? join(dir, latest) : null
-}
-
-/**
- * Wait for pi to flush a sub-agent's native session transcript. pi creates
- * the .jsonl in one synchronous write when the session's first assistant
- * message completes, so watching the directory for its creation is the
- * reliable signal   no polling. Resolves the file path, or null on timeout
- * or if the directory cannot be watched.
- */
-async function waitForNativePiSessionFile(
-  projectPath: string,
-  sessionId: string,
-  timeoutMs = 10_000
-): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath)
-  const suffix = `_${sessionId}.jsonl`
-  const deadline = Date.now() + timeoutMs
-  // A sub-agent can spawn before the primary session's first flush has
-  // created the project's native session directory, so `watch(dir)` throws.
-  // Wait for the directory to appear within the same budget instead of
-  // failing immediately with "CLI session is unavailable".
-  while (!existsSync(dir)) {
-    if (Date.now() >= deadline) return null
-    await new Promise((resolve) => setTimeout(resolve, 150))
-  }
-  let watcher: FSWatcher
-  try {
-    watcher = watch(dir)
-  } catch {
-    return null
-  }
-  return new Promise<string | null>((resolve) => {
-    const timer = setTimeout(() => finish(null), Math.max(deadline - Date.now(), 0))
-    const finish = (file: string | null): void => {
-      clearTimeout(timer)
-      watcher.close()
-      resolve(file)
-    }
-    watcher.on('error', () => finish(null))
-    watcher.on('rename', (filename) => {
-      if (typeof filename === 'string' && filename.endsWith(suffix)) {
-        finish(join(dir, filename))
-      }
-    })
-    // The transcript may have been flushed between the caller's existence
-    // check and the watcher attaching   no rename event would fire for it.
-    // Attach the watcher first, then re-check so neither window is missed.
-    void findNativePiSessionFile(projectPath, sessionId).then((file) => {
-      if (file) finish(file)
-    })
-  })
-}
-
-function nativeUserMessageText(message: Record<string, unknown>): string | undefined {
-  const content = message['content']
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return undefined
-  const parts = content
-    .map((block) =>
-      record(block)?.['type'] === 'text' ? stringValue(record(block)?.['text']) : undefined
-    )
-    .filter((text): text is string => Boolean(text))
-  return parts.join('\n')
-}
-
-/**
- * Serialize CodeInOven mirror messages into native pi session JSONL entries  
- * the inverse of `parseNativePiSession` at conversation granularity. Only text
- * content is carried over: tool calls and reasoning blocks are execution
- * detail the resumed model does not need, and fabricating toolResult entries
- * would desynchronize pi's own accounting. Returns an empty array when the
- * mirror carries no conversational text.
- */
-function prefillTranscriptEntries(
-  projectPath: string,
-  messages: readonly AgentMessage[]
-): string[] {
-  const lines: string[] = [
-    JSON.stringify({
-      type: 'session',
-      version: 3,
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      cwd: projectPath
-    })
-  ]
-  let parentId: string | null = null
-  let wroteMessage = false
-  for (const message of messages) {
-    // Presentation-mode user prompts carry their visible content in a
-    // `user-presentation` part (action + body) instead of a text part. Skip
-    // them here and the seeded native transcript loses every user message,
-    // leaving only assistant output and tool trace for the resumed model.
-    const text = message.parts
-      .flatMap((part) => {
-        if (part.type === 'text') return [part.text]
-        if (part.type === 'user-presentation') {
-          return [[part.presentation.action, part.presentation.body].filter(Boolean).join('\n')]
-        }
-        return []
-      })
-      .join('\n')
-      .trim()
-    if (!text) continue
-    const id = randomUUID()
-    lines.push(
-      JSON.stringify({
-        type: 'message',
-        id,
-        parentId,
-        timestamp: new Date(message.createdAt ?? Date.now()).toISOString(),
-        message: { role: message.role, content: [{ type: 'text', text }] }
-      })
-    )
-    parentId = id
-    wroteMessage = true
-  }
-  return wroteMessage ? lines : []
-}
-
-/**
- * Parse a native pi session JSONL transcript into CodeInOven messages.
- * Used for sub-agent worker threads, which run as in-process pi sessions
- * persisted by pi's own SessionManager rather than mirrored through RPC.
- */
-async function parseNativePiSession(file: string, sessionId: string): Promise<AgentMessage[]> {
-  const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
-  const messages: AgentMessage[] = []
-  const entryTimes = new Map<string, number>()
-  let turnIndex = 0
-  let userIndex = 0
-  for await (const line of lines) {
-    if (!line.trim()) continue
-    let entry: Record<string, unknown> | undefined
-    try {
-      entry = record(JSON.parse(line)) ?? undefined
-    } catch {
-      continue
-    }
-    if (!entry) continue
-    if (entry['type'] === 'compaction') {
-      const summary = stringValue(entry['summary'])
-      const firstKeptEntryId = stringValue(entry['firstKeptEntryId'])
-      if (summary?.trim()) {
-        const id = `pi-${sessionId}-compaction-${turnIndex}`
-        messages.push({
-          id,
-          role: 'assistant',
-          origin: 'compaction',
-          visibility: 'working_trace',
-          createdAt: Date.parse(String(entry['timestamp'])) || Date.now(),
-          parts: [
-            {
-              type: 'compaction',
-              id: `${id}:compaction`,
-              messageID: id,
-              auto: true,
-              summary,
-              firstKeptEntryId,
-              firstKeptCreatedAt: firstKeptEntryId ? entryTimes.get(firstKeptEntryId) : undefined
-            }
-          ]
-        })
-      }
-      continue
-    }
-    if (entry['type'] !== 'message') continue
-    const nativeMessage = record(entry['message'])
-    if (typeof entry['id'] === 'string' && nativeMessage) {
-      entryTimes.set(entry['id'], messageTimestamp(nativeMessage))
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    const message = record(entry['message'])
-    if (!message) continue
-    const role = stringValue(message['role'])
-    if (role === 'assistant') {
-      turnIndex += 1
-      const built = buildAssistantMessage(message, sessionId, {
-        assistantMessageId: null,
-        turnIndex
-      })
-      if (built?.messages?.length) messages.push(...built.messages)
-      continue
-    }
-    if (role === 'user') {
-      const text = nativeUserMessageText(message)
-      if (!text) continue
-      userIndex += 1
-      const messageId = `pi-${sessionId}-user-${userIndex}`
-      messages.push({
-        id: messageId,
-        role: 'user',
-        parts: [{ type: 'text', id: `${messageId}:text`, messageID: messageId, text }],
-        createdAt: messageTimestamp(message)
-      })
-      continue
-    }
-    if (role === 'toolResult') {
-      const callId = stringValue(message['toolCallId'])
-      if (!callId) continue
-      const output = serializeContent(message['content'])
-      const failed = message['isError'] === true
-      // Complete the most recent tool part carrying this call id.
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const candidate = messages[index]
-        if (!candidate) continue
-        const partIndex = candidate.parts.findIndex(
-          (part) => part.type === 'tool' && part.callID === callId
-        )
-        const part = partIndex === -1 ? undefined : candidate.parts[partIndex]
-        if (!part || part.type !== 'tool') continue
-        candidate.parts[partIndex] = {
-          ...part,
-          state: {
-            ...part.state,
-            status: failed ? 'error' : 'completed',
-            ...(output ? { output } : {}),
-            ...(failed && output ? { error: output } : {})
-          }
-        }
-        break
-      }
-    }
-  }
-  return messages
-}
-
-async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {
-  let path: string
-  try {
-    path = attachment.url.startsWith('file:') ? fileURLToPath(attachment.url) : attachment.url
-  } catch {
-    throw new Error(
-      `Pi attachment is not a valid local file: ${attachment.filename ?? attachment.url}`
-    )
-  }
-  return path
-}
-
-interface ComposedPiAttachments {
-  inlineSvg: string
-  images: PiImageContent[]
-  references: string[]
-}
-
-/**
- * Materialize attachments for a pi turn. Images are sent both as inline base64
- * blocks (for vision-capable models) and as a path text reference   when a
- * provider or text-only model registration drops the image block, the model
- * still knows where the file lives and can read it with its file tools.
- */
-async function composePiAttachments(
-  attachments: SendPromptOptions['attachments']
-): Promise<ComposedPiAttachments> {
-  const inlineSvg = await inlineSvgAttachments(attachments)
-  const images: PiImageContent[] = []
-  const references: string[] = []
-  for (const attachment of attachments) {
-    if (isSvgAttachment(attachment)) continue
-    const path = await localAttachmentPath(attachment)
-    if (attachment.mime.toLowerCase().startsWith('image/')) {
-      images.push({
-        type: 'image',
-        data: (await readFile(path)).toString('base64'),
-        mimeType: attachment.mime
-      })
-      references.push(`Attached image file: ${path}`)
-    } else {
-      references.push(`Attached file: ${path}`)
-    }
-  }
-  return { inlineSvg, images, references }
 }
 
 /** Materialized provider-only extension overlay used for model discovery. */
@@ -1698,6 +248,17 @@ interface ProviderOverlay {
   args: string[]
   env: Record<string, string>
   cleanup(): Promise<void>
+}
+
+/**
+ * Storage-relative directory holding one session's app-owned extension runtime
+ * files: the composed module, its per-turn handoffs, and the per-session flag
+ * files (oversized recovery, stop request, watched sub-agents, and the plan and
+ * progress snapshot a rebuilt checkpoint reads). Derived from the session id so
+ * a file can be published before the module is materialized.
+ */
+function cioCoreToolsDirectory(sessionId: string): string {
+  return join('runtime', 'cio-core-tools', sessionId)
 }
 
 /**
@@ -1733,6 +294,22 @@ export class PiDriver extends PersistentCliDriver {
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
+   * Last activity per live RPC session (any RPC record, prompt, steer, or
+   * abort). Feeds the idle sweep that disposes resident harness processes, so
+   * a thread that finished its work stops holding a process and its heap.
+   */
+  private readonly sessionActivityAt = new Map<string, number>()
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null
+  /** Per-session watch file the extension reads to learn which child
+   *  transcripts the app is displaying (see `watchSubagentSession`). */
+  private readonly cioWatchFlagPaths = new Map<string, string>()
+  /** Child session ids the app asked for, with the moment the request goes
+   *  stale. A transcript view polls its child while it is open, so a live view
+   *  keeps its entry fresh and a closed one lapses within the watch window. */
+  private readonly cioWatchedChildren = new Map<string, Map<string, number>>()
+  /** Last watch list published per session, so unchanged state is not rewritten. */
+  private readonly cioPublishedWatch = new Map<string, string>()
+  /**
    * Live transcripts of delegated child pi sessions, keyed by child session id
    * and bounded (insertion order = recency) so a long app session cannot grow
    * without limit. Fed by the core-tools extension's streamed records; read
@@ -1764,7 +341,7 @@ export class PiDriver extends PersistentCliDriver {
     string,
     { provider: string; modelId: string; thinkingLevel: string }
   >()
-  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
+  /** Session-keyed turn handoff files carrying the gateway endpoint for the extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
   /**
    * Session-keyed endpoints published before the gateway extension was materialized.
@@ -1773,7 +350,7 @@ export class PiDriver extends PersistentCliDriver {
    * held here and flushed by materializeCioCoreToolsExtension   otherwise every first
    * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
    */
-  private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
+  private pendingGatewayEndpoints = new Map<string, UtilityGatewayEndpoint>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   /**
@@ -1823,6 +400,13 @@ export class PiDriver extends PersistentCliDriver {
   private cioAllowedToolsPaths = new Map<string, string>()
   /** Storage-relative arm/disarm flag files for oversized-request recovery. */
   private cioOversizedFlagPaths = new Map<string, string>()
+  /** Storage-relative stop-flag files the user's Stop writes for the core-tools
+   *  extension. `abort()` publishes a token here before it aborts the root run,
+   *  because the extension is the only code that can stop the nested worker
+   *  sessions pi keeps inside its own process. */
+  private cioStopFlagPaths = new Map<string, string>()
+  /** Monotonic per-process counter making every stop token unique. */
+  private stopRequestSeq = 0
   /** Session-keyed absolute paths to the materialized single "cio-core-tools"
    *  extension module (status + usage + gateway + core tools composed), passed
    *  to `--extension`. */
@@ -1830,8 +414,15 @@ export class PiDriver extends PersistentCliDriver {
   /** Resolved key env for the session's custom-providers extension, merged
    *  into the RPC process environment on every (re)boot. */
   private cioProvidersExtensionEnvs = new Map<string, Record<string, string>>()
-  /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
-  private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
+  /** This driver's Pi agent directory when it serves a managed account
+   *  container; undefined for the harness-global account. Every catalog input
+   *  (credentials, native provider config) lives inside that directory, so the
+   *  driver must never read the other account's files. */
+  private readonly agentDirectory: string | undefined
+  /** Read view of THIS account's credential store (`auth.json`). The default
+   *  account keeps the WSL-aware transport; a container path is a plain local
+   *  file, exactly as the connect flow writes it. */
+  private readonly authConfig: PiAuthConfigService
 
   constructor(
     storage: StorageEngine,
@@ -1840,13 +431,17 @@ export class PiDriver extends PersistentCliDriver {
     private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
+    this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
+    this.authConfig = this.agentDirectory
+      ? new PiAuthConfigService(join(this.agentDirectory, 'auth.json'))
+      : new PiAuthConfigService(undefined, piAuthFileIo)
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      await this.cheapCandidateModels(projectPath)
+      options.candidates ?? (await this.cheapCandidateModels(projectPath))
     )
   }
 
@@ -1942,19 +537,27 @@ export class PiDriver extends PersistentCliDriver {
 
   /**
    * The providers the user is actually connected to, keyed by the same provider
-   * ids pi's catalog reports: credentials in `~/.pi/agent/auth.json` (written by
-   * pi's TUI or CodeInOven's connect flow), providers configured in
-   * `~/.pi/agent/models.json` (keyed catalog providers and keyless local
-   * servers alike), and CodeInOven-managed base-URL providers injected through
-   * the discovery overlay. Returns `null` when the connected set cannot be
-   * determined reliably   callers then keep the catalog unfiltered rather than
-   * wrongly hiding every provider behind a transient read failure.
+   * ids pi's catalog reports: credentials in this account's `auth.json` (written
+   * by pi's TUI or CodeInOven's connect flow), providers configured in its
+   * `models.json` (keyed catalog providers and keyless local servers alike), and
+   * CodeInOven-managed base-URL providers injected through the discovery
+   * overlay. Returns `null` when the connected set cannot be determined
+   * reliably   callers then keep the catalog unfiltered rather than wrongly
+   * hiding every provider behind a transient read failure.
+   *
+   * Every read here is scoped to the account this driver serves. Reading the
+   * harness-global files instead hides the whole catalog of a container-backed
+   * account: its credentials never appear in `~/.pi/agent/auth.json`, so the
+   * filter would drop every provider the container's pi process just reported
+   * and leave only the harness-global custom providers.
    */
   private async connectedProviderIds(): Promise<Set<string> | null> {
     const overlay = this.baseUrlProviders
-      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => null)
+      ? await this.baseUrlProviders.listEnabled(this.id, this.agentDirectory).catch(() => null)
       : []
-    const nativeIds = await piNativeProviderIds().catch(() => null)
+    const nativeIds = await piNativeProviderIds(
+      this.agentDirectory ? join(this.agentDirectory, 'models.json') : undefined
+    ).catch(() => null)
     if (overlay === null || nativeIds === null) return null
     const connected = new Set<string>([...(await this.authConfig.credentialIds()), ...nativeIds])
     for (const provider of overlay) connected.add(provider.id)
@@ -1981,6 +584,28 @@ export class PiDriver extends PersistentCliDriver {
       .sort()
       .join('|')
     return JSON.stringify([[...connected].sort(), overlayModels])
+  }
+
+  /**
+   * Force Pi's own model catalog to re-fetch from upstream (`pi update
+   * --models`) against THIS account's agent directory, so the discovery that
+   * follows reads catalogs that are fresh at the source instead of the store
+   * Pi already has. Pi throttles remote catalogs to once per provider every
+   * four hours unless the refresh is forced, which is exactly what the model
+   * picker's refresh button has to bypass.
+   *
+   * The CLI entry point is required here: the bundled RPC entry point
+   * hard-codes `--mode rpc` ahead of the arguments, and Pi's own parser then
+   * rejects the package command. Pi reports a non-zero exit when any provider
+   * fails, so a failed pass leaves the stored catalog untouched   the caller
+   * still gets whatever the store holds.
+   */
+  async refreshModelCatalog(): Promise<void> {
+    await runHarnessCommand('pi', ['update', '--models'], {
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      timeoutMs: PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS,
+      bundledEntry: 'cli'
+    })
   }
 
   private async discoverModels(
@@ -2174,6 +799,13 @@ export class PiDriver extends PersistentCliDriver {
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
     const client = await this.ensureRpcClient(projectPath, session.id)
+    // A real user turn is not a continuation of a stop: clear the stop request
+    // the extension applies to worker sessions, and re-arm pi's automatic retry
+    // that the stop disarmed.
+    await this.clearStopRequest(session.id)
+    void client.setAutoRetry(true).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry re-arm failed:', error)
+    })
     // A live turn owns this session (silent continue, auto-retry, an idle race
     // between the harness and the chat-engine status). Throwing here surfaced a
     // second user-facing error on top of a turn that is still producing output
@@ -2343,6 +975,10 @@ export class PiDriver extends PersistentCliDriver {
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
       this.appendUserMessage(session, options)
       this.silentContinues.delete(options.sessionId)
+      // Delivering a real user message supersedes a stop the user requested
+      // earlier: workers it spawns belong to this message, not to the stopped
+      // turn.
+      await this.clearStopRequest(options.sessionId)
       await client.followUp(message, images)
       return
     }
@@ -2354,6 +990,13 @@ export class PiDriver extends PersistentCliDriver {
     const activeClient = client ?? (await this.ensureRpcClient(projectPath, options.sessionId))
     this.appendUserMessage(session, options)
     this.silentContinues.delete(options.sessionId)
+    // A steered message that has to start its own run is a new turn, not a
+    // continuation of a stop: clear the stop request and re-arm the automatic
+    // retry the stop disarmed.
+    await this.clearStopRequest(options.sessionId)
+    void activeClient.setAutoRetry(true).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry re-arm failed:', error)
+    })
     this.activeTurns.add(options.sessionId)
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
@@ -2386,15 +1029,43 @@ export class PiDriver extends PersistentCliDriver {
     await client.steer(message, images)
   }
 
+  /**
+   * Stop the session: end its run, stop every nested worker session, and leave
+   * nothing behind that could resume the work the user just cancelled.
+   *
+   * A stop has four parts, because pi's own abort RPC only reaches the root run:
+   *  1. drop an owed silent continue, which would otherwise re-prompt
+   *     'Continue.' as soon as the aborted run settles;
+   *  2. publish a stop request into the session's stop-flag file, which the
+   *     app-owned core-tools extension applies to the worker sessions it owns
+   *     and which disarms its own wake-up paths;
+   *  3. disarm pi's automatic retry of the aborted run;
+   *  4. after the graceful abort, verify the run actually ended (bounded) and
+   *     kill the process if it did not.
+   */
   override async abort(projectPath: string, sessionId: string): Promise<void> {
     if (this.pageCompactions.has(sessionId)) {
       const turn = this.turnStates.get(sessionId)
       if (turn) this.turnStates.set(sessionId, { ...turn, compacting: false })
     }
     this.pageCompactions.delete(sessionId)
-    await this.requireSession(projectPath, sessionId)
+    // An owed silent continue belongs to the turn the user is stopping: pi
+    // settles the aborted run with `agent_settled`, and the continuation would
+    // then start a fresh run seconds after the stop.
+    this.silentContinues.delete(sessionId)
+    // Published before the abort so the extension already sees it when the
+    // run's own settle hook fires.
+    await this.publishStopRequest(sessionId)
+    const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcClients.get(sessionId)
-    if (!client) return
+    if (!session || !client) {
+      // No live process to abort: nothing can still be running under it.
+      this.settleChildStreams(sessionId, 'aborted')
+      return
+    }
+    void client.setAutoRetry(false).catch((error: unknown) => {
+      Logger.dev('Pi auto-retry disarm after stop failed:', error)
+    })
     try {
       await client.abort()
     } catch {
@@ -2406,6 +1077,99 @@ export class PiDriver extends PersistentCliDriver {
     } finally {
       this.activeTurns.delete(sessionId)
     }
+    // The workers report their own settle a poll window later at worst;
+    // settling them here is what makes the cards and child statuses stop with
+    // the stop instead of spinning until the last transcript lands.
+    this.settleChildStreams(sessionId, 'aborted')
+    void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /**
+   * Stop one nested worker session without touching the root run. Pi keeps its
+   * sub-agent sessions inside its own process, so the child can never be
+   * addressed by `abort`; the extension owns them and acts on this request.
+   */
+  async abortSubagent(
+    projectPath: string,
+    parentSessionId: string,
+    childSessionId: string
+  ): Promise<void> {
+    // The request is keyed by the parent session, so a missing parent means
+    // there is no live harness holding this worker at all.
+    const parent = await this.requireSession(projectPath, parentSessionId).catch(() => null)
+    if (!parent) return
+    await this.publishStopRequest(parentSessionId, [childSessionId])
+    this.settleChildStreams(parentSessionId, 'aborted', childSessionId)
+  }
+
+  /** Publish the user's stop into the session's stop-flag file. */
+  private async publishStopRequest(sessionId: string, childSessionIds?: string[]): Promise<void> {
+    const path = this.cioStopFlagPaths.get(sessionId)
+    if (!path) return
+    this.stopRequestSeq += 1
+    try {
+      await this.storage.writeRaw(
+        path,
+        JSON.stringify({
+          token: `${Date.now()}-${this.stopRequestSeq}`,
+          requestedAt: Date.now(),
+          childSessionIds: childSessionIds ?? []
+        })
+      )
+    } catch (error) {
+      Logger.dev('Pi stop-request publication failed:', error)
+    }
+  }
+
+  /**
+   * Disarm the stop request. A new user turn is not a continuation of a stop,
+   * so the extension must never apply an old token to its workers.
+   */
+  private async clearStopRequest(sessionId: string): Promise<void> {
+    const path = this.cioStopFlagPaths.get(sessionId)
+    if (!path) return
+    try {
+      await this.storage.writeRaw(path, JSON.stringify(emptyStopRequest()))
+    } catch (error) {
+      Logger.dev('Pi stop-request reset failed:', error)
+    }
+  }
+
+  /**
+   * Bounded backstop for a user stop. The graceful abort plus the extension's
+   * stop sweep end the run and its workers in the normal case; when pi still
+   * reports a live run after the grace window it ignored the abort, so the
+   * process is terminated   which takes every nested worker session with it.
+   */
+  private async enforceStoppedSession(projectPath: string, sessionId: string): Promise<void> {
+    const deadline = Date.now() + PI_ABORT_ENFORCE_MS
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, PI_ABORT_ENFORCE_INTERVAL_MS))
+      const client = this.rpcClients.get(sessionId)
+      if (!client || this.sessionProjects.get(sessionId) !== projectPath) return
+      let state: Record<string, unknown> | null
+      try {
+        state = record(await withTimeout(client.getState(), PI_ABORT_PROBE_TIMEOUT_MS))
+      } catch {
+        // A session that cannot answer a state probe after its own abort is
+        // wedged: a graceful stop can never land on it.
+        this.killStoppedSession(sessionId)
+        return
+      }
+      // A probe that timed out (null) cannot confirm the run ended, so it keeps
+      // waiting and terminates at the end of the grace window instead.
+      if (state && state['isStreaming'] !== true && state['isCompacting'] !== true) return
+    }
+    this.killStoppedSession(sessionId)
+  }
+
+  /** Terminate a stopped session's pi process. The exit event finalizes the
+   *  turn and the next run resumes the persisted native transcript. */
+  private killStoppedSession(sessionId: string): void {
+    if (!this.rpcClients.has(sessionId)) return
+    Logger.info('Pi ignored the abort request   terminating the session process', { sessionId })
+    this.settleChildStreams(sessionId, 'aborted')
+    this.disposeRpcClient(sessionId)
   }
 
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
@@ -2424,6 +1188,24 @@ export class PiDriver extends PersistentCliDriver {
       this.disposeRpcClient(sessionId)
     }
     super.releaseProjectResources(projectPath)
+  }
+
+  /**
+   * Restart every session's RPC process so the next turn spawns the Pi runtime
+   * currently on disk. A session's client is long-lived (`pi --mode rpc` keeps
+   * the resumed native transcript in memory), so without this an updated Pi
+   * binary only reaches the app at the next launch.
+   */
+  override restartRuntime(): void {
+    for (const sessionId of [...this.rpcClients.keys()]) {
+      Logger.info('Restarting the Pi RPC process for a harness restart', { sessionId })
+      // Dispose first so the exit event the kill raises cannot re-enter the
+      // teardown, then run the same settlement a crashed process gets: a turn
+      // that was mid-flight must not stay "working" until the watchdog fires.
+      this.rpcClients.get(sessionId)?.dispose()
+      this.settleDeadRpcClient(sessionId)
+    }
+    super.restartRuntime()
   }
 
   /**
@@ -2502,7 +1284,7 @@ export class PiDriver extends PersistentCliDriver {
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
   ): Promise<void> {
     void _projectPath
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
@@ -2526,6 +1308,32 @@ export class PiDriver extends PersistentCliDriver {
       }
     } catch (error) {
       throw new Error('Pi utility gateway handoff update failed', { cause: error })
+    }
+  }
+
+  /**
+   * Publish the plan and progress the owning thread is executing, so the
+   * compaction extension can rebuild a checkpoint from them when a transcript
+   * cannot be summarized. Session-keyed and best-effort: a thread with no plan
+   * (or a harness without rebuild support) simply publishes an empty snapshot.
+   */
+  async publishCompactionContext(
+    _projectPath: string,
+    sessionId: string,
+    context: CompactionFallbackContext | null
+  ): Promise<void> {
+    void _projectPath
+    const relative = join(cioCoreToolsDirectory(sessionId), 'compaction-context.json')
+    try {
+      await this.storage.writeRaw(
+        relative,
+        JSON.stringify(
+          context ?? { plan: null, progress: null, planPath: null, progressPath: null }
+        )
+      )
+    } catch (error) {
+      // Rebuild context is a fallback, never a reason to fail a turn.
+      Logger.dev('Pi compaction context publish failed:', error)
     }
   }
 
@@ -2626,6 +1434,7 @@ export class PiDriver extends PersistentCliDriver {
     this.turnStates.clear()
     this.childStreams.clear()
     this.silentContinues.clear()
+    this.cioStopFlagPaths.clear()
     this.pendingUiRequests.clear()
     for (const sessionId of this.gatewayHandoffPaths.keys()) {
       void this.removeGatewayHandoff(sessionId)
@@ -2733,11 +1542,13 @@ export class PiDriver extends PersistentCliDriver {
         this.handleExtensionStatus(record, sessionId)
       },
       onExit: (code) => {
-        this.handleRpcExit(code, sessionId)
+        this.handleRpcExit(code, sessionId, client)
       }
     })
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
+    this.touchSessionActivity(sessionId)
+    this.ensureIdleSweep()
     // Register the long-lived RPC harness root with the app's process tracker
     // so it appears in the task manager and is covered by orphan reaping.
     this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
@@ -2756,7 +1567,13 @@ export class PiDriver extends PersistentCliDriver {
       await this.resumeNativePiSession(projectPath, sessionId, client)
       await Promise.allSettled([
         client.setAutoRetry(true),
-        client.setAutoCompaction(true),
+        // CodeInOven owns compaction for this session. Pi's own threshold is
+        // `contextWindow - reserveTokens` (a flat 16k), which is far above what
+        // a provider that bills the completion budget against the same window
+        // actually accepts, so it never fires in time; leaving it on would race
+        // our page checkpoints and could rewrite the transcript we keep. Manual
+        // compaction (the `compact` RPC) is unaffected by this switch.
+        client.setAutoCompaction(false),
         this.syncNativeSessionId(projectPath, sessionId)
       ])
     } catch (error) {
@@ -2837,6 +1654,9 @@ export class PiDriver extends PersistentCliDriver {
     // file and the engine's mirror take over as before.
     const live = this.childStreams.get(sessionId)
     if (live && live.context.session.messages.length > 0) {
+      // Whoever asked for this child's transcript is looking at it, so the
+      // extension may forward its token deltas again.
+      this.watchSubagentSession(sessionId)
       return Promise.resolve(structuredClone(live.context.session.messages))
     }
     return this.loadMessagesInternal(projectPath, sessionId, options?.waitForFlush ?? true)
@@ -2863,7 +1683,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await this.loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
+      const native = await loadNativeSubagentMessages(projectPath, sessionId, waitForFlush)
       if (native) return native
       // Throwing stays correct whenever a record genuinely exists   including
       // a hash-mismatched one (moved project), where the engine must retire
@@ -3035,44 +1855,6 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  /** Returns null when no native transcript exists so the caller rethrows. */
-  private async loadNativeSubagentMessages(
-    projectPath: string,
-    sessionId: string,
-    waitForFlush: boolean
-  ): Promise<AgentMessage[] | null> {
-    // The chat engine captures a sub-agent's transcript the moment the spawn
-    // tool reports its childSessionId   but pi defers a new session's first
-    // disk write until its first assistant message completes
-    // (SessionManager._persist), so the .jsonl can appear seconds later.
-    // React to the file's creation instead of polling: watch the session
-    // directory and parse as soon as pi flushes it. The engine's capture race
-    // timeout is 15 s, so a ~10 s wait stays inside it. When the caller
-    // guarantees the child is no longer live (`waitForFlush: false`) a
-    // missing file is final   watching would only burn seconds waiting for
-    // a transcript that can never appear, on every tab reopen.
-    const existing = await findNativePiSessionFile(projectPath, sessionId)
-    const file =
-      existing ?? (waitForFlush ? await waitForNativePiSessionFile(projectPath, sessionId) : null)
-    if (!file) return null
-    // pi writes the flushed file synchronously before closing it, but keep a
-    // short stabilization window in case the create event lands mid-flush.
-    const populatedBy = Date.now() + 2_000
-    for (;;) {
-      try {
-        const messages = await parseNativePiSession(file, sessionId)
-        if (messages.length > 0) return messages
-      } catch (error) {
-        if (Date.now() >= populatedBy) {
-          Logger.dev('Pi native sub-agent transcript parse failed:', error)
-          return null
-        }
-      }
-      if (Date.now() >= populatedBy) return null
-      await new Promise((resolve) => setTimeout(resolve, 150))
-    }
-  }
-
   private async syncNativeSessionId(projectPath: string, sessionId: string): Promise<void> {
     const client = this.rpcClients.get(sessionId)
     if (!client) return
@@ -3088,6 +1870,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string,
     projectPath: string
   ): Promise<void> {
+    this.touchSessionActivity(sessionId)
     return this.requireSession(projectPath, sessionId)
       .then(async (session) => {
         // Resolve the retained context at compaction time, never while forking.
@@ -3095,8 +1878,11 @@ export class PiDriver extends PersistentCliDriver {
         const keptId = compaction?.['firstKeptEntryId']
         const details = parseRecord(compaction?.['details'])
         const trace = parseRecord(details?.['lastWorkingTrace'])
+        const checkpointKind = details?.['kind']
         const retainedAt =
-          details?.['kind'] === 'cio-page-checkpoint' && trace?.['firstKeptEntryId'] === keptId
+          (checkpointKind === 'cio-page-checkpoint' ||
+            checkpointKind === 'cio-emergency-checkpoint') &&
+          trace?.['firstKeptEntryId'] === keptId
             ? numberValue(trace?.['firstKeptCreatedAt'])
             : undefined
         if (retainedAt !== undefined) record['firstKeptCreatedAt'] = retainedAt
@@ -3430,12 +2216,29 @@ export class PiDriver extends PersistentCliDriver {
     void this.finishTurn(session)
   }
 
-  private handleRpcExit(code: number | null, sessionId: string): void {
+  private handleRpcExit(code: number | null, sessionId: string, exitedClient: PiRpcClient): void {
     void code
+    // A session can replace its RPC process while the old child is still
+    // delivering its exit event. Never let that stale callback dispose the
+    // replacement client or turn its next request into "Pi process disposed".
+    if (this.rpcClients.get(sessionId) !== exitedClient) return
+    this.settleDeadRpcClient(sessionId)
+  }
+
+  /**
+   * Tear down everything that belonged to a session whose RPC process is gone:
+   * the client record, its nested workers, and any turn it still owned. Shared
+   * by a crashed process and a deliberate harness restart so both settle the
+   * same way instead of leaving a mid-turn session stuck.
+   */
+  private settleDeadRpcClient(sessionId: string): void {
     // Drop the dead client so the next turn spawns a fresh RPC process and
     // resumes the persisted native transcript instead of failing on a dead
     // pipe (or worse, silently continuing a context-less session).
     this.disposeRpcClient(sessionId)
+    // Nested worker sessions lived inside this process: their transcripts settle
+    // as failed, or a killed session would leave their cards spinning forever.
+    this.settleChildStreams(sessionId, 'error')
     if (this.activeTurns.has(sessionId)) {
       this.activeTurns.delete(sessionId)
       // The pi process died mid-turn; persist whatever was mirrored and
@@ -3549,9 +2352,35 @@ export class PiDriver extends PersistentCliDriver {
           ? ({ state: 'idle' } as const)
           : null
     if (!state) return
+    // A settle that lands inside a driver-owned checkpoint is not the turn's
+    // end. Page checkpoints (`compactPageCheckpoint`) and oversized-request
+    // recovery (`compactAndContinue`) abort the in-flight run, compact, and
+    // re-prompt it, so the aborted run settles idle while this driver still
+    // owns the turn, which is exactly the settle `agent_settled` already ignores
+    // through the `compacting` turn state. The engine, however, treats ANY idle
+    // status as the turn's end: it finalized the turn, tore down the turn's
+    // utility gateway (handoff clear + gateway cleanup), and left the resumed
+    // run with dead cio_util_* tools for the rest of the turn. Only a settle the
+    // driver is not going to resume may be reported idle here; the turn's real
+    // idle is this driver's own `session.idle` from `finishTurn`.
+    if (state.state === 'idle' && this.turnIsMidCheckpoint(sessionId)) return
     // `agent_settled` remains the sole finalization trigger (usage stats +
     // session persistence); the idle status here only clears the busy flag.
     this.emit({ type: 'session.status', sessionId, status: state })
+  }
+
+  /**
+   * Whether this session's turn is being held across a checkpoint that resumes
+   * it: a page checkpoint in flight (`compactPageCheckpoint` keeps the logical
+   * turn through an abort + compact + re-prompt), a compaction run
+   * (`compactAndContinue`, manual `/compact`), or the abort/compact window of
+   * either. Tells a checkpoint's intermediate settle apart from the turn's real
+   * end.
+   */
+  private turnIsMidCheckpoint(sessionId: string): boolean {
+    return (
+      this.pageCompactions.has(sessionId) || this.turnStates.get(sessionId)?.compacting === true
+    )
   }
 
   /**
@@ -3568,17 +2397,20 @@ export class PiDriver extends PersistentCliDriver {
   private closeSubagentCard(
     parentSessionId: string,
     childSessionId: string,
-    error: string | undefined
+    error: string | undefined,
+    status: AgentToolStatus = error ? 'error' : 'completed',
+    force = false
   ): void {
     // A parent that is mid-turn buffers the done notification until its loop
     // reaches the next step, which is exactly the lag this closes. An idle
     // parent runs the notification turn immediately, so its own patch lands
     // just as fast and this extra update would only flip the thread's live
-    // activity back on with no turn behind it.
-    if (!this.activeTurns.has(parentSessionId)) return
+    // activity back on with no turn behind it. A stop is the exception: the
+    // parent's turn is already gone when its workers settle, so a stopped
+    // worker's card is stamped regardless   otherwise it spins forever.
+    if (!force && !this.activeTurns.has(parentSessionId)) return
     const session = this.sessionCache.get(parentSessionId)
     if (!session) return
-    const status: AgentToolStatus = error ? 'error' : 'completed'
     for (const message of session.messages) {
       const part = message.parts.findLast(
         (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
@@ -3587,7 +2419,7 @@ export class PiDriver extends PersistentCliDriver {
       // A card that already reports a terminal state carries the richer
       // payload (final output, duration); never overwrite it with a lifecycle
       // stamp alone.
-      if (!part || part.activity.status === 'completed' || part.activity.status === 'error') {
+      if (!part || TERMINAL_SUBAGENT_STATUSES.has(part.activity.status)) {
         continue
       }
       const event: SessionAgentEvent = {
@@ -3609,6 +2441,47 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Close every still-open child transcript of one parent session. Called when
+   * the user stops the session (its workers are being aborted) and when the
+   * harness process dies (its nested sessions die with it), so no sub-agent
+   * card, tab or trace row can keep spinning for work that is already gone.
+   */
+  private settleChildStreams(
+    parentSessionId: string,
+    status: 'aborted' | 'error',
+    onlyChildSessionId?: string
+  ): void {
+    const error =
+      status === 'error' ? 'The session ended while this sub-agent was still running.' : undefined
+    for (const [childSessionId, state] of this.childStreams) {
+      if (state.parentSessionId !== parentSessionId || state.settled) continue
+      if (onlyChildSessionId && childSessionId !== onlyChildSessionId) continue
+      state.settled = true
+      this.closeSubagentCard(parentSessionId, childSessionId, error, status, true)
+      if (status === 'aborted') {
+        this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
+        continue
+      }
+      const detail = error ?? 'The sub-agent run ended unexpectedly.'
+      const kind = classifyProviderIssue(detail)
+      this.emit({
+        type: 'session.status',
+        sessionId: childSessionId,
+        status: {
+          state: 'error',
+          issue: {
+            kind,
+            message: presentProviderError(detail).message,
+            rawError: detail,
+            harnessId: this.id,
+            retryable: kind !== 'billing'
+          }
+        }
+      })
+    }
+  }
+
+  /**
    * Fold one batch of streamed child-session records into that child's live
    * transcript and re-emit them as child-scoped events. Records carry pi's own
    * shapes, so they go through `mapPiRecord`   the exact mapper a root thread
@@ -3624,7 +2497,7 @@ export class PiDriver extends PersistentCliDriver {
     if (!payload) return
     const childSessionId = stringValue(payload['childSessionId'])
     if (!childSessionId) return
-    const state = this.childStreamState(childSessionId)
+    const state = this.childStreamState(childSessionId, parentSessionId)
     const records = Array.isArray(payload['records']) ? payload['records'] : []
     if (records.length > 0 && !state.announcedWorking && !state.settled) {
       state.announcedWorking = true
@@ -3647,11 +2520,16 @@ export class PiDriver extends PersistentCliDriver {
     if (payload['settled'] !== true) return
     state.settled = true
     const error = stringValue(payload['error'])
+    // A worker the user stopped is neither a completion nor a failure: it gets
+    // its own terminal status so no surface can report finished work, and its
+    // card is stamped even though the stopped parent turn is already gone.
+    const aborted = stringValue(payload['status']) === 'aborted'
+    const status: AgentToolStatus = aborted ? 'aborted' : error ? 'error' : 'completed'
     // The child's own settle record closes the parent thread's card, so the
     // working-trace dropdown and the sub-agent tab flip together instead of
     // the card waiting for the model loop to drain its done notification.
-    this.closeSubagentCard(parentSessionId, childSessionId, error)
-    if (!error) {
+    this.closeSubagentCard(parentSessionId, childSessionId, error, status, aborted)
+    if (!error || aborted) {
       this.emit({ type: 'session.status', sessionId: childSessionId, status: { state: 'idle' } })
       return
     }
@@ -3666,7 +2544,7 @@ export class PiDriver extends PersistentCliDriver {
         state: 'error',
         issue: {
           kind,
-          message: extractProviderErrorEnvelope(error).message,
+          message: presentProviderError(error).message,
           rawError: error,
           harnessId: this.id,
           retryable: kind !== 'billing'
@@ -3700,7 +2578,7 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /** The live transcript state of one child session, capped and LRU-ordered. */
-  private childStreamState(childSessionId: string): PiChildStreamState {
+  private childStreamState(childSessionId: string, parentSessionId: string): PiChildStreamState {
     const existing = this.childStreams.get(childSessionId)
     if (existing) {
       // Re-insert so the oldest entry is always the least recently used.
@@ -3711,6 +2589,7 @@ export class PiDriver extends PersistentCliDriver {
     const created: PiChildStreamState = {
       context: { sessionId: childSessionId, session: { messages: [] } },
       turnState: { assistantMessageId: null, turnIndex: 0 },
+      parentSessionId,
       announcedWorking: false,
       settled: false
     }
@@ -3827,7 +2706,7 @@ export class PiDriver extends PersistentCliDriver {
     // The core-tools extension's permission gate marks its confirm dialogs
     // with a structured payload so they surface as real permission cards
     // (policy enrichment, allow/reject) instead of plain question cards.
-    const permissionPayload = this.permissionMarkerPayload(record)
+    const permissionPayload = permissionMarkerPayload(record)
     if (permissionPayload) {
       this.pendingUiRequests.set(requestId, {
         sessionId,
@@ -3855,7 +2734,7 @@ export class PiDriver extends PersistentCliDriver {
     // Pi has no structured question RPC method. The core-tools extension sends
     // one tagged envelope through the dialog channel and the driver unwraps it
     // directly into the shared question contract.
-    const markedQuestions = this.questionMarkerPayload(record)
+    const markedQuestions = questionMarkerPayload(record)
     if (markedQuestions) {
       this.pendingUiRequests.set(requestId, {
         sessionId,
@@ -3882,52 +2761,6 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.pendingUiRequests.set(requestId, { sessionId, method, client, request: record })
     this.emit({ type: 'question.asked', sessionId, requestId, questions })
-  }
-
-  /** Parse the core-tools extension's canonical question envelope. */
-  private questionMarkerPayload(record: Record<string, unknown>): AgentQuestion[] | null {
-    const title = stringValue(record['title'])
-    if (!title?.startsWith(CIO_QUESTION_MARKER)) return null
-    try {
-      const payload = JSON.parse(title.slice(CIO_QUESTION_MARKER.length)) as {
-        questions?: unknown
-      }
-      if (!Array.isArray(payload.questions)) return null
-      return normalizeAgentQuestions({ questions: payload.questions })
-    } catch {
-      return null
-    }
-  }
-
-  /** Parse the core-tools permission gate's marker payload from a confirm
-   *  dialog, or null when the dialog is an ordinary confirmation. */
-  private permissionMarkerPayload(
-    record: Record<string, unknown>
-  ): { permission: string; patterns: string[]; tool?: string; command?: string } | null {
-    if (stringValue(record['method']) !== 'confirm') return null
-    const message = stringValue(record['message'])
-    if (!message?.startsWith(CIO_PERMISSION_MARKER)) return null
-    try {
-      const payload = JSON.parse(message.slice(CIO_PERMISSION_MARKER.length)) as {
-        permission?: unknown
-        patterns?: unknown
-        tool?: unknown
-        command?: unknown
-      }
-      const permission = typeof payload.permission === 'string' ? payload.permission : ''
-      if (!permission) return null
-      const patterns = Array.isArray(payload.patterns)
-        ? payload.patterns.filter((pattern): pattern is string => typeof pattern === 'string')
-        : []
-      return {
-        permission,
-        patterns,
-        ...(typeof payload.tool === 'string' ? { tool: payload.tool } : {}),
-        ...(typeof payload.command === 'string' ? { command: payload.command } : {})
-      }
-    } catch {
-      return null
-    }
   }
 
   /** Resolve the core-tools permission gate's confirm dialog. `reject` also
@@ -4003,103 +2836,13 @@ export class PiDriver extends PersistentCliDriver {
 
   /** Attach the final session-stats context usage to the last assistant message. */
   private async refreshSessionUsage(session: PersistentCliSession): Promise<void> {
-    const client = this.rpcClients.get(session.id)
-    if (!client) return
-    const lastAssistant = [...session.messages].reverse().find((message) => {
-      return message.role === 'assistant'
+    await refreshSessionUsageFromStats(session, {
+      client: this.rpcClients.get(session.id) ?? null,
+      sessionStatsBroken: this.sessionStatsBroken,
+      rateLimits: this.latestRateLimits.get(session.id)?.windows ?? [],
+      applyEvent: (target, event) => this.applyEventToSession(target, event),
+      emit: (event) => this.emit(event)
     })
-    if (!lastAssistant) return
-    let stats: Record<string, unknown> | null = null
-    if (!this.sessionStatsBroken.has(session.id)) {
-      try {
-        stats = record(await client.getSessionStats())
-      } catch (error) {
-        if (isUsagelessAssistantStatsError(error)) {
-          // Pi's stats walk crashes on a usage-less assistant entry; remember
-          // that so no later refresh re-raises it, and account from the
-          // per-message usage already mirrored in this session instead.
-          this.sessionStatsBroken.add(session.id)
-          stats = null
-        } else {
-          // A disposed client means the session was torn down mid-refresh   an
-          // expected race at turn end, not a failure worth surfacing.
-          if (error instanceof Error && error.message === 'Pi process disposed') return
-          Logger.dev('Pi session stats refresh failed:', error)
-          return
-        }
-      }
-    }
-    if (stats === null) {
-      this.applyMirroredUsage(session, lastAssistant)
-      return
-    }
-    try {
-      const contextUsage = record(stats?.['contextUsage'])
-      const cost =
-        typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
-      const contextWindow = numberValue(contextUsage?.['contextWindow'])
-      // pi's getContextUsage() returns undefined when its session model carries
-      // no contextWindow (gateway models missing from pi's registry), and
-      // `{ tokens: null }` after a compaction with no post-compaction usage.
-      // The provider's own per-turn accounting is still mirrored on the
-      // session's assistant messages, and its last total IS the context
-      // occupancy (prompt + completion of the last request), so use it rather
-      // than reporting nothing and letting a text-only estimate fill the gap.
-      const contextUsed =
-        numberValue(contextUsage?.['tokens']) ?? mirroredContextUsed(session.messages)
-      const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
-      if (
-        cost === undefined &&
-        contextWindow === undefined &&
-        contextUsed === undefined &&
-        rateLimits.length === 0
-      ) {
-        return
-      }
-      const event: SessionAgentEvent = {
-        type: 'usage.updated',
-        sessionId: session.id,
-        messageId: lastAssistant.id,
-        // Session stats are CUMULATIVE across the whole session   attaching
-        // them as the message's `tokens` made per-message output counts (and
-        // any derived tokens/second rate) wildly inflated. Per-message usage
-        // was already reported by the message.completed event; this refresh
-        // only contributes cost, context occupancy, and rate-limit windows.
-        ...(cost !== undefined ? { cost } : {}),
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(contextUsed !== undefined ? { contextUsed } : {}),
-        ...(rateLimits.length > 0 ? { rateLimits } : {})
-      }
-      this.applyEventToSession(session, event)
-      this.emit(event)
-    } catch {
-      // Stats-only application cannot fail for a live session; keep the
-      // refresh contract non-throwing regardless of malformed stats payloads.
-    }
-  }
-
-  /** Emit cumulative cost, context occupancy, and rate-limit windows for a
-   *  session whose native stats RPC is broken, using the per-message accounting
-   *  the turn events already mirrored into `session.messages`. */
-  private applyMirroredUsage(
-    session: PersistentCliSession,
-    lastAssistant: AgentMessage | undefined
-  ): void {
-    if (!lastAssistant) return
-    const cost = mirroredSessionCost(session)
-    const contextUsed = mirroredContextUsed(session.messages)
-    const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
-    if (cost === undefined && contextUsed === undefined && rateLimits.length === 0) return
-    const event: SessionAgentEvent = {
-      type: 'usage.updated',
-      sessionId: session.id,
-      messageId: lastAssistant.id,
-      ...(cost !== undefined ? { cost } : {}),
-      ...(contextUsed !== undefined ? { contextUsed } : {}),
-      ...(rateLimits.length > 0 ? { rateLimits } : {})
-    }
-    this.applyEventToSession(session, event)
-    this.emit(event)
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
@@ -4108,7 +2851,9 @@ export class PiDriver extends PersistentCliDriver {
     // process exit, watchdog finalization, and between-turn compactions, but
     // pi itself always wrote them durably to the session JSONL.
     try {
-      await this.reconcileNativeCompactions(session)
+      await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
+        this.mergeMessages(session, messages)
+      )
     } catch (error) {
       Logger.dev('Pi compaction reconciliation failed:', error)
     }
@@ -4128,7 +2873,9 @@ export class PiDriver extends PersistentCliDriver {
    */
   async reconcileSession(projectPath: string, sessionId: string): Promise<void> {
     const session = await this.requireSession(projectPath, sessionId)
-    await this.reconcileNativeCompactions(session)
+    await reconcileNativeCompactions(session, this.sessionProjects.get(session.id), (messages) =>
+      this.mergeMessages(session, messages)
+    )
     await this.persistSession(session)
   }
 
@@ -4150,102 +2897,6 @@ export class PiDriver extends PersistentCliDriver {
    *    same message shape as `parseNativePiSession`, deduplicated against
    *    what was already reported by retained-boundary id or summary text.
    */
-  private async reconcileNativeCompactions(session: PersistentCliSession): Promise<void> {
-    const projectPath = this.sessionProjects.get(session.id)
-    const nativeSessionId = session.nativeSessionId
-    if (!projectPath || !nativeSessionId) return
-    const file = await findNativePiSessionFile(projectPath, nativeSessionId)
-    if (!file) return
-    const compactionEntries: {
-      summary: string
-      firstKeptEntryId?: string
-      createdAt: number
-    }[] = []
-    const entryTimes = new Map<string, number>()
-    const input = createReadStream(file)
-    const lines = createInterface({ input, crlfDelay: Infinity })
-    try {
-      for await (const line of lines) {
-        const entry = parseRecord(line)
-        if (!entry) continue
-        if (entry['type'] === 'compaction') {
-          const summary = stringValue(entry['summary'])
-          if (summary?.trim()) {
-            compactionEntries.push({
-              summary,
-              firstKeptEntryId: stringValue(entry['firstKeptEntryId']),
-              createdAt: Date.parse(String(entry['timestamp'])) || Date.now()
-            })
-          }
-          continue
-        }
-        if (entry['type'] === 'message') {
-          const id = entry['id']
-          const nativeMessage = parseRecord(entry['message'])
-          if (typeof id === 'string' && nativeMessage) {
-            entryTimes.set(id, messageTimestamp(nativeMessage))
-          }
-        }
-      }
-    } finally {
-      lines.close()
-      input.destroy()
-    }
-    let patched = false
-    for (const message of session.messages) {
-      for (const part of message.parts) {
-        if (part.type !== 'compaction') continue
-        if (part.firstKeptCreatedAt !== undefined || !part.firstKeptEntryId) continue
-        const retainedAt = entryTimes.get(part.firstKeptEntryId)
-        if (retainedAt !== undefined) {
-          part.firstKeptCreatedAt = retainedAt
-          patched = true
-        }
-      }
-    }
-    const recovered: AgentMessage[] = []
-    for (const entry of compactionEntries) {
-      const alreadyMirrored = session.messages.some((message) =>
-        message.parts.some(
-          (part) =>
-            part.type === 'compaction' &&
-            ((entry.firstKeptEntryId && part.firstKeptEntryId === entry.firstKeptEntryId) ||
-              (part.summary?.trim() ?? '') === entry.summary)
-        )
-      )
-      if (alreadyMirrored) continue
-      const retainedAt = entry.firstKeptEntryId ? entryTimes.get(entry.firstKeptEntryId) : undefined
-      const createdAt = retainedAt ?? entry.createdAt
-      const id = `pi-${session.id}-compaction-native-${createdAt}`
-      recovered.push({
-        id,
-        role: 'assistant',
-        origin: 'compaction',
-        visibility: 'working_trace',
-        createdAt,
-        parts: [
-          {
-            type: 'compaction',
-            id: `${id}:compaction`,
-            messageID: id,
-            auto: true,
-            summary: entry.summary,
-            ...(entry.firstKeptEntryId && retainedAt !== undefined
-              ? {
-                  firstKeptEntryId: entry.firstKeptEntryId,
-                  firstKeptCreatedAt: retainedAt
-                }
-              : {})
-          }
-        ]
-      })
-    }
-    if (recovered.length === 0 && !patched) return
-    if (recovered.length > 0) this.mergeMessages(session, recovered)
-    Logger.dev(
-      `Pi compaction reconciliation: ${recovered.length} recovered, boundary backfill ${patched ? 'applied' : 'not needed'}`
-    )
-  }
 
   /**
    * Write the app-owned status extension to a shared temp file (once per
@@ -4275,11 +2926,15 @@ export class PiDriver extends PersistentCliDriver {
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     if (existing) return existing
     try {
-      const directory = join('runtime', 'cio-core-tools', sessionId)
+      const questionCap = (await this.storage.getConfig()).agentQuestionCap
+      const directory = cioCoreToolsDirectory(sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
+      const stopFlagRelative = join(directory, 'stop-request.json')
+      const watchFlagRelative = join(directory, 'watched-subagents.json')
+      const compactionContextRelative = join(directory, 'compaction-context.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
@@ -4287,6 +2942,8 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(systemPromptRelative, '')
       await this.storage.writeRaw(allowedToolsRelative, '[]')
       await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
+      await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
+      await this.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
@@ -4295,23 +2952,31 @@ export class PiDriver extends PersistentCliDriver {
           // tools would only bloat the model request and invite spurious
           // tool calls. Status/usage/compaction stay for every session.
           oneShot: this.isTitleSession(sessionId),
+          questionCap,
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
-          sessionId,
-          // Same durable resolver the orchestration service publishes for the
-          // prose recovery path; the gateway tools use it for host-level
-          // self-healing when the loopback port moved across an app restart.
-          retrieveScriptPath: this.storage.resolve(
-            join('runtime', 'utility-gateway', `${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`)
-          )
+          stopFlagPath: this.storage.resolve(stopFlagRelative),
+          subagentWatchPath: this.storage.resolve(watchFlagRelative),
+          // Never seeded by this materialization: the engine publishes the
+          // thread's plan and progress before the module exists on the first
+          // turn, and a seed written here would overwrite it.
+          compactionContextPath: this.storage.resolve(compactionContextRelative),
+          // The primary agent's composed instructions ride the per-turn system
+          // prompt handoff, which only the root session's hook reads. A worker
+          // gets this distilled contract instead, so it can never be left with
+          // none of the application rules.
+          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT
         })
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
+      this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
+      this.cioWatchFlagPaths.set(sessionId, watchFlagRelative)
+      this.cioWatchedChildren.set(sessionId, new Map())
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn
@@ -4363,15 +3028,140 @@ export class PiDriver extends PersistentCliDriver {
   private disposeRpcClient(sessionId: string): void {
     this.compactionReadySessions.delete(sessionId)
     this.pageCompactions.delete(sessionId)
+    this.sessionActivityAt.delete(sessionId)
+    // No process is left to read a watch list for this session, and the file
+    // outlives the process: publish an empty list so a fresh spawn starts with
+    // nothing wrongly marked as displayed.
+    if (this.cioWatchedChildren.has(sessionId)) {
+      this.cioWatchedChildren.set(sessionId, new Map())
+      this.cioPublishedWatch.delete(sessionId)
+      void this.publishWatchedChildren(sessionId)
+    }
     const client = this.rpcClients.get(sessionId)
     if (client) {
       client.dispose()
       this.rpcClients.delete(sessionId)
     }
+    if (this.rpcClients.size === 0) this.stopIdleSweep()
     this.resumedNativeSessions.delete(sessionId)
     this.appliedPiSettings.delete(sessionId)
     this.latestRateLimits.delete(sessionId)
     this.cioProvidersExtensionEnvs.delete(sessionId)
+  }
+
+  /** Stamp the last activity of a live session for the idle sweep. */
+  private touchSessionActivity(sessionId: string): void {
+    this.sessionActivityAt.set(sessionId, Date.now())
+  }
+
+  /** Arm the idle sweep with the first live client; it stops with the last one. */
+  private ensureIdleSweep(): void {
+    if (this.idleSweepTimer) return
+    this.idleSweepTimer = setInterval(() => this.sweepIdleSessions(), PI_SESSION_IDLE_SWEEP_MS)
+    // Never hold the app's event loop open for an eviction that can wait.
+    if (typeof this.idleSweepTimer.unref === 'function') this.idleSweepTimer.unref()
+  }
+
+  private stopIdleSweep(): void {
+    if (!this.idleSweepTimer) return
+    clearInterval(this.idleSweepTimer)
+    this.idleSweepTimer = null
+  }
+
+  /**
+   * Dispose the harness process of every session that has been idle past the
+   * eviction window. A session is skippable for as long as anything can still
+   * produce output on it: a registered turn (which covers a run in progress,
+   * an RPC compaction, and a pi-managed retry window, since only
+   * `agent_settled` clears it), a nested worker that has not settled, or a
+   * permission/question card the user has not answered yet.
+   */
+  private sweepIdleSessions(): void {
+    const now = Date.now()
+    // The same cadence lapses watch marks nobody refreshed: a closed sub-agent
+    // view must stop its worker's token stream within a bounded window.
+    for (const parentSessionId of this.cioWatchedChildren.keys()) {
+      void this.publishWatchedChildren(parentSessionId)
+    }
+    for (const [sessionId] of this.rpcClients) {
+      if (this.activeTurns.has(sessionId)) continue
+      if (this.hasLiveChildSession(sessionId)) continue
+      if (this.hasPendingUiRequest(sessionId)) continue
+      const idleSince = this.sessionActivityAt.get(sessionId) ?? now
+      if (now - idleSince < PI_SESSION_IDLE_DISPOSE_MS) continue
+      Logger.info('Evicting the harness process of an idle session', {
+        sessionId,
+        idleMs: now - idleSince
+      })
+      this.disposeRpcClient(sessionId)
+    }
+  }
+
+  /** True while a nested worker of this session is still running. */
+  private hasLiveChildSession(parentSessionId: string): boolean {
+    for (const state of this.childStreams.values()) {
+      if (state.parentSessionId === parentSessionId && !state.settled) return true
+    }
+    return false
+  }
+
+  /**
+   * True while the user still owes this session an answer. Pending requests are
+   * keyed by their RPC request id, so they are matched on the session they
+   * belong to: a card on screen must never lose the process that asked for it.
+   */
+  private hasPendingUiRequest(sessionId: string): boolean {
+    for (const request of this.pendingUiRequests.values()) {
+      if (request.sessionId === sessionId) return true
+    }
+    return false
+  }
+
+  /**
+   * Remember that the app is displaying a child session's transcript. The
+   * extension reads the resulting watch file and forwards token deltas for
+   * watched children only: a worker nobody is looking at still reports every
+   * message, tool call and settle, but stops shipping a per-token stream that
+   * only a view would consume.
+   */
+  private watchSubagentSession(childSessionId: string): void {
+    const parentSessionId = this.childStreams.get(childSessionId)?.parentSessionId
+    if (!parentSessionId || !this.cioWatchFlagPaths.has(parentSessionId)) return
+    const watched = this.cioWatchedChildren.get(parentSessionId) ?? new Map<string, number>()
+    watched.set(childSessionId, Date.now() + PI_SUBAGENT_WATCH_WINDOW_MS)
+    this.cioWatchedChildren.set(parentSessionId, watched)
+    void this.publishWatchedChildren(parentSessionId)
+  }
+
+  /** Write the live watch list for one parent session, when it changed. */
+  private async publishWatchedChildren(parentSessionId: string): Promise<void> {
+    const path = this.cioWatchFlagPaths.get(parentSessionId)
+    if (!path) return
+    const childSessionIds = this.liveWatchedChildren(parentSessionId)
+    const signature = childSessionIds.join(',')
+    if (this.cioPublishedWatch.get(parentSessionId) === signature) return
+    this.cioPublishedWatch.set(parentSessionId, signature)
+    try {
+      await this.storage.writeRaw(path, JSON.stringify({ childSessionIds, updatedAt: Date.now() }))
+    } catch (error) {
+      Logger.dev('Sub-agent watch publication failed:', error)
+    }
+  }
+
+  /** Watched child ids of one session, dropping every lapsed mark. */
+  private liveWatchedChildren(parentSessionId: string): string[] {
+    const watched = this.cioWatchedChildren.get(parentSessionId)
+    if (!watched) return []
+    const now = Date.now()
+    const live: string[] = []
+    for (const [childSessionId, expiresAt] of watched) {
+      if (expiresAt <= now) {
+        watched.delete(childSessionId)
+        continue
+      }
+      live.push(childSessionId)
+    }
+    return live.sort()
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {

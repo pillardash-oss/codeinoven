@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile, unlink } from 'fs/promises'
+import { readFile, appendFile, unlink, open, type FileHandle } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -27,7 +28,9 @@ import {
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import {
+  ASSISTANT_CWD_DIR,
   CHATS_ARTIFACTS_DIRECTORY,
+  CHATS_CWD_DIR,
   featureArtifactDirectory,
   featureSlugFromTitle
 } from '../../lib/project-artifacts'
@@ -40,7 +43,10 @@ import {
   normalizeWorkerNames
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
+import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
+import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
@@ -51,24 +57,31 @@ const DEFAULT_CONFIG: AppConfig = {
   onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
+  agentQuestionCap: 3,
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  auxiliaryAgents: {},
+  design: { assignments: [] },
+  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
-  keepAwakeWhileRemoteConnected: true,
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: true,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
+  maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
+  prototypeCdnAllowlist: [],
+  inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -79,9 +92,29 @@ const DEFAULT_CONFIG: AppConfig = {
 const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
 const VISION_MODELS_FILE = 'vision-models.json'
 
+/** Result of an incremental, byte-offset tail read of an append-only log. */
+export interface RawFileTail {
+  /** Complete lines after `fromByte`, decoded UTF-8. Empty when none yet. */
+  content: string
+  /** Byte offset to pass to the next call. */
+  nextByte: number
+  /** Current file size in bytes. */
+  size: number
+}
+
 export class StorageEngine {
   private root: string
   private readonly allowOrphanProjectArtifacts: boolean
+  /**
+   * Per-file append chains. `appendRaw` is called fire-and-forget from hot
+   * stream paths (every working-trace event persists one line), so without a
+   * queue the callers' appends race: each one awaits `ensureDir` and then
+   * `appendFile`, and libuv's threadpool decides which write lands first, not
+   * the call order. That shuffled the durable append-only logs line by line and
+   * made the streamed working trace render scrambled reasoning. Entries are
+   * dropped as soon as their chain drains, so an idle file holds no queue.
+   */
+  private readonly appendQueues = new Map<string, Promise<void>>()
 
   constructor(rootPath?: string) {
     this.root = rootPath ?? getConfigRoot()
@@ -95,9 +128,9 @@ export class StorageEngine {
     await ensureDir(this.resolve('projects-gh'))
     await ensureDir(this.resolve('workflows'))
     await ensureDir(this.resolve('blobs'))
-    await ensureDir(this.resolve('remote'))
     await ensureDir(this.resolve('logs'))
-    await ensureDir(this.resolve('chats-cwd'))
+    await ensureDir(this.resolve(CHATS_CWD_DIR))
+    await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
     await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))
@@ -136,11 +169,29 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
       },
+      auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
+      // Assignments are read straight off the config file, so the array is
+      // filtered here too: only a complete selection on a valid id survives, and
+      // a hand-edited entry can never reach a model the user did not name.
+      design: {
+        assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
+          .filter(isUsableDesignAssignment)
+          .slice(0, MAX_DESIGN_ASSIGNMENTS)
+      },
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
       },
+      inAppNotificationSound: {
+        ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
+        ...(config?.inAppNotificationSound ?? {})
+      },
+      prototypeCdnAllowlist: Array.isArray(config?.prototypeCdnAllowlist)
+        ? config.prototypeCdnAllowlist.filter(
+            (origin): origin is string => typeof origin === 'string'
+          )
+        : DEFAULT_CONFIG.prototypeCdnAllowlist,
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),
@@ -342,20 +393,23 @@ export class StorageEngine {
    *  lowercased) so the record matches the same model across every harness
    *  and provider. Duplicate reports are ignored. */
   async addVisionModel(modelId: string): Promise<void> {
-    const id = modelId.trim().toLowerCase()
+    const id = normalizeVisionModelId(modelId)
     if (!id) throw new TypeError('Vision model id cannot be empty')
     const models = await this.getVisionModels()
-    if (models.some((model) => model.id === id)) return
+    if (models.some((model) => visionModelRecordMatches(model.id, id))) return
     models.push({ id, addedAt: Date.now() })
     await this.write(VISION_MODELS_FILE, models)
   }
 
-  /** True when the app's own record says this model can see images. */
+  /**
+   * True when the app's own record says this model can see images. A record is
+   * compared by the model-name segment of the id, so one report covers every
+   * provider prefix of the same model (see `visionModelRecordMatches`).
+   */
   async hasVisionModel(modelId: string): Promise<boolean> {
-    const id = modelId.trim().toLowerCase()
-    if (!id) return false
+    if (!normalizeVisionModelId(modelId)) return false
     const models = await this.getVisionModels()
-    return models.some((model) => model.id === id)
+    return models.some((model) => visionModelRecordMatches(model.id, modelId))
   }
 
   /** Read a JSON file relative to config root */
@@ -388,6 +442,45 @@ export class StorageEngine {
     }
   }
 
+  /** Read only the bytes appended after `fromByte`, cut to the last complete
+   *  line. Lets append-only logs tail themselves without re-reading (and
+   *  re-decoding) the whole file on every poll. Returns null when the file is
+   *  missing; `size` is the file's current byte length so callers can detect a
+   *  rewrite (shrunk file) themselves. */
+  async readRawTail(relativePath: string, fromByte: number): Promise<RawFileTail | null> {
+    let handle: FileHandle
+    try {
+      handle = await open(this.resolve(relativePath), 'r')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
+    }
+    try {
+      const { size } = await handle.stat()
+      if (fromByte >= size) return { content: '', nextByte: size, size }
+      const length = size - fromByte
+      const buffer = Buffer.allocUnsafe(length)
+      let read = 0
+      while (read < length) {
+        const chunk = await handle.read(buffer, read, length - read, fromByte + read)
+        if (chunk.bytesRead === 0) break
+        read += chunk.bytesRead
+      }
+      // Decode only up to and including the last newline, so a trailing partial
+      // line (and any partial multibyte character in it) is never cut.
+      const region = buffer.subarray(0, read)
+      const lastNewline = region.lastIndexOf(0x0a)
+      if (lastNewline === -1) return { content: '', nextByte: fromByte, size }
+      return {
+        content: region.subarray(0, lastNewline + 1).toString('utf8'),
+        nextByte: fromByte + lastNewline + 1,
+        size
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
   /** Write raw text file atomically */
   async writeRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
@@ -405,11 +498,32 @@ export class StorageEngine {
     }
   }
 
-  /** Append raw text to a file (creates it if missing). Used for append-only logs like history. */
+  /**
+   * Append raw text to a file (creates it if missing). Used for append-only logs
+   * like history. Appends to one file are strictly serialized in call order so a
+   * concurrent caller can never overtake an earlier one - append-only JSONL logs
+   * (the working-trace stream, driver events, history) are only readable if
+   * their line order is the order the events happened in.
+   */
   async appendRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
-    await ensureDir(join(fullPath, '..'))
-    await appendFile(fullPath, content, 'utf-8')
+    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
+    const write = previous.then(async () => {
+      await ensureDir(join(fullPath, '..'))
+      await appendFile(fullPath, content, 'utf-8')
+    })
+    // The queue only ever advances on a settled link: a failed append must not
+    // wedge every later write to the same file. Callers still receive the real
+    // outcome through `write`.
+    const queued = write.then(
+      () => undefined,
+      () => undefined
+    )
+    this.appendQueues.set(fullPath, queued)
+    void queued.then(() => {
+      if (this.appendQueues.get(fullPath) === queued) this.appendQueues.delete(fullPath)
+    })
+    return write
   }
 
   /** List entries in a directory relative to config root */

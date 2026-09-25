@@ -18,6 +18,10 @@ interface FaviconStateCache {
 }
 
 class FaviconState {
+  /** Hosts per IPC call, kept well under the main process's 64-entry limit so a
+   *  long link list resolves in bounded chunks instead of one rejected batch. */
+  private static readonly BATCH_SIZE = 32
+
   private readonly cache = new Map<string, FaviconStateCache>()
   private readonly inflight = new Map<string, Promise<void>>()
   /** Reactive version — bumped whenever a batch resolution updates the cache. */
@@ -86,8 +90,8 @@ class FaviconState {
 
   private async drain(cache: FaviconStateCache): Promise<void> {
     while (cache.pending.size > 0) {
-      const batch = [...cache.pending]
-      cache.pending.clear()
+      const batch = [...cache.pending].slice(0, FaviconState.BATCH_SIZE)
+      for (const hostname of batch) cache.pending.delete(hostname)
       try {
         const resolved = await invoke('web:favicon', batch)
         for (const [hostname, dataUrl] of Object.entries(resolved)) {

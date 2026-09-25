@@ -6,101 +6,78 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
     Plus,
-    Folder,
-    FolderOpen,
-    Ellipsis,
-    ExternalLink,
-    Pin,
-    PinOff,
-    Trash2,
-    MessageSquare,
     SquarePen,
-    Pencil,
-    Copy,
-    FolderKanban,
     Bot,
     BrainCircuit,
     Bug,
+    Clock1,
     Cloud,
-    Cookie,
-    CircleStop,
-    Download,
-    FileDown,
     FileDiff,
     MonitorCog,
     FolderTree,
     Globe2,
+    Hammer,
     History,
     Info,
-    Loader2,
     MessageCircleDashed,
-    Pause,
-    Play,
     SquareTerminal,
-    StickyNote,
-    ChevronDown
+    StickyNote
   } from '@lucide/svelte'
-  import { Dialog, DropdownMenu } from 'bits-ui'
-  import { keymapKeys } from '$lib/keymap/keymap'
-  import WelcomeStart from './WelcomeStart.svelte'
-  import ProjectSwitch from '../shared/ProjectSwitch.svelte'
-  import ProjectIdentity from '../shared/ProjectIdentity.svelte'
-  import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
-  import ChatComposer from '../chats/ChatComposer.svelte'
-  import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
-  import PinnedSection from '../threads/PinnedSection.svelte'
-  import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
-  import ThreadRow from '../threads/ThreadRow.svelte'
-  import ThreadNotePanel from '../threads/ThreadNotePanel.svelte'
-  import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
-  import ThreadView from '../threads/ThreadView.svelte'
-  import SpecConversationSidebar from '../specs/SpecConversationSidebar.svelte'
-  import TerminalPanel from '../terminal/TerminalPanel.svelte'
-  import ActionsPanel from '../actions/ActionsPanel.svelte'
-  import BrowserPanel from '../browser/BrowserPanel.svelte'
-  import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
-  import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
-  import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
-  import Modal from '../ui/Modal.svelte'
-  import StatusPill from '../ui/StatusPill.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import AppearancePicker from '../shared/AppearancePicker.svelte'
-  import ScopeBadge from '../shared/ScopeBadge.svelte'
-  import StatusBadge from '../shared/StatusBadge.svelte'
-  import HistorySidePanel from '../shared/HistorySidePanel.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
-  import SidebarAccountControls from './SidebarAccountControls.svelte'
-  import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
+  import { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
+  import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
+  import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
+  import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import WorkspaceBrowserMenu from './WorkspaceBrowserMenu.svelte'
+  import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
+  import WorkspaceBrowserDataModal from './WorkspaceBrowserDataModal.svelte'
+  import WorkspaceBrowserDownloadsModal from './WorkspaceBrowserDownloadsModal.svelte'
+  import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
+  import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
+  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
+  import WorkspaceFullscreenBrowser from './WorkspaceFullscreenBrowser.svelte'
+  import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
+  import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
+  import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
+  import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
+  import { groupRunsByTask } from '../assistant/assistant-view'
+  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
+  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
-  import { copyText } from '$lib/copy-text'
-  import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
-  import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
-  import { pickColorForSeed } from '$lib/project-colors'
-  import { hasProjectNameCollision } from '$lib/project-location'
+  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
+    assistantEffectiveSettings,
     threadSettings,
-    chatSettings,
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
+    settingsForNewAssistantTask,
     settingsForNewThread,
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    routinePrimaryModel,
+    settingsWithRoutineModel,
+    withDefaultRoutinePrimary
+  } from '$shared/routine-agents'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -109,15 +86,15 @@
     type ContextSidebarTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
-  import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { toast } from 'svelte-sonner'
   import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
@@ -127,36 +104,38 @@
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+  import { threadHasVisibleWork } from './workspace-thread-helpers'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
-  import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
+  import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
     coordinatorHasActiveDelegates,
+    activeThreadRowId,
     INBOX_PROJECT_ID,
+    ASSISTANT_SPACE_ID,
+    ASSISTANT_SETUP_TITLE,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
-    isThreadWorking,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    threadTracksReadStatus,
+    usesThreadWorkspaceMount
   } from '$shared/types'
-  import { APP_NAME } from '$shared/brand'
   import type {
+    AgentModelSelection,
     AgentPart,
     AppConfig,
     AppConfigPatch,
     Project,
     PromptAttachment,
-    Thread,
-    ThreadSearchResult,
-    AgentHarnessUsage
+    Routine,
+    Thread
   } from '$shared/types'
-  import type { BrowserDownload } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
-    mode: 'projects' | 'chats' | 'threads'
+    mode: 'projects' | 'chats' | 'threads' | 'assistant'
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
     /** True while the Scope page is on screen   thread switches must keep the
@@ -195,13 +174,6 @@
   let projectPageLoading = $state<string | null>(null)
   /** Remounts the empty-state chats composer to restore a failed first send. */
   let chatsComposerRestoreKey = $state(0)
-  let chatsComposer: ChatComposer | undefined = $state(undefined)
-
-  const chatSuggestedPrompts = [
-    'Research a question using my device',
-    'Run a task for me on this computer',
-    'Brainstorm ideas with me'
-  ]
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
   // While a thread is selected, the sidebar keeps its row (and thus its
@@ -223,15 +195,6 @@
       if (row.offsetParent !== null || row.getClientRects().length > 0) return row
     }
     return null
-  }
-
-  function handleConversationRenderError(error: unknown): void {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    reportError(error, 'The conversation could not be rendered.', {
-      projectId: thread.projectId,
-      threadId: thread.id
-    })
   }
 
   function isThreadRowVisible(threadId: string): boolean {
@@ -271,13 +234,11 @@
     // ensures the folder is open by the time the scroll step runs. In Threads
     // mode the flat list always renders every row, so only the scroll applies.
     if (active && active.projectId !== INBOX_PROJECT_ID) {
-      expandedFolders.add(active.projectId)
+      sidebar.expandedFolders.add(active.projectId)
       const folderThreads = threadsByProject.get(active.projectId) ?? []
       const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
       if (threadIndex >= 0) {
-        const needed = threadIndex + 1
-        const current = threadShowCount.get(active.projectId) ?? THREADS_PER_PAGE
-        if (needed > current) threadShowCount.set(active.projectId, needed)
+        sidebar.ensureRowVisible(active.projectId, threadIndex + 1)
       }
     }
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
@@ -315,7 +276,10 @@
   // Keep each mode's scroll position and restore it when the mode comes back,
   // and briefly suppress the focus-follow reveal so it doesn't yank the
   // restored scroll back to the selected thread's row.
-  const sidebarScrollByMode = new SvelteMap<'projects' | 'chats' | 'threads', number>()
+  const sidebarScrollByMode = new SvelteMap<
+    'projects' | 'chats' | 'threads' | 'assistant',
+    number
+  >()
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
@@ -350,36 +314,7 @@
     })
   })
 
-  const THREADS_PER_PAGE = 5
-
-  const threadShowCount = new SvelteMap<string, number>()
-
-  function getVisibleCount(groupId: string, pageSize: number = THREADS_PER_PAGE): number {
-    return threadShowCount.get(groupId) ?? pageSize
-  }
-
-  function showMoreThreads(
-    groupId: string,
-    total: number,
-    pageSize: number = THREADS_PER_PAGE
-  ): void {
-    const current = threadShowCount.get(groupId) ?? pageSize
-    threadShowCount.set(groupId, Math.min(current + pageSize, total))
-  }
-
-  function showLessThreads(groupId: string, pageSize: number = THREADS_PER_PAGE): void {
-    threadShowCount.set(groupId, pageSize)
-  }
-  // Built-in Set/Map are not reactive in runes mode   mutations must go through SvelteSet/SvelteMap.
-  const expandedFolders = new SvelteSet<string>()
-
-  /** Initialise expandedFolders: start with all projects expanded, then fold
-   *  any the user has previously collapsed. */
-  function initExpandedFolders(visible: Project[]): void {
-    expandedFolders.clear()
-    for (const p of visible) expandedFolders.add(p.id)
-    for (const id of rendererRecovery.collapsedFolders) expandedFolders.delete(id)
-  }
+  const sidebar = new WorkspaceSidebarController()
 
   /** Selection + terminal state live in the shared store (drives the app header). */
   let selectedThread = $derived(workspaceState.selectedThread)
@@ -396,65 +331,28 @@
       drive sort order regardless of whether the user is typing or dictating. */
   let draftThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
-    for (const t of allThreads) {
-      if (t.archived) continue
-      if (
-        rendererRecovery.hasDraftContent(t.projectId, t.id) ||
-        speechController.isCapturingThread(t.id)
-      )
-        keys.add(threadVisitKey(t))
+    // Only threads that actually hold unsent content belong here, and the draft
+    // store is the authority on which those are. Scanning every thread instead
+    // asked `hasDraftContent` about each one, which materialized an empty draft
+    // entry (six arrays) per thread and subscribed to a draft slot per thread,
+    // on every keystroke.
+    for (const ref of rendererRecovery.listDraftThreadRefs()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
+    }
+    for (const ref of rendererRecovery.queuedMessageThreads()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
+    }
+    // An active voice capture counts as draft activity too, so the row leaves
+    // the "visited" order while the mic is open. Only one scope captures at a
+    // time, so the thread scan below costs nothing with the mic closed.
+    if (speechController.capturingScope) {
+      for (const t of allThreads) {
+        if (!t.archived && speechController.isCapturingThread(t.id)) {
+          keys.add(threadVisitKey(t))
+        }
+      }
     }
     return keys
-  })
-
-  /** Provider catalog for the Chats tab   feeds the empty-state composer so the
-      model picker is populated before the first message creates a thread. */
-  let chatInboxId = $state<string | null>(null)
-  let chatProviders = $derived(
-    chatInboxId
-      ? (providerCatalog.cached(chatInboxId) ?? providerCatalog.allCached())
-      : providerCatalog.allCached()
-  )
-  /** Effective chat settings   the chat's own model when one has been picked,
-   *  else the last project model so a fresh chat starts on the model in use. */
-  let chatComposerSettings = $derived(chatEffectiveSettings())
-
-  /** Live account quota for the not-yet-created "Start a new chat" composer
-   *  the exact same provider-level hover-fetch cache the thread battery uses. */
-  const newChatUsage = createAccountUsageCache()
-  function revealNewChatUsage(): void {
-    if (newChatUsage.isStale()) {
-      void newChatUsage.refresh({
-        harnessId: chatComposerSettings.harnessId,
-        providerId: chatComposerSettings.providerId
-      })
-    }
-  }
-  const newChatHarnessUsage = $derived.by((): AgentHarnessUsage[] =>
-    newChatUsage.usage.map((usage) => ({
-      harnessId: usage.harnessId,
-      providerId: usage.providerId,
-      costUsd: 0,
-      rateLimits: usage.rateLimits,
-      ...(usage.credits ? { credits: usage.credits } : {}),
-      ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
-    }))
-  )
-  $effect(() => {
-    if (mode !== 'chats') return
-    let alive = true
-    void (async () => {
-      try {
-        const inbox = await invoke('project:ensureInbox')
-        if (!alive) return
-        chatInboxId = inbox.id
-      } catch {
-        if (alive) chatInboxId = null
-      }
-    })()
-    return () => {
-      alive = false
-    }
   })
 
   let projectCreateTrigger = $state(0)
@@ -463,7 +361,12 @@
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
+  let prevAssistantTaskCount = 0
+  let prevAssistantRoutineCount = 0
   let prevProjectFileOpenCount = 0
+  let prevToggleContextSidebarCount = 0
+  /** Bumped to open the new-routine dialog from a keyboard shortcut. */
+  let routineCreateTrigger = $state(0)
   let creatingThread = false
 
   // This view hosts the terminal panel   advertise it to the header.
@@ -547,6 +450,34 @@
     }
   })
 
+  /** React to Cmd/Ctrl+N on the Assistant view → new task, inside the routine
+   *  the user is currently in when there is one, routine-less otherwise. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantTaskCount
+    if (current !== prevAssistantTaskCount && workspaceState.consumeAssistantTaskRequest()) {
+      prevAssistantTaskCount = current
+      void createAssistantTaskFromShortcut()
+    }
+  })
+
+  /** React to Cmd/Ctrl+Shift+N on the Assistant view → new routine. */
+  $effect(() => {
+    const current = workspaceState.requestAssistantRoutineCount
+    if (current !== prevAssistantRoutineCount && workspaceState.consumeAssistantRoutineRequest()) {
+      prevAssistantRoutineCount = current
+      routineCreateTrigger++
+    }
+  })
+
+  /** React to Cmd/Ctrl+Shift+S → toggle the right (context) sidebar. */
+  $effect(() => {
+    const current = workspaceState.requestToggleContextSidebarCount
+    if (current !== prevToggleContextSidebarCount) {
+      prevToggleContextSidebarCount = current
+      if (workspaceState.consumeToggleContextSidebarRequest()) toggleContextSidebar()
+    }
+  })
+
   /** Reveal a file selected from the cross-project Ctrl+K search. */
   $effect(() => {
     const current = workspaceState.requestProjectFileOpenCount
@@ -566,146 +497,6 @@
     }
   })
 
-  // Per-project thread search (activation + query)
-  const projectSearchOpen = new SvelteSet<string>()
-  const projectSearchQueries = new SvelteMap<string, string>()
-  const projectSearchResults = new SvelteMap<string, ThreadSearchResult[]>()
-  const projectSearching = new SvelteSet<string>()
-  const projectSearchTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>()
-  const projectSearchRequestIds = new SvelteMap<string, number>()
-  let projectSearchBootstrap = false
-
-  function clearProjectSearch(projectId: string): void {
-    projectSearchOpen.delete(projectId)
-    projectSearchQueries.delete(projectId)
-    projectSearchResults.delete(projectId)
-    projectSearching.delete(projectId)
-    const timer = projectSearchTimers.get(projectId)
-    if (timer) clearTimeout(timer)
-    projectSearchTimers.delete(projectId)
-  }
-
-  function openProjectSearch(projectId: string): void {
-    projectSearchOpen.add(projectId)
-    // Keep the folder expanded so search results stay visible in the sidebar.
-    expandedFolders.add(projectId)
-    if (!projectSearchBootstrap) {
-      projectSearchBootstrap = true
-      setTimeout(() => {
-        projectSearchBootstrap = false
-        for (const projectId of projectSearchOpen) {
-          runProjectSearch(projectId, projectSearchQueries.get(projectId) ?? '')
-        }
-      }, 0)
-    }
-  }
-
-  function closeProjectSearch(projectId: string): void {
-    clearProjectSearch(projectId)
-  }
-
-  function runProjectSearch(projectId: string, raw: string): void {
-    const safeQuery = raw.trim()
-    const timer = projectSearchTimers.get(projectId)
-    if (timer) clearTimeout(timer)
-    const requestId = (projectSearchRequestIds.get(projectId) ?? 0) + 1
-    projectSearchRequestIds.set(projectId, requestId)
-    if (!safeQuery) {
-      projectSearchResults.delete(projectId)
-      projectSearching.delete(projectId)
-      return
-    }
-    projectSearching.add(projectId)
-    projectSearchTimers.set(
-      projectId,
-      setTimeout(() => {
-        void invoke('threads:search', safeQuery, { projectId, limit: 50 })
-          .then((results) => {
-            if (projectSearchRequestIds.get(projectId) !== requestId) return
-            projectSearchResults.set(
-              projectId,
-              results.filter((r) => !isOrchestrationChildThread(r.thread))
-            )
-            projectSearching.delete(projectId)
-          })
-          .catch(() => {
-            if (projectSearchRequestIds.get(projectId) !== requestId) return
-            projectSearchResults.delete(projectId)
-            projectSearching.delete(projectId)
-          })
-      }, 120)
-    )
-  }
-
-  function filterThreadsByQuery(threads: Thread[], query: string): Thread[] {
-    const q = query.trim().toLowerCase()
-    if (!q) return threads
-    return threads.filter((t) => t.title.toLowerCase().includes(q))
-  }
-
-  function threadHasVisibleWork(thread: Thread): boolean {
-    const settledWorking = agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadWorking(thread)
-    return settledWorking || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-  }
-
-  // Threads-view global search (activation + query), mirroring the per-project
-  // search above: the popover only hosts the input, results render in the sidebar
-  // and stay put until the search is explicitly dismissed (Escape / re-click / X).
-  let threadsSearchOpen = $state(false)
-  let threadsSearchQuery = $state('')
-  let threadsSearchResults = $state<ThreadSearchResult[]>([])
-  let threadsSearching = $state(false)
-  let threadsSearchTimer: ReturnType<typeof setTimeout> | undefined
-  let threadsSearchRequestId = 0
-
-  function openThreadsSearch(): void {
-    threadsSearchOpen = true
-    if (threadsSearchQuery.trim()) runThreadsSearch(threadsSearchQuery)
-  }
-
-  function closeThreadsSearch(): void {
-    threadsSearchOpen = false
-    threadsSearchQuery = ''
-    threadsSearchResults = []
-    threadsSearching = false
-    threadsSearchRequestId++
-    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
-    threadsSearchTimer = undefined
-  }
-
-  function runThreadsSearch(raw: string): void {
-    threadsSearchQuery = raw
-    const safeQuery = raw.trim()
-    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
-    const requestId = ++threadsSearchRequestId
-    if (!safeQuery) {
-      threadsSearchResults = []
-      threadsSearching = false
-      return
-    }
-    threadsSearching = true
-    threadsSearchTimer = setTimeout(() => {
-      void invoke('threads:search', safeQuery, { limit: 50 })
-        .then((results) => {
-          if (requestId !== threadsSearchRequestId) return
-          threadsSearchResults = results.filter(
-            (r) =>
-              !isOrchestrationChildThread(r.thread) &&
-              r.thread.projectId !== INBOX_PROJECT_ID &&
-              !r.thread.archived
-          )
-          threadsSearching = false
-        })
-        .catch(() => {
-          if (requestId !== threadsSearchRequestId) return
-          threadsSearchResults = []
-          threadsSearching = false
-        })
-    }, 120)
-  }
-
   /** Clicking into the chat composer means the user found what they were
    *  looking for: any open sidebar thread search is dismissed immediately
    *  ("click and go") instead of lingering and blocking the composer. Runs in
@@ -714,32 +505,18 @@
     const target = event.target
     if (!(target instanceof Element)) return
     if (!target.closest('[data-onboarding="composer"]')) return
-    if (threadsSearchOpen) closeThreadsSearch()
-    for (const projectId of [...projectSearchOpen]) closeProjectSearch(projectId)
+    sidebar.closeAllSearches()
   }
 
   /** Project icon data URLs keyed by project id. */
   const projectIcons = new SvelteMap<string, string>()
 
-  // Folder ellipsis menu
-  let openProjectMenuId = $state<string | null>(null)
-  // Remove-project confirmation
-  let showRemoveModal = $state(false)
-  let removeTarget = $state<Project | null>(null)
-  /** Folder-erasure switch for the remove-project modal. Always starts off. */
-  let removeDeleteFolder = $state(false)
-  /** Second-confirmation modal shown when folder erasure is requested. */
-  let showRemoveFinalConfirm = $state(false)
-  /** Project currently being deleted in the background; guards repeat clicks. */
-  let deletingProjectId = $state<string | null>(null)
-
-  // Edit-project modal
-  let showEditModal = $state(false)
-  let editProject = $state<Project | null>(null)
-  let editProjectName = $state('')
-  let editProjectColor = $state<string | undefined>()
-  let editProjectIconType = $state<string | undefined>()
-  let editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
+  const projectDialogs = new WorkspaceProjectDialogs({
+    getProjects: () => projects,
+    setProjects: (next) => (projects = next),
+    getProjectIcons: () => projectIcons,
+    deleteProject
+  })
 
   // Scope actions (edit, pin, archive, worktree lifecycle, merge, delete) shared
   // with the scope board, so the sidebar scope and the board offer the same set.
@@ -750,11 +527,12 @@
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
-    // Inbox chats browse the thread's own artifact directory instead of a
-    // project root; the mount must be registered before the root listing.
-    if (selectedThread.projectId === INBOX_PROJECT_ID) {
+    // Conversations browse their own app-owned workspace directory instead of a
+    // project root (a chat's artifact directory, an assistant task's working
+    // directory); the mount must be registered before the root listing.
+    if (usesThreadWorkspaceMount(selectedThread.projectId)) {
       projectFilesWorkspace.ensureState(selectedThread.projectId)
-      projectFilesWorkspace.setChatThread(selectedThread.projectId, selectedThread.id)
+      projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
       await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
       return
@@ -775,10 +553,9 @@
   }
 
   function openNewBrowser(): string | null {
-    const activeTab = contextSidebarState.sidebarActiveTab
-    return contextSidebarState.openBrowser(
-      activeTab?.kind === 'browser' ? activeTab.url : 'http://localhost:3000/'
-    )
+    // A new tab starts blank: no URL is loaded, the address bar stays empty,
+    // and the page only loads once the user types an address.
+    return contextSidebarState.openBrowser('')
   }
 
   function openDebugger(): void {
@@ -827,6 +604,34 @@
     open()
   }
 
+  /**
+   * Cmd/Ctrl+Shift+S toggles the whole right sidebar instead of one tool: it
+   * hides whatever is on screen, or brings back the tool the user last had
+   * selected there. Nothing selected yet means there is nothing to bring back,
+   * so the file tree opens when the thread on screen has one and otherwise the
+   * first tool the context rail offers, which is exactly what that rail icon
+   * would do.
+   */
+  function toggleContextSidebar(): void {
+    if (contextSidebarState.toggleLastSelected()) return
+    if (fileTreeAvailable) {
+      void openFiles()
+      return
+    }
+    firstContextTool()?.onSelect()
+  }
+
+  /** The first tool on the context rail that opens a panel in the right sidebar.
+   *  History is a floating flyout rather than a panel, and a terminal docked at
+   *  the bottom has left the sidebar for the dock, so neither answers the
+   *  fallback: toggling the right sidebar must not reveal the bottom dock. */
+  function firstContextTool(): ContextDockItem | undefined {
+    const opensInSidebar = (item: ContextDockItem): boolean =>
+      item.id !== 'history' &&
+      !(item.id === 'terminal' && contextSidebarState.terminalPlacement === 'bottom')
+    return dockGroups.flat().find(opensInSidebar)
+  }
+
   /** Quick chats and explains open from inside a thread and live in the sidebar
    *  as tabs. The rail mirrors them so they can be toggled away and back without
    *  losing the conversation. Durable audits use the coordinator dock instead. */
@@ -861,12 +666,19 @@
 
   function openMemoryTab(): void {
     if (!selectedThread) return
-    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+    contextSidebarState.openMemory(
+      selectedThread.projectId,
+      selectedThread.id,
+      undefined,
+      selectedThread.routineId
+    )
   }
 
-  /** The coordinator published by the thread on screen, if it coordinates work. */
+  /** The coordinator published by the thread on screen, if it coordinates work.
+   *  A worker/auditor child publishes under its coordinator's id, so the panel
+   *  stays docked as the user moves between its children. */
   let coordinator = $derived(
-    coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
+    coordinatorDockState.forThread(selectedThread?.projectId, activeThreadRowId(selectedThread))
   )
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
@@ -1002,128 +814,22 @@
     Boolean(activeProject?.source === 'local' && activeProject.path)
   )
 
-  /** Whether the message-history jump menu (first item on the context dock) is open. */
-  let showHistoryMenu = $state(false)
-  let showBrowserMenu = $state(false)
-  let showClearBrowserDataConfirm = $state(false)
-  let browserDataClearProjectId = $state<string | null>(null)
-  let browserDataClearing = $state(false)
-
-  function openBrowserContextMenu(event: MouseEvent): void {
-    event.preventDefault()
-    showBrowserMenu = true
-  }
-
-  function requestBrowserDataClear(): void {
-    if (!selectedThread) return
-    showBrowserMenu = false
-    browserDataClearProjectId = selectedThread.projectId
-    showClearBrowserDataConfirm = true
-  }
-
-  async function clearBrowserData(): Promise<void> {
-    const projectId = browserDataClearProjectId
-    if (!projectId || browserDataClearing) return
-    browserDataClearing = true
-    try {
-      await invoke('browser:clearData', projectId)
-      showClearBrowserDataConfirm = false
-      browserDataClearProjectId = null
-    } catch (error) {
-      reportError(error, 'Browser cookies and site data could not be cleared.')
-    } finally {
-      browserDataClearing = false
-    }
-  }
-
-  let browserDownloads = $state<BrowserDownload[]>([])
-  let showBrowserDownloads = $state(false)
-
-  const activeDownloadCount = $derived(
-    selectedThread
-      ? browserDownloads.filter((download) => download.projectId === selectedThread.projectId)
-          .length
-      : 0
+  /** Whether the file tree can be opened for the thread on screen: a local
+   *  project with a real path, or a conversation that owns its own workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory). */
+  let fileTreeAvailable = $derived(
+    Boolean(
+      selectedThread &&
+      (usesThreadWorkspaceMount(selectedThread.projectId) || projectToolsAvailable)
+    )
   )
 
-  function upsertBrowserDownload(next: BrowserDownload): void {
-    const index = browserDownloads.findIndex((candidate) => candidate.id === next.id)
-    if (index >= 0) {
-      browserDownloads[index] = next
-      return
-    }
-    browserDownloads = [...browserDownloads, next]
-  }
-
-  function openBrowserDownloads(): void {
-    showBrowserMenu = false
-    showBrowserDownloads = true
-    if (!selectedThread) return
-    void invoke('browser:getDownloads', selectedThread.projectId)
-      .then((downloads) => {
-        browserDownloads = downloads
-      })
-      .catch((error: unknown) => {
-        reportError(error, 'Browser downloads could not be loaded.')
-      })
-  }
-
-  function pauseBrowserDownload(download: BrowserDownload): void {
-    void invoke('browser:pauseDownload', download.id).catch(() => {})
-  }
-
-  function resumeBrowserDownload(download: BrowserDownload): void {
-    void invoke('browser:resumeDownload', download.id).catch(() => {})
-  }
-
-  function cancelBrowserDownload(download: BrowserDownload): void {
-    void invoke('browser:cancelDownload', download.id).catch(() => {})
-  }
-
-  function openBrowserDownload(download: BrowserDownload): void {
-    void invoke('browser:openDownload', download.id).catch((error: unknown) => {
-      reportError(error, 'The downloaded file could not be opened.')
-    })
-  }
-
-  function revealBrowserDownload(download: BrowserDownload): void {
-    void invoke('browser:revealDownload', download.id).catch((error: unknown) => {
-      reportError(error, 'The downloaded file could not be revealed.')
-    })
-  }
-
-  function browserDownloadHost(url: string): string {
-    try {
-      return new URL(url).host
-    } catch {
-      return url
-    }
-  }
-
-  function browserDownloadBytes(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-  }
-
-  function browserDownloadStateLabel(download: BrowserDownload): string {
-    if (download.state === 'completed') return 'Completed'
-    if (download.state === 'cancelled') return 'Cancelled'
-    if (download.state === 'interrupted') return 'Interrupted'
-    return download.paused ? 'Paused' : 'Downloading'
-  }
-
-  function browserDownloadTone(
-    download: BrowserDownload
-  ): 'success' | 'danger' | 'warning' | 'neutral' | 'info' {
-    if (download.state === 'completed') return 'success'
-    if (download.state === 'cancelled') return 'neutral'
-    if (download.state === 'interrupted') return 'danger'
-    return download.paused ? 'warning' : 'info'
-  }
-
+  /** Whether the message-history jump menu (first item on the context dock) is open. */
+  let showHistoryMenu = $state(false)
+  const browser = new WorkspaceBrowserController({
+    getSelectedProjectId: () => selectedThread?.projectId ?? null
+  })
   function jumpToHistoryMessage(id: string): void {
     showHistoryMenu = false
     workspaceState.jumpToMessage?.(id)
@@ -1140,6 +846,11 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev)   never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+    // Assistant tasks are conversations too: their rail adds the how-to panel
+    // and mounts the file tree on the task's own working directory, but it still
+    // carries no terminal, actions or cloud tools.
+    const isAssistantThread = selectedThread.projectId === ASSISTANT_SPACE_ID
+    const isConversation = isChatThread || isAssistantThread
 
     // The message-history counter leads the rail so it reads first, like a
     // running tally of the conversation   click to jump to any past message.
@@ -1160,18 +871,35 @@
       }
     ]
 
+    // The how-to panel is an assistant task's own authoring surface: it sits
+    // right under history, above the workspace tools.
+    const assistantTools: ContextDockItem[] = isAssistantThread
+      ? [
+          {
+            id: 'assistant-how-to',
+            label: 'How to',
+            icon: Hammer,
+            active: dockKindActive('assistant-how-to'),
+            onSelect: () =>
+              toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
+          }
+        ]
+      : []
+
     const workspaceTools: ContextDockItem[] = []
-    // Chats surface their own per-thread artifact directory as the file tree.
-    if (isChatThread) {
+    // Conversations surface their own app-owned workspace directory as the file
+    // tree: a chat's artifact directory, or an assistant task's working
+    // directory (the routine's root).
+    if (isConversation) {
       workspaceTools.push({
         id: 'files',
-        label: 'Artifacts',
+        label: isChatThread ? 'Artifacts' : 'Workspace files',
         icon: FolderTree,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
     }
-    if (!isChatThread && projectToolsAvailable) {
+    if (!isConversation && projectToolsAvailable) {
       workspaceTools.push(
         {
           id: 'files',
@@ -1189,7 +917,7 @@
         }
       )
     }
-    if (!isChatThread && workspaceState.terminalAvailable) {
+    if (!isConversation && workspaceState.terminalAvailable) {
       workspaceTools.push({
         id: 'terminal',
         label: terminalOpen ? 'Hide terminal' : 'Show terminal',
@@ -1234,7 +962,7 @@
         onSelect: () => toggleDockPanel('memory', openMemoryTab)
       }
     ]
-    if (!isChatThread) {
+    if (!isConversation) {
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
@@ -1320,13 +1048,14 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: Globe2,
         active: dockKindActive('browser'),
-        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
-        menu: showBrowserMenu ? browserMenu : undefined,
+        countBadge:
+          browser.activeDownloadCount > 0 ? String(browser.activeDownloadCount) : undefined,
+        menu: browser.menuOpen ? browserMenu : undefined,
         onSelect: () => {
-          showBrowserMenu = false
+          browser.menuOpen = false
           toggleDockPanel('browser', focusBrowser)
         },
-        onContextMenu: openBrowserContextMenu
+        onContextMenu: browser.openContextMenu
       })
     }
 
@@ -1350,6 +1079,7 @@
 
     return [
       history,
+      assistantTools,
       workspaceTools,
       sessionTools,
       temporaryChats,
@@ -1371,12 +1101,22 @@
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
-  /** All open browser tabs, for the fullscreen dialog's tab strip. */
-  let fullscreenBrowserTabs = $derived(
-    contextSidebarState.tabs.filter((tab) => tab.kind === 'browser')
-  )
-  let fullscreenTerminalTabs = $derived(
-    contextSidebarState.tabs.filter((tab) => tab.kind === 'terminal')
+
+  /** The terminal tab actually shown fullscreen, or null when the recorded id no
+   *  longer names an open terminal.
+   *
+   *  A bare id is not enough. It is what publishes the `workspace-terminal-fullscreen`
+   *  suppression block below, and a tab can disappear without any of the three
+   *  closers running   its thread or project can be deleted, or the whole sidebar
+   *  can be rebuilt. A stale id would then keep the browser's native view
+   *  detached with nothing on screen to justify it, which reads as a browser
+   *  panel that never paints. Deriving from the live tab list makes that
+   *  unreachable, and it is also the id the fullscreen surface itself renders
+   *  from, so a stale one can no longer reopen an empty terminal dialog later. */
+  let terminalFullscreenTab = $derived(
+    contextSidebarState.tabs.find(
+      (tab) => tab.id === terminalFullscreenTabId && tab.kind === 'terminal'
+    ) ?? null
   )
 
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
@@ -1385,7 +1125,8 @@
     const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
     const remaining = openTabs.filter((tab) => tab.id !== tabId)
     closeContextTab(tabId)
-    if (remaining.length === 0) return
+    // Nothing left of that kind: the surface has no tab to show, so the record
+    // has to go with it rather than point at the tab that just closed.
     const fallback = remaining.at(-1)?.id ?? null
     if (kind === 'terminal') terminalFullscreenTabId = fallback
     else browserFullscreenTabId = fallback
@@ -1402,41 +1143,54 @@
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
-    if (!tab || !('projectId' in tab)) return
+    const openProjectId = activeProject?.id ?? null
+    if (!tab || !('projectId' in tab)) {
+      // No panel is claiming the keep-mounted host right now (the sidebar is
+      // hidden, or a tab without a project is active). Hold the open project's
+      // panel across thread switches, but drop it once the user has moved to
+      // another project: a host left behind would bootstrap the repository the
+      // user just left the moment the sidebar shows again.
+      if (gitPanelProjectId !== null && gitPanelProjectId !== openProjectId) {
+        gitPanelProjectId = null
+      }
+      return
+    }
     if (tab.kind !== 'git') {
       if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
-    const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
-    const thread = allThreads.find(
-      (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
-    )
+    // Scope comes from the store's resolved bucket for that project (the open
+    // thread's scope, else the project's last one). Reading it off the bounded
+    // thread list missed a thread that was not hydrated yet and fell back to
+    // the project root, so the panel swapped scopes twice on open.
     gitPanelProjectId = tab.projectId
-    gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    gitPanelScopeBucketId = workspaceState.activeScopeBucketIdFor(tab.projectId)
   })
 
   // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
   // file editors) covers the workspace. The browser's native view floats above
   // every DOM surface, so it must be hidden while such a surface is open   the
-  // browser panel unmounts its native surface via its own visibility lifecycle
-  // when this flips true. The browser's own fullscreen dialog is not registered
+  // browser panel asks the browser-visibility store and detaches its native
+  // surface accordingly. The browser's own fullscreen dialog is not registered
   // here so the browser stays visible when the user fullscreens it deliberately.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(
+  // Every modal publishes that block for itself now (`ui/Modal.svelte`), and the
+  // full screen browser is the one surface that opts out of it
+  // (`blocksBrowserView`), because the view it would suppress is the page it is
+  // showing.
+  $effect(() =>
+    browserVisibility.hideWhile(
       'workspace-terminal-fullscreen',
-      terminalFullscreenTabId !== null
+      'fullscreen-surface',
+      terminalFullscreenTab !== null
     )
-  })
+  )
 
   // App.svelte keeps this Workspace mounted (but CSS-hidden) when the user
   // navigates to Settings/Scope, so its state survives the trip. The browser's
   // native view has no notion of that DOM hide and keeps floating at its last
   // screen bounds on top of whatever renders there instead   suppress it
   // whenever this Workspace isn't the active top-level view.
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', !active)
-    return () => contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', false)
-  })
+  $effect(() => browserVisibility.hideWhile('workspace-inactive', 'workspace-inactive', !active))
 
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
@@ -1497,10 +1251,20 @@
       : 'minmax(0, 1fr)'
   )
 
+  /** Show one context tab fullscreen. Only one surface can own the window, so
+   *  opening one closes the other kind instead of leaving two full screen dialogs
+   *  stacked, where the lower one's suppression block would blank the browser's
+   *  native view. */
   function openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
-    if (tab?.kind === 'browser') browserFullscreenTabId = tabId
-    if (tab?.kind === 'terminal') terminalFullscreenTabId = tabId
+    if (tab?.kind === 'browser') {
+      browserFullscreenTabId = tabId
+      terminalFullscreenTabId = null
+    }
+    if (tab?.kind === 'terminal') {
+      terminalFullscreenTabId = tabId
+      browserFullscreenTabId = null
+    }
   }
 
   /** A files tab with unsaved changes waiting on a save/discard decision. */
@@ -1555,6 +1319,11 @@
       if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
       void invoke('browser:destroy', tab.id)
     }
+    // Symmetric with the browser: closing the terminal that is showing fullscreen
+    // would otherwise leave the fullscreen record pointing at a tab that is gone.
+    if (tab.kind === 'terminal' && terminalFullscreenTabId === tab.id) {
+      terminalFullscreenTabId = null
+    }
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
@@ -1584,7 +1353,16 @@
 
   let pinnedThreads = $derived(
     allThreads
-      .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
+      .filter(
+        (t) =>
+          t.pinned &&
+          !t.archived &&
+          t.projectId !== INBOX_PROJECT_ID &&
+          // Assistant tasks live only in Assistant View: a pinned assistant
+          // thread (every routine's how-to thread is pinned) must never surface
+          // in the Projects sidebar's pinned section.
+          t.projectId !== ASSISTANT_SPACE_ID
+      )
       .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
@@ -1602,6 +1380,28 @@
 
   let pinnedProjects = $derived(visibleProjects.filter((p) => p.pinned))
   let regularProjects = $derived(visibleProjects.filter((p) => !p.pinned))
+
+  // ─── Assistant space ──────────────────────────────────────────────────────
+  /** The hidden assistant container (assistant tasks live here). */
+  let assistantProject = $derived(
+    projects.find((project) => project.id === ASSISTANT_SPACE_ID) ?? null
+  )
+  /** Every assistant-space thread (tasks and runs), active only. */
+  let assistantThreads = $derived(
+    allThreads.filter((thread) => thread.projectId === ASSISTANT_SPACE_ID && !thread.archived)
+  )
+  /** Assistant tasks, most recent activity first. A run is not a task, so the
+   *  sidebar, the shortcuts, and the panel never treat one as a task. */
+  let assistantTasks = $derived(
+    assistantThreads
+      .filter((thread) => !thread.assistantTaskId)
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  )
+  /** Every task's runs, newest first, for the sidebar's nested rows. */
+  let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every run thread, for the header search's Runs results. */
+  let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
+  let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
@@ -1641,6 +1441,9 @@
       (t) =>
         !t.archived &&
         t.projectId !== INBOX_PROJECT_ID &&
+        // Assistant tasks are Assistant View's own rows, never the Threads
+        // timeline's, so a pinned how-to thread cannot appear among them.
+        t.projectId !== ASSISTANT_SPACE_ID &&
         threadProjectFilterState.matches(t.projectId)
     )
     // Pinned threads keep one shared pin-time order; the default status sort
@@ -1696,12 +1499,6 @@
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
 
-  function getThreadIcon(thread: Thread): string | null {
-    const project = projects.find((p) => p.id === thread.projectId)
-    if (!project) return null
-    return getProjectIcon(project, projectIcons.get(project.id))
-  }
-
   // ─── Data loading ────────────────────────────────────────────────────────
 
   /** Keep keyed sidebar rows safe even when hydration and live updates overlap. */
@@ -1735,7 +1532,8 @@
       existing.status === thread.status &&
       existing.title === thread.title &&
       existing.pinned === thread.pinned &&
-      existing.read === thread.read
+      existing.read === thread.read &&
+      existing.routineId === thread.routineId
     ) {
       return
     }
@@ -1776,8 +1574,11 @@
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
       scopeState.updateThread(updated)
-      if (isOrchestrationChildThread(updated)) return
-      upsertThreadInList(updated)
+      // Children stay out of the sidebar list, but the read flow below must
+      // still cover them: the coordinator panel renders a worker's live status
+      // chip from its own thread row, so an opened worker settles unread to
+      // read exactly like a regular thread.
+      if (!isOrchestrationChildThread(updated)) upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         // Auto-mark the selected thread read only while the window actually
@@ -1788,7 +1589,7 @@
         // snapshot is applied to every sidebar store here so the badge can
         // never linger on a stale unread state when the backend's own
         // broadcast is missed.
-        if (!updated.read && document.hasFocus()) {
+        if (!updated.read && document.hasFocus() && threadTracksReadStatus(updated)) {
           requestThreadRead(updated.projectId, updated.id)
         }
       }
@@ -1833,7 +1634,12 @@
     const thread = selectedThread
     if (!thread || thread.id === readSettledThreadId) return
     readSettledThreadId = thread.id
-    if (thread.read || isOrchestrationChildThread(thread) || !document.hasFocus()) return
+    // Only a thread that tracks read status settles here: a regular thread, or
+    // a worker whose reporting the user switched off (the coordinator panel
+    // shows its status chip, so an opened or selected non-reporting worker must
+    // not stay unread). Reporting workers and auditors carry no read state:
+    // the Assignment lifecycle is their indicator.
+    if (thread.read || !threadTracksReadStatus(thread) || !document.hasFocus()) return
     markThreadReadAfterPaint(thread)
   })
 
@@ -1846,7 +1652,7 @@
   $effect(() => {
     const onWindowFocus = (): void => {
       const selected = workspaceState.selectedThread
-      if (!selected || selected.read || isOrchestrationChildThread(selected)) return
+      if (!selected || selected.read || !threadTracksReadStatus(selected)) return
       requestThreadRead(selected.projectId, selected.id)
     }
     window.addEventListener('focus', onWindowFocus)
@@ -1914,12 +1720,6 @@
         return
       }
       if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
-    })
-  })
-
-  $effect(() => {
-    return subscribe('browser:download', (download) => {
-      upsertBrowserDownload(download)
     })
   })
 
@@ -2037,13 +1837,13 @@
           id: 'search',
           component: SidebarSearchControl as unknown as ViewActionItem['component'],
           props: {
-            open: threadsSearchOpen,
-            query: threadsSearchQuery,
+            open: sidebar.threadsSearchOpen,
+            query: sidebar.threadsSearchQuery,
             onOpenChange: (open: boolean) => {
-              if (open) openThreadsSearch()
-              else closeThreadsSearch()
+              if (open) sidebar.openThreadsSearch()
+              else sidebar.closeThreadsSearch()
             },
-            onQueryChange: runThreadsSearch,
+            onQueryChange: sidebar.runThreadsSearch,
             ariaLabel: 'Search threads',
             title: 'Search threads',
             placeholder: 'Search threads…',
@@ -2057,7 +1857,7 @@
                 icon: Plus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
-                shortcut: keymapKeys('nav-new-thread'),
+                shortcut: keymapState.keysFor('nav-new-thread'),
                 run: () => void createThreadInProject(activeProject)
               } satisfies ViewActionItem
             ]
@@ -2088,7 +1888,7 @@
           icon: SquarePen,
           ariaLabel: 'New chat',
           title: 'New chat',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: startNewChat
         }
       ]
@@ -2117,7 +1917,7 @@
           icon: Plus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: () => newThreadInScopeContext()
         },
         {
@@ -2127,6 +1927,37 @@
         }
       ]
       viewActions.set('scoped-threads', scopedActions)
+    } else if (mode === 'assistant') {
+      const assistantActions: ViewActionItem[] = [
+        {
+          id: 'search',
+          component: AssistantSearchControl as unknown as ViewActionItem['component'],
+          props: {
+            routines: assistantRoutineList,
+            tasks: assistantTasks,
+            runs: assistantRuns,
+            onOpenTask: openAssistantTask,
+            onOpenRoutine: (routine: Routine) => void openAssistantHowToForRoutine(routine)
+          }
+        },
+        {
+          id: 'new-routine',
+          component: RoutineCreateControl as unknown as ViewActionItem['component'],
+          props: {
+            onCreate: createAssistantRoutine,
+            trigger: routineCreateTrigger
+          }
+        },
+        {
+          id: 'new-task',
+          icon: Clock1,
+          ariaLabel: 'New task',
+          title: 'New task',
+          shortcut: keymapState.keysFor('assistant-new-task'),
+          run: () => void createAssistantTaskFromShortcut()
+        }
+      ]
+      viewActions.set('assistant', assistantActions)
     } else {
       const projectActions: ViewActionItem[] = [
         {
@@ -2218,12 +2049,36 @@
 
   // Keep managed-worktree health fresh for the scoped sidebar too, so the scope
   // menu offers "Repair worktree" exactly when the board would (deduped in the store).
+  //
+  // Worktree health belongs to a *scope*, not to a thread, so this is keyed on
+  // the docked project+bucket values rather than on the sidebar-context object.
+  // `showSidebarForThread` allocates a fresh context object on every thread
+  // switch, so depending on the object made each switch inside one scope look
+  // like a scope change. Depending on the two strings re-runs only when the
+  // scope actually moves or the board changes.
+  const dockedScopeProjectId = $derived(scopeState.sidebarContext?.projectId ?? '')
+  const dockedScopeBucketId = $derived(scopeState.sidebarContext?.bucketId ?? '')
   $effect(() => {
-    const projectId = scopeState.sidebarContext?.projectId
-    scopeState.syncBoardWorktreeHealth(
-      projectId,
-      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    const projectId = dockedScopeProjectId
+    if (!projectId) return
+    const buckets = scopeState.boards.get(projectId)?.buckets
+    scheduleDeferredWork('scope:boardHealth', () =>
+      scopeState.syncBoardWorktreeHealth(projectId, buckets)
     )
+  })
+
+  // Switching the docked scope is an interaction with it: re-read that scope's
+  // health so a checkout that changed on disk is reported right away. Same
+  // value-keyed dependency as above, so a thread switch inside one scope asks
+  // for nothing at all. What does need reading is queued for after the switch
+  // has painted, because discovery shells out to Git.
+  $effect(() => {
+    const projectId = dockedScopeProjectId
+    const bucketId = dockedScopeBucketId
+    if (!projectId || !bucketId) return
+    scheduleDeferredWork('scope:worktreeHealth', () => {
+      void scopeState.revalidateWorktreeHealth(projectId, bucketId).catch(() => undefined)
+    })
   })
 
   // While a thread is selected, keep its row (and project) in focus in the
@@ -2233,6 +2088,11 @@
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
+    // The sidebar only exists while the workspace is on screen. Revealing into a
+    // hidden workspace (Settings/Scope) measures a DOM the user cannot see, and
+    // every background thread update would pay for it. When the workspace comes
+    // back, `active` flips and this effect re-runs to restore the reveal.
+    if (!active) return
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads
@@ -2246,15 +2106,13 @@
       sidebarRevealSuppressed = false
       clearTimeout(sidebarRevealSuppressTimer)
       if (thread.projectId !== INBOX_PROJECT_ID) {
-        expandedFolders.add(thread.projectId)
+        sidebar.expandedFolders.add(thread.projectId)
         // Ensure the folder shows enough rows for the focused thread so its
         // row is actually rendered, then reveal it once the rows mount.
         const folderThreads = threadsByProject.get(thread.projectId) ?? []
         const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
         if (threadIndex >= 0) {
-          const needed = threadIndex + 1
-          const current = threadShowCount.get(thread.projectId) ?? THREADS_PER_PAGE
-          if (needed > current) threadShowCount.set(thread.projectId, needed)
+          sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
         }
         if (!sidebarRevealSuppressed) {
           void tick().then(() => revealThreadInSidebar(thread.id))
@@ -2267,6 +2125,10 @@
     }
     if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
     if (isScopeBoardView) return
+    // Steady state: this effect re-runs on every thread update. A row that is
+    // still in view needs no reveal, and the reveal loop costs a DOM query plus
+    // up to twelve animation frames, so check visibility first.
+    if (isThreadRowVisible(thread.id)) return
     revealThreadInSidebar(thread.id)
   })
 
@@ -2300,31 +2162,18 @@
   $effect(() => {
     const projectId = workspaceState.projectIdToEdit
     if (!projectId) return
-    const project = projects.find((p) => p.id === projectId)
-    if (project) {
-      editProject = project
-      editProjectName = project.name
-      editProjectColor = project.color
-      editProjectIconType = project.iconType
-      editProjectPendingIcon = undefined
-      showEditModal = true
-    }
+    projectDialogs.askEditProject(projectId)
     workspaceState.closeProjectEdit()
-  })
-
-  // Sync allThreads when a thread is moved to a different project via the composer pill.
-  $effect(() => {
-    const count = workspaceState.moveThreadCount
-    const oldId = workspaceState.pendingMoveThreadId
-    const newThread = workspaceState.pendingMoveThread
-    if (count && oldId && newThread) {
-      allThreads = allThreads.filter((t) => t.id !== oldId)
-      upsertThreadInList(newThread)
-    }
   })
 
   async function loadData(): Promise<void> {
     try {
+      // Assistant View is a secondary surface and never hydrates in this pass:
+      // its routines and missed runs are deferred to post-paint (see the finally
+      // block), so nothing about the assistant competes with the first usable
+      // frame. The hidden assistant container itself is created by the main
+      // process before navigation, so its project record is already in
+      // `project:list`.
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
         invoke('thread:listRecentPerProject')
@@ -2341,7 +2190,7 @@
       scopeState.setScopesFromProjects(projectList, projectIcons)
       scopeState.setThreads(uniqueThreads)
       void rescueDraftThreads()
-      initExpandedFolders(projectList.filter((p) => !p.hidden))
+      sidebar.initExpandedFolders(projectList.filter((p) => !p.hidden))
       void loadProjectIcons(projectList).then((icons) => {
         for (const [projectId, iconUrl] of icons) projectIcons.set(projectId, iconUrl)
         scopeState.setScopesFromProjects(projectList, projectIcons)
@@ -2390,9 +2239,13 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
-      // App-start Git discovery launches several local subprocesses. Keep it
-      // out of the first usable frame and let thread selection or opening the
-      // Git panel trigger it immediately when the user actually needs Git.
+      // App-start Git discovery launches several local subprocesses, and its
+      // stale-gated fetch opens a network round trip. Keep both out of the first
+      // usable frame: the delay lands them once the restored conversation has
+      // painted, and thread selection or opening the Git panel still triggers
+      // them immediately when the user gets there first. Triggering the fetch
+      // here is what keeps it off the panel's open path, where a user asking the
+      // panel for something is the last moment a round trip should start.
       window.setTimeout(() => {
         gitState.notifyAppStarted(workspaceState.activeProject)
       }, 2000)
@@ -2442,6 +2295,12 @@
     } finally {
       loading = false
       void invoke('app:rendererReady').catch(() => undefined)
+      // Assistant View hydrates only after the main project view has landed.
+      // Deferred work runs once the shell has painted and the renderer is idle,
+      // so routine/missed-run reads can never occupy the startup frame or race
+      // the project and thread hydration for the main process. Idempotent: a
+      // second call is a no-op, and re-scheduling replaces the pending task.
+      scheduleDeferredWork('assistant:hydrate', () => assistantRoutines.initialize())
     }
   }
 
@@ -2476,7 +2335,7 @@
   }
 
   /** Threads whose unsent composer content fell outside the bounded first-paint
-   *  hydration — drafts persist in renderer storage only (never the DB), so the
+   *  hydration - drafts persist in renderer storage only (never the DB), so the
    *  SQL slice cannot know about them. Drafts load unbounded, like unread:
    *  each is fetched with `thread:get` and merged into both the project-list
    *  (`allThreads`) and the scope store so it shows everywhere immediately,
@@ -2540,17 +2399,14 @@
   })
 
   /** Cmd/Ctrl+W while the context sidebar has focus closes its active tab
-   *  (through the unsaved-changes confirmation) rather than the thread. */
+   *  (through the unsaved-changes confirmation) rather than the thread. The
+   *  store captures the tab id when the request is made and hands it over
+   *  exactly once, and this effect reads nothing else: resolving the active tab
+   *  here instead closed the *next* tab on every re-run, because closing a tab
+   *  changes which tab is active, so one shortcut press cascaded through every
+   *  panel the thread had and kept closing each new panel afterwards. */
   $effect(() => {
-    const request = contextSidebarState.closeActiveTabRequest
-    if (request === 0) return
-    const focused = document.activeElement instanceof Element ? document.activeElement : null
-    const region = focused?.closest<HTMLElement>('[data-region="context-sidebar"]')
-    const placement = region?.dataset.placement
-    const tabId =
-      placement === 'bottom'
-        ? contextSidebarState.terminalActiveTabId
-        : contextSidebarState.sidebarActiveTabId
+    const tabId = contextSidebarState.consumeCloseActiveTabRequest()
     if (tabId) closeContextTab(tabId)
   })
 
@@ -2602,7 +2458,7 @@
   $effect(() => {
     if (mode !== 'threads' || !active) return
     if (threadProjectFilterState.isAll) return
-    if (threadsSearching && threadsSearchQuery.trim()) return
+    if (sidebar.threadsSearching && sidebar.threadsSearchQuery.trim()) return
     const visible = allThreads.filter(
       (t) =>
         !t.archived &&
@@ -2671,11 +2527,10 @@
       // Reveal the freshly fetched rows immediately   the user asked for older
       // threads, so they must not need a second "Show more" click to see them.
       if (additions.length > 0 || page.length > 0) {
-        const current = threadShowCount.get(projectId) ?? THREADS_PER_PAGE
         const folderThreads = allThreads.filter(
           (t) => t.projectId === projectId && !t.archived && !t.pinned
         )
-        threadShowCount.set(projectId, Math.min(current + additions.length, folderThreads.length))
+        sidebar.extendVisibleCount(projectId, additions.length, folderThreads.length)
       }
     } finally {
       projectPageLoading = null
@@ -2687,23 +2542,9 @@
     return !projectExhausted.has(projectId)
   }
 
-  // ─── Folder interactions ─────────────────────────────────────────────────
-
-  function toggleFolder(projectId: string): void {
-    if (expandedFolders.has(projectId)) {
-      expandedFolders.delete(projectId)
-      rendererRecovery.toggleCollapsedFolder(projectId)
-    } else {
-      expandedFolders.add(projectId)
-      rendererRecovery.toggleCollapsedFolder(projectId)
-    }
-  }
-
-  // ─── Project actions ─────────────────────────────────────────────────────
-
   async function handleProjectCreated(project: Project): Promise<void> {
     projects = [project, ...projects]
-    expandedFolders.add(project.id)
+    sidebar.expandedFolders.add(project.id)
     if (project.icon) {
       const url = await invoke('project:getIcon', project.id)
       if (url) projectIcons.set(project.id, url)
@@ -2716,14 +2557,14 @@
   }
 
   function handleExistingProject(project: Project): void {
-    expandedFolders.add(project.id)
+    sidebar.expandedFolders.add(project.id)
   }
 
   async function deleteProject(projectId: string, deleteFolder = false): Promise<void> {
-    if (deletingProjectId !== null) return
+    if (projectDialogs.deletingProjectId !== null) return
     const project = projects.find((p) => p.id === projectId)
     if (!project) return
-    deletingProjectId = projectId
+    projectDialogs.deletingProjectId = projectId
 
     // Deletion is transactional: the backend either deletes everything or
     // nothing (folder erasure runs first and gates every other step). The UI
@@ -2735,7 +2576,7 @@
       reportError(error, 'The project could not be deleted.')
       return
     } finally {
-      deletingProjectId = null
+      projectDialogs.deletingProjectId = null
     }
 
     // Backend deletion succeeded; now mirror it in the UI state.
@@ -2753,171 +2594,6 @@
   }
 
   // ─── Folder ellipsis menu actions ────────────────────────────────────────
-
-  async function copyProjectPath(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project?.path) return
-    try {
-      await copyText(project.path)
-    } catch {
-      // Clipboard not available
-    }
-  }
-
-  async function openInEditor(projectId: string): Promise<void> {
-    await invoke('project:openInEditor', projectId)
-  }
-
-  async function toggleProjectPin(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project) return
-    const updated = await invoke('project:setPinned', projectId, !project.pinned)
-    projects = projects.map((p) => (p.id === updated.id ? updated : p))
-  }
-
-  async function revealProjectInFileManager(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project || !project.path) return
-    await invoke('shell:revealPath', project.path)
-  }
-
-  function askEditProject(projectId: string): void {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project) return
-    editProject = project
-    editProjectName = project.name
-    editProjectColor = project.color
-    editProjectIconType = project.iconType
-    editProjectPendingIcon = undefined
-    showEditModal = true
-  }
-
-  async function confirmEditProject(e?: SubmitEvent): Promise<void> {
-    e?.preventDefault()
-    if (!editProject || !editProjectName.trim()) return
-
-    let updated: Project
-
-    if (editProjectPendingIcon) {
-      // User uploaded a new custom image   persist it now
-      updated = await invoke('project:setIcon', editProject.id, editProjectPendingIcon.path)
-    } else {
-      const hadCustomIcon = !!editProject.icon
-      // Only clear a custom image when switching to an SVG icon type.
-      const switchingToSvgIcon =
-        editProjectIconType !== editProject.iconType && editProjectIconType !== undefined
-
-      if (hadCustomIcon && switchingToSvgIcon) {
-        await invoke('project:clearIcon', editProject.id)
-      }
-
-      updated = await invoke('project:update', editProject.id, {
-        name: editProjectName.trim(),
-        color: editProjectColor,
-        iconType: editProjectIconType
-      })
-    }
-
-    projects = projects.map((p) => (p.id === updated.id ? updated : p))
-
-    // Refresh icon cache
-    if (updated.icon) {
-      const url = await invoke('project:getIcon', updated.id)
-      if (url) projectIcons.set(updated.id, url)
-      else projectIcons.delete(updated.id)
-    } else {
-      projectIcons.delete(updated.id)
-    }
-
-    // Sync the workspace store's active project so the header icon updates immediately
-    if (workspaceState.activeProject?.id === updated.id) {
-      workspaceState.activeProject = updated
-    }
-
-    // Sync the scope store so scope tabs and scope-sidebar project info refresh
-    scopeState.projectRecords = scopeState.projectRecords.map((p) =>
-      p.id === updated.id ? updated : p
-    )
-    const storedIcon = projectIcons.get(updated.id)
-    scopeState.projects = scopeState.projects.map((p) =>
-      p.id === updated.id
-        ? {
-            id: updated.id,
-            name: updated.name,
-            path: updated.path,
-            source: updated.source,
-            host: updated.host,
-            color: updated.color,
-            iconUrl: getProjectIcon(updated, storedIcon)
-          }
-        : p
-    )
-
-    showEditModal = false
-    editProject = null
-    editProjectPendingIcon = undefined
-  }
-
-  async function changeEditProjectIcon(): Promise<void> {
-    if (!editProject) return
-    const imagePath = await invoke('dialog:pickImage')
-    if (!imagePath) return
-    // Read the file as a data URL for local preview only   never persist here
-    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
-    if (!dataUrl) return
-    editProjectPendingIcon = { path: imagePath, dataUrl }
-    // Clear any local colour/icon selection since a custom image takes precedence
-    editProjectColor = undefined
-    editProjectIconType = undefined
-  }
-
-  function askRemoveProject(projectId: string): void {
-    removeTarget = projects.find((p) => p.id === projectId) ?? null
-    if (removeTarget) {
-      // The folder-erasure switch never carries over between opens.
-      removeDeleteFolder = false
-      showRemoveModal = true
-    }
-  }
-
-  function closeRemoveModal(): void {
-    showRemoveModal = false
-    // The switch always rests in the off state; it only ever turns on when
-    // the user explicitly flips it inside the open modal.
-    removeDeleteFolder = false
-  }
-
-  async function confirmRemoveProject(): Promise<void> {
-    const target = removeTarget
-    if (!target || deletingProjectId !== null) return
-    if (removeDeleteFolder) {
-      // Folder erasure is destructive beyond the app, so it gets its own
-      // explicit confirmation before anything is deleted.
-      showRemoveModal = false
-      showRemoveFinalConfirm = true
-      return
-    }
-    showRemoveModal = false
-    removeTarget = null
-    await deleteProject(target.id)
-  }
-
-  function cancelRemoveFinalConfirm(): void {
-    // Return to the first modal with the switch still on so the user can
-    // simply turn it off instead of starting over.
-    showRemoveFinalConfirm = false
-    showRemoveModal = true
-  }
-
-  async function confirmRemoveWithFolder(): Promise<void> {
-    const target = removeTarget
-    if (!target || deletingProjectId !== null) return
-    showRemoveFinalConfirm = false
-    showRemoveModal = false
-    removeTarget = null
-    removeDeleteFolder = false
-    await deleteProject(target.id, true)
-  }
 
   // ─── Scope bucket actions ──────────────────────────────────────────────────
 
@@ -3075,8 +2751,13 @@
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
-    requestedBucketId?: string
+    requestedBucketId?: string,
+    /** Assistant-space grouping: the routine the new task belongs to, and whether
+     *  this is a routine's seed "Getting started" thread. */
+    assistant: { routineId?: string; gettingStarted?: boolean } = {}
   ): Promise<void> {
+    const routineId = assistant.routineId
+    const gettingStarted = assistant.gettingStarted === true
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -3086,9 +2767,68 @@
     const inheritedBucketId =
       activeThread && activeThread.projectId === project.id ? activeThread.scopeBucketId : undefined
     const scopeBucketId = requestedBucketId ?? inheritedBucketId
-    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
+    // The assistant space is its own model-memory family: a new task inherits
+    // the assistant task in focus, and nothing else, so a chat or project
+    // thread that happens to be selected never leaks into the assistant space.
+    const assistantFocus =
+      project.id === ASSISTANT_SPACE_ID && activeThread?.projectId === ASSISTANT_SPACE_ID
+        ? activeThread
+        : null
+    const inheritedSettings =
+      project.id === ASSISTANT_SPACE_ID
+        ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
+        : settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
+      // A routine-scoped create always lands inside its routine, even when it
+      // reuses a blank thread: the reused row predates this call, so its
+      // grouping and setup label are applied here rather than at creation time.
+      const regroup = routineId !== undefined && existing.routineId !== routineId
+      const needsSetupPatch = gettingStarted && existing.assistantGettingStarted !== true
+      if (regroup || needsSetupPatch) {
+        const optimistic: Thread = {
+          ...existing,
+          // A routine's how-to ("Getting started") thread is pinned for life, and
+          // a reused blank row must join the Pinned section too.
+          ...(gettingStarted ? { pinned: true } : {}),
+          ...(regroup ? { routineId } : {}),
+          ...(gettingStarted
+            ? {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual' as const,
+                assistantGettingStarted: true
+              }
+            : {})
+        }
+        upsertThreadInList(optimistic)
+        if (workspaceState.selectedThread?.id === existing.id) {
+          workspaceState.updateThread(optimistic)
+        }
+        const persist = async (): Promise<void> => {
+          if (regroup && routineId) {
+            upsertThreadInList(await assistantRoutines.setTaskRoutine(existing.id, routineId))
+          }
+          if (needsSetupPatch) {
+            upsertThreadInList(
+              await invoke('thread:update', existing.projectId, existing.id, {
+                title: ASSISTANT_SETUP_TITLE,
+                titleSource: 'manual',
+                assistantGettingStarted: true
+              })
+            )
+            // `thread:update` cannot carry the pin, and the how-to thread is
+            // pinned for life, so a reused blank row is pinned in its own write.
+            upsertThreadInList(
+              await invoke('thread:setPinned', existing.projectId, existing.id, true)
+            )
+          }
+          const current = allThreads.find((candidate) => candidate.id === existing.id)
+          if (current && workspaceState.selectedThread?.id === existing.id) {
+            workspaceState.updateThread(current)
+          }
+        }
+        void persist().catch(() => undefined)
+      }
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
@@ -3130,10 +2870,12 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi' as const,
-      title: DEFAULT_THREAD_TITLE,
-      titleSource: 'default' as const,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
+      titleSource: gettingStarted ? ('manual' as const) : ('default' as const),
       status: 'created' as const,
-      pinned: false,
+      // The how-to thread is pinned from the instant it exists, so it never
+      // appears outside the Pinned section and is never an eviction candidate.
+      pinned: gettingStarted,
       archived: false,
       read: true,
       settings: inheritedSettings,
@@ -3141,6 +2883,8 @@
       updatedAt: Date.now(),
       lastActivity: Date.now(),
       workingDirectory: project.path,
+      ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { assistantGettingStarted: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
@@ -3150,7 +2894,7 @@
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsertThreadInList(thread as any)
     threadMessages.seedEmpty(thread.projectId, thread.id)
-    expandedFolders.add(project.id)
+    sidebar.expandedFolders.add(project.id)
     if (scopeBucketId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (scopeBucketId) scopeState.updateThread(thread as any)
@@ -3169,10 +2913,12 @@
       id: optimisticId,
       projectId: project.id,
       providerId: 'pi',
-      title: DEFAULT_THREAD_TITLE,
+      title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
-      ...(scopeBucketId ? { scopeBucketId } : {})
+      ...(scopeBucketId ? { scopeBucketId } : {}),
+      ...(routineId ? { routineId } : {}),
+      ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
@@ -3214,6 +2960,36 @@
     workspaceState.clearThread()
   }
 
+  /** Create a standalone (project-less) chat thread inside the hidden inbox. */
+  async function createInboxThread(): Promise<{ thread: Thread; inbox: Project }> {
+    const inbox = await invoke('project:ensureInbox')
+    const thread = await invoke('thread:create', {
+      projectId: inbox.id,
+      providerId: 'pi',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: '',
+      settings: chatEffectiveSettings(threadSettings.lastUsed)
+    })
+    return { thread, inbox }
+  }
+
+  /**
+   * In-flight creation of the welcome composer's inbox thread. The draft
+   * hand-off (first keystroke) and the first send share it, so a send landing
+   * while the hand-off is still creating the thread can never make a second
+   * one   both wait for the same thread and open it.
+   */
+  let welcomeChatThreadPromise: Promise<{ thread: Thread; inbox: Project }> | null = null
+
+  function ensureWelcomeChatThread(): Promise<{ thread: Thread; inbox: Project }> {
+    if (!welcomeChatThreadPromise) {
+      welcomeChatThreadPromise = createInboxThread().finally(() => {
+        welcomeChatThreadPromise = null
+      })
+    }
+    return welcomeChatThreadPromise
+  }
+
   /** Create a standalone (project-less) chat from the composer's first message. */
   async function createStandaloneChat(
     message: string,
@@ -3222,25 +2998,61 @@
     const msg = message.trim()
     if (!msg && files.length === 0) return
 
+    // Publish the hand-off before awaiting the thread: when a draft hand-off is
+    // already creating it, ThreadView mounts for that same thread and picks the
+    // message up, instead of a second thread being created here.
+    chatDraft.message = msg
+    chatDraft.attachments = files
     try {
-      const inbox = await invoke('project:ensureInbox')
-      const thread = await invoke('thread:create', {
-        projectId: inbox.id,
-        providerId: 'pi',
-        title: DEFAULT_THREAD_TITLE,
-        workingDirectory: '',
-        settings: chatEffectiveSettings()
-      })
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // Seed the empty conversation so the composer renders on the first frame
+      // and the hand-off message is sent without a loading flash.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
       upsertThreadInList(thread)
-      chatDraft.message = msg
-      chatDraft.attachments = files
       workspaceState.openThread(thread, inbox)
     } catch (error) {
+      chatDraft.message = ''
+      chatDraft.attachments = []
       // The thread was never created, so the message cannot appear anywhere.
       // Put it back in the composer so the user doesn't lose their first message.
       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
+    }
+  }
+
+  /**
+   * Turn the welcome composer's unsent draft into a real inbox thread so the
+   * chat surfaces in the Chats sidebar as a draft, exactly like a project's
+   * New thread row. The draft is read again after the thread exists, so words
+   * typed while it was being created are carried over, then it is moved off the
+   * welcome composer and onto the thread before that thread mounts. Nothing is
+   * sent: the draft stays a draft, and the next New chat starts another one.
+   */
+  async function startChatDraft(): Promise<void> {
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
+    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    if (!draft.trim() && attachments.length === 0) return
+
+    try {
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // The thread is seeded empty so its conversation renders the composer on
+      // the first frame   the welcome composer never flashes a loading state.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
+      // Re-read: the composer is authoritative and may have taken more
+      // keystrokes (or been cleared by a send) while the thread was created.
+      rendererRecovery.setDraft(
+        INBOX_PROJECT_ID,
+        thread.id,
+        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+      )
+      rendererRecovery.clearDraft(INBOX_PROJECT_ID, 'new-chat')
+      upsertThreadInList(thread)
+      workspaceState.openThread(thread, inbox)
+    } catch (error) {
+      // The draft stays in the welcome composer, so nothing the user typed is lost.
+      reportError(error, 'The chat draft could not be saved.')
     }
   }
 
@@ -3326,21 +3138,290 @@
   function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
-    markThreadReadAfterPaint(thread)
+    if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread.id)
   }
 
+  // ─── Assistant actions ────────────────────────────────────────────────────
+  function openAssistantTask(task: Thread): void {
+    upsertThreadInList(task)
+    workspaceState.openThread(task, assistantProject)
+  }
+
+  /** Open the task and dock its note panel in the context sidebar. */
+  function openAssistantTaskNotes(task: Thread): void {
+    openAssistantTask(task)
+    contextSidebarState.openThreadNote(task.projectId, task.id, task.title, {
+      edit: true,
+      focusEditor: true
+    })
+  }
+
+  /** Create a routine-less task and open it (header New Task). */
+  async function createAssistantTask(): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject)
+  }
+
+  /**
+   * The model the composer would start a new assistant task on: the selected
+   * assistant task's model, else the assistant's own last-used model, else the
+   * model the project work last ran on. A routine defaults its primary to it.
+   */
+  function currentAssistantModelSelection(): AgentModelSelection | undefined {
+    const selected = workspaceState.selectedThread
+    const settings =
+      selected && selected.projectId === ASSISTANT_SPACE_ID
+        ? selected.settings
+        : assistantEffectiveSettings(threadSettings.lastUsed)
+    if (!settings?.modelId) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
+    }
+  }
+
+  /**
+   * The routine the user is currently "inside": the routine of the selected
+   * task, else the routine whose how-to panel is docked (so a shortcut still
+   * lands in the routine while its panel is open on another task).
+   */
+  function activeAssistantRoutine(): Routine | null {
+    const selectedId = selectedThread?.id
+    const fromSelection = selectedId
+      ? assistantThreads.find((task) => task.id === selectedId)?.routineId
+      : undefined
+    const tab = contextSidebarState.sidebarActiveTab
+    const fromPanel = tab?.kind === 'assistant-how-to' ? (tab.routineId ?? undefined) : undefined
+    const routineId = fromSelection ?? fromPanel
+    if (!routineId) return null
+    return assistantRoutineList.find((routine) => routine.id === routineId) ?? null
+  }
+
+  /** Cmd/Ctrl+N on the Assistant view: new task in the active routine when the
+   *  user is inside one, otherwise a routine-less task. */
+  async function createAssistantTaskFromShortcut(): Promise<void> {
+    const routine = activeAssistantRoutine()
+    if (routine) await createAssistantTaskInRoutine(routine)
+    else await createAssistantTask()
+  }
+
+  /** Create a routine and seed its "Getting started" task, then open its panel. */
+  async function createAssistantRoutine(name: string, description: string): Promise<void> {
+    if (!assistantProject) return
+    // No model prompt: the primary is the model the user is already working on,
+    // so creating a routine never blocks on a pick. Fallbacks are added later
+    // from the panel's Agents tab, which the agent points the user at.
+    const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const routine = await assistantRoutines.createRoutine({ name, description, agents })
+    // The seed task is created already inside the routine: a follow-up regroup
+    // would race the creation broadcast and leave the task outside it.
+    await createThreadInProject(assistantProject, undefined, {
+      routineId: routine.id,
+      gettingStarted: true
+    })
+    await applyRoutineModelToTask(workspaceState.selectedThread, routine)
+    await openAssistantHowToForRoutine(routine)
+  }
+
+  /** Create a task inside a routine and open the routine's how-to panel. */
+  async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
+    const created = workspaceState.selectedThread
+    await applyRoutineModelToTask(created, routine)
+    if (created && created.projectId === ASSISTANT_SPACE_ID) {
+      upsertThreadInList(created)
+      // Anchor on the routine id we already hold: a reused blank thread carries
+      // no grouping until its async regroup lands, and the panel must not open
+      // against the wrong routine in that window.
+      contextSidebarState.openAssistantHowTo(
+        ASSISTANT_SPACE_ID,
+        created.id,
+        routine.id,
+        routine.name
+      )
+    } else {
+      await openAssistantHowToForRoutine(routine)
+    }
+  }
+
+  /**
+   * A task created inside a routine starts on the routine's primary model, so
+   * the composer shows the model the routine actually runs on. Best-effort: the
+   * scheduled run applies the routine's primary regardless, so a failed write
+   * only leaves the composer showing the inherited model.
+   */
+  async function applyRoutineModelToTask(
+    thread: Thread | null | undefined,
+    routine: Routine
+  ): Promise<void> {
+    const primary = routinePrimaryModel(routine.agents)
+    if (!thread || !primary || !thread.settings) return
+    try {
+      const updated = await persistInheritedThreadSettings(
+        thread,
+        settingsWithRoutineModel(thread.settings, primary)
+      )
+      upsertThreadInList(updated)
+      if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
+    } catch {
+      // Cosmetic only: the run itself uses the routine's primary either way.
+    }
+  }
+
+  /** Remove a routine and every thread it owns, its hidden how-to thread included. */
+  async function deleteAssistantRoutine(routineId: string): Promise<void> {
+    const affected = allThreads.filter((thread) => thread.routineId === routineId)
+    // The container and its rows leave the sidebar first: the removal must not
+    // wait on the database sweep. The main process then deletes the threads and
+    // their runs, forgets the routine in the scheduler, and removes its artifact
+    // folder; the toast reports what went with it.
+    for (const thread of affected) {
+      allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
+      scopeState.removeThread(thread.id)
+      if (selectedThread?.id === thread.id) workspaceState.clearThread()
+    }
+    // The routine is gone, so its how-to panel has nothing left to configure.
+    contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
+    try {
+      const result = await assistantRoutines.removeRoutine(routineId)
+      toast.success('Routine removed', {
+        description: removalSummary(result.taskCount, result.runCount, result.artifactsRemoved)
+      })
+    } catch (error) {
+      reportError(error, 'The routine could not be removed.')
+    }
+  }
+
+  /**
+   * What one routine removal swept, in one sentence. The artifact folder is
+   * called out because it can hold files the agent produced, so the user knows
+   * they went with the routine.
+   */
+  function removalSummary(taskCount: number, runCount: number, artifactsRemoved: boolean): string {
+    const parts = [`${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}`]
+    if (runCount > 0) parts.push(`${runCount} ${runCount === 1 ? 'run' : 'runs'}`)
+    const swept = `${parts.join(' and ')} deleted`
+    return artifactsRemoved
+      ? `${swept}, along with the routine's artifact folder.`
+      : `${swept}. Its artifact folder could not be removed.`
+  }
+
+  async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
+    await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
+  }
+
+  /**
+   * Hide a routine's how-to thread. Hiding is the only state the thread can
+   * change: it stays pinned, so archiving it is what takes it out of the
+   * sidebar until the how-to panel reveals it again.
+   */
+  async function hideAssistantHowTo(task: Thread): Promise<void> {
+    if (!task.routineId) return
+    try {
+      const updated = await assistantRoutines.setHowToHidden(task.routineId, true)
+      upsertThreadInList(updated)
+      scopeState.updateThread(updated)
+    } catch (error) {
+      reportError(error, 'Could not hide the how-to thread')
+    }
+  }
+
+  /** Reorder routines by drag: move the dragged routine around its drop target. */
+  async function moveAssistantRoutine(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    if (draggedId === targetId) return
+    const list = [...assistantRoutines.routines]
+    const from = list.findIndex((routine) => routine.id === draggedId)
+    if (from < 0) return
+    const [moved] = list.splice(from, 1)
+    const targetIndex = list.findIndex((routine) => routine.id === targetId)
+    if (targetIndex < 0) return
+    list.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, moved)
+    await assistantRoutines.reorderRoutines(list.map((routine) => routine.id))
+  }
+
+  /** Group a dragged task into a routine. */
+  async function assignAssistantTask(taskId: string, routineId: string): Promise<void> {
+    const updated = await assistantRoutines.setTaskRoutine(taskId, routineId)
+    upsertThreadInList(updated)
+    workspaceState.updateThread(updated)
+  }
+
+  function openAssistantHowToForTask(task: Thread): void {
+    // One panel per routine: the title follows the routine, so opening the
+    // how-to from any of its tasks focuses the same panel with the same name
+    // instead of re-titling it with whichever task was clicked. A run is one
+    // execution, not the task the panel belongs to, so it anchors on its task
+    // (falling back to the run only when that task is gone): a routine must
+    // never grow a second how-to tab just because it ran.
+    const anchor = task.assistantTaskId
+      ? (assistantThreads.find((entry) => entry.id === task.assistantTaskId) ?? task)
+      : task
+    const routineId = anchor.routineId ?? task.routineId
+    const routine = routineId
+      ? assistantRoutineList.find((entry) => entry.id === routineId)
+      : undefined
+    contextSidebarState.openAssistantHowTo(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      routineId ?? null,
+      routine?.name ?? anchor.title
+    )
+  }
+
+  /** Open the how-to panel for a routine, creating a first task if it has none. */
+  async function openAssistantHowToForRoutine(routine: Routine): Promise<void> {
+    let anchor =
+      assistantTasks.find((task) => task.routineId === routine.id) ??
+      (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
+        ? workspaceState.selectedThread
+        : undefined)
+    if (!anchor) {
+      // A routine whose only task is a hidden how-to thread still has an anchor:
+      // ask the main process for it, because hidden rows never reach the
+      // hydrated thread list the sidebar renders from.
+      anchor = (await invoke('assistant:howToThread', routine.id)) ?? undefined
+    }
+    if (!anchor) {
+      if (!assistantProject) return
+      await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
+      const created = workspaceState.selectedThread
+      if (!created) return
+      upsertThreadInList(created)
+      anchor = created
+    }
+    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+  }
+
+  /**
+   * A Ctrl+Tab selection is a deliberate jump to one specific thread, so the
+   * shell lands in the view that owns that thread's family: a chat is only ever
+   * shown by Chats, an assistant task only by Assistant, and a project thread by
+   * Projects (or by the scope state, which the projects family owns). Without
+   * this the switcher could select a thread in a view that does not own it, leaving
+   * the wrong sidebar and that view's own tools on screen for it.
+   */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
-    if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
+    const family = contentThreadFamily(thread)
+    if (family === 'chats') navigate('chats')
+    else if (family === 'assistant') navigate('assistant')
+    else if (mode === 'chats' || mode === 'assistant') navigate('projects')
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
     // the previous project. On the Scope page the view itself follows the
     // thread's project; an active scope-state sidebar follows the thread and
-    // its own scope bucket.
-    if (thread.projectId !== INBOX_PROJECT_ID) {
+    // its own scope bucket. Only the projects family has a scope state.
+    if (family === 'projects') {
       if (scopeViewActive) {
         void scopeState.activateProject(thread.projectId)
       } else if (scopeState.sidebarContext) {
@@ -3355,7 +3436,7 @@
     // the restore + folder expansion have settled.
     sidebarRevealSuppressed = false
     clearTimeout(sidebarRevealSuppressTimer)
-    if (thread.projectId !== INBOX_PROJECT_ID) expandedFolders.add(thread.projectId)
+    if (family === 'projects') sidebar.expandedFolders.add(thread.projectId)
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
@@ -3503,11 +3584,19 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** An assistant task was forked to a project: open it in the projects view. */
+  function handleAssistantHandoff(forked: Thread): void {
+    upsertThreadInList(forked)
+    scopeState.updateThread(forked)
+    navigate('projects')
+    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
   /** Register a freshly added project without landing in a new thread   used by
    *  the continue-chat-in-project flow which creates its own thread. */
   async function handleChatProjectCreated(project: Project): Promise<void> {
     projects = [project, ...projects]
-    expandedFolders.add(project.id)
+    sidebar.expandedFolders.add(project.id)
     if (project.icon) {
       const url = await invoke('project:getIcon', project.id)
       if (url) projectIcons.set(project.id, url)
@@ -3542,873 +3631,76 @@
 <svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
-  <!-- Shared sidebar   shows Projects or Chats depending on the shell mode -->
-  {#if !workspaceState.specStudioOpen || workspaceState.specAgentSidebarOpen}
-    <CollapsibleSidebar
-      title={workspaceState.specStudioOpen
-        ? 'Spec conversation'
-        : mode === 'projects'
-          ? 'Projects'
-          : mode === 'threads'
-            ? 'Threads'
-            : 'Chats'}
-      hideHeader={!workspaceState.specStudioOpen}
+  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
+  {#if mode === 'assistant'}
+    {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
+      <AssistantSidebar
+        bind:scroller={sidebarScroller}
+        routines={assistantRoutineList}
+        tasks={assistantTasks}
+        runsByTask={assistantRunsByTask}
+        selectedThreadId={activeThreadRowId(selectedThread)}
+        {navigate}
+        onOpenTask={openAssistantTask}
+        onOpenTaskHowTo={openAssistantHowToForTask}
+        onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
+        onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+        onRenameTask={handleRename}
+        onTogglePinTask={(task) => void togglePin(task)}
+        onDeleteTask={handleDelete}
+        onForkTask={(task) => void forkThread(task)}
+        onOpenTaskNotes={openAssistantTaskNotes}
+        onHandedOffTask={handleAssistantHandoff}
+        onHideHowTo={(task) => void hideAssistantHowTo(task)}
+        onDeleteRoutine={deleteAssistantRoutine}
+        onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
+        onMoveRoutine={(draggedId, targetId, position) =>
+          void moveAssistantRoutine(draggedId, targetId, position)}
+        onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
+      />
+    {/await}
+  {:else}
+    <WorkspaceSidebar
       bind:scroller={sidebarScroller}
-    >
-      {#snippet header()}
-        {#if workspaceState.specStudioOpen}
-          <span class="text-[0.625rem] tabular-nums text-dimmed">
-            {workspaceState.specAgentResponses.length}
-          </span>
-        {/if}
-      {/snippet}
-
-      {#snippet footer()}
-        {#if !workspaceState.specStudioOpen}
-          <SidebarAccountControls {active} {navigate} />
-        {/if}
-      {/snippet}
-
-      {#if workspaceState.specStudioOpen}
-        <SpecConversationSidebar />
-      {:else if mode === 'projects' && scopeState.sidebarContext}
-        {@const scopeContext = scopeState.sidebarContext}
-        {@const scopeProject = projects.find((project) => project.id === scopeContext.projectId)}
-        {@const scopeBucket = scopeState.buckets.find(
-          (bucket) => bucket.id === scopeContext.bucketId
-        )}
-        {@const otherBuckets = scopeState.buckets.filter(
-          (bucket) => bucket.id !== scopeContext.bucketId
-        )}
-        <div class="flex h-full flex-col">
-          <!-- Board context bar: project identity + scope switcher sit right
-               under the view/controls header -->
-          <div
-            class="flex shrink-0 items-center gap-2 border-b px-3 py-2"
-            style:background-color={scopeProject?.color
-              ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
-              : undefined}
-          >
-            {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
-              <img
-                src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
-                alt=""
-                class="h-4 w-4 shrink-0 object-contain"
-                onerror={projectIconOnError(scopeProject)}
-              />
-            {:else}
-              <Folder size={14} class="shrink-0 text-muted" />
-            {/if}
-            {#if scopeProject}
-              <ProjectIdentity
-                project={scopeProject}
-                class="min-w-0 flex-1"
-                nameClass="text-xs font-semibold text-foreground"
-                locationClass="text-[0.5625rem] text-dimmed"
-                showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
-              />
-            {:else}
-              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-                Project
-              </span>
-            {/if}
-            {#if scopeBucket}
-              {#if scopeBucket && scopeBucket.root.kind === 'worktree'}
-                <span
-                  class="flex shrink-0 items-center"
-                  role="img"
-                  aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
-                  title="Managed Git worktree scope on {scopeBucket.root.branch}"
-                >
-                  <FolderTree size={12} class="text-warning" />
-                </span>
-              {/if}
-              <!-- The scope itself is the menu trigger: click or right-click it to
-                   reach every scope action the scope board offers. -->
-              <ScopeActionsMenu
-                bucket={scopeBucket}
-                actions={scopeActions}
-                triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
-                triggerTitle="Scope actions"
-                menuClass="right-0 top-6"
-              >
-                {#snippet trigger()}
-                  <ScopeBadge bucket={scopeBucket} size="xs" />
-                {/snippet}
-              </ScopeActionsMenu>
-            {/if}
-            <ProjectSwitch
-              activeProjectId={scopeProject?.id ?? null}
-              class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
-              onSwitch={switchScopedProject}
-            >
-              <FolderKanban size={12} />
-            </ProjectSwitch>
-          </div>
-
-          {#if scopeActions.error}
-            <div
-              class="flex shrink-0 items-center gap-2 border-b bg-danger/10 px-3 py-1.5 text-xs text-danger"
-            >
-              <span class="min-w-0 flex-1">{scopeActions.error}</span>
-              <button
-                class="shrink-0 rounded-md px-1.5 py-0.5 transition-colors hover:bg-danger/10"
-                aria-label="Dismiss scope action error"
-                title="Dismiss"
-                onclick={() => scopeActions.dismissError()}
-              >
-                Dismiss
-              </button>
-            </div>
-          {/if}
-
-          {#if otherBuckets.length > 0}
-            <div class="shrink-0 border-b px-3 py-2">
-              <div
-                class="grid gap-1.5"
-                class:grid-cols-1={otherBuckets.length === 1}
-                class:grid-cols-2={otherBuckets.length > 1}
-              >
-                {#each otherBuckets as bucket (bucket.id)}
-                  {@const pinnedCount = scopeState.threadsFor(bucket.id, 'pinned').length}
-                  {@const todoCount = scopeState.threadsFor(bucket.id, 'todo').length}
-                  {@const workingCount = scopeState.threadsFor(bucket.id, 'working').length}
-                  {@const issueCount = scopeState.threadsFor(bucket.id, 'issue').length}
-                  {@const unreadCount = scopeState.threadsFor(bucket.id, 'unread').length}
-                  <div
-                    class="group flex items-center gap-1 border-l-2 pl-2 pr-2.5 py-1.5 transition-colors hover:bg-elevated"
-                    style:border-color={bucket.color ?? pickColorForSeed(bucket.id)}
-                  >
-                    <button
-                      class="relative flex min-w-0 flex-1 items-center gap-2 text-left text-xs text-muted"
-                      title={bucket.name}
-                      onclick={() => scopeState.setSidebarBucket(bucket.id)}
-                    >
-                      <div class="absolute -top-1 left-0 flex gap-0.5">
-                        {#if pinnedCount > 0}
-                          <StatusBadge stage="pinned" title="Pinned threads" />
-                        {/if}
-                        {#if todoCount > 0}
-                          <StatusBadge stage="todo" title="Todo threads" />
-                        {/if}
-                        {#if workingCount > 0}
-                          <StatusBadge stage="working" title="Working threads" />
-                        {/if}
-                        {#if issueCount > 0}
-                          <StatusBadge stage="issue" title="Issue threads" />
-                        {/if}
-                        {#if unreadCount > 0}
-                          <StatusBadge stage="unread" title="Unread threads" />
-                        {/if}
-                      </div>
-                      {#if bucket.iconType}
-                        <img
-                          src={getIconSvgDataUrl(
-                            bucket.iconType,
-                            bucket.color ?? pickColorForSeed(bucket.id)
-                          )}
-                          alt=""
-                          class="h-3.5 w-3.5 shrink-0 object-contain"
-                          draggable="false"
-                        />
-                      {:else if bucket.color}
-                        <img
-                          src={generateInitialsIconSvg(bucket.name, bucket.color)}
-                          alt=""
-                          class="h-3.5 w-3.5 shrink-0 object-contain"
-                          draggable="false"
-                        />
-                      {/if}
-                      {#if bucket.pinned}
-                        <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
-                      {/if}
-                      {#if bucket.root.kind === 'worktree'}
-                        <span
-                          class="flex shrink-0 items-center"
-                          role="img"
-                          aria-label="Managed Git worktree scope on {bucket.root.branch}"
-                          title="Managed Git worktree scope on {bucket.root.branch}"
-                        >
-                          <FolderTree size={10} class="text-warning" />
-                        </span>
-                      {/if}
-                      <span class="truncate">{bucket.name}</span>
-                    </button>
-                    <div class="opacity-0 transition-opacity group-hover:opacity-100">
-                      <ScopeActionsMenu {bucket} actions={scopeActions} />
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
-
-          {#key scopeContext.bucketId}
-            <div class="flex flex-1 min-h-0">
-              <!-- Stage rail: slices share the full sidebar height, growing to
-                   fill available space and shrinking to their floor when tight -->
-              <div class="flex min-h-0 shrink-0 flex-col items-stretch border-r py-2 gap-1.5 w-11">
-                {#each STAGE_ORDER as stage (stage)}
-                  {@const stageCount = scopeState.threadsFor(scopeContext.bucketId, stage).length}
-                  {@const isActive = scopeContext.stage === stage}
-                  {@const bgOpacity = isActive ? '35%' : '8%'}
-                  <button
-                    class="flex min-h-12 flex-1 items-center justify-center rounded-md transition-all text-xs font-medium"
-                    style="background-color: color-mix(in srgb, {STAGE_COLORS[
-                      stage
-                    ]} {bgOpacity}, transparent); color: {isActive
-                      ? 'var(--color-foreground)'
-                      : 'var(--color-muted)'}"
-                    onclick={() => scopeState.selectSidebarStage(stage)}
-                  >
-                    <span class="-rotate-90 flex flex-row items-center gap-3">
-                      {#if stageCount > 0}
-                        <span class="font-bold">{stageCount}</span>
-                      {/if}
-                      <span>{STAGE_LABELS[stage]}</span>
-                    </span>
-                  </button>
-                {/each}
-              </div>
-
-              <div class="flex flex-1 flex-col min-w-0">
-                <div class="flex shrink-0 items-center gap-1.5 border-b px-3 py-2">
-                  <StatusBadge stage={scopeContext.stage} size="md" />
-                  <span class="text-xs font-semibold">{STAGE_LABELS[scopeContext.stage]}</span>
-                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0}
-                    <span class="tabular-nums text-[0.625rem] text-dimmed"
-                      >{scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage)
-                        .length}</span
-                    >
-                  {/if}
-                </div>
-                <div class="flex-1 overflow-y-auto">
-                  {#each scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage) as thread (thread.id)}
-                    <ThreadRow
-                      {thread}
-                      selected={selectedThread?.id === thread.id}
-                      compact
-                      hideScope
-                      onOpen={openScopedThread}
-                      onRename={handleRename}
-                      onTogglePin={togglePin}
-                      onDelete={handleDelete}
-                      onFork={forkThread}
-                    />
-                  {:else}
-                    <p class="px-4 py-8 text-center text-xs text-dimmed">
-                      No threads in this slice
-                    </p>
-                  {/each}
-                  {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId) && !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
-                    <div class="flex justify-center border-t py-1.5">
-                      <button
-                        class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                        disabled={projectPageLoading === scopeContext.projectId}
-                        onclick={() => void loadProjectThreadsPage(scopeContext.projectId)}
-                      >
-                        {projectPageLoading === scopeContext.projectId
-                          ? 'Loading…'
-                          : 'Load older threads'}
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          {/key}
-
-          <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
-               Loaded on demand so their heavy worktree forms stay out of the
-               main shell chunk. -->
-          {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
-            <ScopeActionsModals actions={scopeActions} />
-          {/await}
-        </div>
-      {:else if loading}
-        <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
-      {:else}
-        <!-- Only the active list stays mounted. Keeping inactive lists in the DOM
-             duplicated every row component, observer, and derived calculation. -->
-        {#if mode === 'chats'}
-          {#if pinnedInboxThreads.length > 0}
-            <PinnedSection
-              sectionKey="chats"
-              label="Pinned Chats"
-              threads={pinnedInboxThreads}
-              selectedThreadId={selectedThread?.id ?? null}
-              getRowIcon={() => null}
-              onOpen={openThread}
-              onRename={handleRename}
-              onTogglePin={togglePin}
-              onDelete={handleDelete}
-              onFork={forkThread}
-              onMovePinnedThread={(draggedId, targetId, pos) => {
-                const thread = pinnedInboxThreads.find((t) => t.id === draggedId)
-                if (thread) handleThreadMove(thread.projectId, draggedId, targetId, pos)
-              }}
-            />
-          {/if}
-
-          {#if standaloneThreads.length > 0}
-            <div class="space-y-px" role="list">
-              {#each standaloneThreads.slice(0, 50) as thread (thread.id)}
-                <ThreadRow
-                  {thread}
-                  selected={selectedThread?.id === thread.id}
-                  onOpen={openThread}
-                  onRename={handleRename}
-                  onTogglePin={togglePin}
-                  onDelete={handleDelete}
-                  onFork={forkThread}
-                  onMoveThread={(draggedId, targetId, pos) =>
-                    handleThreadMove(thread.projectId, draggedId, targetId, pos)}
-                />
-              {/each}
-            </div>
-          {:else if pinnedInboxThreads.length === 0}
-            <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-              <MessageSquare size={20} class="text-dimmed" />
-              <p class="text-xs text-muted">No chats yet</p>
-              <p class="text-xs text-dimmed">Start a new chat to get going</p>
-            </div>
-          {/if}
-        {/if}
-        {#if mode === 'threads'}
-          {#if threadsSearchOpen && threadsSearchQuery.trim()}
-            <!-- Threads search: results render inline in the sidebar so the user
-                 can open several results without the search dismissing. -->
-            {#if threadsSearching && threadsSearchResults.length === 0}
-              <p class="px-2 py-6 text-center text-xs text-dimmed">Searching…</p>
-            {:else if threadsSearchResults.length === 0}
-              <p class="px-2 py-6 text-center text-xs text-dimmed">No matching threads</p>
-            {:else}
-              <div class="space-y-px" role="list">
-                {#each threadsSearchResults as result (result.thread.id)}
-                  <ThreadSearchResultRow
-                    {result}
-                    selected={selectedThread?.id === result.thread.id}
-                    onOpen={openThread}
-                  />
-                {/each}
-              </div>
-            {/if}
-          {:else}
-            <!-- Threads mode: pinned section then flat list -->
-            <PinnedSection
-              sectionKey="threads"
-              label="Pinned Threads"
-              threads={pinnedTimelineThreads}
-              selectedThreadId={selectedThread?.id ?? null}
-              getRowIcon={(t) => getThreadIcon(t)}
-              onOpen={openThread}
-              onRename={handleRename}
-              onTogglePin={togglePin}
-              onDelete={handleDelete}
-              onFork={forkThread}
-              onMovePinnedThread={(draggedId, targetId, pos) =>
-                handleTimelinePinnedMove(draggedId, targetId, pos)}
-            />
-            <div class="space-y-px" role="list">
-              {#each unpinnedTimelineThreads as thread (thread.id)}
-                <ThreadRow
-                  {thread}
-                  projectIconUrl={getThreadIcon(thread)}
-                  selected={selectedThread?.id === thread.id}
-                  onOpen={openThread}
-                  onRename={handleRename}
-                  onTogglePin={togglePin}
-                  onDelete={handleDelete}
-                  onFork={forkThread}
-                />
-              {:else}
-                <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-                  <p class="text-xs text-muted">
-                    {threadProjectFilterState.isAll
-                      ? 'No threads yet'
-                      : 'No threads in the selected projects'}
-                  </p>
-                </div>
-              {/each}
-            </div>
-            {#if hasMoreHistory}
-              <button
-                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                disabled={historyLoading}
-                onclick={() => void loadHistoryPage()}
-              >
-                {historyLoading ? 'Loading history…' : 'Load older threads'}
-              </button>
-            {/if}
-          {/if}
-        {/if}
-        {#if mode === 'projects'}
-          <!-- Pinned threads above everything -->
-          <PinnedSection
-            sectionKey="projects-threads"
-            label="Pinned Threads"
-            threads={pinnedThreads}
-            selectedThreadId={selectedThread?.id ?? null}
-            getRowIcon={(t) => {
-              const project = projects.find((p) => p.id === t.projectId)
-              return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
-            }}
-            onOpen={openThread}
-            onRename={handleRename}
-            onTogglePin={togglePin}
-            onDelete={handleDelete}
-            onFork={forkThread}
-            onMovePinnedThread={handlePinnedThreadMove}
-          />
-
-          <!-- Pinned projects -->
-          {#if pinnedProjects.length > 0}
-            <div class="mb-1 pb-2 border-b">
-              <button
-                type="button"
-                class="flex w-full items-center gap-1.5 px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
-                aria-expanded={!pinnedFold.isFolded('projects-projects')}
-                aria-label="{pinnedFold.isFolded('projects-projects')
-                  ? 'Expand'
-                  : 'Fold'} Pinned Projects"
-                title="{pinnedFold.isFolded('projects-projects')
-                  ? 'Expand'
-                  : 'Fold'} Pinned Projects"
-                onclick={() => pinnedFold.toggle('projects-projects')}
-              >
-                <ChevronDown
-                  size={12}
-                  class="shrink-0 text-dimmed transition-transform {pinnedFold.isFolded(
-                    'projects-projects'
-                  )
-                    ? '-rotate-90'
-                    : ''}"
-                />
-                <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-                  >Pinned Projects</span
-                >
-                <span class="text-[0.625rem] text-dimmed/70">{pinnedProjects.length}</span>
-              </button>
-              <div class="space-y-px" role="list">
-                {#if !pinnedFold.isFolded('projects-projects')}
-                  {#each pinnedProjects as project (project.id)}
-                    {@const folderThreads = threadsByProject.get(project.id) ?? []}
-                    {@const expanded =
-                      expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                    {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
-                    <DropdownMenu.Root
-                      open={openProjectMenuId === project.id}
-                      onOpenChange={(o) => {
-                        openProjectMenuId = o ? project.id : null
-                      }}
-                    >
-                      <div>
-                        <FolderRow
-                          {project}
-                          iconUrl={projectIcons.get(project.id) ?? null}
-                          {expanded}
-                          {working}
-                          showLocation={hasProjectNameCollision(project, visibleProjects)}
-                          onToggle={() => toggleFolder(project.id)}
-                          onMoveProject={(draggedId, targetId, pos) =>
-                            handleProjectMove(draggedId, targetId, pos)}
-                          onContextMenu={(e) => {
-                            e.preventDefault()
-                            openProjectMenuId = project.id
-                          }}
-                        >
-                          {#snippet actions()}
-                            <span class="flex shrink-0 items-center gap-0.5">
-                              <SidebarSearchControl
-                                open={projectSearchOpen.has(project.id)}
-                                query={projectSearchQueries.get(project.id) ?? ''}
-                                onOpenChange={(open) => {
-                                  if (open) openProjectSearch(project.id)
-                                  else closeProjectSearch(project.id)
-                                }}
-                                onQueryChange={(value) => {
-                                  projectSearchQueries.set(project.id, value)
-                                  runProjectSearch(project.id, value)
-                                }}
-                                ariaLabel="Search threads in {project.name}"
-                                title="Search threads"
-                                placeholder="Search threads in {project.name}…"
-                              />
-                              <button
-                                class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                                aria-label="New thread in {project.name}"
-                                title="New thread"
-                                data-shortcut={keymapKeys('nav-new-thread').join(',')}
-                                onclick={() => createThreadInProject(project)}
-                              >
-                                <Plus size={12} />
-                              </button>
-                              <DropdownMenu.Trigger
-                                class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-                                aria-label="Options for {project.name}"
-                                title="Project options"
-                                oncontextmenu={(e: MouseEvent) => e.preventDefault()}
-                              >
-                                <Ellipsis size={12} />
-                              </DropdownMenu.Trigger>
-                            </span>
-                          {/snippet}
-                        </FolderRow>
-                        {#if expanded}
-                          {@const searchQ = projectSearchQueries.get(project.id) ?? ''}
-                          {@const isSearching = Boolean(searchQ.trim())}
-                          {@const searchResults = projectSearchResults.get(project.id) ?? []}
-                          {@const filteredThreads = isSearching
-                            ? []
-                            : filterThreadsByQuery(folderThreads, '')}
-                          <div class="ml-2">
-                            {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                              <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
-                            {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                              <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
-                                {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
-                              </p>
-                            {:else if isSearching}
-                              <div
-                                class="max-h-80 space-y-px overflow-y-auto overscroll-contain py-0.5"
-                                role="list"
-                              >
-                                {#each searchResults as result (result.thread.id)}
-                                  <ThreadSearchResultRow
-                                    {result}
-                                    selected={selectedThread?.id === result.thread.id}
-                                    onOpen={openThread}
-                                  />
-                                {/each}
-                              </div>
-                            {:else}
-                              <div class="space-y-px py-0.5" role="list">
-                                {#each filteredThreads.slice(0, getVisibleCount(project.id)) as thread (thread.id)}
-                                  <ThreadRow
-                                    {thread}
-                                    selected={selectedThread?.id === thread.id}
-                                    onOpen={openThread}
-                                    onRename={handleRename}
-                                    onTogglePin={togglePin}
-                                    onDelete={handleDelete}
-                                    onFork={forkThread}
-                                    onMoveThread={(draggedId, targetId, pos) =>
-                                      handleThreadMove(project.id, draggedId, targetId, pos)}
-                                  />
-                                {/each}
-                              </div>
-                              {#if filteredThreads.length > getVisibleCount(project.id)}
-                                <button
-                                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                                  onclick={() =>
-                                    showMoreThreads(project.id, filteredThreads.length)}
-                                >
-                                  Show {filteredThreads.length - getVisibleCount(project.id)} more
-                                </button>
-                              {:else if getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
-                                <button
-                                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                                  disabled={projectPageLoading === project.id}
-                                  onclick={() => void loadProjectThreadsPage(project.id)}
-                                >
-                                  {projectPageLoading === project.id
-                                    ? 'Loading…'
-                                    : 'Load older threads'}
-                                </button>
-                              {/if}
-                              {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
-                                <button
-                                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                                  onclick={() => showLessThreads(project.id)}
-                                >
-                                  Show less
-                                </button>
-                              {/if}
-                            {/if}
-                          </div>
-                        {/if}
-                      </div>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                          side="bottom"
-                          align="end"
-                          sideOffset={4}
-                          collisionPadding={8}
-                          class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                        >
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                            onSelect={() => askEditProject(project.id)}
-                          >
-                            <Pencil size={14} class="text-muted" />
-                            Edit Project
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                            onSelect={() => openInEditor(project.id)}
-                          >
-                            <ExternalLink size={14} class="text-muted" />
-                            Open in Editor
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                            onSelect={() => copyProjectPath(project.id)}
-                          >
-                            <Copy size={14} class="text-muted" />
-                            Copy Path
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                            onSelect={() => revealProjectInFileManager(project.id)}
-                          >
-                            <FolderOpen size={14} class="text-muted" />
-                            {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                              ? 'Reveal in File Manager'
-                              : 'Show in Explorer'}
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                            onSelect={() => toggleProjectPin(project.id)}
-                          >
-                            {#if project.pinned}
-                              <PinOff size={14} class="text-muted" />
-                              Unpin Project
-                            {:else}
-                              <Pin size={14} class="text-muted" />
-                              Pin Project
-                            {/if}
-                          </DropdownMenu.Item>
-                          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                          <DropdownMenu.Item
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                            onSelect={() => askRemoveProject(project.id)}
-                          >
-                            <Trash2 size={14} />
-                            Remove Project
-                          </DropdownMenu.Item>
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
-                  {/each}
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Folder tree -->
-          {#if regularProjects.length === 0 && pinnedProjects.length === 0}
-            <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-              <FolderOpen size={20} class="text-dimmed" />
-              <p class="text-xs text-muted">No projects yet</p>
-              <p class="text-xs text-dimmed">Add a folder to get started</p>
-            </div>
-          {:else if regularProjects.length > 0}
-            <div class="space-y-0.5" role="list">
-              {#each regularProjects as project (project.id)}
-                {@const folderThreads = threadsByProject.get(project.id) ?? []}
-                {@const expanded =
-                  expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
-                <DropdownMenu.Root
-                  open={openProjectMenuId === project.id}
-                  onOpenChange={(o) => {
-                    openProjectMenuId = o ? project.id : null
-                  }}
-                >
-                  <div>
-                    <FolderRow
-                      {project}
-                      iconUrl={projectIcons.get(project.id) ?? null}
-                      {expanded}
-                      {working}
-                      showLocation={hasProjectNameCollision(project, visibleProjects)}
-                      onToggle={() => toggleFolder(project.id)}
-                      onMoveProject={(draggedId, targetId, pos) =>
-                        handleProjectMove(draggedId, targetId, pos)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        openProjectMenuId = project.id
-                      }}
-                    >
-                      {#snippet actions()}
-                        <span class="flex shrink-0 items-center gap-0.5">
-                          <SidebarSearchControl
-                            open={projectSearchOpen.has(project.id)}
-                            query={projectSearchQueries.get(project.id) ?? ''}
-                            onOpenChange={(open) => {
-                              if (open) openProjectSearch(project.id)
-                              else closeProjectSearch(project.id)
-                            }}
-                            onQueryChange={(value) => {
-                              projectSearchQueries.set(project.id, value)
-                              runProjectSearch(project.id, value)
-                            }}
-                            ariaLabel="Search threads in {project.name}"
-                            title="Search threads"
-                            placeholder="Search threads in {project.name}…"
-                          />
-                          <button
-                            class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                            aria-label="New thread in {project.name}"
-                            title="New thread"
-                            data-shortcut={keymapKeys('nav-new-thread').join(',')}
-                            onclick={() => createThreadInProject(project)}
-                          >
-                            <Plus size={12} />
-                          </button>
-                          <DropdownMenu.Trigger
-                            class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-                            aria-label="Options for {project.name}"
-                            title="Project options"
-                            oncontextmenu={(e: MouseEvent) => e.preventDefault()}
-                          >
-                            <Ellipsis size={12} />
-                          </DropdownMenu.Trigger>
-                        </span>
-                      {/snippet}
-                    </FolderRow>
-
-                    <!-- Threads under folder -->
-                    {#if expanded}
-                      {@const searchQ = projectSearchQueries.get(project.id) ?? ''}
-                      {@const isSearching = Boolean(searchQ.trim())}
-                      {@const searchResults = projectSearchResults.get(project.id) ?? []}
-                      {@const filteredThreads = isSearching
-                        ? []
-                        : filterThreadsByQuery(folderThreads, '')}
-                      <div class="ml-2">
-                        {#if isSearching && projectSearching.has(project.id) && searchResults.length === 0}
-                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
-                        {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
-                            {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
-                          </p>
-                        {:else if isSearching}
-                          <div
-                            class="max-h-80 space-y-px overflow-y-auto overscroll-contain py-0.5"
-                            role="list"
-                          >
-                            {#each searchResults as result (result.thread.id)}
-                              <ThreadSearchResultRow
-                                {result}
-                                selected={selectedThread?.id === result.thread.id}
-                                onOpen={openThread}
-                              />
-                            {/each}
-                          </div>
-                        {:else}
-                          <div class="space-y-px py-0.5" role="list">
-                            {#each filteredThreads.slice(0, getVisibleCount(project.id)) as thread (thread.id)}
-                              <ThreadRow
-                                {thread}
-                                selected={selectedThread?.id === thread.id}
-                                onOpen={openThread}
-                                onRename={handleRename}
-                                onTogglePin={togglePin}
-                                onDelete={handleDelete}
-                                onFork={forkThread}
-                                onMoveThread={(draggedId, targetId, pos) =>
-                                  handleThreadMove(project.id, draggedId, targetId, pos)}
-                              />
-                            {/each}
-                          </div>
-                          {#if filteredThreads.length > getVisibleCount(project.id)}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                              onclick={() => showMoreThreads(project.id, filteredThreads.length)}
-                            >
-                              Show {filteredThreads.length - getVisibleCount(project.id)} more
-                            </button>
-                          {:else if getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                              disabled={projectPageLoading === project.id}
-                              onclick={() => void loadProjectThreadsPage(project.id)}
-                            >
-                              {projectPageLoading === project.id
-                                ? 'Loading…'
-                                : 'Load older threads'}
-                            </button>
-                          {/if}
-                          {#if getVisibleCount(project.id) > THREADS_PER_PAGE}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                              onclick={() => showLessThreads(project.id)}
-                            >
-                              Show less
-                            </button>
-                          {/if}
-                        {/if}
-                      </div>
-                    {/if}
-                  </div>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-48 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                    >
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => askEditProject(project.id)}
-                      >
-                        <Pencil size={14} class="text-muted" />
-                        Edit Project
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => openInEditor(project.id)}
-                      >
-                        <ExternalLink size={14} class="text-muted" />
-                        Open in Editor
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => copyProjectPath(project.id)}
-                      >
-                        <Copy size={14} class="text-muted" />
-                        Copy Path
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => revealProjectInFileManager(project.id)}
-                      >
-                        <FolderOpen size={14} class="text-muted" />
-                        {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                          ? 'Reveal in File Manager'
-                          : 'Show in Explorer'}
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => toggleProjectPin(project.id)}
-                      >
-                        {#if project.pinned}
-                          <PinOff size={14} class="text-muted" />
-                          Unpin Project
-                        {:else}
-                          <Pin size={14} class="text-muted" />
-                          Pin Project
-                        {/if}
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                        onSelect={() => askRemoveProject(project.id)}
-                      >
-                        <Trash2 size={14} />
-                        Remove Project
-                      </DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
-              {/each}
-            </div>
-          {/if}
-        {/if}
-      {/if}
-    </CollapsibleSidebar>
+      {mode}
+      {active}
+      {navigate}
+      {projects}
+      {visibleProjects}
+      {projectIcons}
+      {loading}
+      activeThreadId={activeThreadRowId(selectedThread)}
+      {threadsByProject}
+      {pinnedThreads}
+      {pinnedProjects}
+      {regularProjects}
+      {pinnedInboxThreads}
+      {standaloneThreads}
+      {pinnedTimelineThreads}
+      {unpinnedTimelineThreads}
+      {hasMoreHistory}
+      {historyLoading}
+      {projectPageLoading}
+      {sidebar}
+      {projectDialogs}
+      {scopeActions}
+      {projectHasMoreInDb}
+      onLoadProjectThreadsPage={loadProjectThreadsPage}
+      onLoadHistoryPage={loadHistoryPage}
+      onSetProjects={(next) => (projects = next)}
+      onOpenThread={openThread}
+      onRename={handleRename}
+      onTogglePin={togglePin}
+      onDelete={handleDelete}
+      onFork={forkThread}
+      onThreadMove={handleThreadMove}
+      onPinnedThreadMove={handlePinnedThreadMove}
+      onTimelinePinnedMove={handleTimelinePinnedMove}
+      onProjectMove={handleProjectMove}
+      onCreateThread={createThreadInProject}
+      onOpenScopedThread={openScopedThread}
+      onSwitchScopedProject={switchScopedProject}
+    />
   {/if}
 
   <!-- Main Content -->
@@ -4418,281 +3710,49 @@
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
-      <div
-        class="min-h-0 min-w-0 overflow-hidden"
-        style:grid-column="1"
-        style:grid-row="1"
-        data-onboarding="conversation"
-      >
-        {#if selectedThread}
-          <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-            {#key selectedThread.id}
-              <svelte:boundary onerror={handleConversationRenderError}>
-                <ThreadView
-                  thread={selectedThread}
-                  chatMode={mode === 'chats'}
-                  allowCenteredComposer={mode === 'chats' ||
-                    (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
-                      ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
-                        workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
-                  onForked={handleForkedThread}
-                  projects={visibleProjects}
-                  {projectIcons}
-                  onContinueInProject={handleContinuedInProject}
-                  onProjectCreated={handleChatProjectCreated}
-                  onOpenScopeView={(thread) => void openThreadScopeView(thread)}
-                />
-                {#snippet failed(_error: unknown, reset: () => void)}
-                  <div class="flex h-full min-h-0 items-center justify-center px-6">
-                    <div
-                      class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
-                      role="alert"
-                    >
-                      <p class="text-sm font-semibold text-foreground">
-                        Conversation view failed to render
-                      </p>
-                      <p class="mt-1 text-sm text-muted">
-                        The thread is still saved. Reload this view to continue.
-                      </p>
-                      <button
-                        type="button"
-                        class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
-                        onclick={reset}
-                      >
-                        Reload conversation
-                      </button>
-                    </div>
-                  </div>
-                {/snippet}
-              </svelte:boundary>
-            {/key}
-          </div>
-        {:else if mode === 'chats'}
-          <!-- Empty state   greeting, composer, and suggested prompts centered -->
-          <div class="flex h-full flex-col items-center justify-center px-6">
-            <div class="mb-6 text-center">
-              <h1 class="text-[1.375rem] font-semibold tracking-tight">Start a new chat</h1>
-              <p class="mt-1 text-[0.875rem] text-muted">
-                Send a message to begin no project needed
-              </p>
-            </div>
-            <div class="w-full max-w-4xl">
-              {#key chatsComposerRestoreKey}
-                <ChatComposer
-                  bind:this={chatsComposer}
-                  placeholder="What do you want to work on?"
-                  autofocus
-                  showEngineeringMode={false}
-                  showChatModes
-                  hidePermissionSelector
-                  settings={chatComposerSettings}
-                  onSettingsChange={(settings) => chatSettings.commit(settings)}
-                  providers={chatProviders}
-                  projectId={chatInboxId}
-                  attachmentStorage={{
-                    kind: 'chat',
-                    projectId: INBOX_PROJECT_ID,
-                    threadId: 'new-chat'
-                  }}
-                  harnessId={chatComposerSettings.harnessId}
-                  favoriteModels={rendererRecovery.chatFavoriteModels}
-                  onToggleFavorite={(providerId, modelId, harnessId) =>
-                    rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-                  recentModels={rendererRecovery.chatRecentModels}
-                  onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
-                  onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-                  imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
-                  imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
-                  onImageDescriptorDefaultChange={(selection) =>
-                    void updateConfig?.({
-                      agentDefaults: {
-                        ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
-                        imageDescriptor: selection
-                      }
-                    })}
-                  onImageDescriptorAskAgainChange={(value) =>
-                    void updateConfig?.({ imageDescriptorAskAgain: value })}
-                  initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-                  onValueChange={(value) =>
-                    rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
-                  initialAttachments={rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')}
-                  onAttachmentsChange={(files) =>
-                    rendererRecovery.setDraft(
-                      INBOX_PROJECT_ID,
-                      'new-chat',
-                      rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
-                      files
-                    )}
-                  onSend={(msg, files) => void createStandaloneChat(msg, files)}
-                  onRevealUsage={revealNewChatUsage}
-                  onHideUsage={() => newChatUsage.markStale()}
-                  usageRefreshing={newChatUsage.refreshing}
-                  harnessUsage={newChatHarnessUsage}
-                />
-                <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
-                  {#each chatSuggestedPrompts as prompt (prompt)}
-                    <button
-                      type="button"
-                      class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                      onclick={() => chatsComposer?.setComposerText(prompt)}
-                    >
-                      {prompt}
-                    </button>
-                  {/each}
-                </div>
-              {/key}
-            </div>
-          </div>
-        {:else}
-          <WelcomeStart
-            variant="projects"
-            onNewChat={() => navigate('chats')}
-            onToggleSidebar={() => sidebarState.toggle()}
-            onAddProject={() => {
-              navigate('projects')
-              projectCreateTriggerKind = 'local'
-              workspaceState.requestAddProject()
-            }}
-            onCloneRepo={() => {
-              navigate('projects')
-              projectCreateTriggerKind = 'git-clone'
-              workspaceState.requestAddProject()
-            }}
-            onOpenSettings={() => navigate('settings')}
-            onShowTour={() => workspaceState.requestOnboarding()}
-          />
-        {/if}
-      </div>
+      <WorkspaceConversationPane
+        {mode}
+        {active}
+        {selectedThread}
+        {visibleProjects}
+        {projectIcons}
+        {threadsByProject}
+        {config}
+        {updateConfig}
+        restoreKey={chatsComposerRestoreKey}
+        onNavigate={navigate}
+        onForked={handleForkedThread}
+        onContinueInProject={handleContinuedInProject}
+        onProjectCreated={handleChatProjectCreated}
+        onOpenScopeView={(thread) => void openThreadScopeView(thread)}
+        onSendChat={createStandaloneChat}
+        onStartChatDraft={startChatDraft}
+        onRequestAddProject={(kind) => {
+          projectCreateTriggerKind = kind
+          workspaceState.requestAddProject()
+        }}
+      />
 
       {#if sidebarVisible}
         {#snippet contextSidebarContent()}
-          {@const activeContextTab = contextSidebarState.sidebarActiveTab}
-          {@const gitPanelThreadId =
-            activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''}
-          {#if gitPanelProjectId}
-            {#key gitPanelProjectId}
-              {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
-                <div
-                  class="h-full"
-                  style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}
-                >
-                  <GitStatusPanel
-                    projectId={gitPanelProjectId}
-                    threadId={gitPanelThreadId}
-                    scopeBucketId={gitPanelScopeBucketId}
-                  />
-                </div>
-              {/await}
-            {/key}
-          {/if}
-          {#if activeContextTab}
-            {#key activeContextTab.id}
-              {#if activeContextTab.kind === 'files'}
-                <ProjectFilesPanel
-                  projectId={activeContextTab.projectId}
-                  projectName={activeContextTab.projectId === INBOX_PROJECT_ID
-                    ? 'Chat artifacts'
-                    : (activeProject?.name ?? 'Project files')}
-                  projectIconUrl={activeProject
-                    ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
-                    : null}
-                />
-              {:else if activeContextTab.kind === 'diff'}
-                <DiffSidebarPanel
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                  checkpointId={activeContextTab.checkpointId}
-                  revealPath={activeContextTab.revealPath}
-                  revealNonce={activeContextTab.revealNonce}
-                />
-              {:else if activeContextTab.kind === 'terminal'}
-                {#if terminalFullscreenTabId === activeContextTab.id}
-                  <div class="flex h-full items-center justify-center text-xs text-muted">
-                    Terminal is open in fullscreen
-                  </div>
-                {:else}
-                  <TerminalPanel
-                    terminalId={activeContextTab.terminalId}
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                    scopeBucketId={workspaceState.activeScopeBucketIdFor(
-                      activeContextTab.projectId
-                    )}
-                  />
-                {/if}
-              {:else if activeContextTab.kind === 'actions'}
-                <ActionsPanel
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
-                />
-              {:else if activeContextTab.kind === 'browser'}
-                {#if browserFullscreenTabId === activeContextTab.id}
-                  <div class="flex h-full items-center justify-center text-xs text-muted">
-                    Browser is open in fullscreen
-                  </div>
-                {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
-                  <div class="h-full bg-app" aria-hidden="true"></div>
-                {:else}
-                  <BrowserPanel
-                    tab={activeContextTab}
-                    suppressed={browserFullscreenTabId !== null}
-                  />
-                {/if}
-              {:else if activeContextTab.kind === 'debugger'}
-                <AgentDebugPanel />
-              {:else if activeContextTab.kind === 'sources'}
-                {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
-                  <SourcesPanel
-                    sources={workspaceState.sources}
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                  />
-                {/await}
-              {:else if activeContextTab.kind === 'git'}
-                <!-- Rendered by the persistent, keep-mounted block above. -->
-              {:else if activeContextTab.kind === 'cloud-deployment'}
-                {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
-                  <CloudDeploymentPanel
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                  />
-                {/await}
-              {:else if activeContextTab.kind === 'temporary-chat'}
-                {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
-                  <TemporaryChatView
-                    tabId={activeContextTab.id}
-                    onContinueInThread={handleContinueInThread}
-                  />
-                {/await}
-              {:else if activeContextTab.kind === 'notifications'}
-                {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-                  <NotificationPanel />
-                {/await}
-              {:else if activeContextTab.kind === 'coordinator'}
-                {#if coordinator}
-                  {@render coordinator.panel()}
-                {/if}
-              {:else if activeContextTab.kind === 'memory'}
-                {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
-                  <MemoryPanel
-                    variant="sidebar"
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                    bind:activeSection={activeContextTab.memorySection}
-                  />
-                {/await}
-              {:else if activeContextTab.kind === 'thread-note'}
-                <ThreadNotePanel tab={activeContextTab} />
-              {:else}
-                {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
-                  <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
-                {/await}
-              {/if}
-            {/key}
-          {/if}
+          <WorkspaceContextPanelContent
+            {gitPanelProjectId}
+            {gitPanelScopeBucketId}
+            {terminalFullscreenTabId}
+            {browserFullscreenTabId}
+            {activeProject}
+            {projectIcons}
+            {browser}
+            {coordinator}
+            onDismissCoordinator={() => {
+              const tab = contextSidebarState.sidebarActiveTab
+              if (tab?.kind === 'coordinator') closeContextTab(tab.id)
+            }}
+            onContinueInThread={handleContinueInThread}
+            onOpenSubagent={openNestedSubagent}
+            {navigate}
+            onOpenAssistantTask={openAssistantTask}
+          />
         {/snippet}
         <div
           class="min-h-0 min-w-0"
@@ -4728,23 +3788,7 @@
       {/if}
       {#if terminalDockVisible}
         {#snippet terminalDockContent()}
-          {@const activeDockTab = contextSidebarState.terminalActiveTab}
-          {#if activeDockTab}
-            {#if terminalFullscreenTabId === activeDockTab.id}
-              <div class="flex h-full items-center justify-center text-xs text-muted">
-                Terminal is open in fullscreen
-              </div>
-            {:else}
-              {#key activeDockTab.id}
-                <TerminalPanel
-                  terminalId={activeDockTab.terminalId}
-                  projectId={activeDockTab.projectId}
-                  threadId={activeDockTab.threadId}
-                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
-                />
-              {/key}
-            {/if}
-          {/if}
+          <WorkspaceTerminalDockContent {terminalFullscreenTabId} />
         {/snippet}
         <div
           class="min-h-0 min-w-0"
@@ -4790,435 +3834,20 @@
 </div>
 
 {#snippet historyMenu()}
-  <button
-    class="fixed inset-0 z-30 cursor-default"
-    aria-label="Close history"
-    title="Close history"
-    onclick={() => (showHistoryMenu = false)}
-  ></button>
-  <HistorySidePanel
-    messages={workspaceState.userMessages}
-    busy={workspaceState.historyActions?.busy ?? false}
-    forkingId={workspaceState.historyActions?.forkingId ?? null}
-    onSelect={(id) => jumpToHistoryMessage(id)}
-    onFork={(id) => workspaceState.historyActions?.fork(id)}
-    onDelete={(id, mode) =>
-      workspaceState.historyActions?.requestDelete(
-        id,
-        workspaceState.userMessages.find((message) => message.id === id)?.content ?? '',
-        mode
-      )}
-    onClose={() => (showHistoryMenu = false)}
-  />
+  <WorkspaceHistoryMenu onClose={() => (showHistoryMenu = false)} onSelect={jumpToHistoryMessage} />
 {/snippet}
 
 {#snippet browserMenu()}
-  <button
-    class="fixed inset-0 z-30 cursor-default"
-    aria-label="Close browser menu"
-    title="Close browser menu"
-    onclick={() => (showBrowserMenu = false)}
-    oncontextmenu={(event: MouseEvent) => {
-      event.preventDefault()
-      showBrowserMenu = false
-    }}
-  ></button>
-  <div
-    class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
-    role="menu"
-    aria-label="Browser menu"
-  >
-    <button
-      type="button"
-      class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
-      role="menuitem"
-      title="Manage downloaded files"
-      onclick={openBrowserDownloads}
-    >
-      <Download size={14} />
-      <span>Manage downloads</span>
-      {#if activeDownloadCount > 0}
-        <span
-          class="ml-auto rounded-full bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
-        >
-          {activeDownloadCount}
-        </span>
-      {/if}
-    </button>
-    <button
-      type="button"
-      class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
-      role="menuitem"
-      title="Clear browser cookies and site data"
-      onclick={requestBrowserDataClear}
-    >
-      <Cookie size={14} />
-      <span>Clear cookies and site data</span>
-    </button>
-  </div>
+  <WorkspaceBrowserMenu {browser} />
 {/snippet}
 
-<Modal
-  open={showClearBrowserDataConfirm}
-  title="Clear browser data?"
-  onClose={() => {
-    if (!browserDataClearing) {
-      showClearBrowserDataConfirm = false
-      browserDataClearProjectId = null
-    }
-  }}
-  closeOnBackdrop={!browserDataClearing}
->
-  <p class="text-sm leading-relaxed text-muted">
-    This clears cookies, local storage, service workers, caches, and other site data for
-    <span class="font-medium text-foreground"
-      >{projects.find((project) => project.id === browserDataClearProjectId)?.name ??
-        'this project'}</span
-    >. Browser tabs will reload and signed-in sessions may end.
-  </p>
+<WorkspaceBrowserDataModal {browser} {projects} />
 
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
-      title="Keep browser data"
-      disabled={browserDataClearing}
-      onclick={() => {
-        showClearBrowserDataConfirm = false
-        browserDataClearProjectId = null
-      }}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
-      title="Clear browser cookies and site data"
-      disabled={browserDataClearing}
-      onclick={() => void clearBrowserData()}
-    >
-      {browserDataClearing ? 'Clearing…' : 'Clear data'}
-    </button>
-  {/snippet}
-</Modal>
+<WorkspaceBrowserDownloadsModal {browser} />
 
-<Modal
-  open={showBrowserDownloads}
-  title="Browser downloads"
-  onClose={() => (showBrowserDownloads = false)}
-  size="lg"
-  contentClass="overflow-y-auto p-5"
-  closeOnBackdrop={false}
->
-  {#if browserDownloads.length === 0}
-    <div class="flex flex-col items-center justify-center gap-2 py-12 text-center text-dimmed">
-      <Download size={20} strokeWidth={1.5} />
-      <p class="text-xs">No downloads for this project yet.</p>
-      <p class="text-[0.6875rem]">Files download to the location you pick in the save dialog.</p>
-    </div>
-  {:else}
-    <ul class="space-y-2">
-      {#each browserDownloads as download (download.id)}
-        {@const progressing = download.state === 'progressing'}
-        <li class="rounded-xl border border-border bg-elevated p-3">
-          <div class="flex items-start gap-3">
-            <div
-              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
-            >
-              <FileDown size={15} />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="flex min-w-0 items-center gap-2">
-                <p
-                  class="min-w-0 truncate text-sm font-medium text-foreground"
-                  title={download.fileName}
-                >
-                  {download.fileName}
-                </p>
-                <StatusPill tone={browserDownloadTone(download)} dot title={download.state}>
-                  {browserDownloadStateLabel(download)}
-                </StatusPill>
-              </div>
-              <p class="mt-0.5 truncate text-[0.6875rem] text-muted" title={download.url}>
-                {browserDownloadHost(download.url)} · {browserDownloadBytes(download.receivedBytes)}
-                {progressing && download.totalBytes > 0
-                  ? ` of ${browserDownloadBytes(download.totalBytes)}`
-                  : ''}
-              </p>
-              {#if progressing && download.speedBytes > 0}
-                <p class="mt-0.5 text-[0.6875rem] tabular-nums text-dimmed">
-                  {browserDownloadBytes(download.speedBytes)}/s
-                </p>
-              {/if}
-            </div>
-            <div class="flex shrink-0 items-center gap-1">
-              {#if progressing}
-                {#if download.paused}
-                  <button
-                    type="button"
-                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                    aria-label={`Resume ${download.fileName}`}
-                    title={`Resume ${download.fileName}`}
-                    onclick={() => resumeBrowserDownload(download)}
-                  >
-                    <Play size={13} />
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                    aria-label={`Pause ${download.fileName}`}
-                    title={`Pause ${download.fileName}`}
-                    onclick={() => pauseBrowserDownload(download)}
-                  >
-                    <Pause size={13} />
-                  </button>
-                {/if}
-              {/if}
-              {#if download.state === 'completed'}
-                <button
-                  type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  aria-label={`Open ${download.fileName}`}
-                  title={`Open ${download.fileName}`}
-                  onclick={() => openBrowserDownload(download)}
-                >
-                  <ExternalLink size={13} />
-                </button>
-                <button
-                  type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  aria-label={`Reveal ${download.fileName} in file manager`}
-                  title={`Reveal ${download.fileName} in file manager`}
-                  onclick={() => revealBrowserDownload(download)}
-                >
-                  <FolderOpen size={13} />
-                </button>
-              {/if}
-              {#if progressing || download.state === 'interrupted'}
-                <button
-                  type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-danger"
-                  aria-label={`Cancel ${download.fileName}`}
-                  title={`Cancel ${download.fileName}`}
-                  onclick={() => cancelBrowserDownload(download)}
-                >
-                  <CircleStop size={13} />
-                </button>
-              {/if}
-            </div>
-          </div>
-          {#if progressing}
-            {@const percent = Math.min(100, Math.max(0, download.progress))}
-            <div class="mt-3 flex items-center gap-2">
-              <div
-                class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-overlay"
-                role="progressbar"
-                aria-label={`Download progress for ${download.fileName}`}
-                aria-valuenow={Math.round(percent)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              >
-                <div
-                  class="h-full rounded-full bg-primary transition-[width] duration-150"
-                  style={`width: ${percent}%`}
-                ></div>
-              </div>
-              <span class="w-9 shrink-0 text-right text-[0.625rem] tabular-nums text-dimmed">
-                {Math.round(percent)}%
-              </span>
-            </div>
-          {/if}
-          {#if download.error}
-            <p class="mt-2 text-[0.6875rem] text-danger" role="alert">{download.error}</p>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
+<WorkspaceRemoveProjectModals dialogs={projectDialogs} />
 
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Close the downloads manager"
-      onclick={() => (showBrowserDownloads = false)}
-    >
-      Close
-    </button>
-  {/snippet}
-</Modal>
-
-<!-- Remove Project Confirmation -->
-<Modal open={showRemoveModal} title="Remove Project" size="lg" onClose={closeRemoveModal}>
-  <p class="text-sm leading-relaxed text-muted">
-    This will remove
-    <span class="font-medium text-foreground">{removeTarget?.name}</span>
-    and all of its threads from {APP_NAME}. The folder itself will remain on your device.
-  </p>
-
-  {#if removeDeleteFolder}
-    <p class="mt-3 text-sm font-medium leading-relaxed text-danger">
-      You have stated that we should delete this project's folder too from your device!
-    </p>
-  {/if}
-
-  {#snippet footer()}
-    <div class="mr-auto flex items-center">
-      <Switch
-        bind:checked={removeDeleteFolder}
-        title="Delete this project's folder from your device too"
-        aria-label="Delete folder from device"
-        label="Delete folder from device"
-      />
-    </div>
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
-      title="Cancel"
-      disabled={deletingProjectId !== null}
-      onclick={closeRemoveModal}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
-      title="Remove this project and its threads from {APP_NAME}"
-      disabled={deletingProjectId !== null}
-      onclick={() => void confirmRemoveProject()}
-    >
-      {#if deletingProjectId !== null}
-        <Loader2 size={14} class="animate-spin" />
-        Removing…
-      {:else}
-        Remove
-      {/if}
-    </button>
-  {/snippet}
-</Modal>
-
-<!-- Remove Project With Folder Erasure: Final Confirmation -->
-<Modal
-  open={showRemoveFinalConfirm}
-  title="Delete Project Folder"
-  onClose={cancelRemoveFinalConfirm}
->
-  <p class="text-sm leading-relaxed text-muted">
-    Your project will be removed from {APP_NAME} and erased from your device. It cannot be recovered again!
-  </p>
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
-      title="Go back to the previous step"
-      disabled={deletingProjectId !== null}
-      onclick={cancelRemoveFinalConfirm}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
-      title="Delete this project from {APP_NAME} and erase its folder from your device"
-      disabled={deletingProjectId !== null}
-      onclick={() => void confirmRemoveWithFolder()}
-    >
-      {#if deletingProjectId !== null}
-        <Loader2 size={14} class="animate-spin" />
-        Deleting…
-      {:else}
-        Delete Project and Folder
-      {/if}
-    </button>
-  {/snippet}
-</Modal>
-
-<!-- Edit Project Modal -->
-<Modal open={showEditModal} title="Edit Project" onClose={() => (showEditModal = false)}>
-  {#if editProject}
-    <form
-      id="edit-project-form"
-      class="space-y-4"
-      onsubmit={(e: SubmitEvent) => void confirmEditProject(e)}
-    >
-      <AppearancePicker
-        name={editProjectName}
-        color={editProjectColor}
-        iconType={editProjectIconType}
-        fallbackIconUrl={editProjectPendingIcon?.dataUrl ??
-          (editProject.icon ? (projectIcons.get(editProject.id) ?? null) : null)}
-        onColorChange={(color) => (editProjectColor = color)}
-        onIconTypeChange={(iconType) => (editProjectIconType = iconType)}
-        onReset={() => {
-          editProjectColor = editProject?.color
-          editProjectIconType = editProject?.iconType
-          editProjectPendingIcon = undefined
-        }}
-      />
-
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Upload a custom image as the project icon"
-        onclick={() => void changeEditProjectIcon()}
-      >
-        <FolderOpen size={12} />
-        Upload Image
-      </button>
-
-      <!-- Project name -->
-      <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="edit-project-name">
-          Project Name
-        </label>
-        <input
-          id="edit-project-name"
-          type="text"
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-          bind:value={editProjectName}
-        />
-      </div>
-
-      <!-- Project path -->
-      <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="edit-project-path">
-          Project Path
-        </label>
-        <input
-          id="edit-project-path"
-          type="text"
-          class="w-full rounded-lg border bg-raised px-3 py-2 text-sm text-dimmed"
-          value={editProject.path}
-          readonly
-        />
-      </div>
-    </form>
-  {/if}
-
-  {#snippet footer()}
-    {#if editProject}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        title="Cancel"
-        onclick={() => (showEditModal = false)}
-      >
-        Cancel
-      </button>
-      <button
-        type="submit"
-        form="edit-project-form"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        disabled={!editProjectName.trim()}
-        title="Save project settings"
-      >
-        Save
-      </button>
-    {/if}
-  {/snippet}
-</Modal>
+<WorkspaceEditProjectModal dialogs={projectDialogs} {projectIcons} />
 
 <ThreadSwitcher
   threads={recentThreads}
@@ -5228,98 +3857,23 @@
   onSelect={openThreadFromSwitcher}
 />
 
-{#if terminalFullscreenTabId && fullscreenTerminalTabs.length > 0}
-  {@const terminalTab = contextSidebarState.tabs.find((t) => t.id === terminalFullscreenTabId)}
-  <FullscreenPanelDialog
-    tabs={fullscreenTerminalTabs}
-    activeTabId={terminalFullscreenTabId}
-    newLabel="New terminal"
-    minimizeLabel="Minimize terminal"
-    onSelect={(id) => (terminalFullscreenTabId = id)}
-    onCloseTab={(id) => closeFullscreenTab('terminal', id)}
-    onNew={() => {
-      const id = openNewTerminal()
-      if (id) terminalFullscreenTabId = id
-    }}
-    onMinimize={() => (terminalFullscreenTabId = null)}
-  >
-    {#snippet icon()}
-      <SquareTerminal size={11} class="shrink-0" />
-    {/snippet}
-    {#if terminalTab?.kind === 'terminal'}
-      {#key terminalFullscreenTabId}
-        <TerminalPanel
-          terminalId={terminalTab.terminalId}
-          projectId={terminalTab.projectId}
-          threadId={terminalTab.threadId}
-          scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
-        />
-      {/key}
-    {/if}
-  </FullscreenPanelDialog>
-{/if}
-
-{#if browserFullscreenTabId}
-  {@const browserTab = contextSidebarState.tabs.find((tab) => tab.id === browserFullscreenTabId)}
-  {#if browserTab?.kind === 'browser'}
-    <FullscreenPanelDialog
-      tabs={fullscreenBrowserTabs}
-      activeTabId={browserFullscreenTabId}
-      newLabel="New browser tab"
-      minimizeLabel="Minimize browser"
-      onSelect={(id) => (browserFullscreenTabId = id)}
-      onCloseTab={(id) => closeFullscreenTab('browser', id)}
-      onNew={() => {
-        const id = openNewBrowser()
-        if (id) browserFullscreenTabId = id
-      }}
-      onMinimize={() => (browserFullscreenTabId = null)}
-    >
-      {#snippet icon()}
-        <Globe2 size={11} class="shrink-0" />
-      {/snippet}
-      {#key browserFullscreenTabId}
-        <BrowserPanel tab={browserTab} fullscreen />
-      {/key}
-    </FullscreenPanelDialog>
-  {/if}
-{/if}
+<WorkspaceFullscreenTerminal
+  tabId={terminalFullscreenTab?.id ?? null}
+  onTabIdChange={(id) => (terminalFullscreenTabId = id)}
+  onNewTerminal={openNewTerminal}
+  onCloseTab={(id) => closeFullscreenTab('terminal', id)}
+/>
+<WorkspaceFullscreenBrowser
+  tabId={browserFullscreenTabId}
+  onTabIdChange={(id) => (browserFullscreenTabId = id)}
+  onNewBrowser={openNewBrowser}
+  onCloseTab={(id) => closeFullscreenTab('browser', id)}
+/>
 
 <!-- Closing a files tab with unsaved changes -->
-<Dialog.Root bind:open={() => closeTabTarget !== null, (open) => !open && (closeTabTarget = null)}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <Dialog.Title class="text-sm font-semibold text-foreground">Unsaved changes</Dialog.Title>
-      <Dialog.Description class="mt-2 text-xs leading-5 text-muted">
-        <span class="font-mono text-foreground">{closeTabTarget?.path}</span> has unsaved changes. Save
-        them before closing the tab?
-      </Dialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <Dialog.Close
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </Dialog.Close>
-        <button
-          type="button"
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          title="Close the tab and discard unsaved changes"
-          onclick={discardCloseTab}
-        >
-          Discard changes
-        </button>
-        <button
-          type="button"
-          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          title="Save the file and close the tab"
-          onclick={() => void saveAndCloseTab()}
-        >
-          Save &amp; close
-        </button>
-      </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<WorkspaceUnsavedChangesDialog
+  target={closeTabTarget}
+  onCancel={() => (closeTabTarget = null)}
+  onDiscard={discardCloseTab}
+  onSave={saveAndCloseTab}
+/>

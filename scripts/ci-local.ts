@@ -153,7 +153,6 @@ async function hasBinary(binary: string): Promise<boolean> {
 
 function buildEnv(): Record<string, string> {
   const env: Record<string, string> = {}
-  env.MAIN_VITE_REMOTE_API_ORIGIN = 'https://mobile.codeinoven.com'
   env.CODEINOVEN_GITHUB_CLIENT_ID = process.env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''
   return env
 }
@@ -277,6 +276,9 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   )
 
   // security.yml "Detect leaked secrets": gitleaks runs locally when installed.
+  // The flags match the workflow command exactly, including `--exit-code 1`:
+  // without it the stage can never fail, so a local run would report green for
+  // a secrets scan that GitHub Actions rejects.
   stages.push({
     id: 'gitleaks',
     hint: 'Install gitleaks (brew install gitleaks) to mirror the security.yml secrets scan.',
@@ -286,7 +288,10 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
         process.stdout.write('[ci-local] gitleaks not installed — skipping (see security.yml)\n')
         return 0
       }
-      return runStep(['gitleaks', 'detect'], 'Secrets scan (gitleaks)')
+      return runStep(
+        ['gitleaks', 'detect', '--redact', '--verbose', '--exit-code', '1'],
+        'Secrets scan (gitleaks)'
+      )
     }
   })
 

@@ -1,30 +1,28 @@
 import { randomBytes, randomUUID } from 'crypto'
-import { access, readFile } from 'fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
-import { join } from 'path'
 import type {
-  HarnessUtilityBinding,
   ResolvedUtility,
   UtilityDefinition,
-  UtilityDefinitionInput,
   UtilityDefinitionFor,
   McpUtilityConfig,
   UtilityKind,
   PermissionLevel
 } from '../../lib/types'
-import { UTILITY_KIND_VALUES } from '../../lib/types'
+import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
+import { APP_ADB_UTILITY_ID, APP_DESIGN_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  APP_RETRIEVE_MCP_HOST_UTILITY_ID,
+  APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from './utility-registry-service'
-import { CuaBridgeService } from './cua-bridge-service'
+import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
+import type { DesignSessionMode } from './cio-design-prompt'
 import {
+  ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
-  RETRIEVE_MCP_HOST_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -32,15 +30,15 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
+import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
+import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
+import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
+import { designAssignmentsFromConfig } from '../../lib/design-assignments'
+import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
-import {
-  StdioMcpClient,
-  MCP_TIMEOUT_MS,
-  type JsonRpcResponse,
-  type McpClient,
-  type McpTool
-} from '../agents/mcp-stdio-client'
+import { type McpClient } from '../agents/mcp-stdio-client'
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
@@ -54,58 +52,68 @@ import {
   type ImageDescriptorExecutor
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
+import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
-import { instanceRegistry } from '../system/instance-registry'
+import { UTILITY_EVENTS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
+import type { AgentSecretResolution } from './agent-secret-service'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_ALIGNMENT_OPERATIONS,
   BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
+import {
+  ROUTINE_AUTHORING_UTILITY_ID,
+  ROUTINE_AUTHORING_OPERATIONS,
+  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
+  routineAuthoringUtility
+} from '../../lib/routine-authoring'
+import type { ScopeToolContext } from '../workspaces/scope-tool-service'
+import {
+  matchesUtilityKinds,
+  normalizeCapability,
+  operationPid,
+  projectTechnologyTerms,
+  utilityProjectAffinityScore,
+  utilitySearchScore
+} from './utility-orchestration/utility-search'
+import {
+  type ThreadBankEntry,
+  forgetUtility,
+  reconcileActivated
+} from './utility-orchestration/utility-turn-state'
+import {
+  BROWSER_UTILITY_TOOLS,
+  DESIGN_UTILITY_TOOLS,
+  BRIDGE_SCRIPT_PATH,
+  buildCuaSessionId,
+  buildUtilityGatewayScript,
+  gatewayUtility
+} from './utility-orchestration/utility-gateway-scripts'
+import {
+  optionalKinds,
+  optionalNumber,
+  optionalString,
+  readJsonBody,
+  recordValue,
+  requiredDatabase,
+  requiredString
+} from './utility-orchestration/utility-input'
+import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
+import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
+import {
+  connectMcpServer,
+  credentialEnvironment as resolveCredentialEnvironment
+} from './mcp-connection'
 
-const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
-const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
-const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`
-const MAX_REQUEST_BYTES = 1_000_000
 const CUA_UTILITY_ID = 'cio:cua-driver'
-const UTILITY_SEARCH_STOP_WORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'capability',
-  'for',
-  'i',
-  'need',
-  'of',
-  'or',
-  'the',
-  'to',
-  'tool',
-  'use',
-  'using',
-  'utility',
-  'with'
-])
-const PROJECT_TECH_MARKERS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['svelte.config.js', ['svelte', 'sveltekit']],
-  ['svelte.config.ts', ['svelte', 'sveltekit']],
-  ['next.config.js', ['next', 'nextjs', 'react']],
-  ['next.config.mjs', ['next', 'nextjs', 'react']],
-  ['nuxt.config.js', ['nuxt', 'vue']],
-  ['nuxt.config.ts', ['nuxt', 'vue']],
-  ['angular.json', ['angular']],
-  ['Cargo.toml', ['cargo', 'rust']],
-  ['go.mod', ['go', 'golang']],
-  ['pyproject.toml', ['python']],
-  ['requirements.txt', ['python']],
-  ['Gemfile', ['ruby']],
-  ['composer.json', ['php']]
-]
 
 export interface UtilityTurnRequest {
   harnessId: string
   projectId: string
   threadId: string
+  /** Scope the calling thread works in; the default target of `cio:scope`. */
+  scopeBucketId?: string
   /** Human-readable thread title, used to label Cua agent cursors. */
   threadTitle?: string
   projectPath: string
@@ -113,13 +121,29 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
-  /** True when the executing model is recorded as vision-capable (user report),
-   *  so the image descriptor utility stays hidden for this turn. */
-  executingModelVisionCapable?: boolean
+  /**
+   * Live check for whether the executing model can see images itself. Resolved
+   * fresh on every eligibility pass (turn start and each mid-turn refresh) so a
+   * vision report the user makes mid-turn hides the image descriptor from the
+   * very next gateway search instead of only from the following turn.
+   */
+  resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /**
+   * Whether this turn belongs to a design session the user opened with
+   * `@cio-design`. A session promotes the app-owned design capability to an
+   * active capability for the turn, so the playbook is already in context and
+   * its preview operation is callable without a search and an activation.
+   */
+  designSession?: DesignSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
+  /**
+   * Present only for a routine's Getting started interview; the callback owns
+   * the checkpoint path and replaces its content.
+   */
+  saveRoutineCheckpoint?: (markdown: string) => Promise<{ path: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -142,6 +166,28 @@ export interface UtilityResultAttribution {
   retryCause: string | null
 }
 
+/**
+ * One computer-use operation an agent just ran, reported for every such
+ * operation and not only the ones with a target process. A desktop-scoped run
+ * (`get_desktop_state`, `escalate_session`, a desktop `hotkey`) names no pid,
+ * yet it is still computer use and must still be visible to the user.
+ */
+export interface CuaOperationEvent {
+  threadId: string
+  /** Driver operation name, e.g. `drag`. */
+  operation: string
+  /** Target process, or null when the operation did not name one. */
+  pid: number | null
+  /** Turn-scoped Cua cursor session, when the driver declared one. */
+  sessionId?: string
+  /**
+   * The tier this turn runs at. The daemon's authorization mode is fixed when it
+   * starts, so the PiP monitor has to ask for the same one the run already owns
+   * rather than starting a second, differently-tiered daemon under it.
+   */
+  permissionLevel: PermissionLevel
+}
+
 export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
@@ -154,7 +200,14 @@ export interface UtilityTurnGateway {
    * Pi hand { url, token } to their bridge through a session-keyed channel;
    * `null` when the direct path is not in use for this turn.
    */
-  directEndpoint: { url: string; token: string } | null
+  directEndpoint: UtilityGatewayEndpoint | null
+  /**
+   * Whether this turn carries the explicit-setup contract (utility management and
+   * app diagnostics). A gateway fixes its tool set when the turn starts, so a
+   * caller that needs to grant management mid-turn has to read this to decide
+   * whether the live gateway can serve the request or must be rebuilt.
+   */
+  managementEnabled: boolean
   cleanup(): Promise<void>
 }
 
@@ -164,71 +217,51 @@ export type BrowserUtilityExecutor = (
   context: { projectId: string; threadId: string }
 ) => Promise<unknown>
 
-const BROWSER_UTILITY_TOOLS: McpTool[] = [
-  {
-    name: 'open',
-    description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The page keeps running when the user views another project.',
-    inputSchema: {
-      type: 'object',
-      properties: { url: { type: 'string' } },
-      required: ['url'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'snapshot',
-    description:
-      'Read the current thread browser page title, URL, visible text, and interactive elements.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-  },
-  {
-    name: 'click',
-    description: 'Click the first page element matching a CSS selector.',
-    inputSchema: {
-      type: 'object',
-      properties: { selector: { type: 'string' } },
-      required: ['selector'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'type',
-    description: 'Replace an input, textarea, or editable element value and emit input/change.',
-    inputSchema: {
-      type: 'object',
-      properties: { selector: { type: 'string' }, text: { type: 'string' } },
-      required: ['selector', 'text'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'navigate',
-    description: 'Navigate the current in-app browser tab to an http(s) URL.',
-    inputSchema: {
-      type: 'object',
-      properties: { url: { type: 'string' } },
-      required: ['url'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'screenshot',
-    description: 'Capture the visible browser page as a PNG data URL.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-  },
-  {
-    name: 'reload',
-    description: 'Reload the current page.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-  },
-  {
-    name: 'console',
-    description:
-      'Read console messages and browser runtime errors from the current project and thread tab.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-  }
-]
+/**
+ * Runs one gateway invocation of the app-owned design capability for the turn
+ * that made it. The app supplies one of these per operation group, because the
+ * three halves have different owners: `preview` composes the loopback directory
+ * preview with the in-app browser, `delegate` runs a prompt on the model the
+ * user assigned to that design work, and `save-media` writes a generated asset
+ * into the project as a file the design can reference.
+ */
+export type DesignCapabilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one gateway invocation of the app-owned scope and worktree capability
+ * for the turn that made it. The chat engine supplies it because it owns the
+ * thread's scope, project root and permission tier.
+ */
+export type ScopeToolExecutor = (
+  input: Record<string, unknown>,
+  context: ScopeToolContext
+) => Promise<unknown>
+
+/**
+ * Runs one `cio_ask_secret` gateway request for the turn that made it: it
+ * surfaces the secret card, awaits the user's submission, stores the values
+ * (vault, and a utility credential when the agent named a capability) and
+ * returns them so the calling tool can report the names without the values.
+ * The chat engine supplies it because it owns the pending-question machinery
+ * and the secret store.
+ */
+export type SecretRequestExecutor = (
+  input: Record<string, unknown>,
+  context: SecretRequestContext
+) => Promise<AgentSecretResolution>
+
+/** Which turn is asking, so the card is bound to the right thread and session. */
+export interface SecretRequestContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
 
 interface TurnState {
   id: string
@@ -249,6 +282,8 @@ interface TurnState {
   projectSearchTerms: Promise<Set<string>> | null
   /** This thread's utilities bank, restricted to utilities eligible this turn. */
   bank: Map<string, ThreadBankEntry>
+  /** When this turn last re-read the registry for newly installed utilities. */
+  eligibilityRefreshedAt: number
 }
 
 /**
@@ -257,17 +292,15 @@ interface TurnState {
  * name, kind, description) so later turns can invoke the utility directly by
  * id and re-list its docs with cio_util_docs_lookup after compaction.
  */
-interface ThreadBankEntry {
-  id: string
-  name: string
-  kind: UtilityKind
-  description: string
-}
-
 /** Thread bank entries survive app restarts as one small JSON file per thread. */
 const THREAD_BANK_DIRECTORY = 'utility-banks'
 const THREAD_BANK_MAX_ENTRIES = 64
 const THREAD_BANK_DESCRIPTION_LIMIT = 400
+
+/** Shortest gap between mid-turn eligibility refreshes. Installing forces one
+ *  immediately, so the interval only bounds how often a chatty agent re-reads the
+ *  registry while a human-paced install still lands on the next gateway call. */
+const ELIGIBILITY_REFRESH_INTERVAL_MS = 1_000
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
 type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) => Promise<unknown>
@@ -288,10 +321,14 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
-  private cuaActivityListener:
-    ((pid: number, threadId: string, sessionId?: string) => void) | null = null
+  private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private designPreviewExecutor: DesignCapabilityExecutor | null = null
+  private designAssignmentExecutor: DesignCapabilityExecutor | null = null
+  private designMediaExecutor: DesignCapabilityExecutor | null = null
+  private scopeToolExecutor: ScopeToolExecutor | null = null
+  private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -333,6 +370,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
         return (state, input) => this.runDiagnostics(state, input)
+      case ASK_SECRET_TOOL_NAME:
+        return (state, input) => this.askSecret(state, input)
       default:
         return null
     }
@@ -352,16 +391,96 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid   used by the PiP monitor to latch onto the app a thread's
-   * agent is driving.
+   * Register the executor behind the app-owned `cio:design` capability's
+   * `preview` operation. The design pass itself is text; what the app adds is
+   * the ability to serve the folder it produced and show it in the thread's
+   * browser tab.
    */
-  onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
+  setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `delegate` operation,
+   * which runs one prompt on the model the user assigned to a piece of design
+   * work. The chat engine supplies it because it owns drivers, accounts and the
+   * resolved project path, and because the assignment is a user decision the
+   * app must never make on the agent's behalf.
+   */
+  setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designAssignmentExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `save-media`
+   * operation, which writes a generated image, video or sound file into the
+   * project so the design references a file rather than a link that expires.
+   * The app supplies it because it owns the project root the file lands in.
+   */
+  setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designMediaExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:scope` utility. Scope and
+   * worktree management is an ordinary app-owned utility rather than a listed
+   * tool: most turns never touch a worktree, and a turn that does not must not
+   * carry the capability's contract in its context. The chat engine supplies the
+   * executor because it owns the thread's scope, project root and permission
+   * tier.
+   */
+  setScopeToolExecutor(executor: ScopeToolExecutor | null): void {
+    this.scopeToolExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio_ask_secret` gateway tool.
+   * Secret collection is an app capability rather than a utility operation: the
+   * agent asks, the user pastes into the card, and the value never travels back
+   * through the tool result. The chat engine supplies the executor because it
+   * owns pending questions, the vault and the utility registry.
+   */
+  setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
+    this.secretRequestExecutor = executor
+  }
+
+  /**
+   * Register a listener invoked for every computer-use operation an agent
+   * performs. The listener sees the whole picture, including desktop-scoped
+   * operations that name no pid: the PiP monitor needs a pid to track a window,
+   * while a thread row only needs to know the thread is using the computer.
+   */
+  onCuaActivity(listener: (event: CuaOperationEvent) => void): void {
     this.cuaActivityListener = listener
   }
 
-  async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
-    const id = randomUUID()
+  /** True when the harness already performs computer-use, so the Cua Driver MCP
+   *  utility must stay hidden from it. */
+  private hasNativeComputerUse(request: UtilityTurnRequest): boolean {
+    return request.nativeCapabilities.map(normalizeCapability).includes('computer_use')
+  }
+
+  /** Whether the executing model sees images itself, so the image descriptor
+   *  must stay out of this turn's reachable utilities. A capability lookup that
+   *  fails keeps the descriptor reachable rather than hiding a capability the
+   *  turn may legitimately need. */
+  private async executingModelVisionCapable(request: UtilityTurnRequest): Promise<boolean> {
+    if (!request.resolveExecutingModelVisionCapable) return false
+    try {
+      return await request.resolveExecutingModelVisionCapable()
+    } catch (error) {
+      Logger.dev('Executing-model vision capability lookup failed:', error)
+      return false
+    }
+  }
+
+  /**
+   * Resolve the utilities one turn may reach, from the registry plus the
+   * interview-bound brainstorm capability. Shared by turn start and the mid-turn
+   * refresh, so a utility installed while the turn runs becomes searchable and
+   * activatable without waiting for the next turn, and the two paths cannot drift.
+   */
+  private async resolveEligibleUtilities(request: UtilityTurnRequest): Promise<ResolvedUtility[]> {
     let eligible = await this.registry.resolve({
       harnessId: request.harnessId,
       projectId: request.projectId,
@@ -369,38 +488,31 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // Host recovery belongs to the transport, never to model-facing skills.
-    eligible = eligible.filter(({ utility }) => utility.id !== APP_RETRIEVE_MCP_HOST_UTILITY_ID)
-    // This capability is bound to the live interview, never installed globally.
-    eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
+    // These capabilities are bound to the live interview, never installed globally.
+    eligible = eligible.filter(
+      ({ utility }) =>
+        utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
+        utility.id !== ROUTINE_AUTHORING_UTILITY_ID
+    )
     if (request.saveBrainstormNotes) {
       eligible.push(
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
     }
-    const hasNativeComputerUse = request.nativeCapabilities
-      .map(normalizeCapability)
-      .includes('computer_use')
-    if (hasNativeComputerUse) {
+    if (request.saveRoutineCheckpoint) {
+      eligible.push(routineAuthoringUtility(request.harnessId, request.projectId, request.threadId))
+    }
+    if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
       // so enforce the native preference by stable utility identity too.
       eligible = eligible.filter(({ utility }) => utility.id !== CUA_UTILITY_ID)
-    } else {
-      const cuaUtility = await this.cuaBridge.resolveUtility(
-        request.harnessId,
-        request.permissionLevel
-      )
-      if (cuaUtility) eligible.push(cuaUtility)
     }
-    // A model the user reported as vision-capable must never see the image
-    // descriptor: announcing it invites the model to call it, which is exactly
-    // the false-positive report path the vision record exists to prevent.
-    if (request.executingModelVisionCapable === true) {
+    // A model that can already see images must never see the image descriptor:
+    // announcing it invites the model to call it, which is exactly the
+    // false-positive report path the app's vision record exists to prevent.
+    if (await this.executingModelVisionCapable(request)) {
       eligible = eligible.filter(({ utility }) => utility.kind !== 'image_descriptor')
     }
-    const imageDescriptorEligible = eligible.some(
-      ({ utility }) => utility.kind === 'image_descriptor'
-    )
     // Stamp the thread's permission level onto the Cua Driver MCP utility so
     // its launch environment always matches how this thread runs tools.
     for (const entry of eligible) {
@@ -413,18 +525,70 @@ export class UtilityOrchestrationService {
           : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
       }
     }
+    return eligible
+  }
+
+  async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
+    const id = randomUUID()
+    const eligible = await this.resolveEligibleUtilities(request)
+    if (!this.hasNativeComputerUse(request)) {
+      // Resolved once per turn: it inspects the installed Cua Driver binary, which
+      // is far too expensive for the mid-turn refresh below to repeat.
+      const cuaUtility = await this.cuaBridge.resolveUtility(
+        request.harnessId,
+        request.permissionLevel
+      )
+      if (cuaUtility) eligible.push(cuaUtility)
+    }
+    const imageDescriptorEligible = eligible.some(
+      ({ utility }) => utility.kind === 'image_descriptor'
+    )
+    // MCP servers are always `on_demand` and always reached through the gateway, so
+    // they never appear in the native `always` overlay. Keep the kind check even though
+    // the registry normalizes the activation: a legacy entry read straight from disk
+    // must not sneak into a harness launch. See normalizeActivation in the registry.
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
+    // A design session was opened by the user, so the design capability is active
+    // from the first token: the playbook travels with the turn and the preview
+    // operation is callable at once. Its instructions are resolved from live
+    // settings here for the same reason activation resolves them, because the
+    // seeded copy cannot know which CDN origins the user has approved.
+    if (request.designSession && request.designSession !== 'off') {
+      const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+      if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
+        const instructions = await this.designPlaybook()
+        always.push({
+          binding: design.binding,
+          utility: { ...design.utility, kind: 'skill', config: { instructions } }
+        })
+      }
+    }
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter(
-      ({ name }) =>
-        (name !== UTILITY_MANAGE_TOOL_NAME &&
-          name !== UTILITY_DIAGNOSTICS_TOOL_NAME &&
-          hasOnDemand) ||
-        ((name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) &&
-          request.allowManagement === true)
-    )
+    // The app-owned scope utility is advertised as a one-line pointer, never as
+    // a schema: whether it is offered at all is the registry's call, so
+    // disabling it in Utilities removes the pointer too.
+    const hasScopeCapability = eligible.some(({ utility }) => utility.id === APP_SCOPE_UTILITY_ID)
+    // The Android device skill is advertised the same way, as a pointer rather
+    // than a schema. It is knowledge an agent applies with its own shell, so the
+    // only thing a turn needs from the app is to know the playbook exists.
+    const hasAdbCapability = eligible.some(({ utility }) => utility.id === APP_ADB_UTILITY_ID)
+    // The design capability is advertised the same way: the app wants an agent
+    // that is about to design an interface to know the guidance and the preview
+    // exist, without carrying the design pass in every turn's context.
+    const hasDesignCapability = eligible.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+    const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
+      if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
+        return request.allowManagement === true
+      }
+      // Asking for a secret is an app capability rather than a utility
+      // operation, and it never needs a secret to be installed: it is offered on
+      // every turn that carries the gateway at all, plus every explicit setup
+      // turn, where the capability being installed is what needs the value.
+      if (name === ASK_SECRET_TOOL_NAME) return hasOnDemand || request.allowManagement === true
+      return hasOnDemand
+    })
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -432,6 +596,7 @@ export class UtilityOrchestrationService {
         instructions: '',
         directInstructions: '',
         directEndpoint: null,
+        managementEnabled: false,
         cleanup: async () => undefined
       }
     }
@@ -447,7 +612,8 @@ export class UtilityOrchestrationService {
       managedUtilities: [],
       diagnostics: null,
       projectSearchTerms: null,
-      bank: new Map()
+      bank: new Map(),
+      eligibilityRefreshedAt: Date.now()
     }
     // Surface the thread's durable utilities bank so later turns can go
     // straight to usage: only banked utilities that are still eligible this
@@ -460,13 +626,28 @@ export class UtilityOrchestrationService {
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    await this.ensureMcpHostRetriever()
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
+      ...(hasScopeCapability
+        ? [
+            `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+          ]
+        : []),
+      ...(hasAdbCapability
+        ? [
+            `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+          ]
+        : []),
+      ...(hasDesignCapability
+        ? [
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+          ]
+        : []),
       ...(hasOnDemand
         ? [
             "A utility you activate is registered in this thread's utilities bank for the whole thread lifecycle: in later turns you can invoke it directly with " +
@@ -497,7 +678,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values; the user adds those through Utilities.`,
+            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`,
             `App diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql).`
           ]
         : [])
@@ -517,7 +698,12 @@ export class UtilityOrchestrationService {
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
-      directEndpoint: { url: bridgeUrl, token },
+      directEndpoint: {
+        url: bridgeUrl,
+        token,
+        timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
+      },
+      managementEnabled: request.allowManagement === true,
       cleanup
     }
   }
@@ -609,7 +795,7 @@ export class UtilityOrchestrationService {
   /**
    * Record one utility in its thread's bank the first time it is activated.
    * Transient per-turn capabilities (the gateway itself, interview-bound
-   * alignment) are never banked.
+   * alignment notes, and the getting-started checkpoint) are never banked.
    */
   private async registerThreadBankEntry(
     state: TurnState,
@@ -617,19 +803,24 @@ export class UtilityOrchestrationService {
   ): Promise<void> {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
-      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID
+      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
+      utility.id === ROUTINE_AUTHORING_UTILITY_ID
     ) {
       return
     }
     const threadId = state.request.threadId
-    const entries = await this.loadThreadBank(threadId)
-    if (entries.some((entry) => entry.id === utility.id)) return
-    entries.push({
+    const bankEntry: ThreadBankEntry = {
       id: utility.id,
       name: utility.name,
       kind: utility.kind,
       description: utility.description.slice(0, THREAD_BANK_DESCRIPTION_LIMIT)
-    })
+    }
+    // Register the entry for this turn too, so a search later in the same turn
+    // already reports the utility it just activated as banked.
+    state.bank.set(utility.id, bankEntry)
+    const entries = await this.loadThreadBank(threadId)
+    if (entries.some((entry) => entry.id === utility.id)) return
+    entries.push(bankEntry)
     await this.saveThreadBank(threadId, entries.slice(-THREAD_BANK_MAX_ENTRIES))
   }
 
@@ -649,39 +840,31 @@ export class UtilityOrchestrationService {
     if (input['action'] !== 'install_bundle') {
       throw new TypeError('Utility management action is invalid')
     }
-    const bundle = recordValue(input['bundle'])
-    requiredString(bundle['name'], 'Utility bundle name', 120)
-    const entries = bundle['utilities']
-    if (!Array.isArray(entries) || entries.length === 0 || entries.length > 20) {
-      throw new TypeError('Utility bundle must contain between 1 and 20 utilities')
-    }
-    const definitions = entries.map((rawEntry, index) => {
-      const entry = recordValue(rawEntry)
-      if (entry['credentials'] !== undefined) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      const definition = recordValue(entry['definition'])
-      if (definition['kind'] !== 'skill' && definition['kind'] !== 'mcp') {
-        throw new TypeError(`Utility bundle entry ${index} must be a skill or MCP server`)
-      }
-      const credentials = definition['credentials']
-      if (credentials !== undefined && (!Array.isArray(credentials) || credentials.length > 0)) {
-        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
-      }
-      return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
-    })
-    const installed = await this.registry.createMany(definitions)
-    state.managedUtilities.push(...installed)
+    const definitions = normalizeBundleDefinitions(input['bundle'])
+    const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
+    // Hot reload: make what this turn just installed reachable by the next search
+    // or activation in the same turn, without waiting for a reload.
+    await this.refreshEligible(state, { force: true })
     await this.audit(state, 'utility.managed', {
       action: 'install_bundle',
-      utilityIds: installed.map((utility) => utility.id)
+      utilityIds: outcomes.map((outcome) => outcome.utility.id),
+      updatedUtilityIds: outcomes
+        .filter((outcome) => outcome.action === 'updated')
+        .map((outcome) => outcome.utility.id),
+      removedUtilityIds: outcomes.flatMap((outcome) => outcome.removed.map(({ id }) => id))
+    })
+    // Reinstalling is reported apart from installing: the agent must not claim a
+    // second install when the bundle replaced what was already there.
+    const describe = (outcome: (typeof outcomes)[number]) => ({
+      id: outcome.utility.id,
+      kind: outcome.utility.kind,
+      name: outcome.utility.name
     })
     return {
-      installed: installed.map((utility) => ({
-        id: utility.id,
-        kind: utility.kind,
-        name: utility.name
-      }))
+      installed: outcomes.filter((outcome) => outcome.action === 'installed').map(describe),
+      updated: outcomes.filter((outcome) => outcome.action === 'updated').map(describe),
+      removed: outcomes.flatMap((outcome) => outcome.removed)
     }
   }
 
@@ -693,6 +876,106 @@ export class UtilityOrchestrationService {
       return new Map(projects.map((project) => [project.id, project.name]))
     } catch {
       return new Map()
+    }
+  }
+
+  /**
+   * App-owned scope and worktree management for the calling thread, reached
+   * through the gateway's invoke route. The chat engine owns the thread's
+   * scope, project root and permission tier, so the executor receives them
+   * instead of re-deriving them here.
+   */
+  private async runScopeTool(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const execute = this.scopeToolExecutor
+    if (!execute) {
+      throw new Error(
+        'Scope management is unavailable in this session. Ask the user to manage scopes from the project board.'
+      )
+    }
+    const request = state.request
+    const action = typeof input['action'] === 'string' ? input['action'] : 'unknown'
+    // Audited without paths or arguments: that a turn reached for scope
+    // management is the durable fact, the scope contents are user data.
+    await this.audit(state, 'scope.tool', {
+      action,
+      confirmation: input['confirm'] === true
+    })
+    return await execute(input, {
+      projectId: request.projectId,
+      scopeBucketId: request.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
+      threadId: request.threadId,
+      threadTitle: request.threadTitle ?? '',
+      permissionLevel: request.permissionLevel
+    })
+  }
+
+  /**
+   * Collect one or more secrets from the user on the agent's behalf.
+   *
+   * The executor owns the card, the waiting and the storing; this handler owns
+   * the tool contract. It returns the environment variable names   plus the
+   * owner-only file paths for plain secrets   and never a value. The reserved
+   * `environment` field is attached only for a transport that applies it to its
+   * own process, and every MCP transport strips it before the result reaches a
+   * model.
+   */
+  private async askSecret(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.secretRequestExecutor
+    if (!executor) throw new Error('Secret collection is unavailable in this deployment')
+    const resolution = await executor(input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+    const sharedNote = `Each value is stored in the encrypted device vault. Reference it only at its target: \`$ENVIRONMENT_VARIABLE\` in a command, or \`"$(cat secret_path)"\` for a value you interpolate. Never print, echo, log, or read a secret, and never paste one into chat.`
+    const secretEntries = resolution.secrets.map((secret) => ({
+      label: secret.label,
+      environment_variable: secret.environmentVariable,
+      ...(secret.secretPath ? { secret_path: secret.secretPath } : {}),
+      ...(secret.boundUtilityId ? { bound_to_utility: secret.boundUtilityId } : {}),
+      ...(secret.reusedFrom ? { reused_from: secret.reusedFrom } : {})
+    }))
+    const result: Record<string, unknown> =
+      resolution.status === 'dismissed'
+        ? {
+            status: 'dismissed',
+            message:
+              'The user dismissed the secret request without providing a value. Continue without it, and ask again only if the secret is essential.'
+          }
+        : resolution.status === 'alternative'
+          ? {
+              status: 'alternative',
+              message:
+                'The user answered with an instruction instead of a value. This is an answer, not a dismissal: do not ask for the same secret again in this turn. Follow the instruction and continue.',
+              user_instruction: resolution.alternative,
+              secrets: secretEntries,
+              ...(resolution.unresolved?.length
+                ? {
+                    unresolved_environment_variables: resolution.unresolved,
+                    unresolved_note:
+                      'Nothing was exposed for these names. Continue with the user instruction. If one of them is already defined in your own environment, use it directly and never print, echo, or log it; otherwise take a different route or say plainly what is missing.'
+                  }
+                : {}),
+              note: sharedNote
+            }
+          : {
+              status: 'set',
+              message: 'Secret set, you may proceed.',
+              secrets: secretEntries,
+              note: sharedNote
+            }
+    // A reused value must reach the session environment exactly like a pasted
+    // one, which is what a user answering "this key was already supplied" needs.
+    if (input['apply_environment'] !== true || resolution.secrets.length === 0) return result
+    // Only an in-process gateway transport asks for this, and it applies the map
+    // to its own session environment before the result is shown to the model.
+    return {
+      ...result,
+      environment: Object.fromEntries(
+        resolution.secrets.map((secret) => [secret.environmentVariable, secret.value])
+      )
     }
   }
 
@@ -749,6 +1032,9 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.delete(turn.token)
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
+    // Last, so the claim covers the clients it was taken for: an unrestricted
+    // daemon is stopped here once nothing needs it any more.
+    await this.cuaBridge.releaseDaemonClaim(turn.state.id)
     await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
@@ -757,25 +1043,6 @@ export class UtilityOrchestrationService {
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
-        const input = await readJsonBody(request)
-        const sessionId = requiredString(input['session_id'], 'session_id', 128)
-        // turn_id pins the lookup to one utility turn; when omitted (the
-        // extension's self-healing path only knows the session id), any live
-        // utility turn for that session proves instance ownership.
-        const turnId = typeof input['turn_id'] === 'string' ? input['turn_id'] : ''
-        const turn = turnId
-          ? this.turns.get(turnId)
-          : [...this.turns.values()]
-              .filter((entry) => entry.state.request.sessionId === sessionId)
-              .at(-1)
-        if (turn?.state.request.sessionId !== sessionId || !this.gatewayBaseUrl) {
-          this.respond(response, 404, { error: 'Utility turn is not owned by this instance' })
-          return
-        }
-        this.respond(response, 200, { mcpHost: this.gatewayBaseUrl })
-        return
-      }
       const authorization = request.headers.authorization
       const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       const turnId = this.turnIdsByToken.get(token)
@@ -824,7 +1091,6 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
-        instanceRegistry.setMcpHost(this.gatewayBaseUrl)
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -843,7 +1109,6 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
-    instanceRegistry.setMcpHost(null)
     if (!server) return
     await new Promise<void>((resolve) => {
       if (!server.listening) {
@@ -855,19 +1120,97 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Materialize one durable app-owned recovery module. Turn instructions pass
-   * their session id as data, so cleanup can retire turn state without leaving
-   * a command in persistent agent context that points at a deleted module.
+   * Re-read the registry for the current turn so a utility installed or removed
+   * while the turn is running is visible to the very next gateway call instead of
+   * only after a reload. Rate-limited because a chatty agent may search several
+   * times per second, and forced right after this turn installs something.
    */
-  private async ensureMcpHostRetriever(): Promise<string> {
-    const script = buildMcpHostRetrieverScript(this.storage.resolve('instances'))
-    if ((await this.storage.readRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH)) !== script) {
-      await this.storage.writeRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH, script)
+  private async refreshEligible(
+    state: TurnState,
+    options: { force?: boolean } = {}
+  ): Promise<void> {
+    const now = Date.now()
+    if (
+      options.force !== true &&
+      now - state.eligibilityRefreshedAt < ELIGIBILITY_REFRESH_INTERVAL_MS
+    ) {
+      return
     }
-    return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
+    state.eligibilityRefreshedAt = now
+    const next = new Map(
+      (await this.resolveEligibleUtilities(state.request)).map((entry) => [entry.utility.id, entry])
+    )
+    // The Cua Driver entry came from inspecting the installed binary, so keep that
+    // resolution rather than paying installation discovery again.
+    const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
+    if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
+    state.eligible = next
+    // A refresh lists only what is eligible now, so an activated utility missing
+    // from it was disabled, deleted, or moved out of scope while this turn ran.
+    // Dropping it here is what lands that change mid-turn: the call the transcript
+    // already made has returned, and keeping the id alive on its behalf was what
+    // made a disabled capability stay callable until the user sent another message.
+    await this.forgetUtilities(state, reconcileActivated(state, new Set(next.keys())))
+  }
+
+  /**
+   * Why a utility an agent asked for is unreachable, when the registry can say.
+   *
+   * A user who switches a capability off expects it to stop being callable, and
+   * an agent should report that as the user's change rather than as a broken app,
+   * so the registry is consulted once on the failure path only.
+   */
+  private async unreachableUtilityReason(utilityId: string): Promise<string | null> {
+    const utility = await this.registry.get(utilityId)
+    if (!utility) return `\`${utilityId}\` is no longer installed.`
+    if (!utility.enabled) {
+      return `\`${utilityId}\` was switched off in Utilities, so it is unavailable for the rest of this session.`
+    }
+    return null
+  }
+
+  /**
+   * Land a registry change in every turn that is already running.
+   *
+   * The read inside `refreshEligible` covers the next search or activation, but
+   * not a utility a turn already activated. Without this, switching a capability
+   * off would leave it callable until the turn ended, which reads as the change
+   * needing a restart. Dropping it from live turn state means the very next
+   * invoke reports it as unavailable.
+   */
+  async applyRegistryChange(utilityId: string): Promise<void> {
+    for (const turn of this.turns.values()) {
+      const state = turn.state
+      const wasReachable = forgetUtility(state, utilityId)
+      await this.forgetUtilities(state, [utilityId])
+      // The next search must re-read the registry instead of serving the set this
+      // turn built before the change.
+      state.eligibilityRefreshedAt = 0
+      if (wasReachable) await this.audit(state, 'utility.registry_changed', { utilityId })
+    }
+  }
+
+  /** Forget utilities a turn may no longer reach, releasing what belonged to them. */
+  private async forgetUtilities(state: TurnState, utilityIds: readonly string[]): Promise<void> {
+    await Promise.all(utilityIds.map((utilityId) => this.releaseUtility(state, utilityId)))
+  }
+
+  /** End one utility's CUA session and close its MCP client, if it had either. */
+  private async releaseUtility(state: TurnState, utilityId: string): Promise<void> {
+    const sessionId = state.cuaSessionIds.get(utilityId)
+    const client = state.clients.get(utilityId)
+    state.cuaSessionIds.delete(utilityId)
+    state.clients.delete(utilityId)
+    if (!client) return
+    if (sessionId) {
+      await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
+    }
+    await Promise.allSettled([client.close()])
   }
 
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    // A capability installed moments ago must be findable in this same turn.
+    await this.refreshEligible(state)
     const query = optionalString(input['query'], 500)
     const kinds = optionalKinds(input['kinds'])
     const requestedLimit = optionalNumber(input['limit'])
@@ -918,7 +1261,7 @@ export class UtilityOrchestrationService {
       ...(fallback
         ? {
             message:
-              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search.'
+              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search. If none of them fits, research the official source online (your own web tools, or a web/search capability from this library) before concluding the capability cannot be supplied.'
           }
         : {})
     }
@@ -926,6 +1269,9 @@ export class UtilityOrchestrationService {
 
   private async activate(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    // Re-check the registry first: the agent may be activating a utility that was
+    // installed or enabled after this turn started.
+    await this.refreshEligible(state)
     const resolved = state.eligible.get(utilityId)
     if (!resolved) throw new Error('Utility is unavailable in this project, thread, or harness')
     // Re-activating an already-active utility must be a no-op: re-listing the
@@ -968,6 +1314,25 @@ export class UtilityOrchestrationService {
     }
   }
 
+  /**
+   * The design capability's playbook, with the external-asset paragraph rebuilt
+   * from the current settings policy and the delegation section rebuilt from the
+   * user's current assignments.
+   *
+   * Resolved rather than seeded because both facts are user settings: the CDN
+   * allowlist decides which hosts will actually load, and the assignments decide
+   * which models a design turn is allowed to delegate to. All paths that hand the
+   * playbook to a model   activation, and the promotion a `@cio-design` session
+   * performs at turn start   come through here, so they cannot disagree.
+   */
+  private async designPlaybook(): Promise<string> {
+    const config = await this.storage.getConfig()
+    return designCapabilityDocs(
+      prototypeCdnPolicyFromConfig(config),
+      designAssignmentsFromConfig(config.design)
+    )
+  }
+
   /** Build the capability payload (tools, operations, or instructions) that
    *  activation and cio_util_docs_lookup hand back to the model. Shared so a
    *  post-compaction docs re-dump is byte-identical to the original listing. */
@@ -975,15 +1340,29 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
+    if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      return { tools: ROUTINE_AUTHORING_OPERATIONS }
+    }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
+    }
+    if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      // The operation catalog travels with the playbook, because unlike the scope
+      // capability this one is invoked with typed fields.
+      return {
+        instructions: await this.designPlaybook(),
+        tools: DESIGN_UTILITY_TOOLS
+      }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
     }
     if (resolved.utility.kind === 'skill') {
+      // Skills hand back their instructions: the full contract, only now, and
+      // only because this turn asked for the capability. The app-owned scope
+      // utility travels this path.
       return { instructions: resolved.utility.config.instructions }
     }
     if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
@@ -1015,6 +1394,15 @@ export class UtilityOrchestrationService {
     }
     let client = state.clients.get(utilityId)
     if (!client) {
+      if (this.isComputerUseUtility(resolved)) {
+        // The Cua daemon's authorization mode is a start-time, daemon-wide
+        // property: whichever client starts the daemon fixes it for every later
+        // run until the daemon stops. Claiming the tier here, before the client
+        // connects, is what keeps a full_access run from leaving an
+        // approval-free daemon behind and an auto_review run from silently
+        // downgrading a full_access one.
+        await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+      }
       client = await this.mcpClient(resolved.utility)
       state.clients.set(utilityId, client)
     }
@@ -1068,12 +1456,15 @@ export class UtilityOrchestrationService {
       // per-turn eligibility gate still applies; the MCP client is reconnected
       // lazily below (stateless per turn, id persistent per thread).
       if (!state.bank.has(utilityId)) {
-        throw new Error('Activate this utility before invoking it')
+        const reason = await this.unreachableUtilityReason(utilityId)
+        throw new Error(reason ?? 'Activate this utility before invoking it')
       }
       const eligible = state.eligible.get(utilityId)
       if (!eligible) {
+        const reason = await this.unreachableUtilityReason(utilityId)
         throw new Error(
-          'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
+          reason ??
+            'This banked utility is not available to the current turn (disabled, out of scope, or filtered); search for a replacement or ask the user to re-enable it in Utilities'
         )
       }
       resolved = eligible
@@ -1081,7 +1472,11 @@ export class UtilityOrchestrationService {
     }
 
     let result: unknown
-    if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
+    if (resolved.utility.id === APP_SCOPE_UTILITY_ID) {
+      // The capability's `operation` is the scope action, and its `input` is
+      // exactly the field set the scope capability accepts.
+      result = await this.runScopeTool(state, { ...operationInput, action: operation })
+    } else if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       if (operation !== 'save_notes' || !state.request.saveBrainstormNotes) {
         throw new Error('Alignment notes are only available during an active Brainstorm interview')
       }
@@ -1091,6 +1486,18 @@ export class UtilityOrchestrationService {
         BRAINSTORM_ALIGNMENT_NOTE_LIMIT
       )
       result = await state.request.saveBrainstormNotes(markdown)
+    } else if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      if (operation !== 'save_checkpoint' || !state.request.saveRoutineCheckpoint) {
+        throw new Error(
+          'The getting-started checkpoint is only available while a routine\u2019s how-to is being written'
+        )
+      }
+      const markdown = requiredString(
+        operationInput['markdown'],
+        'markdown',
+        ROUTINE_AUTHORING_CHECKPOINT_LIMIT
+      )
+      result = await state.request.saveRoutineCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
@@ -1098,19 +1505,44 @@ export class UtilityOrchestrationService {
         projectId: state.request.projectId,
         threadId: state.request.threadId
       })
+    } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      // One capability, three operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned,
+      // and `save-media` brings a generated asset in as a file.
+      const executors = new Map<string, DesignCapabilityExecutor | null>([
+        ['preview', this.designPreviewExecutor],
+        ['delegate', this.designAssignmentExecutor],
+        ['save-media', this.designMediaExecutor]
+      ])
+      const executor = executors.get(operation)
+      if (!executor) {
+        throw new Error(
+          executors.has(operation)
+            ? `The design capability's "${operation}" operation is unavailable`
+            : `The design capability has no operation named "${operation}"`
+        )
+      }
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
-      result = await client.callTool(operation, routedInput)
+      try {
+        result = await client.callTool(operation, routedInput)
+      } catch (error) {
+        await this.dropDeadComputerUseTransport(state, resolved, client, error)
+        throw error
+      }
       if (this.isComputerUseUtility(resolved)) {
-        const pid = operationPid(routedInput)
-        if (pid !== null) {
-          this.cuaActivityListener?.(
-            pid,
-            state.request.threadId,
-            state.cuaSessionIds.get(utilityId)
-          )
-        }
+        this.cuaActivityListener?.({
+          threadId: state.request.threadId,
+          operation,
+          pid: operationPid(routedInput),
+          sessionId: state.cuaSessionIds.get(utilityId),
+          permissionLevel: state.request.permissionLevel
+        })
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
@@ -1132,11 +1564,23 @@ export class UtilityOrchestrationService {
           pinnedSelection: await this.pinnedImageDescriptorSelection()
         })
       }
+    } else if (resolved.utility.kind === 'skill') {
+      // A skill is documentation. Its whole contract arrived at activation, so
+      // there is nothing to invoke; say so instead of reporting a kind mismatch.
+      throw new Error(
+        `\`${resolved.utility.id}\` is a skill: it exposes no tool. Its instructions arrived when it was activated, so re-list them with ${UTILITY_DOCS_TOOL_NAME} if they are gone, then do the work with your own tools.`
+      )
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
-    return result
+    // A picture that travels inline as base64 is billed as text, at roughly one
+    // token per character; the same bytes delivered as an image content part are
+    // billed on the pixels they cover, which measured about 22x cheaper on a real
+    // screenshot (40,788 tokens against 1,844 at 1568px). Both bridges forward a
+    // `content` array verbatim, so an image-bearing result is handed back in that
+    // shape and everything else keeps its existing form.
+    return resultWithImageParts(result) ?? result
   }
 
   /**
@@ -1162,6 +1606,47 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === CUA_UTILITY_ID) return true
     const capability = normalizeCapability(resolved.binding.nativeCapability ?? '')
     return capability === 'computer_use'
+  }
+
+  /**
+   * Drop a Cua client whose daemon connection died mid-turn.
+   *
+   * The `cua-driver mcp` server owns one connection to the shared Cua daemon and
+   * never re-establishes it, so a daemon that dies while a run is in flight (a
+   * crash, a driver update, a quit from the menu bar) leaves every remaining
+   * computer-use call of that turn failing against a connection that can never
+   * work again   measured against cua-driver 0.17.0: the connected server keeps
+   * answering `daemon transport error ... cua-driver.sock: No such file or
+   * directory` while a freshly spawned one starts a new daemon and works.
+   *
+   * Closing the client and forgetting its session is what lets the next call
+   * reconnect: reconnecting re-claims the daemon, which starts a fresh one on
+   * macOS, and the cursor session is re-created on it. The session id is dropped
+   * with the client because that session lived inside the daemon that just died.
+   *
+   * The call that failed is deliberately never retried: a computer-use operation
+   * may already have moved the mouse or typed, so replaying it is not safe.
+   *
+   * The failing client is the one named here, and it is only forgotten when it is
+   * still the cached one: the gateway serves concurrent requests, so another call
+   * may already have replaced it with a fresh connection that must survive.
+   */
+  private async dropDeadComputerUseTransport(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    error: unknown
+  ): Promise<void> {
+    if (!this.isComputerUseUtility(resolved)) return
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isCuaDaemonTransportFailure(message)) return
+    const utilityId = resolved.utility.id
+    if (state.clients.get(utilityId) === client) {
+      state.clients.delete(utilityId)
+      state.cuaSessionIds.delete(utilityId)
+    }
+    await client.close().catch(() => undefined)
+    Logger.dev('Cua daemon connection was lost; the next computer-use call reconnects')
   }
 
   /** Establish a visible, never-idle-hidden cursor for one Cua turn. */
@@ -1278,32 +1763,19 @@ export class UtilityOrchestrationService {
       }
       return RemoteMcpClient.connect(utility.config.endpoint, {})
     }
-    const environment = await this.credentialEnvironment(utility)
-    if (utility.config.transport === 'stdio') {
-      if (!utility.config.command) throw new Error('stdio MCP command is not configured')
-      return StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
-        ...utility.config.environment,
-        ...environment
-      })
-    }
-    if (!utility.config.url) throw new Error('Remote MCP URL is not configured')
-    return RemoteMcpClient.connect(
-      utility.config.url,
-      resolveEnvironmentReferences(utility.config.headers ?? {}, environment)
-    )
+    // One shared starter, which the Utilities connection test calls too, so a
+    // server that tests green is a server this gateway can start.
+    return connectMcpServer({
+      config: utility.config,
+      environment: await this.credentialEnvironment(utility),
+      owner: { name: utility.name, credentials: utility.credentials }
+    })
   }
 
   private async credentialEnvironment(utility: UtilityDefinition): Promise<Record<string, string>> {
-    const environment: Record<string, string> = {}
-    for (const credential of utility.credentials) {
-      if (!credential.environmentVariable) continue
-      try {
-        environment[credential.environmentVariable] = await this.vault.resolve(credential.secretRef)
-      } catch (error) {
-        if (credential.required) throw error
-      }
-    }
-    return environment
+    return resolveCredentialEnvironment(utility.credentials, (secretRef) =>
+      this.vault.resolve(secretRef)
+    )
   }
 
   private async audit(
@@ -1312,7 +1784,7 @@ export class UtilityOrchestrationService {
     details: Record<string, unknown>
   ): Promise<void> {
     await this.storage.appendRaw(
-      'logs/utility-events.jsonl',
+      dailyLogRelativePath(UTILITY_EVENTS_LOG_FILE),
       `${JSON.stringify({
         timestamp: Date.now(),
         action,
@@ -1329,612 +1801,4 @@ export class UtilityOrchestrationService {
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(body))
   }
-}
-
-class RemoteMcpClient implements McpClient {
-  private nextId = 1
-  private sessionId: string | undefined
-
-  private constructor(
-    private readonly url: string,
-    private readonly headers: Record<string, string>
-  ) {}
-
-  static async connect(url: string, headers: Record<string, string>): Promise<RemoteMcpClient> {
-    const client = new RemoteMcpClient(url, headers)
-    await client.request('initialize', {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
-    })
-    await client.notify('notifications/initialized', {})
-    return client
-  }
-
-  async listTools(): Promise<McpTool[]> {
-    const result = recordValue(await this.request('tools/list', {}))
-    const tools = Array.isArray(result['tools']) ? result['tools'] : []
-    return tools.flatMap((value) => {
-      if (!isRecord(value) || typeof value['name'] !== 'string') return []
-      return [
-        {
-          name: value['name'],
-          ...(typeof value['description'] === 'string'
-            ? { description: value['description'] }
-            : {}),
-          ...(isRecord(value['inputSchema']) ? { inputSchema: value['inputSchema'] } : {})
-        }
-      ]
-    })
-  }
-
-  callTool(name: string, input: Record<string, unknown>): Promise<unknown> {
-    return this.request('tools/call', { name, arguments: input })
-  }
-
-  async close(): Promise<void> {
-    if (this.sessionId) {
-      await fetch(this.url, {
-        method: 'DELETE',
-        headers: { ...this.headers, 'Mcp-Session-Id': this.sessionId }
-      }).catch(() => undefined)
-    }
-  }
-
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.send({ jsonrpc: '2.0', id: this.nextId++, method, params }, true)
-  }
-
-  private notify(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.send({ jsonrpc: '2.0', method, params }, false)
-  }
-
-  private async send(payload: Record<string, unknown>, expectsResult: boolean): Promise<unknown> {
-    const response = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        ...this.headers,
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...(this.sessionId ? { 'Mcp-Session-Id': this.sessionId } : {})
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(MCP_TIMEOUT_MS)
-    })
-    if (!response.ok) throw new Error(`Remote MCP request failed (${response.status})`)
-    this.sessionId ??= response.headers.get('mcp-session-id') ?? undefined
-    if (!expectsResult || response.status === 202) return undefined
-    const contentType = response.headers.get('content-type') ?? ''
-    const text = await response.text()
-    const raw = contentType.includes('text/event-stream')
-      ? text
-          .split('\n')
-          .find((line) => line.startsWith('data:'))
-          ?.slice(5)
-          .trim()
-      : text
-    if (!raw) throw new Error('Remote MCP returned no result')
-    const result = JSON.parse(raw) as JsonRpcResponse
-    if (result.error) throw new Error(result.error.message)
-    return result.result
-  }
-}
-
-function gatewayUtility(
-  request: UtilityTurnRequest,
-  scriptPath: string,
-  bridgeUrl: string,
-  token: string
-): ResolvedUtility {
-  const now = Date.now()
-  const utility: UtilityDefinitionFor<'mcp'> = {
-    id: `cio:utility-gateway:${request.threadId}`,
-    kind: 'mcp',
-    name: 'CodeInOven utilities',
-    description: 'Search, activate, and invoke scoped app-owned utilities on demand.',
-    enabled: true,
-    activation: 'always',
-    scope: { level: 'thread', projectId: request.projectId, threadId: request.threadId },
-    config: {
-      transport: 'stdio',
-      command: process.execPath,
-      args: [scriptPath],
-      environment: {
-        ELECTRON_RUN_AS_NODE: '1',
-        CODEINOVEN_UTILITY_BRIDGE_URL: bridgeUrl,
-        CODEINOVEN_UTILITY_BRIDGE_TOKEN: token
-      }
-    },
-    credentials: [],
-    harnessBindings: [
-      { harnessId: request.harnessId, strategy: 'mcp', transportName: 'utilities' }
-    ],
-    appOwned: false,
-    createdAt: now,
-    updatedAt: now
-  }
-  const binding: HarnessUtilityBinding = utility.harnessBindings[0]!
-  return { utility, binding }
-}
-
-function normalizeCapability(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[\s-]+/gu, '_')
-}
-
-function operationPid(input: Record<string, unknown>): number | null {
-  const directPid = input['pid']
-  if (typeof directPid === 'number' && Number.isInteger(directPid) && directPid > 0) {
-    return directPid
-  }
-  const target = isRecord(input['target']) ? input['target'] : {}
-  const targetPid = target['pid']
-  return typeof targetPid === 'number' && Number.isInteger(targetPid) && targetPid > 0
-    ? targetPid
-    : null
-}
-
-function matchesUtilityKinds(
-  { utility, binding }: ResolvedUtility,
-  kinds: Set<UtilityKind> | null
-): boolean {
-  if (!kinds || kinds.has(utility.kind)) return true
-  if (!binding.nativeCapability) return false
-  const capability = normalizeCapability(binding.nativeCapability)
-  return [...kinds].some((kind) => normalizeCapability(kind) === capability)
-}
-
-function utilitySearchScore({ utility, binding }: ResolvedUtility, query: string): number {
-  if (!query) return 0
-  const normalizedQuery = normalizeSearchText(query)
-  const name = normalizeSearchText(utility.name)
-  const description = normalizeSearchText(utility.description)
-  const metadata = normalizeSearchText(
-    [
-      utility.id,
-      utility.kind,
-      binding.nativeCapability,
-      binding.transportName,
-      utilitySearchConfiguration(utility),
-      utilitySearchAliases(utility.kind, binding.nativeCapability)
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join(' ')
-  )
-  let score = 0
-  if (name.includes(normalizedQuery)) score += 100
-  if (description.includes(normalizedQuery)) score += 60
-  if (metadata.includes(normalizedQuery)) score += 40
-
-  const tokens = searchTokens(normalizedQuery)
-  for (const token of tokens) {
-    if (name.includes(token)) score += 12
-    if (description.includes(token)) score += 6
-    if (metadata.includes(token)) score += 3
-  }
-  return score
-}
-
-/** Prefer utilities whose identity is already present in the current project's
- *  root manifests. This is a deterministic tie-breaker for intent queries, not
- *  a replacement for explicit query matches. */
-function utilityProjectAffinityScore(
-  { utility, binding }: ResolvedUtility,
-  projectTerms: ReadonlySet<string>
-): number {
-  if (projectTerms.size === 0) return 0
-  const identity = searchTokens(
-    normalizeSearchText(
-      [
-        utility.name,
-        utility.id,
-        binding.nativeCapability,
-        binding.transportName,
-        utilitySearchConfiguration(utility)
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join(' ')
-    )
-  )
-  return identity.reduce((score, token) => score + (projectTerms.has(token) ? 10 : 0), 0)
-}
-
-/** Non-secret identifiers that often carry the strongest MCP/provider name
- *  even when a utility's human-authored description is sparse. */
-function utilitySearchConfiguration(utility: UtilityDefinition): string {
-  switch (utility.kind) {
-    case 'mcp':
-      return [utility.config.command, ...(utility.config.args ?? []), utility.config.url]
-        .filter((value): value is string => Boolean(value))
-        .join(' ')
-    case 'skill':
-      return utility.config.supportingFiles?.join(' ') ?? ''
-    case 'web_search':
-    case 'web_fetch':
-      return [utility.config.provider, utility.config.endpoint]
-        .filter((value): value is string => Boolean(value))
-        .join(' ')
-    case 'computer_use':
-      return [utility.config.backend, utility.config.endpoint]
-        .filter((value): value is string => Boolean(value))
-        .join(' ')
-    case 'provider':
-      return [utility.config.providerId, utility.config.defaultModel, utility.config.endpoint]
-        .filter((value): value is string => Boolean(value))
-        .join(' ')
-    case 'image_descriptor':
-      return [utility.config.harnessId, utility.config.providerId, utility.config.modelId].join(' ')
-  }
-}
-
-function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): string {
-  const aliases: string[] = []
-  if (normalizeCapability(nativeCapability ?? '') === 'computer_use') {
-    aliases.push(
-      'computer desktop screen mouse keyboard click type scroll gui ui application app browser chrome safari firefox visual automation control interact open launch'
-    )
-  }
-  if (kind === 'mcp') aliases.push('mcp integration connector server external tools')
-  if (kind === 'skill') aliases.push('skill instructions workflow knowledge procedure')
-  if (kind === 'web_search') aliases.push('web internet online search research lookup')
-  if (kind === 'web_fetch') aliases.push('web internet url page website fetch read download')
-  if (kind === 'computer_use') {
-    aliases.push(
-      'computer desktop screen mouse keyboard click type scroll gui ui application app browser chrome safari firefox visual automation control interact open launch'
-    )
-  }
-  if (kind === 'provider') aliases.push('provider model api inference')
-  if (kind === 'image_descriptor') {
-    aliases.push(
-      'image descriptor describe vision picture photo screenshot see look visual ocr caption alt text'
-    )
-  }
-  return aliases.join(' ')
-}
-
-function normalizeSearchText(value: string): string {
-  return value.toLocaleLowerCase().replace(/[_-]+/gu, ' ').replace(/\s+/gu, ' ').trim()
-}
-
-function searchTokens(value: string): string[] {
-  return [
-    ...new Set(
-      value
-        .match(/[\p{L}\p{N}]+/gu)
-        ?.filter((token) => token.length > 2 && !UTILITY_SEARCH_STOP_WORDS.has(token)) ?? []
-    )
-  ]
-}
-
-/** Read only bounded root-level technology signals. Search stays local and
- *  deterministic, while package names let an intent-only query favor the MCP
- *  that matches the project stack. */
-async function projectTechnologyTerms(projectPath: string): Promise<Set<string>> {
-  const terms = new Set<string>()
-  const packageJsonPath = join(projectPath, 'package.json')
-  try {
-    const raw = await readFile(packageJsonPath, 'utf8')
-    if (raw.length <= 1_000_000) {
-      const parsed: unknown = JSON.parse(raw)
-      if (isRecord(parsed)) {
-        addProjectPackageTerms(terms, parsed['name'])
-        for (const field of [
-          'dependencies',
-          'devDependencies',
-          'peerDependencies',
-          'optionalDependencies'
-        ]) {
-          const dependencies = parsed[field]
-          if (!isRecord(dependencies)) continue
-          for (const packageName of Object.keys(dependencies)) {
-            addProjectPackageTerms(terms, packageName)
-          }
-        }
-      }
-    }
-  } catch {
-    // A missing or malformed package manifest simply contributes no signals.
-  }
-
-  await Promise.all(
-    PROJECT_TECH_MARKERS.map(async ([filename, markerTerms]) => {
-      try {
-        await access(join(projectPath, filename))
-        for (const term of markerTerms) terms.add(term)
-      } catch {
-        // Most projects have only one or two of these markers.
-      }
-    })
-  )
-  return terms
-}
-
-function addProjectPackageTerms(terms: Set<string>, value: unknown): void {
-  if (typeof value !== 'string') return
-  for (const token of value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) {
-    if (token.length <= 2) continue
-    terms.add(token)
-    if (token.endsWith('js') && token.length > 4) terms.add(token.slice(0, -2))
-  }
-}
-
-function resolveEnvironmentReferences(
-  values: Record<string, string>,
-  environment: Record<string, string>
-): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [
-      key,
-      value.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_, name: string) => {
-        const resolved = environment[name]
-        if (resolved === undefined)
-          throw new Error(`Credential environment is unavailable: ${name}`)
-        return resolved
-      })
-    ])
-  )
-}
-
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    size += buffer.length
-    if (size > MAX_REQUEST_BYTES) throw new Error('Utility request is too large')
-    chunks.push(buffer)
-  }
-  const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
-  return recordValue(parsed)
-}
-
-function requiredString(value: unknown, label: string, maximum: number): string {
-  if (
-    typeof value !== 'string' ||
-    !value.trim() ||
-    value.length > maximum ||
-    value.includes('\0')
-  ) {
-    throw new TypeError(`${label} is invalid`)
-  }
-  return value.trim()
-}
-
-function optionalString(value: unknown, maximum: number): string {
-  if (value === undefined) return ''
-  if (typeof value !== 'string' || value.length > maximum || value.includes('\0')) {
-    throw new TypeError('String input is invalid')
-  }
-  return value.trim()
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new TypeError('Numeric input is invalid')
-  }
-  return value
-}
-
-function optionalKinds(value: unknown): Set<UtilityKind> | null {
-  if (value === undefined) return null
-  const allowed = new Set<UtilityKind>(UTILITY_KIND_VALUES)
-  if (
-    !Array.isArray(value) ||
-    value.some((kind) => typeof kind !== 'string' || !allowed.has(kind as UtilityKind))
-  ) {
-    throw new TypeError('Utility kinds are invalid')
-  }
-  return new Set(value as UtilityKind[])
-}
-
-function recordValue(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw new TypeError('Expected an object')
-  return value
-}
-
-/** Explicit @cio-utility diagnostics require the app database; fail fast otherwise. */
-function requiredDatabase(
-  database: import('../database/database').Database | undefined
-): import('../database/database').Database {
-  if (!database) throw new Error('App diagnostics are unavailable in this deployment')
-  return database
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** Build the stdio MCP gateway script. The tool list and the tools/call route
- *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
- *  matches the catalog   no hand-synchronized copy to drift. */
-function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
-  const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
-    name,
-    description,
-    inputSchema
-  }))
-  const routes: Record<string, string> = {}
-  for (const tool of gatewayTools) routes[tool.name] = tool.route
-  return String.raw`import readline from 'node:readline'
-
-const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
-const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
-const tools = ${JSON.stringify(tools)}
-const routes = ${JSON.stringify(routes)}
-
-async function bridge(path, args) {
-  if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
-  const response = await fetch(baseUrl + path, {
-    method: 'POST',
-    headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
-    body: JSON.stringify(args)
-  })
-  const body = await response.json()
-  if (!response.ok) throw new Error(body.error || 'Utility bridge call failed')
-  return body
-}
-
-function write(value) {
-  process.stdout.write(JSON.stringify(value) + '\n')
-}
-
-const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
-for await (const line of lines) {
-  if (!line.trim()) continue
-  let request
-  try {
-    request = JSON.parse(line)
-    if (request.method === 'initialize') {
-      write({
-        jsonrpc: '2.0',
-        id: request.id,
-        result: {
-          protocolVersion: '2025-03-26',
-          capabilities: { tools: {} },
-          serverInfo: { name: 'codeinoven-utilities', version: '1' }
-        }
-      })
-    } else if (request.method === 'tools/list') {
-      write({ jsonrpc: '2.0', id: request.id, result: { tools } })
-    } else if (request.method === 'tools/call') {
-      const name = request.params?.name
-      const args = request.params?.arguments || {}
-      const path = routes[name]
-      if (!path) throw new Error('Unknown utility gateway tool')
-      const result = await bridge(path, args)
-      const content = Array.isArray(result?.content)
-        ? result.content
-        : [{ type: 'text', text: JSON.stringify(result) }]
-      write({ jsonrpc: '2.0', id: request.id, result: { content } })
-    } else if (request.id !== undefined) {
-      write({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } })
-    }
-  } catch (error) {
-    if (request?.id !== undefined) {
-      write({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: error instanceof Error ? error.message : 'Gateway failure' } })
-    }
-  }
-}
-`
-}
-
-/**
- * Build the durable, shell-callable host resolver. It reads only public process
- * metadata and probes every loopback gateway in parallel; bearer credentials
- * never enter the registry, command arguments, or tool output.
- */
-function buildMcpHostRetrieverScript(instanceDirectory: string): string {
-  return String.raw`import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
-
-const instanceDirectory = ${JSON.stringify(instanceDirectory)}
-const sessionId = process.argv[2]?.trim()
-const turnId = process.argv[3]?.trim()
-
-if (!sessionId || sessionId.length > 128 || (turnId !== undefined && turnId.length > 128)) {
-  process.stderr.write(
-    '${RETRIEVE_MCP_HOST_TOOL_NAME} requires the utility session id (and optionally the turn id).\n'
-  )
-  process.exit(1)
-}
-
-function validLoopbackHost(value) {
-  if (typeof value !== 'string') return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' && url.hostname === '127.0.0.1' ? url.origin : null
-  } catch {
-    return null
-  }
-}
-
-async function registeredHosts() {
-  let files
-  try {
-    files = await fs.readdir(instanceDirectory)
-  } catch {
-    return []
-  }
-  const entries = await Promise.all(
-    files
-      .filter((file) => file.endsWith('.json'))
-      .map(async (file) => {
-        try {
-          return JSON.parse(await fs.readFile(join(instanceDirectory, file), 'utf8'))
-        } catch {
-          return null
-        }
-      })
-  )
-  const newestAllowedHeartbeat = Date.now() - 120_000
-  return [
-    ...new Set(
-      entries
-        .filter(
-          (entry) =>
-            typeof entry?.lastHeartbeat === 'number' &&
-            entry.lastHeartbeat >= newestAllowedHeartbeat
-        )
-        .map((entry) => validLoopbackHost(entry.mcpHost))
-        .filter(Boolean)
-    )
-  ]
-}
-
-async function resolveHost(host) {
-  try {
-    const response = await fetch(host + ${JSON.stringify(RETRIEVE_MCP_HOST_ROUTE)}, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(turnId ? { session_id: sessionId, turn_id: turnId } : { session_id: sessionId }),
-      signal: AbortSignal.timeout(1500)
-    })
-    if (!response.ok) return null
-    const body = await response.json()
-    return validLoopbackHost(body?.mcpHost)
-  } catch {
-    return null
-  }
-}
-
-const hosts = await registeredHosts()
-let resolved = null
-try {
-  resolved = await Promise.any(
-    hosts.map(async (host) => {
-      const candidate = await resolveHost(host)
-      if (!candidate) throw new Error('Not the owning instance')
-      return candidate
-    })
-  )
-} catch {
-  // No registered live instance owns this session.
-}
-if (!resolved) {
-  process.stderr.write('No live CodeInOven instance owns this utility session.\n')
-  process.exitCode = 1
-} else {
-  process.stdout.write(JSON.stringify({ mcpHost: resolved }) + '\n')
-}
-`
-}
-
-const MAX_CUA_SESSION_TITLE_CHARS = 24
-
-/**
- * Build the Cua session id shown as the on-screen agent cursor label. The
- * turn id is always kept so session identity stays stable; the thread title
- * is prepended as a human-readable label (e.g. `cio-fix-pip-focus-a1b2c3`).
- */
-function buildCuaSessionId(threadTitle: string | undefined, turnId: string): string {
-  const label = (threadTitle ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, MAX_CUA_SESSION_TITLE_CHARS)
-    .replace(/-+$/gu, '')
-  return label ? `cio-${label}-${turnId}` : `codeinoven-${turnId}`
 }

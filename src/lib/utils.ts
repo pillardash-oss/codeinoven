@@ -128,11 +128,39 @@ export async function removeDir(dirPath: string): Promise<void> {
   await rm(dirPath, { recursive: true, force: true })
 }
 
-/** Get the app config root path */
+/**
+ * Is this an Electron launch of the unpackaged app? Electron sets
+ * `process.defaultApp` to `true` only when the app was started by being handed
+ * to the default Electron executable (`electron .`   exactly what
+ * `electron-vite dev` does), and leaves it `undefined` in a packaged app. It is
+ * therefore the one signal a shared utility can use to tell a development
+ * launch from a shipped one without importing `electron`.
+ */
+function isUnpackagedElectronLaunch(): boolean {
+  const electronProcess = process as NodeJS.Process & { readonly defaultApp?: boolean }
+  return electronProcess.defaultApp === true
+}
+
+/**
+ * Get the app config root path.
+ *
+ * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.
+ * It is honored by unpackaged launches (so several worktrees can run `bun dev`
+ * against isolated data) and by the packaged-startup smoke harness that proves
+ * a first run from an empty root. A shipped app ignores it unless the smoke
+ * harness sets it, so a stray environment variable can never repoint a user's
+ * real data root.
+ */
 export function getConfigRoot(): string {
   const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
   const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
-  if (isPackagedSmoke && configuredRoot && isAbsolute(configuredRoot)) return configuredRoot
+  if (
+    configuredRoot &&
+    isAbsolute(configuredRoot) &&
+    (isPackagedSmoke || isUnpackagedElectronLaunch())
+  ) {
+    return configuredRoot
+  }
   const home = process.env.HOME ?? process.env.USERPROFILE ?? '~'
   return join(home, '.config', ORG_SLUG, APP_SLUG)
 }
@@ -140,6 +168,11 @@ export function getConfigRoot(): string {
 /** Get project storage path */
 export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
+}
+
+/** Get routine storage path (routine icons and future per-routine artifacts). */
+export function getRoutinePath(routineId: string): string {
+  return join(getConfigRoot(), 'routines', routineId)
 }
 
 const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/

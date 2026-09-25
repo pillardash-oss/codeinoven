@@ -3,6 +3,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
+  import { reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
 
@@ -21,6 +22,18 @@
 
   let start = $derived(part.time?.start)
   let end = $derived(part.time?.end)
+
+  /**
+   * A summary that merely repeats the reasoning body is not a summary   it is
+   * the same content that reached both channels, and sessions recorded before
+   * the Codex channels were separated still carry it. Render it once: the
+   * summary formatting is the clean one (the body copy has the streamed line
+   * separators collapsed into literal `****`), so it becomes the body and the
+   * separate "Thinking summary" section is dropped.
+   */
+  let repeatsSummary = $derived(reasoningSummaryRepeatsBody(part.text, part.summary ?? ''))
+  let body = $derived(repeatsSummary ? (part.summary ?? '') : part.text)
+  let summary = $derived(repeatsSummary ? '' : (part.summary ?? ''))
 
   $effect(() => {
     if (start && active && live) clock.start()
@@ -60,22 +73,22 @@
   </summary>
   <div class="border-t border-border/40 px-3 py-2">
     <div class="max-h-80 overflow-y-auto">
-      {#if part.text.trim()}
+      {#if body.trim()}
         <SmoothMarkdown
-          text={part.text}
+          text={body}
           streaming={active && live}
           class="text-xs text-muted"
           {onCiteFile}
         />
-      {:else if !part.summary?.trim()}
+      {:else if !summary.trim()}
         <p class="text-xs text-muted/70 italic">No thinking text was recorded for this step.</p>
       {/if}
-      {#if part.summary?.trim()}
-        <div class={part.text.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
+      {#if summary.trim()}
+        <div class={body.trim() ? 'mt-3 border-t border-border/40 pt-3' : ''}>
           <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-info/80">
             Thinking summary
           </p>
-          <MarkdownView text={part.summary} class="text-xs text-muted" {onCiteFile} />
+          <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
         </div>
       {/if}
     </div>

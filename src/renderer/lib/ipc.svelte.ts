@@ -8,8 +8,13 @@ import type {
   InvokeChannel,
   InvokeResult
 } from '../../preload/index'
+import {
+  isGitInvocationSuccess,
+  isGitRefusedOperation,
+  type GitInvocationValue,
+  type GitRefusingChannel
+} from '$shared/ipc-contract'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 
 declare global {
   interface Window {
@@ -24,6 +29,9 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:waitForFeatures',
   'config:get',
   'project:ensureInbox',
+  // Registered on the hydration surface so Assistant View's first pass resolves
+  // it immediately instead of waiting for the post-paint feature graph.
+  'routine:ensureSpace',
   'project:get',
   'project:getIcon',
   'project:list',
@@ -41,11 +49,9 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
 let featureReadyPromise: Promise<void> | null = null
 
 async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
-  // The remote PWA talks to the desktop through the capability-scoped RPC
-  // bridge. `app:waitForFeatures` is an Electron renderer lifecycle channel,
-  // not a remote capability, and the desktop is necessarily ready before its
-  // remote gateway can serve workspace RPC.
-  if (isRemotePwaRuntime() || HYDRATION_CHANNELS.has(channel)) return
+  // Hydration channels are registered before navigation, so they are always
+  // answerable; every other feature channel waits for the post-paint graph.
+  if (HYDRATION_CHANNELS.has(channel)) return
   featureReadyPromise ??= window.api.invoke('app:waitForFeatures')
   await featureReadyPromise
 }
@@ -71,6 +77,37 @@ export async function invoke<Channel extends InvokeChannel>(
     agentDebug.trackResult(channel, result)
   }
   return result
+}
+
+/**
+ * Typed invoke for the git channels that report an expected refusal as data.
+ *
+ * Electron logs every rejected `ipcMain.handle` call with `console.error`, so a
+ * refusal the user resolves by acting (an uncommitted working tree, an open
+ * integration, a branch that is not fully merged) comes back as
+ * `{ ok: false, refusal }` instead of a rejection. It is re-thrown here, on this
+ * side of the boundary, so the refusal reaches no log and no IPC hop, every
+ * store keeps the failure handling it already has, and this app's logs stay
+ * unchanged for a state the UI renders anyway.
+ *
+ * Restricted to the channels whose contract result is a `GitInvocation`, so a
+ * non-refusing channel cannot be routed through it by mistake.
+ */
+export async function invokeGit<Channel extends GitRefusingChannel>(
+  channel: Channel,
+  ...args: InvokeArgs<Channel>
+): Promise<GitInvocationValue<InvokeResult<Channel>>> {
+  const result: unknown = await invoke(channel, ...args)
+  if (isGitRefusedOperation(result)) throw new Error(result.refusal)
+  // A channel that honoured its contract returns the `{ ok: true, value }`
+  // envelope on success, so the value the caller asked for is one level down.
+  if (isGitInvocationSuccess(result)) {
+    return result.value as GitInvocationValue<InvokeResult<Channel>>
+  }
+  // A handler that returned the plain value (no envelope) passes through
+  // untouched; the compiler cannot see through the generic channel lookup,
+  // so the result is asserted either way.
+  return result as GitInvocationValue<InvokeResult<Channel>>
 }
 
 /** Subscribe to an IPC event channel, returns unsubscribe function */

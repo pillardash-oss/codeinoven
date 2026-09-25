@@ -7,7 +7,7 @@
  * ``` fence is lexed as a code block, which means code streams live into a
  * highlighted block instead of flashing as plain text first.
  */
-import { Marked, type Token, type Tokens } from 'marked'
+import { Marked, walkTokens, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
 import {
@@ -20,6 +20,26 @@ import {
 } from '$lib/agent-source-citations'
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
 import { faviconState } from '$lib/stores/favicons.svelte'
+import { githubImageState } from '$lib/stores/github-images.svelte'
+import { schemeState } from '$lib/stores/scheme.svelte'
+import type { ResolvedTheme } from '$lib/theme'
+import {
+  EMOJI_GLYPH_PATTERN,
+  HTML_SOURCE_TAG,
+  IMAGE_ATTR_ALT,
+  IMAGE_ATTR_CLASS,
+  IMAGE_ATTR_SRC,
+  IMAGE_ATTR_SRC_ANY,
+  IMAGE_ATTR_SRCSET_ANY,
+  IMAGE_TAG,
+  TAG_ATTR_SRCSET,
+  decodeMarkdownAttribute,
+  firstSrcsetUrl,
+  hasRemoteImage,
+  isDarkSchemeSource
+} from '$lib/markdown-remote-images'
+import { githubReferencesExtension, type GithubRepoContext } from '$lib/github-references'
+import { githubEmojiExtension } from './github-emoji'
 
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
@@ -65,8 +85,16 @@ const FOOTNOTE_DEF_SOURCE = /^\[\^([^\]\n]+)\]:(?:[ \t]+|$)(.*(?:\n(?![ \t]*(?:\
  * default for agent output and anything typed into the app. `allowHtml` true
  * lets the tags through to DOMPurify, which is what content authored on
  * GitHub (pull request bodies and comments) needs to read correctly.
+ *
+ * `repository` is the repository the content was authored in. It enables
+ * GitHub's own reference linkification (`#150`, `@login`), which is meaningless
+ * without knowing where the text came from, so it stays off everywhere else.
+ *
+ * Emoji shortcodes are expanded in both modes: `:wave:` becomes 👋 wherever it
+ * appears, because a shortcode that is not a real emoji name stays literal and
+ * the expansion is therefore never wrong, only useful.
  */
-function createMarked(allowHtml: boolean): Marked {
+function createMarked(allowHtml: boolean, repository: GithubRepoContext | null): Marked {
   const instance = new Marked({ gfm: true, breaks: true })
 
   if (!allowHtml) {
@@ -84,6 +112,11 @@ function createMarked(allowHtml: boolean): Marked {
 
   instance.use({
     extensions: [
+      githubEmojiExtension,
+      // Registered last so the built-in link and URL tokenizers win wherever
+      // they also match; a reference only tokenizes when nothing else claimed
+      // the position first.
+      ...(repository ? [githubReferencesExtension(repository)] : []),
       {
         name: 'footnoteDef',
         level: 'block',
@@ -174,10 +207,26 @@ function createMarked(allowHtml: boolean): Marked {
   return instance
 }
 
-/** Default parser: raw HTML stays literal text. */
-const marked = createMarked(false)
-/** Parser for provider-authored content, where HTML is part of the format. */
-const markedWithHtml = createMarked(true)
+/**
+ * Parser instances, keyed by content mode and repository.
+ *
+ * Reference linkification is repo-scoped, so a parser cannot be a single shared
+ * constant any more. The set stays tiny (a session reads a handful of
+ * repositories) and is bounded, and a parser is reused across every block of
+ * every message in that repository instead of being rebuilt per render.
+ */
+const parserCache = new Map<string, Marked>()
+const PARSER_CACHE_LIMIT = 8
+
+function parserFor(allowHtml: boolean, repository: GithubRepoContext | null): Marked {
+  const key = `${allowHtml ? 'h' : 'p'}:${repository ? `${repository.owner}/${repository.repo}` : ''}`
+  const cached = parserCache.get(key)
+  if (cached) return cached
+  const parser = createMarked(allowHtml, repository)
+  if (parserCache.size >= PARSER_CACHE_LIMIT) parserCache.clear()
+  parserCache.set(key, parser)
+  return parser
+}
 
 /**
  * Tags that never survive sanitizing, whatever the source.
@@ -250,8 +299,12 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
  * of the markdown dialect (GitHub pull requests). Anything the user or an
  * agent types must keep the default.
  */
-export function lexMarkdown(text: string, allowHtml = false): Token[] {
-  const parser = allowHtml ? markedWithHtml : marked
+export function lexMarkdown(
+  text: string,
+  allowHtml = false,
+  repository: GithubRepoContext | null = null
+): Token[] {
+  const parser = parserFor(allowHtml, repository)
   const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
   const tokens = parser.lexer(
     linkifyFileCitations(
@@ -274,12 +327,18 @@ export function lexMarkdown(text: string, allowHtml = false): Token[] {
 const LEX_CACHE_LIMIT = 24
 const lexCache = new Map<string, Token[]>()
 
-export function lexMarkdownCached(text: string, allowHtml = false): Token[] {
+export function lexMarkdownCached(
+  text: string,
+  allowHtml = false,
+  repository: GithubRepoContext | null = null
+): Token[] {
   // Read the revision in the caller's reactive context so a resolution bump
   // re-evaluates this expression, and use it as part of the key so the bumped
-  // evaluation cannot hit a stale pre-resolution entry.
+  // evaluation cannot hit a stale pre-resolution entry. The repository belongs in
+  // the key too: the same text lexes to different links in a different repo.
   const revision = citationPathsState.revision
-  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}${text}`
+  const scope = repository ? `${repository.owner}/${repository.repo}` : ''
+  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${text}`
   const cached = lexCache.get(key)
   if (cached) {
     // Refresh for LRU ordering   most recently used survives eviction.
@@ -287,7 +346,7 @@ export function lexMarkdownCached(text: string, allowHtml = false): Token[] {
     lexCache.set(key, cached)
     return cached
   }
-  const tokens = lexMarkdown(text, allowHtml)
+  const tokens = lexMarkdown(text, allowHtml, repository)
   lexCache.set(key, tokens)
   if (lexCache.size > LEX_CACHE_LIMIT) {
     const oldest = lexCache.keys().next().value
@@ -355,7 +414,7 @@ function resolveFootnotes(tokens: Token[]): Token[] {
   let nextNumber = 1
   const numberByLabel = new Map<string, number>()
   const countByLabel = new Map<string, number>()
-  marked.walkTokens(body, (token) => {
+  walkTokens(body, (token) => {
     if (!isFootnoteRef(token)) return
     token.defined = defs.has(token.label)
     if (!token.defined) return
@@ -390,32 +449,74 @@ function resolveFootnotes(tokens: Token[]): Token[] {
 
 // Rendered-block cache   every stream delta re-derives all tokens, but only
 // the last one's `raw` actually changes. Keyed by raw source, bounded so a
-// long session cannot grow it without limit. The favicon version is folded in
-// so a resolved favicon re-renders a link with its icon (plain link before).
+// long session cannot grow it without limit. The favicon and image versions are
+// folded in so a resolved picture re-renders the block that waits on it, and the
+// repository is part of the key because the same text links differently in it.
 const htmlCache = new Map<string, string>()
 const HTML_CACHE_LIMIT = 500
-const HTML_CACHE_VERSION = 4
+// Bumped from 4 by the emoji shortcode, reference linkification and inlined image
+// renderers: the same source now produces different HTML, so every entry a
+// previous version of this file cached must be recomputed.
+const HTML_CACHE_VERSION = 5
 
-/** Render a single non-code block token to sanitized HTML. */
-export function blockHtml(token: Token, allowHtml = false): string {
+/**
+ * Render a single non-code block token to sanitized HTML.
+ *
+ * `repository` scopes GitHub reference linkification and belongs in the cache
+ * key: `#150` is a different link depending on the repository the text came
+ * from, so two repositories must never share a rendered block.
+ */
+export function blockHtml(
+  token: Token,
+  allowHtml = false,
+  repository: GithubRepoContext | null = null
+): string {
   const hasExternalLink = EXTERNAL_LINK_SOURCE_PATTERN.test(token.raw)
+  const hasImage = hasRemoteImage(token.raw)
   const footnoteKey = footnoteCacheKey(token)
-  // Only link-bearing blocks depend on favicon resolution, so the cache key is
-  // stable for everything else (no re-render churn as favicons resolve). The
+  // Only link- and image-bearing blocks depend on resolution, so the cache key is
+  // stable for everything else (no re-render churn as pictures resolve). The
   // HTML mode is part of the key so the same source never serves the other
   // mode's output.
   const mode = allowHtml ? 'h' : 'p'
-  const cacheKey = hasExternalLink
-    ? `${HTML_CACHE_VERSION}:${mode}:f${faviconState.version}:${footnoteKey}:${token.raw}`
-    : `${HTML_CACHE_VERSION}:${mode}:${footnoteKey}:${token.raw}`
+  const scope = repository ? `${repository.owner}/${repository.repo}` : ''
+  const resolution = `${hasExternalLink ? `f${faviconState.version}` : ''}${
+    hasImage ? `i${githubImageState.version}` : ''
+  }`
+  // A picture's variant depends on the app's scheme, so that is part of the key
+  // for a picture-bearing block only: folding it into every image block would make
+  // a theme switch recompute HTML that cannot differ.
+  const variant = PICTURE_SOURCE.test(token.raw) ? `v${schemeState.isDark ? 'd' : 'l'}` : ''
+  const cacheKey = `${HTML_CACHE_VERSION}:${mode}:${scope}:${resolution}${variant}:${footnoteKey}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
-  const parser = allowHtml ? markedWithHtml : marked
+  const parser = parserFor(allowHtml, repository)
   const sanitized = DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
-  const html = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
+  const withFavicons = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
+  const html = hasImage
+    ? injectContentImages(selectPictureVariant(withFavicons, schemeState.current))
+    : withFavicons
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
+}
+
+/**
+ * Render a raw HTML fragment that a container split out of its block.
+ *
+ * An HTML block's own markup   the `<summary>` inside a `<details>`, or the
+ * text between two elements   has to be sanitized exactly like a whole block,
+ * images and favicons included, so it takes the same path `blockHtml` does. The
+ * synthetic token carries the fragment as both source and text, which is what
+ * marked's own HTML renderer passes through.
+ *
+ * `allowHtml` is not a parameter because only HTML mode ever produces a
+ * fragment: with the HTML tokenizers off there is no raw markup to split.
+ */
+export function htmlFragment(raw: string, repository: GithubRepoContext | null = null): string {
+  if (!raw.trim()) return ''
+  const token: Tokens.HTML = { type: 'html', block: true, raw, pre: false, text: raw }
+  return blockHtml(token, true, repository)
 }
 
 /**
@@ -444,25 +545,159 @@ function collectFootnoteRefs(token: Token, visit: (ref: FootnoteRefToken) => voi
 }
 
 const EXTERNAL_LINK_SOURCE_PATTERN = /https?:\/\//iu
-const EXTERNAL_LINK_OPEN = /<a\b[^>]*\bhref="https?:\/\/[^"]+"[^>]*>/giu
+/**
+ * A whole external anchor: its attributes, its href and its content.
+ *
+ * Matching the element rather than its opening tag is what makes the favicon
+ * decision below possible — whether an image already *is* the link cannot be
+ * answered from the opening tag alone.
+ */
+const EXTERNAL_LINK_ANCHOR = /<a\b([^>]*\bhref="(https?:\/\/[^"]*)"[^>]*)>([\s\S]*?)<\/a>/giu
 
 /**
  * Insert a favicon into external link anchors. The renderer CSP blocks remote
  * images, so only already-resolved `data:` URLs are injected; unresolved links
  * stay plain until `faviconState.version` bumps and the block re-renders.
+ *
+ * An anchor whose content is already a picture gets nothing: a bot comment that
+ * links its own logo writes `<a href="…"><img …></a>`, and a favicon there would
+ * be a second image inside the same link.
  */
 function injectLinkFavicons(html: string): string {
-  return html.replace(EXTERNAL_LINK_OPEN, (anchor) => {
-    const href = /\bhref="(https?:\/\/[^"]+)"/iu.exec(anchor)?.[1]
-    if (!href) return anchor
-    const dataUrl = faviconState.faviconFor(href)
-    if (!dataUrl) return anchor
-    return `${anchor}<img class="markdown-link-favicon" src="${dataUrl}" alt="" loading="lazy">`
+  return html.replace(
+    EXTERNAL_LINK_ANCHOR,
+    (anchor: string, attributes: string, href: string, inner: string) => {
+      if (isMediaOnlyAnchor(inner)) return anchor
+      const dataUrl = faviconState.faviconFor(href)
+      if (!dataUrl) return anchor
+      return `<a${attributes}><img class="markdown-link-favicon" src="${dataUrl}" alt="" loading="lazy">${inner}</a>`
+    }
+  )
+}
+
+/**
+ * Whether an anchor draws a picture and nothing else.
+ *
+ * Text is what a favicon sits beside; an anchor that is only an image has no
+ * text to decorate. `&nbsp;` is not text: it is the spacing a bot footer pads
+ * its logo with.
+ */
+function isMediaOnlyAnchor(inner: string): boolean {
+  if (!/<(?:img|picture|svg|video)\b/iu.test(inner)) return false
+  return (
+    inner
+      .replace(/<[^>]*>/gu, '')
+      .replace(/&nbsp;/giu, '')
+      .trim() === ''
+  )
+}
+
+const PICTURE_ELEMENT = /<picture\b[^>]*>([\s\S]*?)<\/picture>/giu
+/** Whether a source can hold a `<picture>` at all, for the cache key. */
+const PICTURE_SOURCE = /<picture\b/iu
+const IMG_TAG = /<img\b[^>]*>/iu
+
+/**
+ * The remote URL of a `<picture>`'s dark asset, as written, or null.
+ *
+ * Read from the tag rather than from a capture group of the whole element because
+ * a picture can carry several sources (format hints, width queries), and only the
+ * one asking for a dark surface is a second *picture* rather than a second
+ * encoding of the same one.
+ */
+function darkPictureSource(inner: string): string | null {
+  for (const match of inner.matchAll(HTML_SOURCE_TAG)) {
+    const tag = match[0]
+    if (!isDarkSchemeSource(tag)) continue
+    const srcset = TAG_ATTR_SRCSET.exec(tag)?.[1]
+    if (!srcset) continue
+    return firstSrcsetUrl(srcset)
+  }
+  return null
+}
+
+/**
+ * Replace a `<picture>` with the one asset this app should draw.
+ *
+ * A provider offers its artwork twice: a `<source media="(prefers-color-scheme:
+ * dark)">` for a dark surface, and the `<img>` beside it as the fallback. Both are
+ * remote, and the renderer CSP blocks remote hosts, so what has to survive is one
+ * `<img>` whose `src` this module can then inline. Which one is decided by the
+ * app's own scheme rather than by the browser: the media query inside the source
+ * asks the OS, so a reader who picked light in Appearance while their OS is dark
+ * would get dark artwork on a light panel.
+ *
+ * Replacing the `src` instead of rebuilding the tag keeps the `<img>`'s other
+ * attributes (alt, width, height, class), which GitHub's logo relies on for its
+ * 9px box.
+ */
+function selectPictureVariant(html: string, scheme: ResolvedTheme): string {
+  return html.replace(PICTURE_ELEMENT, (whole: string, inner: string) => {
+    const imgTag = IMG_TAG.exec(inner)?.[0] ?? null
+    // Anything else in the picture is an encoding hint whose URL the fallback
+    // already covers, so a light app has nothing to choose between.
+    const dark = scheme === 'dark' ? darkPictureSource(inner) : null
+    if (!dark) return imgTag ?? whole
+    if (!imgTag) return `<img src="${dark}" alt="">`
+    return imgTag.replace(IMAGE_ATTR_SRC_ANY, `src="${dark}"`)
+  })
+}
+
+/**
+ * Replace every remote `<img>` with something the renderer is allowed to draw.
+ *
+ * The CSP permits `img-src 'self' data:` and nothing remote, so an image in a
+ * GitHub body currently renders as a broken-image icon. Three outcomes:
+ *
+ * - an emoji-class image whose alt is already the glyph   drawn as the glyph;
+ * - a URL main has already inlined   the `data:` URL replaces the remote one,
+ *   keeping every other attribute (alt, width, height, class) untouched;
+ * - anything still unresolved   a labelled placeholder, so an unloaded picture
+ *   reads as a picture rather than as a failure.
+ *
+ * Resolution is asynchronous and version-driven: `githubImageState.version` is
+ * part of the block's cache key, so a landed picture re-renders this block with
+ * the `data:` URL.
+ */
+function injectContentImages(html: string): string {
+  return html.replace(IMAGE_TAG, (tag) => {
+    const encodedSrc = IMAGE_ATTR_SRC.exec(tag)?.[1]
+    if (!encodedSrc || !/^https:\/\//iu.test(encodedSrc)) return tag
+    const src = decodeMarkdownAttribute(encodedSrc)
+    const alt = decodeMarkdownAttribute(IMAGE_ATTR_ALT.exec(tag)?.[1] ?? '')
+    const className = decodeMarkdownAttribute(IMAGE_ATTR_CLASS.exec(tag)?.[1] ?? '')
+
+    if (/\bemoji\b/u.test(className) && EMOJI_GLYPH_PATTERN.test(alt.trim())) {
+      return `<span class="emoji">${escapeHtml(alt.trim())}</span>`
+    }
+
+    const dataUrl = githubImageState.imageFor(src)
+    if (dataUrl) {
+      // `srcset` wins over `src` wherever a browser can use it, and every URL in
+      // it is a remote one this renderer cannot draw, so the attribute has to go
+      // with the `src` it replaces.
+      return tag.replace(IMAGE_ATTR_SRC_ANY, `src="${dataUrl}"`).replace(IMAGE_ATTR_SRCSET_ANY, '')
+    }
+
+    const label = escapeHtmlAttribute(alt)
+    return `<span class="markdown-image-pending" role="img" aria-label="${label}" title="${label}">${escapeHtml(alt)}</span>`
   })
 }
 
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Escape a value that lands inside a double-quoted attribute.
+ *
+ * Distinct from `escapeHtml` on purpose: a quote in text content is harmless and
+ * `&quot;` there is noise, but a quote in an attribute value breaks out of it. The
+ * alt this escapes comes from third-party markdown, and the markup below is
+ * inserted after sanitizing, so nothing else would catch it.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtml(value).replace(/"/g, '&quot;')
 }
 
 /**

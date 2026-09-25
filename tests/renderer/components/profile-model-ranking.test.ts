@@ -51,6 +51,12 @@ function analytics(): LocalProfileAnalytics {
       }
     ],
     gradingSpend: { costUsd: 0.07 },
+    records: {
+      agentResponses: 0,
+      utilities: 0,
+      modelRankings: 1,
+      pendingGrades: 0
+    },
     generatedAt: now
   }
 }
@@ -62,7 +68,21 @@ describe('ProfileSettingsTab model-ranking DOM presentation', () => {
     invokeMock.mockReset()
     invokeMock.mockImplementation(async (channel: string) => {
       if (channel === 'account:getLocalUsage') return analytics()
-      if (channel === 'account:getProfile') return { status: 'signed-out', profile: null }
+      // The Usage page also renders the grading controls, so the queue and the
+      // grading model they read are answered here rather than left null.
+      if (channel === 'account:getRankingQueue') {
+        return {
+          awaiting: 0,
+          due: 0,
+          failed: 0,
+          judge: { kind: 'automatic', label: 'Automatic', complete: true },
+          run: null
+        }
+      }
+      if (channel === 'config:get') return { rankingJudge: { kind: 'automatic' } }
+      if (channel === 'typesafe:getStatus') return { hasKey: false }
+      if (channel === 'agent:listProviders') return []
+      if (channel === 'providerAccounts:list') return []
       return null
     })
   })

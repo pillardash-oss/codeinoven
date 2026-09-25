@@ -1,4 +1,6 @@
-import type { AppConfig, GitPullPreference } from '$shared/types'
+import { DEFAULT_IN_APP_NOTIFICATION_SOUND } from '$shared/types'
+import type { AppConfig, GitPullPreference, InAppNotificationSoundSettings } from '$shared/types'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
 const DEFAULT_MAX_DIFF_LINES = 100
@@ -14,13 +16,16 @@ const FONT_STACKS: Record<string, string> = {
   satoshi: "'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   'sf-mono': "'SF Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
-  menlo: "Menlo, ui-monospace, monospace",
-  monaco: "Monaco, ui-monospace, monospace",
+  menlo: 'Menlo, ui-monospace, monospace',
+  monaco: 'Monaco, ui-monospace, monospace',
   'fira-code': "'Fira Code', 'JetBrains Mono Variable', ui-monospace, monospace"
 }
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let openLocalhostInCioBrowser = $state(true)
+let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
+  structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
+)
 let defaultPullStrategy = $state<GitPullPreference>('ask')
 let fontFamily = $state(DEFAULT_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
@@ -51,6 +56,10 @@ export const appConfigState = {
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
+  /** Which in-app alert groups may play their quieter sound. */
+  get inAppNotificationSound(): InAppNotificationSoundSettings {
+    return inAppNotificationSound
+  },
   get defaultPullStrategy(): GitPullPreference {
     return defaultPullStrategy
   },
@@ -69,11 +78,18 @@ export const appConfigState = {
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
+    inAppNotificationSound = {
+      ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
+      ...config.inAppNotificationSound
+    }
     defaultPullStrategy = config.defaultPullStrategy
     fontFamily = config.fontFamily
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
+    // The persisted keybindings overwrite the registry defaults, so every
+    // handler that asks keymapState for an id picks up the user's binding.
+    keymapState.setOverrides(config.keybindings)
     applyAppearance()
   }
 }

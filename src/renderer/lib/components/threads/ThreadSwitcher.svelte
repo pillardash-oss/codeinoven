@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { Dialog } from 'bits-ui'
   import { tick } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
+  import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { Project, Thread } from '$shared/types'
 
   interface Props {
@@ -17,13 +18,7 @@
     onSelect: (thread: Thread) => void | Promise<void>
   }
 
-  let {
-    threads,
-    projects,
-    projectIconUrls,
-    selectedThreadId,
-    onSelect
-  }: Props = $props()
+  let { threads, projects, projectIconUrls, selectedThreadId, onSelect }: Props = $props()
 
   let open = $state(false)
   let highlightedIndex = $state(0)
@@ -112,7 +107,7 @@
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Tab' && event.ctrlKey) {
+    if (keymapState.matches('thread-switcher', event)) {
       if (threads.length === 0) return
       event.preventDefault()
       event.stopPropagation()
@@ -138,15 +133,6 @@
   function handleWindowBlur(): void {
     cancel()
   }
-
-  // While this dialog is open the browser's native WebContentsView must stay
-  // detached: a native view floats above every DOM surface, so if it is on
-  // screen it would cover the dialog entirely. Suspending is a no-op when no
-  // browser view is visible. Panels re-attach their view automatically when
-  // the flag clears (the same path used for full-window DOM surfaces).
-  $effect(() => {
-    contextSidebarState.setBrowserSwitcherSuspended(open)
-  })
 </script>
 
 <svelte:window
@@ -156,73 +142,67 @@
   onblur={handleWindowBlur}
 />
 
-<Dialog.Root
+<Modal
   {open}
-  onOpenChange={(nextOpen) => {
-    if (!nextOpen) cancel()
+  title="Switch thread"
+  onClose={cancel}
+  placement="palette"
+  panelWidth="max-w-lg"
+  chrome={false}
+  bind:panelEl={contentElement}
+  claimInitialFocus={() => {
+    focusHighlightedThread()
+    return true
+  }}
+  onCloseAutoFocus={(event) => {
+    event.preventDefault()
+    if (restoreFocusOnClose) previousFocus?.focus()
+    previousFocus = null
+    restoreFocusOnClose = false
   }}
 >
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-40 bg-app/50" />
-    <Dialog.Content
-      bind:ref={contentElement}
-      class="fixed left-1/2 top-[18%] z-50 w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
-      onOpenAutoFocus={(event) => {
-        event.preventDefault()
-        focusHighlightedThread()
-      }}
-      onCloseAutoFocus={(event) => {
-        event.preventDefault()
-        if (restoreFocusOnClose) previousFocus?.focus()
-        previousFocus = null
-        restoreFocusOnClose = false
-      }}
-    >
-      <Dialog.Title class="sr-only">Switch thread</Dialog.Title>
-      <Dialog.Description class="sr-only">
-        Choose from the ten most recently active threads.
-      </Dialog.Description>
+  <header class="border-b border-border px-4 py-3">
+    <p class="text-sm font-semibold text-foreground">Switch thread</p>
+    <p class="mt-0.5 text-[0.6875rem] text-dimmed">
+      Release Control to open the highlighted thread
+    </p>
+  </header>
 
-      <header class="border-b border-border px-4 py-3">
-        <p class="text-sm font-semibold text-foreground">Switch thread</p>
-        <p class="mt-0.5 text-[0.6875rem] text-dimmed">Release Control to open the highlighted thread</p>
-      </header>
-
-      <div
-        class="max-h-[min(28rem,65vh)] overflow-y-auto p-1.5"
-        role="listbox"
-        aria-label="Recent threads"
+  <div
+    class="max-h-[min(28rem,65vh)] overflow-y-auto p-1.5"
+    role="listbox"
+    aria-label="Recent threads"
+  >
+    {#each threads as thread, index (thread.id)}
+      {@const resolvedProjectIcon = projectIcon(thread)}
+      {@const resolvedProjectIconGlyph = contentFamilyIcon(thread)}
+      <button
+        type="button"
+        role="option"
+        aria-selected={index === highlightedIndex}
+        data-thread-index={index}
+        class="w-full overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
+        title="Open {thread.title}"
+        onpointerenter={(event) => {
+          if (pointerMovedSinceOpen(event)) highlightedIndex = index
+        }}
+        onclick={() => void selectThread(thread)}
       >
-        {#each threads as thread, index (thread.id)}
-          {@const resolvedProjectIcon = projectIcon(thread)}
-          <button
-            type="button"
-            role="option"
-            aria-selected={index === highlightedIndex}
-            data-thread-index={index}
-            class="w-full overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
-            title="Open {thread.title}"
-            onpointerenter={(event) => {
-              if (pointerMovedSinceOpen(event)) highlightedIndex = index
-            }}
-            onclick={() => void selectThread(thread)}
-          >
-            <ThreadRow
-              {thread}
-              picker
-              selected={index === highlightedIndex}
-              projectIconUrl={resolvedProjectIcon}
-            />
-          </button>
-        {/each}
-      </div>
+        <ThreadRow
+          {thread}
+          picker
+          selected={index === highlightedIndex}
+          projectIconUrl={resolvedProjectIcon}
+          projectIconGlyph={resolvedProjectIconGlyph}
+        />
+      </button>
+    {/each}
+  </div>
 
-      <footer
-        class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[0.625rem] text-dimmed"
-      >
-        <span class="tabular-nums">{threads.length} recent threads</span>
-        <span>Ctrl+Tab next · Shift+Ctrl+Tab previous</span>
-      </footer>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+  <footer
+    class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[0.625rem] text-dimmed"
+  >
+    <span class="tabular-nums">{threads.length} recent threads</span>
+    <span>Ctrl+Tab next · Shift+Ctrl+Tab previous</span>
+  </footer>
+</Modal>

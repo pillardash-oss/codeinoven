@@ -1,0 +1,149 @@
+<script lang="ts">
+  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search } from '@lucide/svelte'
+  import { RoutineDefaultIcon } from '$lib/routine-icons'
+
+  interface Props {
+    /** Full name of the tree's root. It is the routine's own name for an
+     *  assistant task's tree, which is often a whole sentence, so it is used as
+     *  the root icon's tooltip rather than printed as the label. */
+    projectName: string
+    /** Label beside the root icon; empty when the root names itself with the
+     *  icon alone, which is a routine root. */
+    projectLabel?: string
+    /** Root icon image: the routine's own icon when the tree is mounted on a
+     *  routine's workspace, else null. */
+    projectIconUrl?: string | null
+    /** True when the tree's root is a routine: without an icon of its own it
+     *  draws the routine default mark, never a generic folder. */
+    routineRoot?: boolean
+    /** Accent colour of the root identity (a routine's colour), or null for the
+     *  default primary accent. Drawn as an inset left edge so the header never
+     *  shifts, whatever the scope. */
+    projectAccentColor?: string | null
+    explorerWidth: number
+    resizing: boolean
+    dropActive: boolean
+    dropFolder: string | null
+    anyDirExpanded: boolean
+    treeBusy: boolean
+    filterOpen: boolean
+    rootLoading: boolean
+    onStartResize: (event: PointerEvent) => void
+    onResizeKeydown: (event: KeyboardEvent) => void
+    onToggleExpandAll: () => void
+    onToggleFilter: () => void
+    onRefresh: () => void
+  }
+
+  let {
+    projectName,
+    projectLabel = projectName,
+    projectIconUrl = null,
+    routineRoot = false,
+    projectAccentColor = null,
+    explorerWidth,
+    resizing,
+    dropActive,
+    dropFolder,
+    anyDirExpanded,
+    treeBusy,
+    filterOpen,
+    rootLoading,
+    onStartResize,
+    onResizeKeydown,
+    onToggleExpandAll,
+    onToggleFilter,
+    onRefresh
+  }: Props = $props()
+</script>
+
+<button
+  type="button"
+  class="absolute inset-y-0 -left-0.5 z-20 w-1.5 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20 {resizing
+    ? 'bg-primary/30'
+    : ''}"
+  tabindex="0"
+  aria-label={`Resize file tree, ${explorerWidth} pixels wide`}
+  title="Resize file tree"
+  onpointerdown={onStartResize}
+  onkeydown={onResizeKeydown}
+></button>
+{#if dropActive}
+  <div
+    class="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center"
+    aria-hidden="true"
+  >
+    <span
+      class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
+      >{dropFolder ? `Drop into ${dropFolder || ''}` : 'Drop to import'}</span
+    >
+  </div>
+{/if}
+<div
+  class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2"
+  style:box-shadow={projectAccentColor ? `inset 2px 0 0 0 ${projectAccentColor}` : undefined}
+>
+  <span
+    class="flex h-4 w-4 shrink-0 items-center justify-center"
+    title={projectLabel ? null : projectName}
+    role={projectLabel ? null : 'img'}
+    aria-label={projectLabel ? null : projectName}
+  >
+    {#if projectIconUrl}
+      <img
+        src={projectIconUrl}
+        alt={projectName}
+        class="h-3.5 w-3.5 object-contain"
+        draggable="false"
+      />
+    {:else if routineRoot}
+      <RoutineDefaultIcon
+        size={13}
+        strokeWidth={1.8}
+        style="color: {projectAccentColor ?? 'var(--color-primary)'}"
+      />
+    {:else}
+      <FolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
+    {/if}
+  </span>
+  <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground"
+    >{projectLabel}</span
+  >
+  <button
+    type="button"
+    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+    title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+    disabled={treeBusy}
+    onclick={onToggleExpandAll}
+  >
+    {#if anyDirExpanded}
+      <ChevronsUp size={12} />
+    {:else}
+      <ChevronsDown size={12} />
+    {/if}
+  </button>
+  <button
+    type="button"
+    class={[
+      'flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
+      filterOpen ? 'bg-elevated text-foreground' : ''
+    ]}
+    aria-label="Search project files"
+    title="Search project files (Cmd/Ctrl+F)"
+    aria-pressed={filterOpen}
+    onclick={onToggleFilter}
+  >
+    <Search size={12} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label="Refresh project files"
+    title="Refresh files"
+    disabled={rootLoading}
+    onclick={onRefresh}
+  >
+    <RefreshCw size={12} class={rootLoading ? 'animate-spin' : ''} />
+  </button>
+</div>

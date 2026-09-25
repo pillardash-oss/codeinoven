@@ -1,6 +1,10 @@
 import type { Thread, ThreadSettings } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
-import { threadSettings } from '$lib/stores/thread-settings.svelte'
+import {
+  assistantEffectiveSettings,
+  assistantSettings,
+  threadSettings
+} from '$lib/stores/thread-settings.svelte'
 
 function cloneSettings(settings: ThreadSettings): ThreadSettings {
   return {
@@ -26,6 +30,27 @@ export function settingsForNewThread(
   // default. Idempotent when the fallback is already the saved value.
   threadSettings.commit(cloned)
   return cloned
+}
+
+/**
+ * Settings for a new assistant task: the assistant task in focus, else the
+ * assistant's own last-used settings, else the model the project work last ran
+ * on (see `assistantEffectiveSettings`).
+ *
+ * Only a focused assistant task is ever inherited from. A thread selected in
+ * another view is not a source here, and the borrowed project model is never
+ * written back as the assistant's memory, so an assistant that never picked a
+ * model keeps following what project work uses instead of freezing a copy of it.
+ */
+export function settingsForNewAssistantTask(
+  focusedTask: Thread | null,
+  projectFallback: ThreadSettings
+): ThreadSettings {
+  const focused = focusedTask?.settings
+  if (!focused) return assistantEffectiveSettings(projectFallback)
+  const settings = cloneSettings(focused)
+  assistantSettings.commit(settings)
+  return settings
 }
 
 /** Apply inherited settings immediately while their durable write finishes off the UI path. */

@@ -1,19 +1,13 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    HelpCircle,
-    MessageSquareDashed,
-    Paperclip,
-    Send,
-    X
-  } from '@lucide/svelte'
+  import { Check, ChevronLeft, ChevronRight, Clock, Paperclip, Send, X } from '@lucide/svelte'
+  import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteSet, createSubscriber } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
-  import { blockHtml, lexMarkdown } from '../markdown/markdown'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -25,6 +19,8 @@
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
+  import AgentCardChatActions from './AgentCardChatActions.svelte'
+  import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
     request: PendingAgentQuestionRequest
@@ -93,7 +89,7 @@
   )
   let working = $state(false)
   let actionError = $state('')
-  let now = $state(Date.now())
+  let folded = $state(false)
   // svelte-ignore state_referenced_locally
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
   let syncedServerState = $state('')
@@ -114,9 +110,17 @@
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
   let allAnswered = $derived(answers.every((answer) => answer.length > 0))
   let timerPaused = $derived(interactedIndexes.has(currentIndex) || request.expiresAt === undefined)
-  let remainingMs = $derived(
-    timerPaused || request.expiresAt === undefined ? null : Math.max(0, request.expiresAt - now)
-  )
+  // Time is an external system, so the countdown subscribes to it instead of
+  // tracking it in an effect; the interval only runs while the timer is live.
+  const subscribeToClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, 1_000)
+    return () => window.clearInterval(timer)
+  })
+  let remainingMs = $derived.by(() => {
+    if (timerPaused || request.expiresAt === undefined) return null
+    subscribeToClock()
+    return Math.max(0, request.expiresAt - Date.now())
+  })
   let remainingLabel = $derived(remainingMs === null ? 'Paused' : formatRemaining(remainingMs))
 
   // Plain-markdown rendition of the question and its options that the agent
@@ -149,14 +153,6 @@
   }
 
   $effect(() => {
-    if (request.expiresAt === undefined) return
-    const timer = window.setInterval(() => {
-      now = Date.now()
-    }, 1_000)
-    return () => window.clearInterval(timer)
-  })
-
-  $effect(() => {
     const serverAnswers = request.answers
     const serverIndex = request.activeQuestionIndex
     const serverInteracted = request.interactedQuestionIndexes
@@ -176,13 +172,6 @@
     currentIndex = serverIndex
     for (const index of serverInteracted) interactedIndexes.add(index)
   })
-
-  function formatRemaining(milliseconds: number): string {
-    const seconds = Math.ceil(milliseconds / 1_000)
-    const minutes = Math.floor(seconds / 60)
-    const remainder = seconds % 60
-    return minutes > 0 ? `${minutes}:${String(remainder).padStart(2, '0')}` : `${seconds}s`
-  }
 
   function goPrev(): void {
     if (currentIndex > 0) navigateTo(currentIndex - 1)
@@ -267,6 +256,57 @@
     }
   }
 
+  // Whole-card drop target for file-request questions. The card claims the
+  // drop (and marks itself as a self-handled drop region, see
+  // chat-composer-drop.ts) so the conversation composer never also attaches
+  // the same files as message attachments.
+  let draggingFiles = $state(false)
+
+  function isFileDrag(e: DragEvent): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  }
+
+  function handleCardDragOver(e: DragEvent): void {
+    if (!question.fileRequest || working || !isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    draggingFiles = true
+  }
+
+  function handleCardDragLeave(e: DragEvent): void {
+    if (!question.fileRequest) return
+    const card = e.currentTarget
+    if (
+      card instanceof HTMLElement &&
+      e.relatedTarget instanceof Node &&
+      card.contains(e.relatedTarget)
+    ) {
+      return
+    }
+    draggingFiles = false
+  }
+
+  function handleCardDrop(e: DragEvent): void {
+    draggingFiles = false
+    if (!question.fileRequest || working) return
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const paths: string[] = []
+    for (const file of Array.from(files)) {
+      const path = window.api.getPathForFile(file)
+      if (path && !paths.includes(path)) paths.push(path)
+    }
+    if (paths.length === 0) return
+    const merged = [...currentAnswers]
+    for (const path of paths) if (!merged.includes(path)) merged.push(path)
+    markInteracted(currentIndex)
+    setAnswer(currentIndex, merged)
+    persistProgress(currentIndex, merged)
+  }
+
   function removeAttachedAnswer(path: string): void {
     if (working) return
     const updated = currentAnswers.filter((answer) => answer !== path)
@@ -338,8 +378,30 @@
   }
 </script>
 
-<section class="overflow-hidden rounded-xl border bg-surface shadow-sm" aria-label="Agent question">
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+<section
+  out:slide={dismissSlide()}
+  data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
+  class={[
+    'relative flex flex-col overflow-hidden rounded-xl border bg-surface shadow-sm',
+    draggingFiles && 'border-primary'
+  ]}
+  aria-label="Agent question"
+  ondragover={handleCardDragOver}
+  ondragleave={handleCardDragLeave}
+  ondrop={handleCardDrop}
+  {@attach fitQuestionCard}
+>
+  {#if draggingFiles}
+    <div
+      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/5"
+    >
+      <p class="rounded-lg bg-surface px-3 py-1.5 text-xs font-medium text-primary shadow-sm">
+        Drop files to attach
+      </p>
+    </div>
+  {/if}
+
+  <div class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
     <div class="min-w-0">
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
         {question.header ?? 'Question'}
@@ -387,276 +449,288 @@
       >
         <X size={15} />
       </button>
+      <CardFoldToggle bind:folded label="question" />
     </div>
   </div>
 
-  <div class="space-y-3 p-4">
-    <div class="space-y-1">
-      <div class="text-sm text-foreground">
-        {#each lexMarkdown(question.prompt) as token (token.raw)}
-          {#if token.type !== 'space'}
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-            {@html blockHtml(token)}
+  {#if !folded}
+    <div class="flex min-h-0 flex-1 flex-col" transition:slide={foldSlide()}>
+      <!-- The scrollable half: the question, its options and the custom answer
+         give way first, while the header above and the footer below stay put. -->
+      <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
+        <div class="space-y-1">
+          <!-- Card-scale markdown: the same renderer the transcript uses, sized by
+             the text utility on the surface around it. -->
+          <div class="text-sm text-foreground">
+            <MarkdownView text={question.prompt} class="markdown-body-card" />
+          </div>
+          {#if question.description}
+            <div class="text-xs text-muted">
+              <MarkdownView text={question.description} class="markdown-body-card" />
+            </div>
           {/if}
-        {/each}
-      </div>
-      {#if question.description}
-        <div class="text-xs text-muted">
-          {#each lexMarkdown(question.description) as token (token.raw)}
-            {#if token.type !== 'space'}
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-              {@html blockHtml(token)}
-            {/if}
-          {/each}
         </div>
-      {/if}
-    </div>
 
-    {#if question.richOptions && question.richOptions.length > 0}
-      <div class="grid gap-2" role="group" aria-label="Answer options">
-        {#each question.richOptions as option (option.label)}
-          {@const selected = currentAnswers.includes(option.label) && !currentCustomAnswer}
-          <button
-            class={[
-              'flex min-h-12 w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              selected
-                ? 'border-primary bg-primary text-on-primary'
-                : 'border-border bg-surface text-foreground hover:bg-elevated'
-            ]}
-            disabled={working}
-            aria-pressed={selected}
-            onclick={() => toggleOption(option.label)}
-          >
-            <span
-              class={[
-                'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[0.5625rem]',
-                question.multiple ? 'rounded' : 'rounded-full',
-                selected ? 'border-on-primary bg-on-primary text-primary' : 'border-muted'
-              ]}
-            >
-              {#if selected}<Check size={11} />{/if}
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                {#if question.fileRequest}
-                  <span class="break-all font-mono text-[0.6875rem] font-medium">{option.label}</span>
-                {:else}
-                  {option.label}
-                {/if}
-                {#if option.recommended}
-                  <span
-                    class={[
-                      'rounded px-1.5 py-0.5 text-[0.625rem] font-semibold',
-                      selected ? 'bg-on-primary/15 text-on-primary' : 'bg-primary/10 text-primary'
-                    ]}
-                  >
-                    Recommended
-                  </span>
-                {/if}
-              </span>
-              {#if option.description}
+        {#if question.richOptions && question.richOptions.length > 0}
+          <div class="grid gap-2" role="group" aria-label="Answer options">
+            {#each question.richOptions as option (option.label)}
+              {@const selected = currentAnswers.includes(option.label) && !currentCustomAnswer}
+              <button
+                class={[
+                  'flex min-h-12 w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  selected
+                    ? 'border-primary bg-primary text-on-primary'
+                    : 'border-border bg-surface text-foreground hover:bg-elevated'
+                ]}
+                disabled={working}
+                aria-pressed={selected}
+                onclick={() => toggleOption(option.label)}
+              >
                 <span
                   class={[
-                    'mt-0.5 block text-[0.6875rem] leading-relaxed',
-                    selected ? 'text-on-primary/80' : 'text-muted'
+                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[0.5625rem]',
+                    question.multiple ? 'rounded' : 'rounded-full',
+                    selected ? 'border-on-primary bg-on-primary text-primary' : 'border-muted'
                   ]}
                 >
-                  {option.description}
+                  {#if selected}<Check size={11} />{/if}
                 </span>
-              {/if}
-            </span>
-          </button>
-        {/each}
-      </div>
-    {:else if question.options && question.options.length > 0}
-      <div class="flex flex-wrap gap-2" role="group" aria-label="Answer options">
-        {#each question.options as option (option)}
-          {@const selected = currentAnswers.includes(option) && !currentCustomAnswer}
-          <button
-            class={[
-              'rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              selected
-                ? 'border-primary bg-primary text-on-primary'
-                : 'border-border bg-surface text-foreground hover:bg-elevated'
-            ]}
-            disabled={working}
-            aria-pressed={selected}
-            onclick={() => toggleOption(option)}
-          >
-            {#if selected}<Check size={12} class="mr-1 inline" />{/if}
-            {option}
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    {#if question.fileRequest}
-      <div class="space-y-2">
-        {#if attachedAnswers.length > 0}
-          <div class="flex flex-wrap gap-1.5" role="list" aria-label="Attached files">
-            {#each attachedAnswers as attachedPath (attachedPath)}
-              <span
-                class="flex max-w-full min-w-0 items-center gap-1 rounded-lg border border-border bg-elevated px-2 py-1"
-                role="listitem"
+                <span class="min-w-0 flex-1">
+                  <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                    {#if question.fileRequest}
+                      <span class="break-all font-mono text-[0.6875rem] font-medium"
+                        >{option.label}</span
+                      >
+                    {:else}
+                      {option.label}
+                    {/if}
+                    {#if option.recommended}
+                      <span
+                        class={[
+                          'rounded px-1.5 py-0.5 text-[0.625rem] font-semibold',
+                          selected
+                            ? 'bg-on-primary/15 text-on-primary'
+                            : 'bg-primary/10 text-primary'
+                        ]}
+                      >
+                        Recommended
+                      </span>
+                    {/if}
+                  </span>
+                  {#if option.description}
+                    <span
+                      class={[
+                        'mt-0.5 block text-[0.6875rem] leading-relaxed',
+                        selected ? 'text-on-primary/80' : 'text-muted'
+                      ]}
+                    >
+                      {option.description}
+                    </span>
+                  {/if}
+                </span>
+              </button>
+            {/each}
+          </div>
+        {:else if question.options && question.options.length > 0}
+          <div class="flex flex-wrap gap-2" role="group" aria-label="Answer options">
+            {#each question.options as option (option)}
+              {@const selected = currentAnswers.includes(option) && !currentCustomAnswer}
+              <button
+                class={[
+                  'rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  selected
+                    ? 'border-primary bg-primary text-on-primary'
+                    : 'border-border bg-surface text-foreground hover:bg-elevated'
+                ]}
+                disabled={working}
+                aria-pressed={selected}
+                onclick={() => toggleOption(option)}
               >
-                <Paperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
-                <span class="truncate font-mono text-[0.6875rem] text-foreground">{attachedPath}</span>
-                <button
-                  type="button"
-                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-danger/10 hover:text-danger"
-                  disabled={working}
-                  onclick={() => removeAttachedAnswer(attachedPath)}
-                  title="Remove this attached file"
-                  aria-label={`Remove attached file ${attachedPath}`}
-                >
-                  <X size={11} />
-                </button>
-              </span>
+                {#if selected}<Check size={12} class="mr-1 inline" />{/if}
+                {option}
+              </button>
             {/each}
           </div>
         {/if}
-        <button
-          type="button"
-          class="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working}
-          onclick={() => void attachFiles()}
-          title="Attach files from your computer to share with the agent"
-          aria-label="Attach files to share with the agent"
-        >
-          <Paperclip size={13} />
-          Attach files…
-        </button>
-      </div>
-    {/if}
 
-    {#if question.custom !== false}
-      <div>
-        <label
-          class="mb-1.5 block text-xs font-medium text-muted"
-          for={`custom-answer-${request.requestId}-${currentIndex}`}
-        >
-          {question.options?.length || question.richOptions?.length
-            ? question.fileRequest
-              ? 'Or type a file path'
-              : 'Or write your own response'
-            : 'Your response'}
-        </label>
-        <div class="flex items-stretch gap-2">
-          <RichMarkdownEditor
-            bind:this={customAnswerEditor}
-            id={`custom-answer-${request.requestId}-${currentIndex}`}
-            value={currentCustomAnswer}
-            class="max-h-40 min-h-10 w-full resize-none overflow-y-auto rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-[width] focus:border-primary disabled:opacity-50"
-            containerClass="min-w-0 flex-1"
-            placeholder="Type your response…"
-            ariaLabel="Your response"
-            disabled={working}
-            onValueChange={handleCustomInput}
-            onSubmit={() => void handleSubmit()}
-          />
-          <div class="flex shrink-0 items-center">
-            <VoiceInputButton
-              targetId={customAnswerSpeechTargetId}
-              getTarget={customAnswerSpeechTarget}
-              {scope}
+        {#if question.fileRequest}
+          <div class="space-y-2">
+            {#if attachedAnswers.length > 0}
+              <div class="flex flex-wrap gap-1.5" role="list" aria-label="Attached files">
+                {#each attachedAnswers as attachedPath (attachedPath)}
+                  <span
+                    class="flex max-w-full min-w-0 items-center gap-1 rounded-lg border border-border bg-elevated px-2 py-1"
+                    role="listitem"
+                  >
+                    <Paperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
+                    <span class="truncate font-mono text-[0.6875rem] text-foreground"
+                      >{attachedPath}</span
+                    >
+                    <button
+                      type="button"
+                      class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                      disabled={working}
+                      onclick={() => removeAttachedAnswer(attachedPath)}
+                      title="Remove this attached file"
+                      aria-label={`Remove attached file ${attachedPath}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                {/each}
+              </div>
+            {/if}
+            <button
+              type="button"
+              class="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={working}
+              onclick={() => void attachFiles()}
+              title="Attach files from your computer to share with the agent"
+              aria-label="Attach files to share with the agent"
+            >
+              <Paperclip size={13} />
+              Attach files…
+            </button>
+          </div>
+        {/if}
+
+        {#if question.custom !== false}
+          <div>
+            <label
+              class="mb-1.5 block text-xs font-medium text-muted"
+              for={`custom-answer-${request.requestId}-${currentIndex}`}
+            >
+              {question.options?.length || question.richOptions?.length
+                ? question.fileRequest
+                  ? 'Or type a file path'
+                  : 'Or write your own response'
+                : 'Your response'}
+            </label>
+            <div class="flex items-stretch gap-2">
+              <RichMarkdownEditor
+                bind:this={customAnswerEditor}
+                id={`custom-answer-${request.requestId}-${currentIndex}`}
+                value={currentCustomAnswer}
+                class="max-h-40 min-h-10 w-full resize-none overflow-y-auto rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-[width] focus:border-primary disabled:opacity-50"
+                containerClass="min-w-0 flex-1"
+                placeholder="Type your response…"
+                ariaLabel="Your response"
+                disabled={working}
+                onValueChange={handleCustomInput}
+                onSubmit={() => void handleSubmit()}
+              />
+              <div class="flex shrink-0 items-center">
+                <VoiceInputButton
+                  targetId={customAnswerSpeechTargetId}
+                  getTarget={customAnswerSpeechTarget}
+                  {scope}
+                  disabled={working}
+                />
+              </div>
+              {#if currentCustomAnswer.trim() && currentIndex < total - 1}
+                <button
+                  type="button"
+                  class="flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+                  disabled={working}
+                  onclick={goNext}
+                >
+                  Next
+                  <ChevronRight size={14} />
+                </button>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if actionError}
+          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {actionError}
+          </p>
+        {/if}
+      </div>
+
+      <!-- Shrinkable footer: the row never lets one control paint over another.
+         The chat actions give way first, the speech control keeps its slot, and
+         the model switch ellipsizes instead of pushing into its neighbour. -->
+      <div
+        class="question-card-footer flex min-w-0 shrink-0 items-center justify-between gap-3 border-t px-4 py-2.5"
+      >
+        <div class="flex min-w-0 items-center gap-2">
+          {#if onExplain || onQuickChat}
+            <AgentCardChatActions
+              onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
+              onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
+              subject="question"
               disabled={working}
             />
-          </div>
-          {#if currentCustomAnswer.trim() && currentIndex < total - 1}
-            <button
-              type="button"
-              class="flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-              disabled={working}
-              onclick={goNext}
-            >
-              Next
-              <ChevronRight size={14} />
-            </button>
+          {:else}
+            <p class="min-w-0 truncate text-[0.6875rem] text-muted">
+              {#if !currentAnswers.length}
+                Answer this question to continue
+              {:else if !allAnswered}
+                {answers.filter((answer) => answer.length > 0).length} of {total} answered
+              {:else}
+                Ready to send
+              {/if}
+            </p>
           {/if}
+          <!-- Self-hides when no TTS artifact is installed -->
+          <QuestionSpeechControls
+            messageId={speechMessageId}
+            markdown={spokenQuestionText}
+            disabled={working}
+          />
+        </div>
+        <div class="flex min-w-0 shrink items-center justify-end gap-2">
+          <EngineeringModelSwitch
+            {settings}
+            {providers}
+            {projectId}
+            {favoriteModels}
+            {recentModels}
+            {onRemoveRecent}
+            {onModelChange}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
+          <button
+            class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!allAnswered || working}
+            onclick={() => void handleSubmit()}
+          >
+            {#if working}
+              Sending…
+            {:else}
+              <Send size={13} />
+              Submit {total > 1 ? 'answers' : 'answer'}
+            {/if}
+          </button>
         </div>
       </div>
-    {/if}
-
-    {#if actionError}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-        {actionError}
-      </p>
-    {/if}
-  </div>
-
-  <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
-    <div class="flex min-w-0 items-center gap-2">
-      {#if onExplain || onQuickChat}
-        <div class="flex shrink-0 items-center gap-1">
-          {#if onExplain}
-            <button
-              type="button"
-              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={working}
-              onclick={() => openQuestionChat(onExplain)}
-              title="Explain this question to help you decide"
-              aria-label="Explain this question in a temporary read-only chat"
-            >
-              <HelpCircle size={13} />
-              Explain
-            </button>
-          {/if}
-          {#if onQuickChat}
-            <button
-              type="button"
-              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={working}
-              onclick={() => openQuestionChat(onQuickChat)}
-              title="Start a temporary read-only quick chat about this question"
-              aria-label="Start a temporary read-only quick chat about this question"
-            >
-              <MessageSquareDashed size={13} />
-              Quick chat
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <p class="min-w-0 text-[0.6875rem] text-muted">
-          {#if !currentAnswers.length}
-            Answer this question to continue
-          {:else if !allAnswered}
-            {answers.filter((answer) => answer.length > 0).length} of {total} answered
-          {:else}
-            Ready to send
-          {/if}
-        </p>
-      {/if}
-      <!-- Self-hides when no TTS artifact is installed -->
-      <QuestionSpeechControls
-        messageId={speechMessageId}
-        markdown={spokenQuestionText}
-        disabled={working}
-      />
     </div>
-    <div class="flex shrink-0 items-center gap-2">
-      <EngineeringModelSwitch
-        {settings}
-        {providers}
-        {projectId}
-        {favoriteModels}
-        {recentModels}
-        {onRemoveRecent}
-        {onModelChange}
-        {onToggleFavorite}
-        {onReorderFavorite}
-      />
-      <button
-        class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-        disabled={!allAnswered || working}
-        onclick={() => void handleSubmit()}
-      >
-      {#if working}
-        Sending…
-      {:else}
-        <Send size={13} />
-        Submit {total > 1 ? 'answers' : 'answer'}
-      {/if}
-      </button>
-    </div>
-  </div>
+  {/if}
 </section>
+
+<style>
+  /*
+    The card never grows past the room its conversation pane offers, which
+    `question-card-fit` measures and writes here; the viewport clamp is the
+    fallback for the first frame and for a host that renders no pane. The body
+    scrolls inside this ceiling, so a long option list stays reachable and the
+    header and footer stay pinned.
+  */
+  section {
+    max-height: var(--question-card-max-height, calc(100dvh - 6rem));
+  }
+
+  /*
+    The footer row is the query container so its controls retreat before the row
+    runs out of room (a wide side panel, a split pane). The shared chat actions
+    (`AgentCardChatActions`) drop their words first: the glyph and the tooltip
+    always still say what they do, which leaves the speech control and the model
+    switch their space instead of letting one control overlap the other.
+  */
+  .question-card-footer {
+    container: agent-card-footer / inline-size;
+  }
+</style>

@@ -1,10 +1,29 @@
-import type { AssignmentPlan, AssignmentTask } from '../types'
+import type { AssignmentPlan, AssignmentTask, ScopeChoice } from '../types'
 
 function mermaidLabel(value: string): string {
   return value.replace(/"/gu, "'").replace(/\r?\n/gu, ' ')
 }
 
-function taskDetails(task: AssignmentTask): string[] {
+/**
+ * How a worker scope reads in the reviewable Assignment. The export is a pure
+ * function with no board to resolve names against, so a named scope is written
+ * as its bucket ID, exactly like a task's thread ID.
+ */
+function scopeLabel(scope: ScopeChoice): string {
+  if (scope.mode === 'inherit') return 'Inherited from the Sr. Engineer'
+  if (scope.mode === 'dedicated') return 'New worktree at dispatch'
+  return `Chosen scope \`${scope.bucketId}\``
+}
+
+/** A scope choice compared by value, so a task's own pick is only printed when
+ *  it actually departs from the level above it. */
+function sameScope(left: ScopeChoice, right: ScopeChoice | undefined): boolean {
+  if (right === undefined || left.mode !== right.mode) return false
+  if (left.mode === 'scope' && right.mode === 'scope') return left.bucketId === right.bucketId
+  return true
+}
+
+function taskDetails(task: AssignmentTask, inheritedScope?: ScopeChoice): string[] {
   const worker = task.workerName ? ` (${task.workerName})` : ''
   const model = task.model
     ? `${task.model.harnessId}/${task.model.providerId}/${task.model.modelId} · ${task.model.thinkingLevel}`
@@ -20,6 +39,15 @@ function taskDetails(task: AssignmentTask): string[] {
     `- Owner: ${task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}`,
     `- Depends on: ${task.dependsOn.join(', ') || 'None'}`,
     `- Model: ${model}`,
+    // Written only when the task departs from the scope of its phase and
+    // Assignment, so the artifact points at the exceptions rather than
+    // repeating one line on every task. `inherit` is not a departure, it defers
+    // to the level above.
+    ...(task.workerScope === undefined ||
+    task.workerScope.mode === 'inherit' ||
+    sameScope(task.workerScope, inheritedScope)
+      ? []
+      : [`- Scope: ${scopeLabel(task.workerScope)}`]),
     `- Thread: ${task.threadId ?? 'Not assigned'}`,
     '',
     task.info ? `> ${task.info}` : '',
@@ -38,6 +66,10 @@ export function exportAssignmentMarkdown(plan: AssignmentPlan): string {
     `Status: **${plan.status}**`,
     ''
   ]
+
+  if (plan.content.workerScope !== undefined && plan.content.workerScope.mode !== 'inherit') {
+    lines.push(`Worker scope: ${scopeLabel(plan.content.workerScope)}`, '')
+  }
 
   if (plan.auditCycle) {
     lines.push('## Audit cycle', '', `Status: **${plan.auditCycle.status}**`)
@@ -70,8 +102,15 @@ export function exportAssignmentMarkdown(plan: AssignmentPlan): string {
   for (const phase of plan.content.phases) {
     lines.push(`## ${phase.title}`, '', phase.description, '')
     if (phase.info) lines.push(`> ${phase.info}`, '')
+    if (phase.workerScope !== undefined && phase.workerScope.mode !== 'inherit') {
+      lines.push(`Worker scope: ${scopeLabel(phase.workerScope)}`, '')
+    }
+    const inheritedScope = [phase.workerScope, plan.content.workerScope].find(
+      (candidate): candidate is ScopeChoice =>
+        candidate !== undefined && candidate.mode !== 'inherit'
+    )
     for (const task of plan.content.tasks.filter((candidate) => candidate.phaseId === phase.id)) {
-      lines.push(...taskDetails(task))
+      lines.push(...taskDetails(task, inheritedScope))
     }
   }
 

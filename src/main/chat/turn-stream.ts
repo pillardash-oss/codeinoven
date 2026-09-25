@@ -1,17 +1,5 @@
 import type { AgentPart } from '../../lib/types'
-
-function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): AgentPart {
-  if (incoming.id !== existing.id || incoming.type !== existing.type) return incoming
-  if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
-  if (existing.type !== 'text' && existing.type !== 'reasoning') return incoming
-  if (
-    (incoming.text.length < existing.text.length && existing.text.startsWith(incoming.text)) ||
-    (incoming.type === 'reasoning' && !incoming.text.startsWith(existing.text))
-  ) {
-    return { ...incoming, text: existing.text }
-  }
-  return incoming
-}
+import { appendPartDelta, mergeStreamedPart } from '../../lib/agent-part-merge'
 
 /**
  * Durable, append-only per-thread SSE stream log.
@@ -86,6 +74,9 @@ export function foldTurnStreamEvents(
   // Text length already present in the stored part, so a delta never re-appends
   // text a later snapshot already included.
   const textBaseline = new Map<string, number>()
+  // Same guard for the reasoning summary channel, which Codex streams
+  // separately from the reasoning body.
+  const summaryBaseline = new Map<string, number>()
 
   const lastActivityTs = new Map<string, number>()
 
@@ -104,6 +95,10 @@ export function foldTurnStreamEvents(
       const text =
         mergedPart?.type === 'reasoning' || mergedPart?.type === 'text' ? mergedPart.text.length : 0
       textBaseline.set(part.id, text)
+      summaryBaseline.set(
+        part.id,
+        mergedPart?.type === 'reasoning' ? (mergedPart.summary ?? '').length : 0
+      )
       lastActivityTs.set(part.id, event.ts)
       continue
     }
@@ -111,8 +106,25 @@ export function foldTurnStreamEvents(
     if (event.kind !== 'part.delta') continue
     const existingIndex = indexById.get(event.partId)
     if (existingIndex === undefined) continue
-    if (event.field !== 'text') continue
     const part = parts[existingIndex]
+    if (event.field === 'summary') {
+      if (part.type !== 'reasoning') continue
+      const current = (part.summary ?? '').length
+      const baseline = summaryBaseline.get(part.id) ?? current
+      // A rewind (a snapshot shortened the summary) is ignored rather than
+      // corrupting the reconstruction, mirroring the text channel below.
+      if (baseline > current) {
+        summaryBaseline.set(part.id, current)
+        continue
+      }
+      const updated = appendPartDelta(part, event.field, event.delta)
+      parts[existingIndex] = updated
+      if (updated.type === 'reasoning') {
+        summaryBaseline.set(part.id, (updated.summary ?? '').length)
+      }
+      continue
+    }
+    if (event.field !== 'text') continue
     if (part.type !== 'reasoning' && part.type !== 'text') continue
     const baseline = textBaseline.get(part.id) ?? part.text.length
     // Only append deltas that continue from the recorded baseline; a rewind
@@ -122,9 +134,11 @@ export function foldTurnStreamEvents(
       textBaseline.set(part.id, part.text.length)
       continue
     }
-    const updated = { ...part, text: part.text + event.delta }
+    const updated = appendPartDelta(part, event.field, event.delta)
     parts[existingIndex] = updated
-    textBaseline.set(part.id, updated.text.length)
+    if (updated.type === 'text' || updated.type === 'reasoning') {
+      textBaseline.set(part.id, updated.text.length)
+    }
   }
 
   if (minTs === undefined) return parts

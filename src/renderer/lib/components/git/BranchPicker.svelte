@@ -1,8 +1,11 @@
 <script lang="ts">
   import { ChevronDown, Check, FolderTree, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import type { Snippet } from 'svelte'
+  import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { parseRemoteIdentity } from '$lib/git-remote-identity'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import type { GitBranchInfo } from '$shared/types'
 
   interface Props {
@@ -18,6 +21,22 @@
     onAddOrigin?: () => void
     /** Open the replace-origin flow (shown when a remote is configured). */
     onReplaceOrigin?: () => void
+    /**
+     * Leading glyph, drawn where the branch icon sits by default. The panel owns
+     * it so the working-tree state (clean, dirty, conflicted) stays with the
+     * status it comes from. The trigger renders it interactive, where every state
+     * but clean is a control that opens the panel's Changes view; the picker's own
+     * rows render it bare, where the badge stays a plain mark.
+     */
+    statusIcon?: Snippet<[boolean]>
+    /**
+     * Badge for the branch that is checked out, drawn at the end of its row. The
+     * panel owns it for the same reason it owns `statusIcon`: the working tree's
+     * state comes from the status, not from the branch list. Rendered without
+     * the interactive behaviour, since the row it marks is already the branch
+     * that is checked out.
+     */
+    statusBadge?: Snippet<[boolean]>
   }
 
   let {
@@ -29,7 +48,9 @@
     onCreate,
     onDelete,
     onAddOrigin,
-    onReplaceOrigin
+    onReplaceOrigin,
+    statusIcon,
+    statusBadge
   }: Props = $props()
 
   let open = $state(false)
@@ -37,6 +58,13 @@
   let creating = $state(false)
   let newBranchName = $state('')
   let deleteTarget = $state<string | null>(null)
+
+  /**
+   * The panel's own control inside the trigger, marked by the panel. Activating
+   * one is that control's business: the trigger must neither open the picker on
+   * the way through nor leave one open underneath it.
+   */
+  const STATUS_ACTION_SELECTOR = '[data-status-action]'
 
   const filtered = $derived(
     search.trim()
@@ -90,15 +118,53 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('palette-close', event)) {
       open = false
       search = ''
       creating = false
       newBranchName = ''
     }
-    if (event.key === 'Enter' && creating) {
+    if (keymapState.matches('git-new-branch', event) && creating) {
       handleCreate()
     }
+  }
+
+  /**
+   * The trigger opens the picker from its own pointer events   a mouse toggles
+   * on `pointerdown`, touch on `pointerup`   so a gesture that starts on the
+   * panel's control cancels the one it would toggle on, and the branch list
+   * stays shut unless the gesture lands anywhere else on the trigger.
+   *
+   * Cancelled rather than stopped on purpose. bits-ui composes its own handlers
+   * with these and skips its own once the event is cancelled, while a stopped
+   * event would never reach the layers that dismiss the menus around this one,
+   * leaving a stray open menu behind when the badge takes the user elsewhere.
+   */
+  function guardStatusActionPointer(event: PointerEvent): void {
+    if (!isStatusActionEvent(event)) return
+    if (event.type === 'pointerup' && event.pointerType !== 'touch') return
+    event.preventDefault()
+  }
+
+  /**
+   * A status badge inside the trigger opens the Changes view, so a click that
+   * landed on one closes the picker instead of dragging it along to the next view.
+   * `preventDefault` keeps the trigger's own click handler out of the loop (it is
+   * what also covers the click a screen reader sends for the badge, which arrives
+   * with no keyboard event in front of it); the click is left to bubble, so every
+   * other layer still sees the interaction and no focus is lost by the click
+   * being cancelled.
+   */
+  function handleTriggerClick(event: MouseEvent): void {
+    if (!isStatusActionEvent(event)) return
+    open = false
+    event.preventDefault()
+  }
+
+  /** Whether an event is the panel's own control inside the trigger acting, rather than the trigger itself. */
+  function isStatusActionEvent(event: Event): boolean {
+    const target = event.target
+    return target instanceof Element && target.closest(STATUS_ACTION_SELECTOR) !== null
   }
 </script>
 
@@ -111,13 +177,27 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
-    title="Switch branch"
-    aria-label="Switch branch"
+    title={currentBranch ? `Switch branch (${currentBranch})` : 'Switch branch'}
+    aria-label={currentBranch ? `Switch branch, currently ${currentBranch}` : 'Switch branch'}
+    onpointerdown={guardStatusActionPointer}
+    onpointerup={guardStatusActionPointer}
+    onclick={handleTriggerClick}
   >
-    <GitBranch size={11} class="shrink-0" />
-    <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
+    {#if statusIcon}
+      {@render statusIcon(true)}
+    {:else}
+      <GitBranch size={11} class="shrink-0" />
+    {/if}
+    <!--
+      Wide enough for a real branch name (`feature/git-panel-redesign`) instead
+      of the ten characters this used to cap at. `truncate` keeps its automatic
+      minimum size at zero, so the branch name is what gives way when the row is
+      tight instead of the tab strip and the tool buttons beside it. The name is
+      in the trigger's tooltip for when it does truncate.
+    -->
+    <span class="max-w-[26ch] truncate">{currentBranch ?? 'detached'}</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
 
@@ -186,7 +266,7 @@
             <div
               class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch)}
-              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch)}
+              onkeydown={(e: KeyboardEvent) => keymapState.matches('ui-activate', e) && handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
@@ -201,6 +281,9 @@
                 </span>
               {/if}
               {#if branch.current}
+                {#if statusBadge}
+                  {@render statusBadge(false)}
+                {/if}
                 <Check size={12} class="shrink-0 text-primary" />
               {:else if onDelete}
                 <button
@@ -315,31 +398,15 @@
   </DropdownMenu.Portal>
 </DropdownMenu.Root>
 
-<AlertDialog.Root open={deleteTarget !== null} onOpenChange={() => (deleteTarget = null)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Delete branch?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Branch <strong class="text-foreground">{deleteTarget}</strong> will be permanently deleted. This
-        cannot be undone.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={confirmDelete}
-        >
-          Delete
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmDialog
+  open={deleteTarget !== null}
+  title="Delete branch?"
+  onCancel={() => (deleteTarget = null)}
+  onConfirm={confirmDelete}
+  confirmLabel="Delete"
+>
+  <p>
+    Branch <strong class="text-foreground">{deleteTarget}</strong> will be permanently deleted. This cannot
+    be undone.
+  </p>
+</ConfirmDialog>

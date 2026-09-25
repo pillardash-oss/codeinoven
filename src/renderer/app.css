@@ -51,6 +51,11 @@
   --color-thread-unread: var(--color-success);
   --color-thread-error: var(--color-danger);
   --color-thread-done: var(--color-muted);
+  /* Missed scheduled run (Assistant View). A dedicated yellow-family tone
+     tuned from the suggested #ffe300 so it stays readable on light surfaces;
+     never the amber --color-warning (#d97706). Light value #a16207 gives
+     ~4.9:1 on #ffffff (AA for normal text). */
+  --color-missed: #a16207;
 
   /* Borders */
   --color-border: #e2e1dc;
@@ -82,11 +87,13 @@
      default family) for a uniform dev-workspace feel with unambiguous
      code glyphs like backticks. --font-app is overridden at runtime by
      the Appearance settings (app-config store). */
-  --font-app: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
-    'SFMono-Regular', Menlo, monospace;
+  --font-app:
+    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
+    Menlo, monospace;
   --font-sans: var(--font-app);
-  --font-mono: 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace,
-    'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', monospace;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
+    Menlo, Monaco, 'Cascadia Code', monospace;
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -115,6 +122,9 @@
   --color-chat-success: #34d399;
   --color-thread-working-paused: var(--color-warning);
   --color-thread-spec: #a78bfa;
+  /* Missed run on dark: #fcd34d gives ~13.6:1 on #0b0b0d, clearly brighter
+     and more yellow than the amber warning so the two read apart. */
+  --color-missed: #fcd34d;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */
@@ -142,7 +152,10 @@ body {
      dev workspace's prose and composers need every literal character to
      render as typed, not merge into a compact glyph. Disable app-wide. */
   font-variant-ligatures: none;
-  font-feature-settings: 'calt' 0, 'liga' 0, 'dlig' 0;
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0,
+    'dlig' 0;
 }
 
 /* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
@@ -256,18 +269,48 @@ body {
 /* Sizes are em-based so the same styles scale from text-sm prose down to
    text-xs reasoning traces. Colors are token-driven for both themes. */
 
+/*
+ * The conversation reading step, named.
+ *
+ * Every prose surface takes its size and leading from these, and one surface
+ * needs the same numbers for a different job: a report preview clamps itself to
+ * whole lines before the reader decides whether to expand it. Five of those
+ * lines have to be five of the lines the text is set in, so the clamp
+ * multiplies these numbers instead of copying them.
+ */
+:root {
+  --prose-size: 0.8125rem;
+  --prose-leading: 1.8;
+}
+
 .markdown-body {
   min-width: 0;
   max-width: 100%;
   /* Conversation gets the comfortable reading treatment: a step larger than
      panel chrome and a generous line-height for long prose. */
-  font-size: 0.8125rem;
-  line-height: 1.8;
+  font-size: var(--prose-size);
+  line-height: var(--prose-leading);
   overflow-wrap: anywhere;
   white-space: normal;
   /* Dev workspace: chat prose follows the app font so code characters
      like backticks are unambiguous. */
   font-family: var(--font-app);
+}
+
+/*
+ * Card-scale markdown.
+ *
+ * Composer cards (an agent's question prompt and its description) carry their
+ * own type step   `text-sm` for the prompt, `text-xs` for the description. A
+ * plain text utility cannot express that here: `.markdown-body` sets an
+ * explicit size and it is emitted unlayered, so it outranks every layered
+ * Tailwind utility. This modifier gives the size and leading back to the
+ * surrounding surface while every other `.markdown-body` rule   link colour,
+ * favicon sizing, code, lists, tables   still applies.
+ */
+.markdown-body.markdown-body-card {
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .markdown-body > * {
@@ -441,6 +484,109 @@ body {
   font-weight: 600;
 }
 
+/* ─── Table controls (wrap, column resize) ──────────────────────────────── */
+/* Every table carries a small control rectangle at its top left. Both toggles
+   are opt-in and in memory only, so a wide table costs nothing until the reader
+   asks for one of them. */
+.markdown-body .md-table-block {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.markdown-body .md-table-controls {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-elevated);
+  padding: 0.0625rem;
+}
+
+.markdown-body .md-table-control {
+  display: flex;
+  align-items: center;
+  border-radius: 0.25rem;
+  color: var(--color-dimmed);
+  padding: 0.1875rem;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.markdown-body .md-table-control:hover {
+  background: var(--color-overlay);
+  color: var(--color-foreground);
+}
+
+.markdown-body .md-table-control:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* An engaged toggle stays readable rather than shouting: the icon keeps its
+   size, so switching wrap or the padlock never shifts the strip. */
+.markdown-body .md-table-control[aria-pressed='true'] {
+  color: var(--color-foreground);
+}
+
+/* Wrap mode: the table stops sizing to its content and takes the panel width,
+   so columns wrap instead of the table scrolling sideways. */
+.markdown-body .md-table-wrap.md-table-fit table {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Resize mode: the widths come from the dragged `<col>` elements, so the table
+   must neither fall back to content sizing nor be widened past them. */
+.markdown-body .md-table-wrap.md-table-resizable table {
+  table-layout: fixed;
+  min-width: 0;
+}
+
+/* A narrowed column truncates rather than wraps, which is what the drag
+   promises. Wrapping stays available through the wrap toggle. */
+.markdown-body .md-table-wrap.md-table-resizable:not(.md-table-fit) th,
+.markdown-body .md-table-wrap.md-table-resizable:not(.md-table-fit) td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-body .md-table-resizable th {
+  position: relative;
+}
+
+/* While a column is being dragged the whole table holds the resize cursor and
+   stops selecting text, so a fast drag never paints a text selection. */
+.markdown-body .md-table-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* The drag target sits over the column's right padding, ending exactly on the
+   border, so it is the border the reader grabs   and so the cell's own
+   `overflow: hidden` (resize mode) can never clip it. */
+.markdown-body .md-col-resizer {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  z-index: 1;
+  width: 0.5rem;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.markdown-body .md-col-resizer:hover,
+.markdown-body .md-col-resizer:focus-visible {
+  background: color-mix(in srgb, var(--color-primary) 30%, transparent);
+  outline: none;
+}
+
 .markdown-body hr {
   border: 0;
   border-top: 1px solid var(--color-border);
@@ -448,8 +594,69 @@ body {
 }
 
 .markdown-body img {
+  /* Preflight makes every replaced element a block box so a lone screenshot
+     takes the width it needs. Provider prose puts pictures *inside* its
+     sentences too: a bot's footer leads with `<a href><picture><img>` before
+     its text, and a block box there spends a whole line on a 9px logo and
+     pushes the sentence that follows onto the next one. An inline box keeps
+     the picture in the flow, which is how github.com renders the same source.
+     The favicon, emoji and pending-image rules around this one already state
+     the same for their own cases; this is the base case each was working
+     around. */
+  display: inline-block;
   max-width: 100%;
   border-radius: 8px;
+}
+
+/*
+ * GitHub emoji.
+ *
+ * A shortcode (`:wave:`) expands to the character itself, and an emoji that
+ * arrives as an image whose alt is already the character is drawn the same way
+ * rather than fetched. Both land here, so a shortcode and a provider emoji look
+ * identical in the same paragraph, at the size of the text around them, the way
+ * GitHub's own `.emoji` rule behaves.
+ */
+.markdown-body .emoji {
+  display: inline-block;
+  font-family:
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', 'EmojiOne Color',
+    sans-serif;
+  font-size: 1.1em;
+  font-style: normal;
+  line-height: 1;
+  vertical-align: -0.15em;
+}
+
+/*
+ * An image the app is still downloading, or could not download at all.
+ *
+ * The renderer's CSP blocks remote hosts, so main fetches every picture and hands
+ * it back inlined. Until that lands, the alt text stands in inside a bordered box
+ * that preserves the height a picture would take: a body with three screenshots
+ * then reads as three pictures rather than three broken-image icons, and nothing
+ * jumps when they arrive.
+ */
+.markdown-body .markdown-image-pending {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 1.75rem;
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 0.25rem 0.5rem;
+  color: var(--color-text-dimmed);
+  font-size: 0.75em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-body .markdown-image-pending::before {
+  content: '🖼';
+  font-size: 1.1em;
+  line-height: 1;
 }
 
 /* Raw-HTML blocks, rendered only for provider-authored markdown (pull
@@ -653,6 +860,20 @@ html body [data-sonner-toaster] {
   font-family: var(--font-app) !important;
 }
 
+html body [data-sonner-toaster] {
+  /* A toast floats above every modal (svelte-sonner stacks itself at
+     `z-index: 999999999`, the modals sit at `z-60`), but a modal bits-ui
+     Dialog locks the whole page with `body { pointer-events: none }` while it
+     is open, and pointer events inherit. Without opting back in here, a toast
+     raised over a modal was painted yet dead to the mouse: its close button
+     did nothing, and the click fell through to the modal's overlay, which
+     dismissed the modal instead and left the toast stranded on screen.
+
+     `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
+     panel; `lib/toast-layer.ts` owns the selector both sides share. */
+  pointer-events: auto;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote
@@ -682,12 +903,14 @@ html body [data-sonner-toaster] {
   color: var(--color-info);
 }
 
-/* ─── Settings search reveal ─────────────────────────────────────────────── */
+/* ─── Jump reveal ────────────────────────────────────────────────────────── */
 /*
- * When a settings search result is picked, the target block's border flashes
- * three times (accent gold) so the eye lands on it after the jump.
+ * When a jump lands on a target inside a long surface (a settings search
+ * result, a pull request comment opened from an agent report), the target's
+ * border flashes three times in accent gold, so the eye finds it after the
+ * scroll.
  */
-@keyframes settings-flash-border {
+@keyframes reveal-flash-border {
   0%,
   100% {
     border-color: var(--color-border);
@@ -700,14 +923,14 @@ html body [data-sonner-toaster] {
   }
 }
 
-.settings-flash {
-  animation: settings-flash-border 0.7s ease-in-out 3;
+.reveal-flash {
+  animation: reveal-flash-border 0.7s ease-in-out 3;
 }
 
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`
- * would otherwise be unreachable on the phone client, so on a device with no
+ * would otherwise be unreachable on a touch device, so on a device with no
  * hover they are simply visible. Long-press covers the cases driven by JS
  * state instead of CSS (see `long-press.svelte.ts`).
  */

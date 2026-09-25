@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
   interface Props {
@@ -36,42 +39,52 @@
     onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
+
+  let folded = $state(false)
 </script>
 
 <section
+  out:slide={dismissSlide()}
   class="rounded-2xl border border-thread-spec/40 bg-surface p-4 shadow-sm"
   aria-labelledby="prd-ready-title"
 >
-  <h2 id="prd-ready-title" class="text-sm font-semibold text-foreground">PRD ready for review</h2>
-  <p class="mt-1 text-xs leading-5 text-muted">
-    Review product requirements before finalizing this lifecycle gate.
-  </p>
-  <div class="mt-4 flex items-center justify-end gap-2">
-    <EngineeringModelSwitch
-      {settings}
-      {providers}
-      {projectId}
-      {favoriteModels}
-      {recentModels}
-      {onRemoveRecent}
-      {onModelChange}
-      {onToggleFavorite}
-      {onReorderFavorite}
-    />
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-elevated hover:text-foreground"
-      onclick={onReview}
-    >
-      Review PRD
-    </button>
-    <button
-      type="button"
-      class="rounded-lg bg-thread-spec px-3 py-2 text-xs font-medium text-foreground disabled:opacity-50"
-      disabled={busy}
-      onclick={() => void onFinalize()}
-    >
-      Finalize PRD
-    </button>
+  <div class="flex items-start justify-between gap-2">
+    <h2 id="prd-ready-title" class="text-sm font-semibold text-foreground">PRD ready for review</h2>
+    <CardFoldToggle bind:folded label="PRD review" />
   </div>
+  {#if !folded}
+    <div transition:slide={foldSlide()}>
+      <p class="mt-1 text-xs leading-5 text-muted">
+        Review product requirements before finalizing this lifecycle gate.
+      </p>
+      <div class="mt-4 flex items-center justify-end gap-2">
+        <EngineeringModelSwitch
+          {settings}
+          {providers}
+          {projectId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          {onModelChange}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-elevated hover:text-foreground"
+          onclick={onReview}
+        >
+          Review PRD
+        </button>
+        <button
+          type="button"
+          class="rounded-lg bg-thread-spec px-3 py-2 text-xs font-medium text-foreground disabled:opacity-50"
+          disabled={busy}
+          onclick={() => void onFinalize()}
+        >
+          Finalize PRD
+        </button>
+      </div>
+    </div>
+  {/if}
 </section>

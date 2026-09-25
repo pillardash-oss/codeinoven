@@ -1,23 +1,7 @@
-import { createHash } from 'crypto'
-import { chmod, mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
-import { homedir } from 'os'
+import { chmod, mkdir, readdir, readFile, rm, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
-import type {
-  AgentMessage,
-  AgentPart,
-  AgentTokenUsage,
-  BaseUrlProvider,
-  ProviderCatalog,
-  SessionAgentEvent,
-  ProviderModel,
-  ThinkingPreset
-} from '../../lib/types'
-import {
-  isQuestionToolName,
-  normalizeAgentQuestions,
-  permissionPatterns
-} from '../../lib/agent-interactions'
-import { classifyProviderIssue, parseUsageResetAt } from '../../lib/provider-issue'
+import type { BaseUrlProvider, ProviderCatalog, ProviderModel } from '../../lib/types'
+import { isQuestionToolName } from '../../lib/agent-interactions'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -35,904 +19,40 @@ import {
   type UtilityRuntimeOverlay,
   type UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
+import { PermissionPolicy } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
-import { attachmentTarget } from './attachment-reference'
-import { resolveHarnessRuntime, runHarnessCommand } from './harness-runtime'
-import { attachmentReferences } from './attachment-reference'
+import { attachmentReferences, attachmentTarget } from './attachment-reference'
+import { runHarnessCommand } from './harness-runtime'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
+import {
+  clineApprovalRequest,
+  clineWebOnlyHook,
+  isClineWebOnlyTurn,
+  type ClineApprovalBridge
+} from './cline/cline-approval'
+import {
+  CLINE_FALLBACK_CATALOG,
+  CLINE_PASS_PROVIDER_ID,
+  CLINE_THINKING_LEVELS,
+  CLINE_THINKING_PRESETS,
+  applyClineObservedContextWindows,
+  clineFreeModelIds,
+  cloneCatalogs,
+  fetchClineCatalog,
+  filterClineCatalogForAccount,
+  hasClinePassSubscription,
+  isClineAvailable,
+  observeClineContextWindow,
+  refreshClineCatalogOnce
+} from './cline/cline-models'
+import { clineModelContextWindow } from './cline/cline-usage'
+import { mapClineRecord, mapCurrentClineRecord } from './cline/cline-stream-fold'
+import type { ClineTurnState } from './cline/cline-stream-fold'
+import { record, stringValue, utilityKey } from './cline/cline-values'
 
-const CLINE_THINKING_LEVELS: Record<string, string> = {
-  minimal: 'low',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'xhigh',
-  ultra: 'xhigh'
-}
-
-const CLINE_CATALOG_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended-models'
-const CLINE_CATALOG_CACHE_TTL_MS = 60 * 60 * 1000
-const CLINE_PASS_PROVIDER_ID = 'cline-pass'
-
-const CLINE_THINKING_PRESETS: ThinkingPreset[] = [
-  { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
-  { id: 'low', label: 'Low', description: 'Low reasoning effort' },
-  { id: 'medium', label: 'Medium', description: 'Moderate reasoning effort' },
-  { id: 'high', label: 'High', description: 'High reasoning effort' },
-  { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' }
-]
-
-/** Stable Cline gateway models used when the remote catalog is unavailable. */
-const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
-  {
-    id: 'cline',
-    name: 'Cline',
-    harnessId: 'cline',
-    models: [
-      {
-        id: 'anthropic/claude-sonnet-4-6',
-        providerId: 'cline',
-        name: 'Claude Sonnet 4.6',
-        reasoning: true,
-        thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
-        toolcall: true
-      },
-      {
-        id: 'google/gemini-2.5-pro',
-        providerId: 'cline',
-        name: 'Gemini 2.5 Pro',
-        reasoning: true,
-        thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
-        toolcall: true
-      },
-      {
-        id: 'openai/gpt-4o',
-        providerId: 'cline',
-        name: 'GPT-4o',
-        reasoning: false,
-        attachment: true,
-        toolcall: true
-      },
-      {
-        id: 'deepseek/deepseek-chat',
-        providerId: 'cline',
-        name: 'DeepSeek Chat',
-        reasoning: false,
-        attachment: false,
-        toolcall: true
-      },
-      {
-        id: 'minimax/minimax-m2.5',
-        providerId: 'cline',
-        name: 'MiniMax M2.5',
-        reasoning: true,
-        thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
-        toolcall: true
-      }
-    ]
-  },
-  {
-    id: CLINE_PASS_PROVIDER_ID,
-    name: 'ClinePass',
-    harnessId: 'cline',
-    models: [
-      {
-        id: 'cline-pass/qwen3.8-max',
-        providerId: CLINE_PASS_PROVIDER_ID,
-        name: 'Qwen 3.8 Max',
-        reasoning: true,
-        thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
-        toolcall: true
-      },
-      {
-        id: 'cline-pass/deepseek-v4-flash',
-        providerId: CLINE_PASS_PROVIDER_ID,
-        name: 'DeepSeek V4 Flash',
-        reasoning: true,
-        thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: false,
-        toolcall: true
-      }
-    ]
-  }
-]
-
-let clineCatalogCache: { cachedAt: number; catalogs: ProviderCatalog[] } | null = null
-let clineFreeModelIds: string[] = []
-let clinePassEntitlementCache: {
-  checkedAt: number
-  tokenFingerprint: string
-  subscribed: boolean
-} | null = null
-
-function cloneCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-  return catalogs.map((catalog) => ({ ...catalog, models: [...catalog.models] }))
-}
-
-function mapRemoteClineModel(value: unknown, providerId: string): ProviderModel | null {
-  const raw = record(value)
-  const id = stringValue(raw?.['id'])
-  if (!id) return null
-  const name = stringValue(raw?.['name']) ?? id
-  const reasoning = /reason|opus|sonnet|gemini|qwen|deepseek|kimi|mimo|laguna/iu.test(
-    `${id} ${name}`
-  )
-  // Prefer a structured vision capability when the catalog reports one;
-  // otherwise default to vision-capable except for known text-only families.
-  const capabilities = record(raw?.['capabilities'])
-  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
-  const attachment = explicitVision === undefined ? !isTextOnlyModel(id) : explicitVision !== false
-  return {
-    id,
-    providerId,
-    name,
-    reasoning,
-    ...(reasoning ? { thinkingPresets: CLINE_THINKING_PRESETS } : {}),
-    attachment,
-    toolcall: true
-  }
-}
-
-/** Known text-only model families that cannot see images. */
-function isTextOnlyModel(modelId: string): boolean {
-  return /deepseek/iu.test(modelId)
-}
-
-function uniqueModels(models: ProviderModel[]): ProviderModel[] {
-  return [...new Map(models.map((model) => [model.id, model])).values()]
-}
-
-function mapRemoteClineCatalog(value: unknown): ProviderCatalog[] {
-  const payload = record(value)
-  if (!payload) return []
-
-  const mapModels = (key: string, providerId: string): ProviderModel[] => {
-    const values = payload[key]
-    return Array.isArray(values)
-      ? uniqueModels(
-          values
-            .map((model) => mapRemoteClineModel(model, providerId))
-            .filter((model): model is ProviderModel => model !== null)
-        )
-      : []
-  }
-
-  const catalogs: ProviderCatalog[] = []
-  const freeModels = mapModels('free', 'cline')
-  clineFreeModelIds = freeModels.map((model) => model.id)
-  const clineModels = uniqueModels([...mapModels('recommended', 'cline'), ...freeModels])
-  if (clineModels.length > 0) {
-    catalogs.push({ id: 'cline', name: 'Cline', harnessId: 'cline', models: clineModels })
-  }
-
-  const clinePassModels = mapModels('clinePass', CLINE_PASS_PROVIDER_ID)
-  if (clinePassModels.length > 0) {
-    catalogs.push({
-      id: CLINE_PASS_PROVIDER_ID,
-      name: 'ClinePass',
-      harnessId: 'cline',
-      models: clinePassModels
-    })
-  }
-  return catalogs
-}
-
-/** Read the OAuth access token Cline itself owns without copying or mutating it. */
-async function readClineAccessToken(): Promise<string | undefined> {
-  try {
-    const content = await readFile(
-      join(homedir(), '.cline', 'data', 'settings', 'providers.json'),
-      'utf8'
-    )
-    const store = record(JSON.parse(content) as unknown)
-    const providers = record(store?.['providers'])
-    const cline = record(providers?.['cline'])
-    const settings = record(cline?.['settings'])
-    const auth = record(settings?.['auth'])
-    return stringValue(auth?.['accessToken'])
-  } catch {
-    return undefined
-  }
-}
-
-/** Only expose subscription-gated models when Cline confirms an active plan. */
-async function hasClinePassSubscription(): Promise<boolean> {
-  const accessToken = await readClineAccessToken()
-  if (!accessToken) return false
-  const tokenFingerprint = createHash('sha256').update(accessToken).digest('hex')
-  if (
-    clinePassEntitlementCache?.tokenFingerprint === tokenFingerprint &&
-    Date.now() - clinePassEntitlementCache.checkedAt < 5 * 60 * 1000
-  ) {
-    return clinePassEntitlementCache.subscribed
-  }
-  let subscribed = false
-  try {
-    const response = await fetch('https://api.cline.bot/api/v1/users/me/plan', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(5_000)
-    })
-    if (response.ok) {
-      const envelope = record(await response.json())
-      const currentPlan = record(envelope?.['data'])
-      subscribed = record(currentPlan?.['plan']) !== null
-    }
-  } catch {
-    // A plan that cannot be confirmed must not expose subscription-only models.
-  }
-  clinePassEntitlementCache = { checkedAt: Date.now(), tokenFingerprint, subscribed }
-  return subscribed
-}
-
-/**
- * Cline allows its free models through both the Cline and ClinePass providers.
- * Keep those visible for every signed-in account, while filtering the paid
- * ClinePass set unless the account API confirms an active subscription.
- */
-function filterClineCatalogForAccount(
-  catalogs: ProviderCatalog[],
-  hasClinePass: boolean
-): ProviderCatalog[] {
-  const cline = catalogs.find((catalog) => catalog.id === 'cline')
-  const clinePass = catalogs.find((catalog) => catalog.id === CLINE_PASS_PROVIDER_ID)
-  const freeIds = new Set(clineFreeModelIds)
-  const freeModels = (cline?.models ?? [])
-    .filter((model) => freeIds.has(model.id))
-    .map((model) => ({ ...model, providerId: CLINE_PASS_PROVIDER_ID }))
-  const subscriptionModels = hasClinePass ? (clinePass?.models ?? []) : []
-  const availableClinePassModels = uniqueModels([...freeModels, ...subscriptionModels])
-  const available = catalogs.filter((catalog) => catalog.id !== CLINE_PASS_PROVIDER_ID)
-  if (availableClinePassModels.length > 0) {
-    available.push({
-      id: CLINE_PASS_PROVIDER_ID,
-      name: 'ClinePass',
-      harnessId: 'cline',
-      models: availableClinePassModels
-    })
-  }
-  return available
-}
-
-async function fetchClineCatalog(): Promise<ProviderCatalog[]> {
-  if (clineCatalogCache && Date.now() - clineCatalogCache.cachedAt < CLINE_CATALOG_CACHE_TTL_MS) {
-    return cloneCatalogs(clineCatalogCache.catalogs)
-  }
-
-  try {
-    const response = await fetch(CLINE_CATALOG_URL, {
-      signal: AbortSignal.timeout(8_000)
-    })
-    if (!response.ok) return []
-    const catalogs = mapRemoteClineCatalog(await response.json())
-    if (catalogs.length === 0) return []
-    clineCatalogCache = { cachedAt: Date.now(), catalogs }
-    return cloneCatalogs(catalogs)
-  } catch {
-    return []
-  }
-}
-
-/** Dedupes concurrent remote-catalog refreshes (e.g. several pickers open at once). */
-let clineRemoteInflight: Promise<ProviderCatalog[]> | null = null
-
-function refreshClineCatalogOnce(): Promise<ProviderCatalog[]> {
-  clineRemoteInflight ??= fetchClineCatalog().finally(() => {
-    clineRemoteInflight = null
-  })
-  return clineRemoteInflight
-}
-
-const CLINE_AVAILABILITY_CACHE_TTL_MS = 60_000
-let clineAvailabilityCache: { checkedAt: number; available: boolean } | null = null
-
-/**
- * Whether the `cline` binary is present on the harness PATH. Fetching the
- * remote model catalog costs a network round-trip for every provider-catalog
- * refresh, so it is pointless when Cline is not installed   gate on the binary
- * instead and fall back to the static catalog. The probe result is cached for
- * a short window so rapid refreshes do not repeat filesystem resolution.
- */
-async function isClineAvailable(): Promise<boolean> {
-  if (
-    clineAvailabilityCache &&
-    Date.now() - clineAvailabilityCache.checkedAt < CLINE_AVAILABILITY_CACHE_TTL_MS
-  ) {
-    return clineAvailabilityCache.available
-  }
-  const available = (await resolveHarnessRuntime('cline')) !== null
-  clineAvailabilityCache = { checkedAt: Date.now(), available }
-  return available
-}
-
-function utilityKey(value: string): string {
-  const key = value
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9_-]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-  return key || 'utility'
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function timestampValue(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return Date.now()
-}
-
-function mapClineUsage(value: unknown): AgentTokenUsage | undefined {
-  const usage = record(value)
-  if (!usage) return undefined
-  const input = numberValue(usage['inputTokens']) ?? 0
-  const output = numberValue(usage['outputTokens']) ?? 0
-  const reasoning = numberValue(usage['reasoningTokens']) ?? 0
-  const cacheRead = numberValue(usage['cacheReadTokens']) ?? 0
-  const cacheWrite = numberValue(usage['cacheWriteTokens']) ?? 0
-  return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheWrite,
-    total: input + output + reasoning + cacheRead + cacheWrite
-  }
-}
-
-function serializeToolOutput(value: unknown): string | undefined {
-  if (typeof value === 'string') return value
-  if (value === undefined) return undefined
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
-
-interface ClineTurnState {
-  turnIndex: number
-  iteration: number
-  messageId: string
-  createdAt: number
-  parts: AgentPart[]
-  /** Interaction request ids promoted from the live turn (used to suppress idle). */
-  questionRequestIds: Set<string>
-  /** Set when the driver deliberately stops the process at a question boundary. */
-  expectsProcessStop?: boolean
-}
-
-/**
- * Desktop-approval bridge for Cline's headless `--json` runs. Cline denies
- * every tool call when stdin/stdout are not a TTY unless it runs in desktop
- * approval mode, where it writes a `<sessionId>.request.<requestId>.json` file
- * into `CLINE_TOOL_APPROVAL_DIR` and waits for the matching
- * `<sessionId>.decision.<requestId>.json`. The app evaluates each request with
- * its own `PermissionPolicy` so `auto_review` turns can actually run tools
- * (e.g. `git fetch`/file writes for PR compose) without handing Cline blanket
- * auto-approval.
- */
-interface ClineApprovalBridge {
-  directory: string
-  timer: ReturnType<typeof setInterval>
-  handled: Set<string>
-}
-
-const CLINE_WEB_ONLY_TOOL_NAMES = new Set(['question', 'webfetch', 'websearch', 'gemini_quota'])
-
-function isClineWebOnlyTurn(allowedTools: readonly string[] | undefined): boolean {
-  return (
-    allowedTools !== undefined &&
-    allowedTools.some((tool) => tool === 'webfetch' || tool === 'websearch') &&
-    allowedTools.every((tool) => CLINE_WEB_ONLY_TOOL_NAMES.has(tool))
-  )
-}
-
-function clineWebOnlyHook(allowedAttachmentPaths: readonly string[]): string {
-  return `#!/usr/bin/env node
-import { readFileSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
-
-const allowedPaths = new Set(${JSON.stringify(allowedAttachmentPaths)}.map((path) => resolve(path)))
-const payload = JSON.parse(readFileSync(0, 'utf8'))
-const request = payload.preToolUse ?? {}
-const tool = request.tool ?? request.toolName ?? ''
-const parameters = request.parameters ?? {}
-
-function values(value) {
-  if (typeof value === 'string') return [value]
-  if (Array.isArray(value)) return value.flatMap(values)
-  if (!value || typeof value !== 'object') return []
-  return Object.entries(value).flatMap(([key, nested]) =>
-    ['path', 'filePath', 'file_path', 'paths', 'files', 'file_paths'].includes(key)
-      ? values(nested)
-      : []
-  )
-}
-
-const webTools = new Set(['fetch_web_content', 'web_search', 'websearch', 'webfetch'])
-const neutralTools = new Set(['ask_question', 'submit_and_exit'])
-let allowed = webTools.has(tool) || neutralTools.has(tool)
-if (tool === 'read_files') {
-  const paths = values(parameters)
-  allowed = paths.length > 0 && paths.every((path) => {
-    if (!isAbsolute(path)) return false
-    return allowedPaths.has(resolve(path))
-  })
-}
-
-process.stdout.write(JSON.stringify(
-  allowed
-    ? { cancel: false }
-    : {
-        cancel: true,
-        errorMessage: 'This inbox chat can use the web and read files explicitly attached by the user, but it cannot access other local files or run local commands.'
-      }
-))
-`
-}
-
-/** Map Cline's tool names onto the app's provider-neutral permission names. */
-function clineToolPermission(toolName: string): string {
-  const normalized = toolName.toLowerCase()
-  if (/command|run_commands|terminal|bash|shell/iu.test(normalized)) return 'bash'
-  if (/write|edit|create|apply|delete|rename|move|filesystem|file-change/iu.test(normalized)) {
-    return 'write'
-  }
-  if (/read|list|search|grep|context/iu.test(normalized)) return 'read'
-  if (/fetch|web|http|request/iu.test(normalized)) return 'network'
-  if (/mcp|tool/iu.test(normalized)) return 'mcp'
-  return normalized.replace(/[^a-z0-9_-]+/gu, '-') || 'tool'
-}
-
-/** Extract the command strings Cline passes for shell/command tools. */
-function clineApprovalCommands(input: Record<string, unknown>): string[] {
-  const commands: string[] = []
-  const append = (value: unknown): void => {
-    if (typeof value === 'string' && value.trim()) commands.push(value.trim())
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        if (typeof entry === 'string' && entry.trim()) commands.push(entry.trim())
-      }
-    }
-  }
-  append(input['commands'])
-  append(input['command'])
-  return commands
-}
-
-function clineApprovalRequest(payload: Record<string, unknown>): PermissionRequest {
-  const toolInput = record(payload['input']) ?? {}
-  const paths = permissionPatterns(toolInput)
-  const commands = clineApprovalCommands(toolInput)
-  return {
-    permission: clineToolPermission(stringValue(payload['toolName']) ?? 'tool'),
-    ...(paths.length > 0 ? { paths } : {}),
-    ...(commands.length > 0 ? { commands } : {})
-  }
-}
-
-function clineMessage(state: ClineTurnState): AgentMessage {
-  return {
-    id: state.messageId,
-    role: 'assistant',
-    parts: [...state.parts],
-    createdAt: state.createdAt,
-    harnessId: 'cline'
-  }
-}
-
-function upsertPart(state: ClineTurnState, part: AgentPart): void {
-  const index = state.parts.findIndex((candidate) => candidate.id === part.id)
-  if (index === -1) state.parts.push(part)
-  else state.parts[index] = part
-}
-
-function beginClineIteration(
-  context: CliLineParseContext,
-  state: ClineTurnState,
-  iteration: number,
-  createdAt: number
-): CliLineParseResult {
-  state.iteration = iteration
-  state.messageId = `cline:${context.sessionId}:${state.turnIndex}:${iteration}`
-  state.createdAt = createdAt
-  state.parts = []
-  return { messages: [clineMessage(state)] }
-}
-
-function mapClineContentEvent(
-  event: Record<string, unknown>,
-  context: CliLineParseContext,
-  state: ClineTurnState,
-  complete: boolean
-): CliLineParseResult {
-  const contentType = stringValue(event['contentType'])
-  const messageId = state.messageId
-  if (
-    contentType === 'text' ||
-    contentType === 'reasoning' ||
-    contentType === 'reasoning_summary'
-  ) {
-    const partType = contentType === 'text' ? 'text' : 'reasoning'
-    const partId = `${messageId}:${partType}`
-    const existing = state.parts.find(
-      (part): part is Extract<AgentPart, { type: 'text' | 'reasoning' }> =>
-        part.id === partId && (part.type === 'text' || part.type === 'reasoning')
-    )
-    const chunk = contentType === 'reasoning_summary' ? '' : (stringValue(event[contentType]) ?? '')
-    const text = complete ? chunk : `${existing?.text ?? ''}${chunk}`
-    const summary =
-      stringValue(event['summary']) ??
-      (contentType === 'reasoning_summary' ? stringValue(event['reasoning_summary']) : undefined)
-    const part: Extract<AgentPart, { type: 'text' | 'reasoning' }> =
-      partType === 'reasoning'
-        ? {
-            type: 'reasoning',
-            id: partId,
-            messageID: messageId,
-            text,
-            ...(summary ? { summary } : {})
-          }
-        : { type: 'text', id: partId, messageID: messageId, text }
-    upsertPart(state, part)
-    return {
-      messages: [clineMessage(state)],
-      events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
-    }
-  }
-
-  if (contentType === 'tool') {
-    const callId = stringValue(event['toolCallId']) ?? `${messageId}:call`
-    const toolName = stringValue(event['toolName']) ?? 'tool'
-    const output = serializeToolOutput(event['output'])
-    const failed =
-      event['isError'] === true ||
-      (Array.isArray(event['output']) &&
-        event['output'].some((entry) => record(entry)?.['success'] === false))
-    const previous = state.parts.find(
-      (part): part is Extract<AgentPart, { type: 'tool' }> =>
-        part.type === 'tool' && part.callID === callId
-    )
-    const part: Extract<AgentPart, { type: 'tool' }> = {
-      type: 'tool',
-      id: `${messageId}:tool:${callId}`,
-      messageID: messageId,
-      callID: callId,
-      tool: toolName,
-      state: {
-        status: complete ? (failed ? 'error' : 'completed') : 'running',
-        input: record(event['input']) ?? previous?.state.input ?? {},
-        ...(output ? { output } : {}),
-        ...(failed ? { error: output ?? `${toolName} failed` } : {})
-      }
-    }
-    upsertPart(state, part)
-    const events: SessionAgentEvent[] = [
-      { type: 'message.part.updated', sessionId: context.sessionId, part }
-    ]
-    // Cline's headless `ask_question` executor never blocks on stdin   it
-    // resolves immediately with the first option (`Promise.resolve(F[0])`).
-    // Promote the call into the shared interaction stream so the chat engine
-    // can pause the turn here and resume it with the user's answers; the
-    // question boundary is handled by the driver's `onJsonRecord` hook.
-    if (isQuestionToolName(toolName) && !state.questionRequestIds.has(callId)) {
-      state.questionRequestIds.add(callId)
-      events.push({
-        type: 'question.asked',
-        sessionId: context.sessionId,
-        requestId: callId,
-        questions: normalizeAgentQuestions(part.state.input),
-        tool: { messageID: messageId, callID: callId }
-      })
-    }
-    return { messages: [clineMessage(state)], events }
-  }
-
-  return { events: [] }
-}
-
-function mapCurrentClineRecord(
-  entry: Record<string, unknown>,
-  context: CliLineParseContext,
-  state: ClineTurnState
-): CliLineParseResult | null {
-  const type = stringValue(entry['type'])
-  if (type === 'run_start') {
-    const nativeSessionId = stringValue(entry['sessionId']) ?? stringValue(entry['session_id'])
-    return nativeSessionId ? { nativeSessionId } : { events: [] }
-  }
-
-  if (type === 'error') {
-    const error = stringValue(entry['message']) ?? stringValue(entry['error'])
-    if (!error) return null
-    const kind = classifyProviderIssue(error)
-    const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(error) : undefined
-    return {
-      events: [
-        {
-          type: 'session.error',
-          sessionId: context.sessionId,
-          error,
-          issue: {
-            kind,
-            message: error,
-            rawError: error,
-            harnessId: 'cline',
-            retryable: kind !== 'billing',
-            ...(retryAt === undefined ? {} : { retryAt })
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'agent_event') {
-    const event = record(entry['event'])
-    if (!event) return null
-    const eventType = stringValue(event['type'])
-    if (eventType === 'iteration_start') {
-      return beginClineIteration(
-        context,
-        state,
-        numberValue(event['iteration']) ?? state.iteration + 1,
-        timestampValue(entry['ts'])
-      )
-    }
-    if (eventType === 'content_start' || eventType === 'content_end') {
-      return mapClineContentEvent(event, context, state, eventType === 'content_end')
-    }
-    if (eventType === 'iteration_end') {
-      return {
-        messages: [{ ...clineMessage(state), completedAt: timestampValue(entry['ts']) }],
-        events: [
-          { type: 'message.completed', sessionId: context.sessionId, messageId: state.messageId }
-        ]
-      }
-    }
-    return { events: [] }
-  }
-
-  if (type === 'run_result') {
-    const finishReason = stringValue(entry['finishReason'])
-    const failed = finishReason === 'error'
-    const finalText = stringValue(entry['text']) ?? ''
-    let finalTextPart: AgentPart | undefined
-    if (finalText) {
-      const part: AgentPart = {
-        type: 'text',
-        id: `${state.messageId}:text`,
-        messageID: state.messageId,
-        text: finalText
-      }
-      upsertPart(state, part)
-      finalTextPart = part
-    }
-    const model = record(entry['model'])
-    const usage = mapClineUsage(entry['usage'])
-    const cost = numberValue(record(entry['usage'])?.['totalCost'])
-    const message: AgentMessage = {
-      ...clineMessage(state),
-      completedAt: timestampValue(entry['ts']),
-      modelId: stringValue(model?.['id']),
-      providerId: stringValue(model?.['provider']),
-      ...(usage ? { tokens: usage } : {}),
-      ...(cost !== undefined ? { cost } : {}),
-      ...(failed ? { error: finalText || 'Cline turn failed' } : {})
-    }
-    const events: SessionAgentEvent[] = []
-    if (finalTextPart) {
-      events.push({
-        type: 'message.part.updated',
-        sessionId: context.sessionId,
-        part: finalTextPart
-      })
-    }
-    events.push({
-      type: 'message.completed',
-      sessionId: context.sessionId,
-      messageId: state.messageId,
-      ...(failed ? { error: finalText || 'Cline turn failed' } : {})
-    })
-    return {
-      messages: [message],
-      events
-    }
-  }
-
-  return null
-}
-
-function mapClineRecordToEvents(
-  value: Record<string, unknown>,
-  sessionId: string,
-  messageId: string
-): { events: SessionAgentEvent[] } | undefined {
-  const type = stringValue(value['type'])
-  if (type !== 'say' && type !== 'ask') return undefined
-
-  const text = stringValue(value['text']) ?? ''
-  const say = stringValue(value['say'])
-  const ask = stringValue(value['ask'])
-  const reasoning = stringValue(value['reasoning'])
-  const partial = value['partial'] === true
-
-  if (type === 'say' && say === 'reasoning' && reasoning) {
-    const partId = `${messageId}:reasoning`
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId,
-          part: {
-            type: 'reasoning',
-            id: partId,
-            messageID: messageId,
-            text: reasoning
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'say' && say === 'text') {
-    const partId = `${messageId}:text`
-    if (partial) {
-      return {
-        events: [
-          {
-            type: 'message.part.delta',
-            sessionId,
-            messageId,
-            partId,
-            field: 'text',
-            delta: text
-          }
-        ]
-      }
-    }
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId,
-          part: {
-            type: 'text',
-            id: partId,
-            messageID: messageId,
-            text
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'say' && say === 'tool') {
-    const partId = `${messageId}:tool`
-    const toolName = stringValue(value['tool']) ?? 'unknown'
-    const toolInput = record(value['input'])
-    const toolOutput = stringValue(value['output'])
-
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId,
-          part: {
-            type: 'tool',
-            id: partId,
-            messageID: messageId,
-            callID: `${messageId}:call`,
-            tool: toolName,
-            state: {
-              status: partial ? 'running' : toolOutput ? 'completed' : 'running',
-              input: toolInput ?? {},
-              ...(toolOutput ? { output: toolOutput } : {}),
-              title: toolName
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  if (type === 'ask') {
-    const partId = `${messageId}:ask`
-    const questionType = ask ?? 'tool'
-    const questionText = text || `Allow ${questionType}?`
-
-    return {
-      events: [
-        {
-          type: 'message.part.updated',
-          sessionId,
-          part: {
-            type: 'tool',
-            id: partId,
-            messageID: messageId,
-            callID: partId,
-            tool: 'permission',
-            state: {
-              status: 'running',
-              input: { prompt: questionText, ask: questionType },
-              title: questionText
-            }
-          }
-        }
-      ]
-    }
-  }
-
-  return undefined
-}
-
-function mapClineRecord(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
-  const record_ = record(value)
-  if (!record_) return null
-
-  const type = stringValue(record_['type'])
-  if (!type) return null
-
-  const ts = numberValue(record_['ts']) ?? Date.now()
-  const messageId = `cline:${context.sessionId}:${ts}`
-
-  const result = mapClineRecordToEvents(record_, context.sessionId, messageId)
-  if (!result) return null
-
-  const messages: AgentMessage[] = []
-  for (const event of result.events) {
-    if (event.type === 'message.part.updated') {
-      const existingMessage = messages.find((m) => m.id === messageId)
-      if (existingMessage) {
-        const partIndex = existingMessage.parts.findIndex((p) => p.id === event.part.id)
-        if (partIndex === -1) {
-          existingMessage.parts.push(event.part)
-        } else {
-          existingMessage.parts[partIndex] = event.part
-        }
-      } else {
-        messages.push({
-          id: messageId,
-          role: 'assistant',
-          parts: [event.part],
-          createdAt: ts,
-          harnessId: 'cline'
-        })
-      }
-    }
-  }
-
-  const nativeSessionId = stringValue(record_['session_id'])
-
-  return {
-    events: result.events,
-    messages: messages.length > 0 ? messages : undefined,
-    nativeSessionId
-  }
-}
-
-/** Process-per-turn bridge for Cline's `--json` protocol. */
 export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
   readonly name = 'Cline'
@@ -950,7 +70,9 @@ export class ClineDriver extends PersistentCliDriver {
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
-    contextUsage: false,
+    // Emits per-iteration token, cost and context-occupancy telemetry, and
+    // reports the model context window it resolved on every run result.
+    contextUsage: true,
     compaction: false,
     subagents: false,
     nativeUtilities: ['web_search', 'web_fetch']
@@ -1024,7 +146,7 @@ export class ClineDriver extends PersistentCliDriver {
     // Do not pay a network round-trip for Cline's remote catalog when the
     // harness is not installed   return the static fallback instead.
     if (!(await isClineAvailable())) {
-      return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
+      return applyClineObservedContextWindows(appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG)))
     }
     // The chat engine already gives slow driver probes a background enrichment
     // path. Await Cline's live feed here so that enrichment persists the real
@@ -1034,7 +156,9 @@ export class ClineDriver extends PersistentCliDriver {
       hasClinePassSubscription()
     ])
     const discovered = remote.length > 0 ? remote : cloneCatalogs(CLINE_FALLBACK_CATALOG)
-    return appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
+    return applyClineObservedContextWindows(
+      appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
+    )
   }
 
   /** Cheapest available free/pass models, shared by title and grading runs. */
@@ -1059,11 +183,19 @@ export class ClineDriver extends PersistentCliDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    return this.generateTitleWithCandidates(projectPath, options, await this.cheapestCandidates())
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      options.candidates ?? (await this.cheapestCandidates())
+    )
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidates())
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      options.candidates ?? (await this.cheapestCandidates())
+    )
   }
 
   /** Cheapest candidates for any auxiliary one-shot run. */
@@ -1443,11 +575,38 @@ export class ClineDriver extends PersistentCliDriver {
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     const state = this.turnStates.get(context.sessionId)
-    if (entry && state) {
-      const current = mapCurrentClineRecord(entry, context, state)
-      if (current) return current
+    if (entry) {
+      if (stringValue(entry['type']) === 'run_result') {
+        this.learnModelContextWindow(context.sessionId, entry)
+      }
+      if (state) {
+        const current = mapCurrentClineRecord(entry, context, state)
+        if (current) return current
+      }
     }
     return mapClineRecord(value, context)
+  }
+
+  /**
+   * Learn the context window Cline resolved for the model it just ran.
+   *
+   * Cline's catalog publishes no window, so this run result is the app's only
+   * source for one. A newly learned value changes the denominator of the
+   * occupancy meter and the budget a history recap is truncated against, for
+   * every project, so it is worth asking the engine to re-list the catalogs.
+   */
+  private learnModelContextWindow(sessionId: string, entry: Record<string, unknown>): void {
+    const model = record(entry['model'])
+    const modelId = stringValue(model?.['id'])
+    const contextWindow = clineModelContextWindow(model)
+    if (!modelId || contextWindow === undefined) return
+    if (!observeClineContextWindow(modelId, contextWindow)) return
+    Logger.dev('Cline reported a model context window the catalog did not have', {
+      sessionId,
+      modelId,
+      contextWindow
+    })
+    this.emit({ type: 'catalog.updated', harnessId: this.id })
   }
 
   /**

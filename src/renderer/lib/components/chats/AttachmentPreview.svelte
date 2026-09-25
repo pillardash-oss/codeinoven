@@ -1,25 +1,17 @@
 <script lang="ts">
-  import { AlertDialog } from 'bits-ui'
-  import {
-    X,
-    Download,
-    FileQuestion,
-    Loader2,
-    RotateCcw,
-    Save,
-    WrapText,
-    ZoomIn,
-    ZoomOut
-  } from '@lucide/svelte'
+  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
+  import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
   import { documentPreviewFrame } from '$lib/document-preview-frame'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     attachment: PromptAttachment
@@ -51,15 +43,6 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  /** Register the attachment-editor full-window surface while the fullscreen
-   *  editor is mounted, clearing it on teardown so native surfaces are never
-   *  suppressed after the editor closes. */
-  function editorSurfaceAttachment(_node: HTMLElement): () => void {
-    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', true)
-    return () => {
-      contextSidebarState.setFullscreenSurfaceActive('attachment-editor', false)
-    }
-  }
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
   // svelte-ignore state_referenced_locally
@@ -145,8 +128,8 @@
 
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
-    if (e.key === 'Escape' && !confirmCloseOpen) requestClose()
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && editableText) {
+    // Shift is excluded so Cmd/Ctrl+Shift+S stays the right-sidebar toggle.
+    if (keymapState.matches('files-save', e) && editableText) {
       e.preventDefault()
       void saveText()
     }
@@ -154,9 +137,14 @@
 />
 
 {#if editableText}
-  <div
-    {@attach editorSurfaceAttachment}
-    class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
+  <Modal
+    open
+    title={filename}
+    description="Full screen attachment editor"
+    onClose={requestClose}
+    placement="fullscreen"
+    chrome={false}
+    panelClass="bg-app"
   >
     <div
       class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
@@ -222,184 +210,147 @@
       wrap={wrapTextState.wrapped}
       onInput={({ currentTarget }) => (draft = currentTarget.value)}
     />
-  </div>
+  </Modal>
 {:else}
-  <div
-    role="presentation"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-overlay/80 backdrop-blur-sm"
-    onclick={requestClose}
-    onkeydown={(e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') requestClose()
+  <Modal
+    open
+    title={`Preview of ${filename}`}
+    onClose={requestClose}
+    placement="fullscreen"
+    chrome={false}
+    panelClass="bg-overlay/80 backdrop-blur-sm"
+    claimInitialFocus={(panel) => {
+      panel.querySelector<HTMLElement>('button')?.focus()
+      return true
     }}
   >
     <div
       role="presentation"
-      class="relative flex flex-col items-center {kind === 'image'
-        ? 'max-h-[90vh] max-w-[90vw]'
-        : 'h-[85vh] w-[85vw]'}"
-      onclick={(e: MouseEvent) => e.stopPropagation()}
+      class="relative flex flex-1 items-center justify-center"
+      onclick={requestClose}
+      onkeydown={(e: KeyboardEvent) => {
+        if (keymapState.matches('ui-activate', e)) requestClose()
+      }}
     >
-      {#if kind === 'image' && src}
-        <div
-          {@attach imageViewportAttachment}
-          role="group"
-          class={[
-            'flex touch-none items-center justify-center overflow-hidden',
-            panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
-          ]}
-          onwheel={panZoom.onWheel}
-          onpointerdown={panZoom.onPointerDown}
-          onpointermove={panZoom.onPointerMove}
-          onpointerup={panZoom.onPointerUp}
-          onpointercancel={panZoom.onPointerUp}
-          ondblclick={() => panZoom.reset()}
-        >
-          <img
-            {@attach panZoom.bindTarget}
+      <div
+        role="presentation"
+        class="relative flex flex-col items-center {kind === 'image'
+          ? 'max-h-[90vh] max-w-[90vw]'
+          : 'h-[85vh] w-[85vw]'}"
+        onclick={(e: MouseEvent) => e.stopPropagation()}
+      >
+        {#if kind === 'image' && src}
+          <div
+            {@attach imageViewportAttachment}
+            role="group"
+            class={[
+              'flex touch-none items-center justify-center overflow-hidden',
+              panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+            ]}
+            onwheel={panZoom.onWheel}
+            onpointerdown={panZoom.onPointerDown}
+            onpointermove={panZoom.onPointerMove}
+            onpointerup={panZoom.onPointerUp}
+            onpointercancel={panZoom.onPointerUp}
+            ondblclick={() => panZoom.reset()}
+          >
+            <img
+              {@attach panZoom.bindTarget}
+              {src}
+              alt={filename}
+              draggable="false"
+              class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
+              style={panZoom.transform}
+            />
+          </div>
+          <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-3 bottom-3" />
+        {:else if kind === 'video' && src}
+          <video
             {src}
-            alt={filename}
-            draggable="false"
-            class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
-            style={panZoom.transform}
-          />
-        </div>
-        <div
-          class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
-        >
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Zoom out"
-            title="Zoom out"
-            disabled={panZoom.zoom <= panZoom.min}
-            onclick={() => panZoom.zoomByButton(1 / 1.4, imageViewport)}
+            controls
+            preload="metadata"
+            class="max-h-[75vh] max-w-[85vw] rounded-lg shadow-2xl"
           >
-            <ZoomOut size={14} />
-          </button>
-          <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
-            {Math.round(panZoom.zoom * 100)}%
-          </span>
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Zoom in"
-            title="Zoom in"
-            disabled={panZoom.zoom >= panZoom.max}
-            onclick={() => panZoom.zoomByButton(1.4, imageViewport)}
+            <track kind="captions" />
+          </video>
+        {:else if kind === 'audio' && src}
+          <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
+        {:else if kind === 'pdf' && src}
+          <iframe
+            {src}
+            class="h-full w-full rounded-lg border-0 shadow-2xl"
+            title={`Preview ${filename}`}
+          ></iframe>
+        {:else if kind === 'document' && documentSrcdoc}
+          <iframe
+            srcdoc={documentSrcdoc}
+            sandbox=""
+            class="h-full w-full rounded-lg border-0 bg-[#eceff1] shadow-2xl"
+            title={`Preview ${filename}`}
+          ></iframe>
+        {:else if kind === 'document' && documentLoading}
+          <div
+            class="flex h-full w-full items-center justify-center rounded-lg bg-surface text-muted shadow-2xl"
+            role="status"
           >
-            <ZoomIn size={14} />
-          </button>
-          <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
-          <button
-            type="button"
-            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Reset zoom and pan"
-            title="Reset zoom and pan"
-            disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
-            onclick={() => panZoom.reset()}
+            <Loader2 size={24} class="animate-spin" />
+            <span class="sr-only">Loading document preview</span>
+          </div>
+        {:else if kind === 'markdown' && text !== undefined}
+          <div
+            class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface p-4 shadow-2xl"
           >
-            <RotateCcw size={14} />
-          </button>
+            <MarkdownView {text} class="text-sm text-foreground" />
+          </div>
+        {:else if kind === 'text' && text !== undefined}
+          <pre
+            class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
+        {:else}
+          <div
+            class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"
+          >
+            <FileQuestion size={32} class="text-dimmed" />
+            <span class="text-xs">No preview available for this file type</span>
+          </div>
+        {/if}
+        <div class="mt-3 flex items-center gap-3">
+          <span class="max-w-full truncate text-xs text-muted">{filename}</span>
         </div>
-      {:else if kind === 'video' && src}
-        <video
-          {src}
-          controls
-          preload="metadata"
-          class="max-h-[75vh] max-w-[85vw] rounded-lg shadow-2xl"
-        >
-          <track kind="captions" />
-        </video>
-      {:else if kind === 'audio' && src}
-        <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
-      {:else if kind === 'pdf' && src}
-        <iframe
-          {src}
-          class="h-full w-full rounded-lg border-0 shadow-2xl"
-          title={`Preview ${filename}`}
-        ></iframe>
-      {:else if kind === 'document' && documentSrcdoc}
-        <iframe
-          srcdoc={documentSrcdoc}
-          sandbox=""
-          class="h-full w-full rounded-lg border-0 bg-[#eceff1] shadow-2xl"
-          title={`Preview ${filename}`}
-        ></iframe>
-      {:else if kind === 'document' && documentLoading}
-        <div
-          class="flex h-full w-full items-center justify-center rounded-lg bg-surface text-muted shadow-2xl"
-          role="status"
-        >
-          <Loader2 size={24} class="animate-spin" />
-          <span class="sr-only">Loading document preview</span>
-        </div>
-      {:else if kind === 'markdown' && text !== undefined}
-        <div
-          class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface p-4 shadow-2xl"
-        >
-          <MarkdownView {text} class="text-sm text-foreground" />
-        </div>
-      {:else if kind === 'text' && text !== undefined}
-        <pre
-          class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
-      {:else}
-        <div
-          class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"
-        >
-          <FileQuestion size={32} class="text-dimmed" />
-          <span class="text-xs">No preview available for this file type</span>
-        </div>
-      {/if}
-      <div class="mt-3 flex items-center gap-3">
-        <span class="max-w-full truncate text-xs text-muted">{filename}</span>
       </div>
+      <button
+        type="button"
+        class="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+        aria-label="Close preview"
+        title="Close preview (Esc)"
+        onclick={closeFromButton}
+      >
+        <X size={18} />
+      </button>
+      <button
+        type="button"
+        class="absolute right-4 top-16 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+        aria-label="Download file"
+        title="Download file"
+        onclick={downloadFromButton}
+      >
+        <Download size={16} />
+      </button>
     </div>
-    <button
-      type="button"
-      class="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-      aria-label="Close preview"
-      title="Close preview (Esc)"
-      onclick={closeFromButton}
-    >
-      <X size={18} />
-    </button>
-    <button
-      type="button"
-      class="absolute right-4 top-16 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-      aria-label="Download file"
-      title="Download file"
-      onclick={downloadFromButton}
-    >
-      <Download size={16} />
-    </button>
-  </div>
+  </Modal>
 {/if}
 
-<AlertDialog.Root bind:open={confirmCloseOpen}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Discard attachment changes?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Your unsaved edits to {filename} will be lost.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-        >
-          Keep editing
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={onClose}
-        >
-          Discard changes
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+<ConfirmDialog
+  open={confirmCloseOpen}
+  title="Discard attachment changes?"
+  onCancel={() => (confirmCloseOpen = false)}
+  onConfirm={() => {
+    confirmCloseOpen = false
+    onClose()
+  }}
+  confirmLabel="Discard changes"
+  cancelLabel="Keep editing"
+>
+  <p>
+    Your unsaved edits to <span class="font-medium text-foreground">{filename}</span> will be lost.
+  </p>
+</ConfirmDialog>

@@ -1,10 +1,8 @@
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
+import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
 import type { Database } from '../database'
-import type {
-  ModelRankingSnapshotRow,
-  RankingShotCategory
-} from '../../../lib/types'
+import type { ModelRankingSnapshotRow, RankingShotCategory } from '../../../lib/types'
 
 /** Input for one newly captured conversation-window snapshot. */
 export interface OpenRankingSnapshotInput {
@@ -23,8 +21,26 @@ export interface OpenRankingSnapshotInput {
   dueAtMs: number
   userMessageText: string
   assistantOutputText: string
+  /** Visible user message this window answers. The window counts one shot per
+   *  prompt, so a later turn that re-answers this same message refreshes the
+   *  window instead of registering a follow-up. */
+  anchorMessageId: string
   costUsd: number | null
   costStatus: 'known' | 'estimated' | 'unavailable'
+}
+
+/**
+ * One queued row's identity and deadline, without its conversation payload.
+ *
+ * A drain pass reads this window before it claims anything, so the rows it must
+ * hold back are decided without loading transcripts the pass may never judge.
+ */
+export interface RankingQueueHead {
+  id: string
+  harness_id: string
+  provider_id: string
+  model_id: string
+  due_at_ms: number
 }
 
 /**
@@ -53,9 +69,9 @@ export class ModelRankingSnapshotRepo {
          id, thread_id, project_id, shot_category, status,
          harness_id, provider_id, model_id, thinking_level,
          started_at, ended_at, closed_at_ms, due_at_ms,
-         user_message_text, assistant_output_text, follow_up_text,
+         user_message_text, assistant_output_text, follow_up_text, anchor_message_id,
          cost_usd, cost_status, attempt_count, last_attempt_at_ms, created_at
-       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, 0, NULL, ?)`,
+       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, ?)`,
       [
         snapshotId(input),
         input.threadId,
@@ -70,6 +86,7 @@ export class ModelRankingSnapshotRepo {
         input.dueAtMs,
         input.userMessageText,
         input.assistantOutputText,
+        input.anchorMessageId,
         input.costUsd,
         input.costStatus,
         Date.now()
@@ -87,9 +104,9 @@ export class ModelRankingSnapshotRepo {
          id, thread_id, project_id, shot_category, status,
          harness_id, provider_id, model_id, thinking_level,
          started_at, ended_at, closed_at_ms, due_at_ms,
-         user_message_text, assistant_output_text, follow_up_text,
+         user_message_text, assistant_output_text, follow_up_text, anchor_message_id,
          cost_usd, cost_status, attempt_count, last_attempt_at_ms, created_at
-       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, 0, NULL, ?)`,
+       ) VALUES(?,?,?,?, 'pending', ?,?,?,?,?,?, NULL, ?, ?, ?, NULL, ?, ?, ?, 0, NULL, ?)`,
       snapshotId(input),
       input.threadId,
       input.projectId,
@@ -103,6 +120,7 @@ export class ModelRankingSnapshotRepo {
       input.dueAtMs,
       input.userMessageText,
       input.assistantOutputText,
+      input.anchorMessageId,
       input.costUsd,
       input.costStatus,
       Date.now()
@@ -122,33 +140,75 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
-   * A completed later exchange on the still-open conversation window: upgrade
-   * the classification to multi_shot, append the follow-up prompt as judge
-   * context, and slide the inactivity deadline. The window stays open   a
-   * conversation is graded exactly once, at close. A plain update, never a
-   * failure marker.
+   * A completed later exchange on the still-open conversation window.
+   *
+   * `promptMessageId` is the visible user message this exchange answers. A
+   * prompt the window already answers is not a new shot: an invisible
+   * continuation (a search nudge, a Mermaid repair, incomplete-turn recovery,
+   * a specification continuation) and a resumed retry all re-answer the user's
+   * own message, so such a turn refreshes the graded answer in place instead of
+   * upgrading the window to `multi_shot` and handing the judge the same prompt
+   * again as a follow-up, which the rubric reads as the user pushing back.
+   *
+   * A genuinely later prompt upgrades the classification to `multi_shot` and
+   * appends its text as judge context. Either way the inactivity deadline
+   * slides, so the window stays open   a conversation is graded exactly once,
+   * at close. A plain update, never a failure marker.
+   *
+   * One statement, deliberately: the database worker owns a second connection
+   * to the same file, so a read-then-write could have another connection's
+   * write land in between. Every CASE reads the pre-update row, and the answer
+   * is refreshed only while the window holds a single exchange (`first_shot`,
+   * where the prompt being answered again IS the window's own) and only with
+   * real text, because a text-less continuation turn must never erase the
+   * answer the user received.
    *
    * If the drain had already claimed the row ('processing', inactivity
    * deadline elapsed mid-conversation), the row is reset to 'pending' and its
    * claim token cleared, so the in-flight judge result is discarded (its
    * delete guard no longer matches) and the conversation is graded later with
-   * the full follow-up context.
+   * the final answer.
    */
-  registerCompletedExchange(id: string, followUpText: string, endedAt: number, nextDueAtMs: number): void {
+  registerCompletedExchange(
+    id: string,
+    promptMessageId: string,
+    followUpText: string,
+    assistantOutputText: string,
+    endedAt: number,
+    nextDueAtMs: number
+  ): void {
     this.db.run(
       `UPDATE model_ranking_snapshots
-       SET shot_category = 'multi_shot',
-           follow_up_text = substr(
-             CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
-                  THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
-             -12000),
+       SET shot_category = CASE
+             WHEN anchor_message_id = ? THEN shot_category
+             ELSE 'multi_shot'
+           END,
+           follow_up_text = CASE
+             WHEN anchor_message_id = ? THEN follow_up_text
+             ELSE substr(
+               CASE WHEN follow_up_text IS NULL OR follow_up_text = ''
+                    THEN ? ELSE follow_up_text || char(10) || char(10) || ? END,
+               -12000)
+           END,
+           assistant_output_text = CASE
+             WHEN anchor_message_id = ? AND shot_category = 'first_shot' AND ? <> ''
+               THEN ?
+             ELSE assistant_output_text
+           END,
+           anchor_message_id = ?,
            ended_at = ?,
            due_at_ms = ?,
            status = 'pending',
            claim_token = NULL
        WHERE id = ? AND closed_at_ms IS NULL AND status IN ('pending','processing')`,
+      promptMessageId,
+      promptMessageId,
       followUpText,
       followUpText,
+      promptMessageId,
+      assistantOutputText,
+      assistantOutputText,
+      promptMessageId,
       endedAt,
       nextDueAtMs,
       id
@@ -170,29 +230,92 @@ export class ModelRankingSnapshotRepo {
   }
 
   /**
-   * Atomically claim up to `limit` due pending snapshots: the SELECT picks the
-   * oldest due rows and the outer UPDATE flips them to 'processing' in the
-   * same statement, so overlapping drains can never claim the same row twice.
+   * Claim up to `limit` due pending snapshots: the oldest due rows are read,
+   * then flipped to 'processing' in one statement that is guarded by the
+   * pending status, so overlapping drains can never claim the same row twice.
    * Every claim carries a unique generation token; score, delete, and defer
    * operations are guarded by it, so a stale judge result from a previous
    * claim generation can never apply to a re-claimed row.
+   *
+   * The drain plans its batch from `dueQueueHead` plus its own judge-route
+   * checks and claims it with `claimRows`; this stays as the plain
+   * "take the head of the queue" form, and delegates to those two so one
+   * implementation owns the token and the guards.
    */
   claimDueBatch(nowMs: number, limit = 3): ModelRankingSnapshotRow[] {
-    const claimToken = randomUUID()
-    return this.db.all<ModelRankingSnapshotRow>(
-      `UPDATE model_ranking_snapshots
-       SET status = 'processing', claim_token = ?
-       WHERE id IN (
-         SELECT id FROM model_ranking_snapshots
-         WHERE status = 'pending' AND due_at_ms <= ?
-         ORDER BY due_at_ms ASC, created_at ASC, id ASC
-         LIMIT ?
-       )
-       RETURNING *`,
-      claimToken,
+    return this.claimRows(
+      nowMs,
+      this.dueQueueHead(nowMs, limit).map((row) => row.id)
+    )
+  }
+
+  /**
+   * The head of the pending queue, in the same order `claimDueBatch` would take
+   * it, carrying only the columns a pass needs to decide what to claim. Read
+   * only: nothing is flipped to 'processing' until the pass has planned.
+   */
+  dueQueueHead(nowMs: number, limit: number): RankingQueueHead[] {
+    return this.db.all<RankingQueueHead>(
+      `SELECT id, harness_id, provider_id, model_id, due_at_ms
+       FROM model_ranking_snapshots
+       WHERE status = 'pending' AND due_at_ms <= ?
+       ORDER BY due_at_ms ASC, created_at ASC, id ASC
+       LIMIT ?`,
       nowMs,
       limit
     )
+  }
+
+  /**
+   * Claim exactly the rows a pass planned to judge, under one generation token
+   * so a stale judge result can never apply to a re-claimed row. Guarded by the
+   * pending status and the deadline, so a row that was closed by a new exchange
+   * or already claimed while the pass was planning is silently left alone.
+   */
+  claimRows(nowMs: number, ids: readonly string[]): ModelRankingSnapshotRow[] {
+    if (ids.length === 0) return []
+    const claimToken = randomUUID()
+    const placeholders = ids.map(() => '?').join(', ')
+    return this.db.all<ModelRankingSnapshotRow>(
+      `UPDATE model_ranking_snapshots
+       SET status = 'processing', claim_token = ?
+       WHERE id IN (${placeholders}) AND status = 'pending' AND due_at_ms <= ?
+       RETURNING *`,
+      claimToken,
+      ...ids,
+      nowMs
+    )
+  }
+
+  /**
+   * Push still-pending rows to a later deadline without touching their status
+   * or attempt count.
+   *
+   * A row whose provider already reported its usage window closed is not a
+   * judge failure: claiming it would consume one of its attempts on work that
+   * cannot run, and would report a null score the queue never asked for. The
+   * rows keep their pending state and simply wait, grouped by the moment their
+   * window reopens. Routed through the database worker because the pass defers
+   * every due row of the blocked route at once. The write outcome is returned so
+   * the caller can pace itself when a deferral does not land.
+   */
+  async deferPendingRowsViaWorker(
+    ids: readonly string[],
+    dueAtMs: number,
+    nowMs: number
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (ids.length === 0) return { ok: true }
+    const placeholders = ids.map(() => '?').join(', ')
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ?
+       WHERE id IN (${placeholders}) AND status = 'pending' AND due_at_ms <= ?`,
+      [dueAtMs, ...ids, nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking window deferral write failed:', result.error)
+    }
+    return result
   }
 
   /**
@@ -211,7 +334,8 @@ export class ModelRankingSnapshotRepo {
       )
       if (!claimed) return false
       this.db.run(
-        'DELETE FROM model_ranking_snapshots WHERE id = ? AND status = ' + "'processing' AND claim_token = ?",
+        'DELETE FROM model_ranking_snapshots WHERE id = ? AND status = ' +
+          "'processing' AND claim_token = ?",
         id,
         claimToken
       )
@@ -234,36 +358,105 @@ export class ModelRankingSnapshotRepo {
     retryBaseMs: number,
     nowMs: number
   ): void {
+    const attemptCount = this.claimedAttemptCount(id, claimToken)
+    if (attemptCount === null) return
+    const statement = this.deferOrParkStatement(
+      id,
+      claimToken,
+      attemptCap,
+      rankingRetryDelayMs(attemptCount, retryBaseMs),
+      nowMs
+    )
+    this.db.run(statement.sql, ...statement.params)
+  }
+
+  /**
+   * The same judge-failure bookkeeping, executed on the database worker's
+   * connection so a retry write can never stall the Electron main thread on a
+   * contended database. The retry/park decision and the next attempt count are
+   * derived inside the statement from the row's own persisted state, guarded by
+   * the claim generation, so the worker path and the primary path write exactly
+   * the same record. Only the attempt-count read stays on the primary
+   * connection: it is a primary-key lookup, and the worker's bounded-query
+   * path cannot host the claim's `UPDATE … RETURNING`.
+   */
+  async deferOrParkViaWorker(
+    id: string,
+    claimToken: string,
+    attemptCap: number,
+    retryBaseMs: number,
+    nowMs: number
+  ): Promise<void> {
+    const attemptCount = this.claimedAttemptCount(id, claimToken)
+    if (attemptCount === null) return
+    const statement = this.deferOrParkStatement(
+      id,
+      claimToken,
+      attemptCap,
+      rankingRetryDelayMs(attemptCount, retryBaseMs),
+      nowMs
+    )
+    await this.db.executeViaWorker(statement.sql, statement.params)
+  }
+
+  /** Attempt count of a row still owned by the given claim generation, or null. */
+  private claimedAttemptCount(id: string, claimToken: string): number | null {
     const row = this.db.get<{ attempt_count: number }>(
       "SELECT attempt_count FROM model_ranking_snapshots WHERE id = ? AND status = 'processing' AND claim_token = ?",
       id,
       claimToken
     )
-    if (!row) return
-    const nextAttempt = row.attempt_count + 1
-    if (nextAttempt >= attemptCap) {
-      this.db.run(
-        `UPDATE model_ranking_snapshots
-         SET status = 'failed', attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
-         WHERE id = ? AND status = 'processing' AND claim_token = ?`,
-        nextAttempt,
-        nowMs,
-        id,
-        claimToken
-      )
-      return
-    }
-    const retryDelay = retryBaseMs * 2 ** Math.min(row.attempt_count, 4)
-    this.db.run(
-      `UPDATE model_ranking_snapshots
-       SET status = 'pending', due_at_ms = ?, attempt_count = ?, last_attempt_at_ms = ?, claim_token = NULL
+    return row === undefined ? null : row.attempt_count
+  }
+
+  /**
+   * One statement for both outcomes: when the next attempt reaches the cap the
+   * row parks as 'failed' and keeps its deadline (recovery re-queues it), and
+   * otherwise it returns to 'pending' at the caller's retry deadline.
+   */
+  private deferOrParkStatement(
+    id: string,
+    claimToken: string,
+    attemptCap: number,
+    retryDelayMs: number,
+    nowMs: number
+  ): { sql: string; params: unknown[] } {
+    return {
+      sql: `UPDATE model_ranking_snapshots
+       SET status = CASE WHEN attempt_count + 1 >= ? THEN 'failed' ELSE 'pending' END,
+           due_at_ms = CASE WHEN attempt_count + 1 >= ? THEN due_at_ms ELSE ? END,
+           attempt_count = attempt_count + 1,
+           last_attempt_at_ms = ?,
+           claim_token = NULL
        WHERE id = ? AND status = 'processing' AND claim_token = ?`,
-      nowMs + retryDelay,
-      nextAttempt,
-      nowMs,
-      id,
-      claimToken
+      params: [attemptCap, attemptCap, nowMs + retryDelayMs, nowMs, id, claimToken]
+    }
+  }
+
+  /**
+   * Hold back one harness's due queue   every pending row whose deadline has
+   * already arrived   until a cooldown deadline, spreading the released rows by
+   * up to `jitterMs` so a judge that recovers does not re-judge a whole backlog
+   * in one burst. Rows whose own deadline is already later than the cooldown are
+   * untouched, and the failing row itself is covered because its retry deadline
+   * is the earliest one in the queue. Unbounded sweep: routed through the
+   * database worker.
+   */
+  async deferQueuedHarnessCooldown(
+    harnessId: string,
+    dueAtMs: number,
+    jitterMs: number,
+    nowMs: number
+  ): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ? + ABS(RANDOM() % ?)
+       WHERE harness_id = ? AND status = 'pending' AND due_at_ms <= ?`,
+      [dueAtMs, Math.max(1, Math.floor(jitterMs)), harnessId, nowMs]
     )
+    if (!result.ok) {
+      Logger.dev('Ranking harness cooldown sweep failed:', result.error)
+    }
   }
 
   /**
@@ -275,7 +468,7 @@ export class ModelRankingSnapshotRepo {
   async requeueFailedForRecovery(cooldownMs: number, nowMs: number): Promise<void> {
     const result = await this.db.executeViaWorker(
       `UPDATE model_ranking_snapshots
-       SET status = 'pending', due_at_ms = ?, attempt_count = 0
+       SET status = 'pending', due_at_ms = ?, attempt_count = 0, claim_token = NULL
        WHERE status = 'failed' AND last_attempt_at_ms IS NOT NULL AND last_attempt_at_ms <= ?`,
       [nowMs, nowMs - cooldownMs]
     )
@@ -318,6 +511,108 @@ export class ModelRankingSnapshotRepo {
     )
     return row?.count ?? 0
   }
+
+  /**
+   * The three numbers a user deciding to grade now needs: how many
+   * conversations are waiting at all, how many the automatic drain would take
+   * on its next pass, and how many are parked after exhausting their retries.
+   *
+   * One statement, because the three answer the same question and reading them
+   * apart could report a queue that never existed.
+   */
+  queueCounts(nowMs: number): { awaiting: number; due: number; failed: number } {
+    const row = this.db.get<{ awaiting: number; due: number; failed: number }>(
+      `SELECT
+         COUNT(*) AS awaiting,
+         COALESCE(SUM(status = 'pending' AND due_at_ms <= ?), 0) AS due,
+         COALESCE(SUM(status = 'failed'), 0) AS failed
+       FROM model_ranking_snapshots`,
+      nowMs
+    )
+    return { awaiting: row?.awaiting ?? 0, due: row?.due ?? 0, failed: row?.failed ?? 0 }
+  }
+
+  /**
+   * Pull every conversation still inside its inactivity window forward, so a
+   * user-requested run grades what the queue would otherwise hold for hours.
+   *
+   * Only `pending` rows move: a row already claimed by a concurrent pass keeps
+   * its own claim and deadline, and the claim guard would refuse a re-date
+   * anyway. Routed through the database worker because the sweep is unbounded.
+   */
+  async pullPendingForwardViaWorker(nowMs: number): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET due_at_ms = ?
+       WHERE status = 'pending' AND due_at_ms > ?`,
+      [nowMs, nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking queue pull-forward failed:', result.error)
+    }
+    return result
+  }
+
+  /**
+   * Give every parked conversation one fresh attempt.
+   *
+   * A user who asks for a grade now is deliberately retrying work that already
+   * exhausted its retry budget, so the attempt count resets with it; otherwise
+   * the first failure would park the row again immediately. The claim token is
+   * cleared so a stale in-flight result cannot apply to the revived row.
+   */
+  async requeueFailedRowsViaWorker(nowMs: number): Promise<{ ok: boolean; error?: string }> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE model_ranking_snapshots
+       SET status = 'pending', due_at_ms = ?, attempt_count = 0, claim_token = NULL
+       WHERE status = 'failed'`,
+      [nowMs]
+    )
+    if (!result.ok) {
+      Logger.dev('Ranking failed-snapshot requeue failed:', result.error)
+    }
+    return result
+  }
+
+  /**
+   * Every queue row in any state, including ones parked as `failed` for
+   * recovery. A user-requested clean slate reports and removes all of them,
+   * because a surviving row would be graded later and repopulate the ranking
+   * aggregates the user just cleared.
+   */
+  async totalCount(): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      'SELECT COUNT(*) AS count FROM model_ranking_snapshots',
+      [],
+      1
+    )
+    const value = result.rows[0]?.['count']
+    return typeof value === 'number' ? value : 0
+  }
+
+  /**
+   * Drop every queue row in bounded worker batches.
+   *
+   * This is the one place a row is discarded without a score, and it is
+   * deliberate: an explicit user purge must not leave conversations that would
+   * later restore the cleared aggregates. Rows a drain has already claimed stop
+   * matching its claim token once deleted, so an in-flight grade result is
+   * dropped instead of resurrecting the slate.
+   */
+  clearAllViaWorker(): Promise<RowsPurged> {
+    // `1 = 1` is the whole-table filter; the purge helper takes a predicate so
+    // range-scoped purges and this one share a single batched implementation.
+    return purgeRowsViaWorker(this.db, 'model_ranking_snapshots', '1 = 1', [])
+  }
+}
+
+/**
+ * Retry delay for a judge failure at the given persisted attempt count:
+ * bounded exponential backoff, so a judge that keeps failing backs off to
+ * roughly an hour between attempts instead of hammering a fixed cadence.
+ */
+export function rankingRetryDelayMs(attemptCount: number, retryBaseMs: number): number {
+  return retryBaseMs * 2 ** Math.min(attemptCount, 4)
 }
 
 /** Deterministic snapshot id so a replayed capture stays a no-op. */

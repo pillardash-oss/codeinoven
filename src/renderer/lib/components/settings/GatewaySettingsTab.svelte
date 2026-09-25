@@ -15,6 +15,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
   import { gatewayState } from '$lib/stores/gateway.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
@@ -145,9 +146,7 @@
       await invoke('gateway:copyDashboardPassword', pluginId)
       toast.success('Dashboard password copied to the clipboard')
     } catch (copyError) {
-      toast.error(
-        copyError instanceof Error ? copyError.message : 'The dashboard password could not be copied.'
-      )
+      reportError(copyError, 'The dashboard password could not be copied.')
     }
   }
 

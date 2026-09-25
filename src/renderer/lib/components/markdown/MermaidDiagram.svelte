@@ -1,22 +1,12 @@
 <script lang="ts">
-  import {
-    Check,
-    Code2,
-    Copy,
-    Expand,
-    MessageSquarePlus,
-    RotateCcw,
-    X,
-    ZoomIn,
-    ZoomOut
-  } from '@lucide/svelte'
-  import { Dialog } from 'bits-ui'
+  import { Check, Code2, Copy, Expand, MessageSquarePlus } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import { PanZoom } from '$lib/pan-zoom.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     code: string
@@ -31,9 +21,6 @@
   let error = $state<string>()
   let errorDetail = $state<string>()
   let expanded = $state(false)
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('mermaid-expanded', expanded)
-  })
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')
@@ -173,44 +160,7 @@
     {/if}
 
     {#if fullscreen && svg}
-      <div
-        class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
-      >
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Zoom out"
-          title="Zoom out"
-          disabled={panZoom.zoom <= panZoom.min}
-          onclick={() => panZoom.zoomByButton(1 / 1.4, fullscreenViewport)}
-        >
-          <ZoomOut size={14} />
-        </button>
-        <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
-          {Math.round(panZoom.zoom * 100)}%
-        </span>
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Zoom in"
-          title="Zoom in"
-          disabled={panZoom.zoom >= panZoom.max}
-          onclick={() => panZoom.zoomByButton(1.4, fullscreenViewport)}
-        >
-          <ZoomIn size={14} />
-        </button>
-        <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
-        <button
-          type="button"
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-          aria-label="Reset zoom and pan"
-          title="Reset zoom and pan"
-          disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
-          onclick={() => panZoom.reset()}
-        >
-          <RotateCcw size={14} />
-        </button>
-      </div>
+      <PanZoomToolbar {panZoom} viewport={fullscreenViewport} class="absolute right-3 bottom-3" />
     {/if}
   </div>
 {/snippet}
@@ -278,7 +228,10 @@
         <div class="min-w-0">
           <p>{error}</p>
           {#if errorDetail}
-            <p class="mt-0.5 break-words font-mono text-[0.625rem] text-danger/70" title={errorDetail}>
+            <p
+              class="mt-0.5 break-words font-mono text-[0.625rem] text-danger/70"
+              title={errorDetail}
+            >
               {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
             </p>
           {/if}
@@ -307,31 +260,18 @@
   {/if}
 </div>
 
-<Dialog.Root bind:open={expanded}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="titlebar-no-drag fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-    <Dialog.Content
-      class="titlebar-no-drag fixed inset-6 z-50 flex min-h-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-2xl outline-none"
-    >
-      <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
-        <Dialog.Title class="text-xs font-semibold text-foreground">Mermaid diagram</Dialog.Title>
-        <Dialog.Description class="sr-only">
-          Expanded view of the generated Mermaid diagram
-        </Dialog.Description>
-        <Dialog.Close
-          class="rounded p-1 text-muted transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Close expanded Mermaid diagram"
-          title="Close expanded Mermaid diagram"
-        >
-          <X size={15} />
-        </Dialog.Close>
-      </div>
-      <div class="min-h-0 flex-1">
-        {@render diagramContent(true)}
-      </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<Modal
+  open={expanded}
+  title="Mermaid diagram"
+  onClose={() => (expanded = false)}
+  size="full"
+  fill
+  contentClass="flex flex-col overflow-hidden p-0"
+>
+  <div class="min-h-0 flex-1">
+    {@render diagramContent(true)}
+  </div>
+</Modal>
 
 <style>
   .mermaid-svg :global(svg) {

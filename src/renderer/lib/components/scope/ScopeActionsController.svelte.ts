@@ -1,9 +1,13 @@
-import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
+import { revealInOsFileManager } from '$lib/os-file-manager'
+import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  type GitSyncDirection,
   type ScopeBucket,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight
@@ -37,6 +41,12 @@ export class ScopeActionsController {
   deletePreflight = $state<ScopeLifecyclePreflight | null>(null)
   lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
   mergeTarget = $state<ScopeBucket | null>(null)
+  /**
+   * Scope whose worktree is the checkout a peer sync runs in. Opened from the
+   * menu as "Merge from project…", which is a sync from the project root into
+   * that worktree, but the chooser still lets the user pick any other end.
+   */
+  syncTarget = $state<{ bucket: ScopeBucket; direction: GitSyncDirection } | null>(null)
   createWorktreeTarget = $state<ScopeBucket | null>(null)
   adoptWorktreeTarget = $state<ScopeBucket | null>(null)
   /** Last failed action, surfaced by whichever surface renders the controller. */
@@ -76,7 +86,7 @@ export class ScopeActionsController {
       })
       this.editTarget = null
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be edited.')
+      this.fail(this.message(error, 'The scope could not be edited.'))
     }
   }
 
@@ -86,7 +96,7 @@ export class ScopeActionsController {
     try {
       await scopeState.setPinned(projectId, bucket.id, bucket.pinned !== true)
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be pinned.')
+      this.fail(this.message(error, 'The scope could not be pinned.'))
     }
   }
 
@@ -96,7 +106,7 @@ export class ScopeActionsController {
     try {
       await scopeState.setArchive(projectId, bucket.id, archived)
     } catch (error) {
-      this.error = this.message(error, 'The scope could not be archived.')
+      this.fail(this.message(error, 'The scope could not be archived.'))
     }
   }
 
@@ -118,54 +128,38 @@ export class ScopeActionsController {
       })
   }
 
-  async confirmDelete(): Promise<void> {
+  /**
+   * Hand the confirmed deletion to the app-level worktree dock, mirroring how a
+   * create or adopt runs: the threads, the checkout and the scope record are
+   * removed by a job the user can background while they keep working. Every
+   * value the run needs is read BEFORE the dialog state is cleared, because the
+   * dock panel outlives this dialog.
+   */
+  confirmDelete(): void {
     const target = this.deleteTarget
     if (!target || target.id === DEFAULT_SCOPE_BUCKET_ID) return
-    try {
-      const affectedThreads = scopeState.currentProjectThreads.filter(
-        (thread) => scopeState.bucketForThread(thread) === target.id
-      )
-      if (this.deleteThreads) {
-        await Promise.all(
-          affectedThreads.map((thread) => invoke('thread:delete', thread.projectId, thread.id))
-        )
-        for (const thread of affectedThreads) {
-          scopeState.removeThread(thread.id)
-          if (workspaceState.selectedThread?.id === thread.id) {
-            workspaceState.clearThread()
-          }
-        }
-      } else {
-        const reassigned = await Promise.all(
-          affectedThreads.map((thread) =>
-            invoke('thread:update', thread.projectId, thread.id, {
-              scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-            })
-          )
-        )
-        for (const thread of reassigned) {
-          scopeState.updateThread(thread)
-          workspaceState.updateThread(thread)
-        }
-      }
-      const projectId = this.getProjectId()
-      if (target.root.kind === 'worktree' && projectId) {
-        // Full cleanup for worktree-backed scopes   the worktree and its branch
-        // are removed through the guarded lifecycle. The token is minted here
-        // (fresh) rather than reusing the dialog's display preflight, so it can
-        // never be stale by the time the user confirms.
-        const preflight = await scopeState.preflightWorktree(projectId, target.id, 'delete-scope')
-        await scopeState.confirmDeleteScope(projectId, target.id, preflight.confirmationId, true)
-      } else {
-        await scopeState.removeBucket(target.id)
-      }
+    const projectId = this.getProjectId()
+    if (!projectId) return
+    // A second confirmation for a scope already being removed would only fail
+    // inside the dock, so the dialog closes on the run in progress instead.
+    if (scopeJobs.isRemoving(projectId, target.id)) {
       this.deleteTarget = null
       this.deleteThreads = false
       this.deletePreflight = null
-      this.redockIfScoped(target)
-    } catch (error) {
-      this.error = this.message(error, 'The scope could not be deleted.')
+      return
     }
+    const input = {
+      bucketId: target.id,
+      title: target.name,
+      isolated: target.root.kind === 'worktree',
+      deleteThreads: this.deleteThreads
+    }
+    this.deleteTarget = null
+    this.deleteThreads = false
+    this.deletePreflight = null
+    scopeJobs.remove(projectId, input, {
+      onRemoved: () => this.redockIfScoped(target)
+    })
   }
 
   /** Never leave the scoped-threads sidebar pointing at a scope that is gone. */
@@ -183,6 +177,39 @@ export class ScopeActionsController {
     this.mergeTarget = bucket
   }
 
+  /**
+   * Open this scope's managed checkout in the OS file manager. Health is the
+   * authority for where the checkout is (it reports `expectedPath`, and the
+   * actual path when Git disagrees), and the reveal itself runs through the
+   * same `shell:revealPath` contract every file surface uses, which re-validates
+   * the path in main.
+   */
+  async revealWorktree(bucket: ScopeBucket): Promise<void> {
+    const projectId = this.getProjectId()
+    if (!projectId || bucket.root.kind !== 'worktree') return
+    try {
+      const health = await scopeState.revalidateWorktreeHealth(projectId, bucket.id, {
+        force: true
+      })
+      const path = health?.actualPath ?? health?.expectedPath
+      if (!path) throw new Error('This scope has no worktree folder on disk to reveal')
+      const revealed = await revealInOsFileManager(path)
+      if (!revealed) {
+        throw new Error(`The file manager could not open ${path}`)
+      }
+    } catch (error) {
+      this.fail(this.message(error, 'The worktree folder could not be revealed.'))
+    }
+  }
+
+  /**
+   * "Merge from project": bring the project root's commits into this worktree's
+   * branch, through the same peer chooser the Git panel uses.
+   */
+  askSyncFrom(bucket: ScopeBucket): void {
+    this.syncTarget = { bucket, direction: 'from' }
+  }
+
   askCreateWorktree(bucket: ScopeBucket): void {
     this.createWorktreeTarget = bucket
   }
@@ -197,7 +224,7 @@ export class ScopeActionsController {
     try {
       await scopeState.retryWorktreeSetup(projectId, bucket.id, true)
     } catch (error) {
-      this.error = this.message(error, 'Setup could not be retried.')
+      this.fail(this.message(error, 'Setup could not be run.'))
     }
   }
 
@@ -210,10 +237,13 @@ export class ScopeActionsController {
         scopeBucketId: bucket.id
       })
       if (health.category !== 'healthy') {
-        this.error = health.detail ?? `The worktree is still ${health.category}.`
+        // Name what is still wrong and which action resolves it instead of
+        // leaving the user with a health category they cannot act on.
+        const guidance = scopeWorktreeHealthGuidance(health)
+        this.fail(`${guidance.cause}. ${guidance.fix}`)
       }
     } catch (error) {
-      this.error = this.message(error, 'The worktree could not be repaired.')
+      this.fail(this.message(error, 'The worktree could not be repaired.'))
     }
   }
 
@@ -239,7 +269,7 @@ export class ScopeActionsController {
         ? workspaceState.selectedThread
         : undefined)
     if (!anchor) {
-      this.error = 'The merge hit conflicts. Open the Git panel from a thread to resolve them.'
+      this.fail('The merge hit conflicts. Open the Git panel from a thread to resolve them.')
       return
     }
     scopeState.showSidebarForThread(anchor)
@@ -252,7 +282,15 @@ export class ScopeActionsController {
     this.error = null
   }
 
+  /**
+   * Record a failure for the surface that renders it (the scope board and the
+   * scoped sidebar both show `error` in a dismissible banner).
+   */
+  private fail(message: string): void {
+    this.error = message
+  }
+
   private message(error: unknown, fallback: string): string {
-    return error instanceof Error ? error.message : fallback
+    return ipcErrorMessage(error, fallback)
   }
 }

@@ -1,4 +1,5 @@
 import { Logger } from './logger'
+import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 
@@ -64,6 +65,8 @@ export class RetrySchedulerService {
   private changeListener: (() => void) | null = null
   /** Serialized atomic writes so rapid track/clear never interleave snapshots. */
   private persistChain: Promise<void> = Promise.resolve()
+  /** Returns true when a deliberate user stop is latched on the record's thread. */
+  private isStopped: ((projectId: string, threadId: string) => Promise<boolean>) | null = null
 
   constructor(private storage: StorageEngine) {}
 
@@ -72,6 +75,10 @@ export class RetrySchedulerService {
     const config = await this.storage.getConfig()
     this.enabled = config.autoRetryAfterReset === true
     await this.loadPending()
+    // Records whose thread was deliberately stopped by the user before the
+    // last shutdown must be dropped here, before the launch tick can fire
+    // them: restart is exactly when a stopped thread revives itself today.
+    await this.refreshStoppedVeto()
     this.refreshTimer()
     // Resets that elapsed while the app was closed fire immediately on launch.
     this.tick()
@@ -86,8 +93,55 @@ export class RetrySchedulerService {
   }
 
   /** The chat engine supplies the resume callback once registered. */
-  attachContinue(callback: (record: PendingRetryRecord) => Promise<void>): void {
+  attachContinue(callback: (record: PendingRetryRecord) => Promise<void>): Promise<void> {
     this.continueThread = callback
+    // A record can come due while the engine is still booting; the veto must
+    // exist before the first fire, so the latch query ships with the callback.
+    return this.refreshStoppedVeto()
+  }
+
+  /**
+   * A deliberate user stop vetoes the automatic resume, and the veto must
+   * survive app restarts because the persisted pending ledger does. The chat
+   * engine supplies the test so the scheduler never touches storage itself.
+   */
+  attachStoppedThreadTest(test: (projectId: string, threadId: string) => Promise<boolean>): void {
+    this.isStopped = test
+  }
+
+  /** Drop every pending record whose thread is currently user-stopped. */
+  private async refreshStoppedVeto(): Promise<void> {
+    const test = this.isStopped
+    if (!test) return
+    for (const record of [...this.pending.values()]) {
+      let stopped: boolean
+      try {
+        stopped = await test(record.projectId, record.threadId)
+      } catch {
+        continue
+      }
+      if (stopped && this.pending.get(record.sessionId) === record) {
+        this.pending.delete(record.sessionId)
+        Logger.info('Auto-retry dropped: the user stopped this thread', {
+          projectId: record.projectId,
+          threadId: record.threadId,
+          sessionId: record.sessionId
+        })
+      }
+    }
+    void this.persist()
+    this.refreshTimer()
+    this.notifyChange()
+  }
+
+  /** Drop every pending record of one thread (a deliberate user stop). */
+  dropThread(threadId: string): void {
+    for (const record of [...this.pending.values()]) {
+      if (record.threadId === threadId) this.pending.delete(record.sessionId)
+    }
+    void this.persist()
+    this.refreshTimer()
+    this.notifyChange()
   }
 
   /** Register a callback fired whenever the pending-retry set changes. */
@@ -104,7 +158,32 @@ export class RetrySchedulerService {
   }
 
   /** Record (or refresh) a pending reset retry for a session. */
-  track(record: PendingRetryRecord): boolean {
+  async track(record: PendingRetryRecord): Promise<boolean> {
+    // A deliberate user stop must never be overwritten by a fresh wait: the
+    // failure that arrived under a successor session is exactly what Stop was
+    // cancelling. The auto-retry toggle is honoured through `enabled` (kept
+    // current by `start`/`setEnabled`) and by `tick`, which never fires while
+    // it is off.
+    try {
+      if (this.isStopped && (await this.isStopped(record.projectId, record.threadId))) {
+        Logger.info('Auto-retry not tracked: the user stopped this thread', {
+          projectId: record.projectId,
+          threadId: record.threadId,
+          sessionId: record.sessionId
+        })
+        return false
+      }
+    } catch (error) {
+      // The veto probe itself failed. Tracking a stopped thread is the worse
+      // outcome (silent revival), so the record is not written and the thread
+      // falls back to the visible warning card for manual recovery.
+      Logger.error('Auto-retry veto probe failed; record not tracked', {
+        projectId: record.projectId,
+        threadId: record.threadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return false
+    }
     this.pending.set(record.sessionId, record)
     void this.persist()
     Logger.info('Retry wait retained after usage reset', {
@@ -118,7 +197,10 @@ export class RetrySchedulerService {
     // The reset may already have passed   fire without waiting.
     this.tick()
     this.notifyChange()
-    return this.enabled
+    // True means the wait is on the ledger. Whether it FIRES automatically is
+    // `tick`'s decision: with auto-retry off the persisted record only backs
+    // the visible "Waiting to retry" card, exactly as before this gate.
+    return true
   }
 
   /** Drop a session from the pending set once it resolves or retires. */
@@ -249,13 +331,56 @@ export class RetrySchedulerService {
 
   private tick(): void {
     if (!this.enabled) return
+    void this.tickAsync()
+  }
+
+  private async tickAsync(): Promise<void> {
+    if (!this.enabled) return
+    // The ledger of pending resets is shared by every instance using this config
+    // root, and each instance holds its own in-memory copy of it. Only the
+    // longest-running instance fires a continuation, so a second window can
+    // never resume a thread the first one already owns, and a fired record is
+    // removed from the shared ledger by exactly one process.
+    if (!instanceRegistry.isIncumbentInstance()) return
     const now = Date.now()
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {
       if (record.retryAt !== undefined && record.retryAt <= now) due.push(record)
     }
     if (due.length === 0) return
-    for (const record of due) {
+    // A deliberate user stop vetoes the fire. The check is async, so due
+    // records are first parked out of `pending` and either re-added (run
+    // still allowed) or discarded (stopped).
+    const vetoed: PendingRetryRecord[] = []
+    if (this.isStopped) {
+      for (const record of due) {
+        try {
+          if (await this.isStopped(record.projectId, record.threadId)) vetoed.push(record)
+        } catch {
+          // Probe failed: keep the record rather than silently dropping work.
+        }
+      }
+    }
+    const runnable = due.filter((record) => !vetoed.includes(record))
+    if (runnable.length === 0) {
+      if (vetoed.length > 0) {
+        for (const record of vetoed) {
+          if (this.pending.get(record.sessionId) === record) {
+            this.pending.delete(record.sessionId)
+            Logger.info('Auto-retry vetoed: the user stopped this thread', {
+              projectId: record.projectId,
+              threadId: record.threadId,
+              sessionId: record.sessionId
+            })
+          }
+        }
+        void this.persist()
+        if (this.pending.size === 0) this.refreshTimer()
+        this.notifyChange()
+      }
+      return
+    }
+    for (const record of runnable) {
       // Fire each record exactly once; a re-reported error re-tracks it.
       if (this.pending.get(record.sessionId) === record) {
         this.pending.delete(record.sessionId)

@@ -5,6 +5,7 @@
     ArrowLeftToLine,
     ArrowRightToLine,
     Check,
+    FileCode2,
     FileWarning,
     GitMerge,
     Loader2,
@@ -22,6 +23,7 @@
   } from '$lib/editor/codemirror-file-editor'
   import { gitState } from '$lib/stores/git.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { conflictSaveActionLabels, conflictSaveActionTitle } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
@@ -39,6 +41,9 @@
     onToggleWrap?: () => void
     onControllerChange?: (controller: ConflictResolutionController | null) => void
     onStatusChange?: (status: ConflictResolutionStatus) => void
+    /** Leave this file to the file editor, revealed in the file tree. Only the
+     *  size notice offers it, because that file cannot be assembled here. */
+    onOpenOriginal: () => void
   }
 
   let {
@@ -47,7 +52,8 @@
     wrap = false,
     onToggleWrap = () => {},
     onControllerChange = () => {},
-    onStatusChange = () => {}
+    onStatusChange = () => {},
+    onOpenOriginal
   }: Props = $props()
 
   let workFile = $state<GitConflictWorkFile | null>(null)
@@ -76,6 +82,9 @@
   const activeState = $derived(hunkStates[activeHunk] ?? null)
   const resolvedCount = $derived(hunkStates.filter(isResolved).length)
   const allResolved = $derived(hunkStates.length > 0 && resolvedCount === hunkStates.length)
+  /** Resolved progress the scratch file has not taken yet. The editor's own
+   *  save button writes exactly this as a draft; marking the file resolved is
+   *  the panel's save control, and it does not need this draft. */
   const canSaveDraft = $derived(resolvedCount > 0 && dirty)
 
   function isResolved(state: GitConflictWorkHunkState): boolean {
@@ -110,7 +119,12 @@
   }
 
   function notifyStatus(): void {
-    onStatusChange({ canSave: allResolved, dirty, saving: saving || draftSaving })
+    onStatusChange({
+      canSave: allResolved,
+      canSaveDraft,
+      dirty,
+      saving: saving || draftSaving
+    })
   }
 
   function handleConflictRangesChange(ranges: FileEditorConflictRange[]): void {
@@ -255,17 +269,18 @@
     notifyStatus()
   }
 
-  async function saveDraft(): Promise<void> {
-    if (!canSaveDraft || draftSaving || saving) return
+  async function saveDraft(): Promise<boolean> {
+    if (!canSaveDraft || draftSaving || saving) return false
     const controller = centerController
-    if (!controller) return
+    if (!controller) return false
     handleConflictRangesChange(controller.getConflictRanges())
     draftSaving = true
     notifyStatus()
     try {
       const saved = await gitState.saveConflictDraft(projectId, path, scratchContent, hunkStates)
-      if (!saved) return
+      if (!saved) return false
       dirty = false
+      return true
     } finally {
       draftSaving = false
       notifyStatus()
@@ -288,7 +303,7 @@
     }
   }
 
-  const controller: ConflictResolutionController = { save }
+  const controller: ConflictResolutionController = { save, saveDraft }
 
   onMount(() => {
     onControllerChange(controller)
@@ -461,7 +476,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">
       <Loader2 size={14} class="animate-spin" /> Preparing conflict scratch document
@@ -482,6 +497,21 @@
       <p class="text-xs font-medium text-foreground">
         {analysis.binary ? 'Binary conflict' : 'File too large for the merge editor'}
       </p>
+      {#if !analysis.binary}
+        <p class="max-w-[48ch] text-[0.625rem] leading-relaxed text-dimmed">
+          This file is too large for the merge editor to assemble. Open it in the file editor and
+          clear the conflict markers by hand.
+        </p>
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+          title="Reveal the original conflicted file in the file tree and open it in the file editor"
+          onclick={onOpenOriginal}
+        >
+          <FileCode2 size={12} />
+          Open original file
+        </button>
+      {/if}
     </div>
   {:else}
     <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
@@ -517,13 +547,13 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[0.5625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="flex h-6 items-center gap-1 rounded border border-border bg-elevated px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:opacity-30"
         disabled={!canSaveDraft || draftSaving || saving}
-        title="Save resolved conflict progress to the scratch file"
+        title={conflictSaveActionTitle('draft')}
         onclick={() => void saveDraft()}
       >
         {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
-        Save draft
+        {conflictSaveActionLabels.draft}
       </button>
       <button
         type="button"
@@ -611,7 +641,8 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-accent/30 bg-accent/10 px-2"
           >
-            <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
+            <span
+              class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
               >incoming</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
@@ -661,7 +692,8 @@
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-primary/30 bg-primary/10 px-2"
           >
-            <span class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
+            <span
+              class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
               >current</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"

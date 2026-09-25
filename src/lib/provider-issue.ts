@@ -1,4 +1,4 @@
-import type { AgentProviderIssue, AgentProviderIssueKind, AgentRateLimitWindow } from './types'
+import type { AgentProviderIssue, AgentProviderIssueKind } from './types'
 
 /**
  * True when a provider issue represents a usage/rate-limit reset wait rather
@@ -13,6 +13,20 @@ export function isUsageResetWaitIssue(
   if (!issue) return false
   if (issue.kind === 'quota' || issue.kind === 'rate_limit') return true
   return issue.kind === 'provider_unavailable' && issue.retryable === true
+}
+
+/**
+ * Upper bound for an unattended scheduled auto-retry wait. A reset inside this
+ * window is imminent: the power-wake policy keeps the device awake so the retry
+ * can fire on time, and the header keeps counting the thread as working. A
+ * retry parked beyond it is a long wait   treated as not-working so the activity
+ * badge drops the thread and the user sees the state change.
+ */
+export const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
+
+/** True when a scheduled retry deadline falls beyond the keep-awake window. */
+export function isLongScheduledRetryWait(retryAt: number, now = Date.now()): boolean {
+  return retryAt - now > SCHEDULED_RETRY_WAKE_WINDOW_MS
 }
 
 /**
@@ -42,12 +56,64 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
       const message = typeof body['message'] === 'string' ? body['message'] : raw
       const type = typeof body['type'] === 'string' ? body['type'] : undefined
       const code = typeof body['code'] === 'string' ? body['code'] : undefined
-      return { message, ...(type === undefined ? {} : { type }), ...(code === undefined ? {} : { code }) }
+      return {
+        message,
+        ...(type === undefined ? {} : { type }),
+        ...(code === undefined ? {} : { code })
+      }
     }
   } catch {
     // Not a JSON envelope (or malformed)   treat the whole string as the message.
   }
   return { message: raw }
+}
+
+/**
+ * A crash-trace frame line, e.g.
+ * `    at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)` or the
+ * `at SessionPrompt.run (definition)` shape a compiled runtime emits. A
+ * harness that crashes inside its own runtime hands its exception text back
+ * as an ordinary message string, so the first frame line is where the
+ * diagnostic detail begins.
+ */
+const STACK_FRAME_LINE = /^\s*at(?:\s|$)/u
+
+export interface ProviderErrorPresentation {
+  /** Short, user-facing message the provider card body may render: the JSON
+   *  body's `message` with any stack trace reduced to its header line. */
+  message: string
+  /** Full diagnostic text (raw transport string, trace included). Present only
+   *  when it says more than `message`; the Raw Error view shows this. */
+  rawError?: string
+}
+
+/**
+ * Split a provider/harness failure string into the short message the provider
+ * error card body may render and the full diagnostic text reserved for the Raw
+ * Error view. A failure reaches the UI as a plain message string, with no
+ * envelope to unwrap, in two shapes that both used to leak a whole stack trace
+ * into the beautified card body:
+ *
+ * ```
+ * TypeError: undefined is not an object (evaluating 'a.name')
+ *     at resolve (/$bunfs/root/chunk-36bwgd4p.js:2:1659)
+ *     at map (native:1:11)
+ * ```
+ *
+ * Cutting at the first frame line keeps the header (`TypeError: ...`) as the
+ * card body and leaves the trace in Raw Error, which is the app-wide contract
+ * for every `AgentProviderIssue`: `message` is display copy, `rawError` is
+ * diagnostic detail.
+ */
+export function presentProviderError(raw: string): ProviderErrorPresentation {
+  const detail = raw.trim()
+  if (!detail) return { message: '' }
+  const body = extractProviderErrorEnvelope(detail).message.trim()
+  const lines = body.split('\n')
+  const frameIndex = lines.findIndex((line) => STACK_FRAME_LINE.test(line))
+  const header = (frameIndex === -1 ? lines : lines.slice(0, frameIndex)).join('\n').trim()
+  const message = header || (lines[0] ?? body).trim() || detail
+  return message === detail ? { message } : { message, rawError: detail }
 }
 
 /**
@@ -141,54 +207,6 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
 }
 
 /**
- * Convert a structured usage-limit issue into the exhausted quota window the
- * usage meter expects. Provider headers and account APIs remain preferable,
- * but a provider's explicit limit notice is authoritative telemetry too and
- * must not produce a limit card with an empty usage panel beside it.
- */
-export function rateLimitWindowFromProviderIssue(
-  issue: Pick<AgentProviderIssue, 'kind' | 'message' | 'retryAt' | 'retryable'>,
-  now = Date.now()
-): AgentRateLimitWindow | null {
-  if (!isUsageResetWaitIssue(issue)) return null
-  const normalized = extractProviderErrorEnvelope(issue.message).message.toLowerCase()
-  const hourWindow = /(\d+)\s*[- ]?h(?:(?:ou)?rs?)?/iu.exec(normalized)
-  const hours = hourWindow ? Number(hourWindow[1]) : undefined
-  const label = normalized.includes('weekly')
-    ? 'Weekly limit'
-    : normalized.includes('monthly')
-      ? 'Monthly limit'
-      : normalized.includes('daily')
-        ? 'Daily limit'
-        : hours !== undefined && Number.isFinite(hours)
-          ? `${hours}-hour limit`
-          : normalized.includes('session')
-            ? 'Session limit'
-            : issue.kind === 'rate_limit'
-              ? 'Rate limit'
-              : 'Usage limit'
-  const windowMinutes = normalized.includes('weekly')
-    ? 10_080
-    : normalized.includes('monthly')
-      ? 43_200
-      : normalized.includes('daily')
-        ? 1_440
-        : hours !== undefined && Number.isFinite(hours)
-          ? hours * 60
-          : undefined
-  const resetsAt = issue.retryAt ?? parseUsageResetAt(issue.message, now)
-  return {
-    id: `provider-issue:${label.toLowerCase().replaceAll(/[^a-z0-9]+/gu, '-')}`,
-    label,
-    status: 'exhausted',
-    usedPercent: 100,
-    remaining: 0,
-    ...(resetsAt === undefined ? {} : { resetsAt }),
-    ...(windowMinutes === undefined ? {} : { windowMinutes })
-  }
-}
-
-/**
  * Classify a provider/harness failure message and optional HTTP status code into
  * a provider-neutral kind so every driver and the chat engine agree on how the
  * failure is presented (title, retry affordance, raw-error visibility).
@@ -273,4 +291,29 @@ export function classifyProviderIssue(
     return 'network'
   }
   return 'unknown'
+}
+
+/**
+ * The heading a provider issue is shown under.
+ *
+ * Shared so the thread's provider card and every other surface that renders a
+ * failure from the same `AgentProviderIssue` name it the same way. `waiting`
+ * distinguishes a retry the app scheduled from a failure that has stopped.
+ */
+export function providerIssueTitle(kind: AgentProviderIssueKind, waiting = false): string {
+  switch (kind) {
+    case 'rate_limit':
+    case 'quota':
+      return 'Usage limit reached'
+    case 'authentication':
+      return 'Provider sign-in required'
+    case 'billing':
+      return 'Provider billing issue'
+    case 'provider_unavailable':
+      return 'Provider temporarily unavailable'
+    case 'network':
+      return 'Provider connection interrupted'
+    default:
+      return waiting ? 'Provider retry scheduled' : 'Agent output error'
+  }
 }

@@ -1,0 +1,114 @@
+name: Download mirror
+
+# Copy a published release to our own download origin (dl.codeinoven.com) so
+# users stop downloading installers from GitHub Releases, which is slow.
+#
+# Nothing is rebuilt here: the job downloads the assets GitHub already
+# published, verifies every installer against the release's own SHA256SUMS.txt,
+# aborts any unfinished multipart upload an earlier run left in that channel,
+# uploads them with their update feeds and a RELEASE.json manifest, HEAD-checks
+# what the origin actually serves, and deletes the previous release of that
+# channel, so the bucket holds only the release it serves (GitHub Releases is
+# the archive). See scripts/publish-release-mirror.ts and
+# docs/DOWNLOAD-MIRROR.md.
+#
+# Requires (repo settings):
+#   variables DOWNLOAD_MIRROR_S3_ENDPOINT, DOWNLOAD_MIRROR_S3_BUCKET
+#             (optional DOWNLOAD_MIRROR_S3_REGION, default `auto`)
+#   secrets   DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID, DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY
+# Until the two variables exist, automatic runs are skipped instead of turning
+# every release red; a manual run always executes and reports exactly what is
+# missing.
+#
+# The `release: published` trigger only fires for a release published by hand or
+# by a token other than the default one: GitHub does not start a workflow from an
+# event that a GITHUB_TOKEN caused, so the release workflows (nightly.yml,
+# release.yml) dispatch this workflow explicitly instead. `workflow_dispatch` is
+# the documented exception to that rule, which is why the dispatch works.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to mirror (e.g. v0.5.57)
+        required: true
+      channel:
+        description: Mirror channel
+        type: choice
+        options:
+          - auto
+          - stable
+          - nightly
+        default: auto
+      keep:
+        description: '1 sweeps the channel down to the release being published; 0 deletes nothing'
+        default: '1'
+      allow_downgrade:
+        description: Mirror an older release even though that deletes the newer one
+        type: boolean
+        default: false
+      dry_run:
+        description: Plan only, upload nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One mirror job at a time: runs share a bucket, and each one sweeps the channel
+# it published to, so overlapping runs must not delete each other's objects.
+concurrency:
+  group: download-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror release to dl.codeinoven.com
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: ${{ github.event_name == 'workflow_dispatch' || (vars.DOWNLOAD_MIRROR_S3_ENDPOINT != '' && vars.DOWNLOAD_MIRROR_S3_BUCKET != '') }}
+    env:
+      DOWNLOAD_MIRROR_S3_ENDPOINT: ${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}
+      DOWNLOAD_MIRROR_S3_BUCKET: ${{ vars.DOWNLOAD_MIRROR_S3_BUCKET }}
+      DOWNLOAD_MIRROR_S3_REGION: ${{ vars.DOWNLOAD_MIRROR_S3_REGION || 'auto' }}
+      DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID: ${{ secrets.DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID }}
+      DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY: ${{ secrets.DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      CHANNEL: ${{ (github.event_name == 'release' && (github.event.release.prerelease && 'nightly' || 'stable')) || inputs.channel }}
+      KEEP: ${{ inputs.keep || '1' }}
+      ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade || false }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      # No dependency install: the script uses Bun's built-in S3 client and the
+      # repo's own TypeScript modules.
+      - name: Mirror the release
+        run: |
+          args=(--tag "$TAG" --channel "$CHANNEL" --keep "$KEEP")
+          if [ "$ALLOW_DOWNGRADE" = "true" ]; then
+            args+=(--allow-downgrade)
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          bun scripts/publish-release-mirror.ts "${args[@]}"
+
+      - name: Confirm the public manifest is served
+        run: |
+          url="https://dl.codeinoven.com/${CHANNEL}/RELEASE.json"
+          if ! body="$(curl -fsS --max-time 30 "$url")"; then
+            echo "::warning::Download mirror: $url is not served yet. Check the R2 custom domain and the cache rules (docs/DOWNLOAD-MIRROR.md)."
+            exit 0
+          fi
+          echo "::notice::Download mirror: $url serves version $(printf '%s' "$body" | jq -r .version)"

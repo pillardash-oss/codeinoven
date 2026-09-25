@@ -1,6 +1,5 @@
 import type { RendererLogEntry, RendererLogLevel } from '$shared/ipc-contract'
 import type { AppBridge } from '../../../preload/index'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 
 declare global {
   interface Window {
@@ -19,7 +18,8 @@ const MAX_STACK_CHARS = 16000
  * installs window-level handlers for uncaught exceptions, unhandled promise
  * rejections, and `console.error` output, and forwards them through the
  * `renderer:log` IPC bridge to the main-process durable Logger where they land
- * in `error.log` / `main.jsonl` next to main-process records.
+ * in the current day folder's `error.log` / `main.jsonl` next to main-process
+ * records.
  *
  * The bridge is fire-and-forget: forwarding never throws and never blocks the
  * renderer, so a logging failure can never hide or worsen the original error.
@@ -35,10 +35,7 @@ function send(
   stack: string | undefined,
   source: RendererLogEntry['source']
 ): void {
-  // The phone PWA talks to the desktop through a capability-scoped RPC bridge;
-  // `renderer:log` is an Electron IPC channel, not a remote capability, so it is
-  // intentionally skipped there.
-  if (typeof window === 'undefined' || isRemotePwaRuntime() || !window.api) return
+  if (typeof window === 'undefined' || !window.api) return
   const entry: RendererLogEntry = {
     level,
     message: clip(message, MAX_MESSAGE_CHARS),

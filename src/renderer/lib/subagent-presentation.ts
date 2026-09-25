@@ -60,6 +60,8 @@ export function subagentStatusLabel(status: AgentToolStatus): string {
       return 'Completed'
     case 'error':
       return 'Failed'
+    case 'aborted':
+      return 'Stopped'
     default:
       return 'Starting'
   }
@@ -70,7 +72,17 @@ export const SUBAGENT_STATUS_TONE: Record<AgentToolStatus, string> = {
   running: 'text-info',
   completed: 'text-success',
   error: 'text-danger',
+  aborted: 'text-dimmed',
   pending: 'text-dimmed'
+}
+
+/**
+ * Whether a status means the worker's life is over, whatever its outcome.
+ * Used to decide when a surface may freeze a duration or replace a live
+ * spinner with a terminal state.
+ */
+export function subagentStatusIsTerminal(status: AgentToolStatus): boolean {
+  return status === 'completed' || status === 'error' || status === 'aborted'
 }
 
 /**

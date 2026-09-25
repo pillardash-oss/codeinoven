@@ -3,7 +3,9 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -13,7 +15,14 @@
   interface Props {
     open: boolean
     title: string
-    /** Whether the panel is collapsed into the bottom-right dock. */
+    /**
+     * Whether the panel is collapsed into its dock row. A docked panel is not an
+     * overlay: it renders nothing but its floating chip, so it claims neither
+     * Escape nor the close-surface shortcut, and the user restores it from the
+     * chip. That keeps Escape free for whatever is actually on view   the
+     * composer's double-Escape stop, stopping a recording, closing the surface
+     * underneath the chip.
+     */
     minimized: boolean
     /**
      * Whether the close (X) affordance is available. When false the header shows
@@ -23,14 +32,29 @@
     closable: boolean
     onMinimize: () => void
     onClose: () => void
-    /** Restore the panel from the dock. */
-    onExpand: () => void
-    /** Content rendered inside the bottom-right dock while minimized. */
+    /**
+     * Content rendered in the dock while minimized. Each dock wraps its chips in
+     * `DockRow`, which owns the row's edge placement and its drag head, so a
+     * docked panel can be dragged to any screen edge; a dock whose host renders
+     * the shared chip row (e.g. the PR or worktree dock) renders nothing here.
+     */
     dock: Snippet
     children: Snippet
     footer?: Snippet
-    /** LocalStorage key used to persist the panel's position/size. */
+    /**
+     * LocalStorage key used to persist the panel's position/size.
+     */
     storageKey?: string
+    /**
+     * Stacking layer. `surface` sits with the app's other floating panels at
+     * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
+     * browser, file editor and the pull request reader all render through
+     * `ui/Modal.svelte` at `z-60`), which the pull request sheet needs because
+     * it can be opened from the full screen reader. Portaled menus and confirms
+     * inside a `top` panel belong at `z-90` so they still clear the panel
+     * itself.
+     */
+    layer?: 'surface' | 'top'
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -40,6 +64,14 @@
      * icon and name), so the panel states which project it belongs to.
      */
     headerPrefix?: Snippet
+    /**
+     * Lets the panel's owner claim ⌘/Ctrl+Enter before the generic DOM lookup:
+     * return true when the chord was handled. Use it when the panel's primary
+     * action needs context the DOM cannot express (e.g. "start the work and dock
+     * the panel"), so the shortcut never depends on a footer button happening
+     * to be enabled.
+     */
+    onPrimaryAction?: () => boolean
   }
 
   let {
@@ -49,14 +81,15 @@
     closable,
     onMinimize,
     onClose,
-    onExpand,
     dock,
     children,
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    layer = 'surface',
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
-    headerPrefix
+    headerPrefix,
+    onPrimaryAction
   }: Props = $props()
 
   const PANEL_MARGIN = 12
@@ -205,14 +238,15 @@
     persistSnapshot()
   }
 
-  // Let the Cmd/Ctrl+W "close the active surface" shortcut mirror the Escape
-  // behavior: expand a minimized panel, close a closable one, otherwise minimize.
+  // The Cmd/Ctrl+W "close the active surface" shortcut closes a closable panel
+  // and minimizes a pinned one. A docked panel registers nothing: its chip is
+  // not an overlay on view, so the shortcut belongs to the surface actually in
+  // front of the user, and `isOverlayOpen()` must not keep reporting an overlay
+  // for an off-screen chip.
   $effect(() => {
-    if (!open) return
+    if (!open || minimized) return
     return registerOverlayClose(() => {
-      if (minimized) {
-        onExpand()
-      } else if (closable) {
+      if (closable) {
         onClose()
       } else {
         onMinimize()
@@ -222,13 +256,34 @@
 
   let panelEl = $state<HTMLElement | null>(null)
 
+  const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
+
+  // The in-app browser renders a native WebContentsView that the compositor
+  // paints above every DOM surface, so a panel floating over the browser frame
+  // would be hidden behind the page and unclickable. Publish this panel's
+  // on-screen rectangle and let the browser panel detach its native view while
+  // it is covered   a panel dragged off the browser leaves the browser usable.
+  // The minimized dock row publishes its own rectangle through `DockRow`.
+  $effect(() => {
+    if (!open || minimized) return
+    const key = occlusionKey
+    // The floating panel is positioned and sized from state, so reading those
+    // values here re-publishes on drag, resize, and viewport clamping without a
+    // DOM measurement.
+    browserVisibility.publishOcclusion(key, { x: position.x, y: position.y, width, height })
+    return () => browserVisibility.clearOcclusion(key)
+  })
+
   // ⌘/Ctrl+Enter runs this panel's primary action through the shared LIFO
   // pipeline while the panel is open and expanded (a minimized panel is not in
-  // focus, so its resolver yields).
+  // focus, so its resolver yields). The owner hook runs first so a panel can
+  // claim the chord deterministically; otherwise the shared selector chain
+  // finds the panel's own primary action.
   $effect(() => {
     if (!open || minimized) return
     return registerModalPrimaryAction(() => {
       if (!panelEl || focusOwnsEnter(panelEl)) return false
+      if (onPrimaryAction?.()) return true
       const action = findPanelPrimaryAction(panelEl)
       if (!action) return false
       action.click()
@@ -239,10 +294,11 @@
 
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
-    if (!open || e.key !== 'Escape') return
-    if (minimized) {
-      onExpand()
-    } else if (closable) {
+    // A docked panel deliberately ignores Escape: the chip is not on view, the
+    // user restores the panel from it, and the key stays free for everything
+    // else that owns Escape behind the chip.
+    if (!open || minimized || !keymapState.matches('ui-close-modal', e)) return
+    if (closable) {
       onClose()
     } else {
       onMinimize()
@@ -254,12 +310,22 @@
   <!--
     The panel stays mounted in the SAME tree position whether minimized or not so
     its embedded terminal PTYs are never torn down   minimize only hides it while
-    the bottom-right dock keeps the run badges live. The dock renders as a sibling.
+    the dock row keeps the run badges live. The dock renders as a sibling, outside
+    this panel, so the panel's `invisible` state cannot hide it.
+  -->
+  <!--
+    `pointer-events-auto` is load-bearing, not decoration: a modal bits-ui Dialog
+    (the full screen reader, terminal, browser, file editor) sets
+    `body { pointer-events: none }` while it is open, and pointer events inherit,
+    so a panel that does not opt back in is visible above that surface at z-80 but
+    completely dead to the mouse. That is the whole reason `layer="top"` exists.
   -->
   <div
-    class="fixed z-50 flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
+    class="fixed {layer === 'top'
+      ? 'z-80'
+      : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {minimized
       ? 'invisible pointer-events-none'
-      : ''}"
+      : 'pointer-events-auto'}"
     style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;"
     bind:this={panelEl}
     role="dialog"
@@ -308,8 +374,14 @@
     <div class="min-h-0 flex-1 overflow-y-auto p-4">{@render children()}</div>
 
     {#if footer}
+      <!--
+        `flex-wrap` because the footer carries three actions in the pull request
+        sheet (compose, dismiss, create). It was sized for two, and at the panel's
+        360px minimum width the third would have overflowed the edge instead of
+        wrapping to a second row. Panels that already fit are unaffected.
+      -->
       <div
-        class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+        class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
         data-modal-footer
       >
         {@render footer()}
@@ -318,6 +390,11 @@
   </div>
 
   {#if minimized}
-    <div class="fixed right-4 bottom-4 z-50">{@render dock()}</div>
+    <div
+      class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
+      {@attach trackBrowserOcclusion}
+    >
+      {@render dock()}
+    </div>
   {/if}
 {/if}

@@ -5,7 +5,7 @@ import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
-import { INBOX_PROJECT_ID } from '$shared/types'
+import { INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '$shared/types'
 import type { ProjectFileEntry } from '$shared/types'
 import { fileUrlToPath } from '$lib/mime'
 
@@ -45,10 +45,11 @@ async function ensureProjectFilesReady(projectId: string, mountThreadId?: string
   projectFilesWorkspace.ensureState(projectId)
   if (activeThreadId !== threadId) contextSidebarState.activateThread(projectId, threadId)
   contextSidebarState.openFiles(projectId, threadId)
-  // Inbox chats browse their own per-thread artifact directory; the mount must
+  // Conversations browse their own app-owned workspace directory (a chat's
+  // artifact directory, an assistant task's working directory); the mount must
   // be registered before the root listing resolves through the thread root.
-  if (projectId === INBOX_PROJECT_ID) {
-    projectFilesWorkspace.setChatThread(projectId, mountThreadId ?? (threadId || null))
+  if (usesThreadWorkspaceMount(projectId)) {
+    projectFilesWorkspace.setThreadMount(projectId, mountThreadId ?? (threadId || null))
   }
   await projectFilesWorkspace.loadDirectory(projectId, '')
 }
@@ -95,6 +96,31 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
     : relativeProjectPath(projectPath ?? '', path)
   const entry = await exactEntry(projectId, relativePath)
   if (entry) await revealEntry(projectId, entry)
+}
+
+/**
+ * Open a file in a project's own editor from a path main already resolved to that
+ * project (`project:findFileOwner`). Unlike {@link revealFileInAppTree} the
+ * relative path is given rather than derived from the *active* project, so an OS
+ * hand-off opens correctly whichever project happens to be on screen. Returns
+ * whether the file was opened, so the caller can fall back to the standalone
+ * viewer when the path no longer resolves inside the project.
+ *
+ * `focusLine` places the caret on one line, which is what a pull request thread
+ * needs: its path and line are the only way back to the code being discussed.
+ */
+export async function openProjectFileFromAbsolutePath(
+  projectId: string,
+  relativePath: string,
+  focusLine?: number
+): Promise<boolean> {
+  // Resolve on disk before preparing anything: a path that no longer exists must
+  // not switch the project's file surface on.
+  const entry = await exactEntry(projectId, relativePath)
+  if (!entry) return false
+  await ensureProjectFilesReady(projectId)
+  await revealEntry(projectId, entry, focusLine)
+  return true
 }
 
 /** Route an explicit local file URL to the in-app tree or the OS file manager. */

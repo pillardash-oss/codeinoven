@@ -9,7 +9,12 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
-  import { DEFAULT_THREAD_TITLE, type Thread } from '$shared/types'
+  import {
+    DEFAULT_THREAD_TITLE,
+    activeThreadRowId,
+    threadTracksReadStatus,
+    type Thread
+  } from '$shared/types'
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeActionsModals from './ScopeActionsModals.svelte'
   import { ScopeActionsController } from './ScopeActionsController.svelte'
@@ -45,13 +50,14 @@
   })
 
   // Keep the typed health of every managed worktree on the active board fresh so
-  // unhealthy scopes surface repair actions immediately (deduped in the store).
+  // unhealthy scopes surface repair actions immediately (deduped in the store),
+  // and re-read it on entry so switching to a project or scope always reports the
+  // live checkout state (throttled per scope, so it never polls).
   $effect(() => {
     const projectId = scopeState.activeProjectId
-    scopeState.syncBoardWorktreeHealth(
-      projectId,
-      projectId ? scopeState.boards.get(projectId)?.buckets : undefined
-    )
+    const buckets = projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    scopeState.syncBoardWorktreeHealth(projectId, buckets)
+    scopeState.revalidateBoardWorktreeHealth(projectId, buckets)
   })
 
   $effect(() => {
@@ -104,12 +110,14 @@
     scopeState.showSidebarForThread(thread)
     navigateToScopedThreads?.()
     workspaceState.openThread(thread, project)
-    try {
-      const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-      scopeState.updateThread(updated)
-      workspaceState.updateThread(updated)
-    } catch (error) {
-      actionError = errorMessage(error, 'The thread could not be opened.')
+    if (threadTracksReadStatus(thread)) {
+      try {
+        const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+        scopeState.updateThread(updated)
+        workspaceState.updateThread(updated)
+      } catch (error) {
+        actionError = errorMessage(error, 'The thread could not be opened.')
+      }
     }
   }
 
@@ -316,7 +324,7 @@
               {bucket}
               actions={scopeActions}
               fill={scopeState.buckets.length === 1}
-              selectedThreadId={workspaceState.selectedThread?.id ?? null}
+              activeThreadId={activeThreadRowId(workspaceState.selectedThread)}
               onToggle={() => toggleBucket(bucket.id)}
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onMoveBucket={moveBucket}

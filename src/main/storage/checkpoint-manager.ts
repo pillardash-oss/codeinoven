@@ -1,8 +1,7 @@
-import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
-import { dirname, join, resolve, sep } from 'path'
+import { readFile } from 'fs/promises'
+import { join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
-import { generateId, getConfigRoot } from '../../lib/utils'
-import { Logger } from '../system/logger'
+import { generateId } from '../../lib/utils'
 import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
@@ -14,12 +13,33 @@ import { CrossProcessMutex } from '../system/cross-process-mutex'
 import {
   ChangeTrackingService,
   isBinary,
-  type CheckpointBlobStore,
   type CheckpointChange,
   type CheckpointFile,
   type ProjectCheckpoint,
   type ProjectFingerprint
 } from '../git/change-tracking-service'
+import {
+  calculateLineStats,
+  captureWarning,
+  decodeDiffWindow,
+  DIFF_WINDOW_CONTEXT_BYTES,
+  MAX_DIFF_WINDOW_BYTES,
+  type CheckpointLineStats
+} from './checkpoint/checkpoint-diff'
+import { StorageCheckpointBlobStore, isMissing } from './checkpoint/checkpoint-blob-store'
+import {
+  assertId,
+  boundCheckpointFailure,
+  MAX_CHECKPOINT_FAILURE_LENGTH
+} from './checkpoint/checkpoint-errors'
+import {
+  pruneUnusedBlobs,
+  repairMisattributedInternalCheckpoints,
+  repairTruncatedLineStats,
+  type CheckpointMaintenanceHost
+} from './checkpoint/checkpoint-maintenance'
+
+export { MAX_CHECKPOINT_FAILURE_LENGTH }
 
 export interface TurnCheckpoint {
   id: string
@@ -39,12 +59,6 @@ export interface TurnCheckpoint {
   rolledBackAt?: number
   rolledBackPaths?: string[]
   failure?: string
-}
-
-interface CheckpointLineStats {
-  additions?: number
-  deletions?: number
-  truncated?: boolean
 }
 
 /**
@@ -78,73 +92,6 @@ const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
  *  straggler claim; a genuinely still-running model emits its late edits
  *  within seconds of the premature settle. */
 export const LATE_CLAIM_REOPEN_WINDOW_MS = 15 * 60_000
-
-/** Upper bounds for one line-stats repair pass so startup is never blocked. */
-const REPAIR_MAX_CHECKPOINTS = 200
-const REPAIR_MAX_FILES = 500
-
-const MAX_LINE_DIFF_BYTES = 1024 * 1024
-const MAX_LINE_DIFF_LINES = 20_000
-const MAX_LINE_DIFF_DISTANCE = 4_000
-const MAX_LINE_DIFF_WORK = 4_000_000
-/**
- * Maximum user-facing failure text persisted on (and rendered from) a turn
- * checkpoint. A checkpoint failure is a short explanation (interruption notice,
- * capture warning, contract rejection)   never a transcript. The bound also
- * heals legacy checkpoints: before the textual usage-limit detection was
- * structurally guarded, an agent's entire final message could be recorded as
- * the failure and then splash into the run-changes card verbatim.
- */
-export const MAX_CHECKPOINT_FAILURE_LENGTH = 600
-
-/** Bound a checkpoint's user-facing failure text to a short explanation. */
-function boundCheckpointFailure(failure: string): string {
-  const trimmed = failure.trim()
-  if (trimmed.length <= MAX_CHECKPOINT_FAILURE_LENGTH) return trimmed
-  return `${trimmed.slice(0, MAX_CHECKPOINT_FAILURE_LENGTH).trimEnd()}…`
-}
-
-/** Byte window returned for a per-file diff. Kept small to bound IPC payloads. */
-const MAX_DIFF_WINDOW_BYTES = 64 * 1024
-/** Context bytes kept around the changed region so the diff reads naturally. */
-const DIFF_WINDOW_CONTEXT_BYTES = 8 * 1024
-
-class StorageCheckpointBlobStore implements CheckpointBlobStore {
-  constructor(private readonly projectId: string) {}
-
-  async put(hash: string, content: Uint8Array): Promise<void> {
-    assertHash(hash)
-    const path = join(getConfigRoot(), `projects/${this.projectId}/blobs/${hash}`)
-    await mkdir(dirname(path), { recursive: true })
-    try {
-      await writeFile(path, content, { flag: 'wx', mode: 0o600 })
-    } catch (error) {
-      if (!isAlreadyExists(error)) throw error
-    }
-  }
-
-  async get(hash: string): Promise<Uint8Array | null> {
-    assertHash(hash)
-    try {
-      return await readFile(join(getConfigRoot(), `projects/${this.projectId}/blobs/${hash}`))
-    } catch (error) {
-      if (isMissing(error)) return null
-      throw error
-    }
-  }
-
-  async revision(): Promise<string> {
-    try {
-      return await readFile(
-        join(getConfigRoot(), `projects/${this.projectId}/blob-revision`),
-        'utf-8'
-      )
-    } catch (error) {
-      if (isMissing(error)) return ''
-      throw error
-    }
-  }
-}
 
 /**
  * Persists pre/post-turn checkpoints and exposes selective, snapshot-backed rollback.
@@ -207,8 +154,8 @@ export class CheckpointManager {
       }
       await this.save(checkpoint)
       await this.writeRow(
-        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-        [projectId, threadId, id]
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id, owner_pid) VALUES(?, ?, ?, ?)',
+        [projectId, threadId, id, process.pid]
       )
       return checkpoint
     })
@@ -280,16 +227,16 @@ export class CheckpointManager {
       const changes = changedPaths
         ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
-      const lineStats = await this.calculateLineStats(tracker, changes)
+      const lineStats = await calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
         ...(checkpoint.before.unavailableFiles ?? []),
         ...(after.unavailableFiles ?? []),
         ...lineStats.unavailablePaths
       ])
-      const captureWarning = this.captureWarning(
+      const captureNotice = captureWarning(
         changes.filter((change) => contentUnavailable.has(change.path)).map((change) => change.path)
       )
-      const joinedFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const joinedFailure = [failure, captureNotice].filter(Boolean).join(' ')
       const completionFailure = joinedFailure ? boundCheckpointFailure(joinedFailure) : ''
       const updated: TurnCheckpoint = {
         ...checkpoint,
@@ -354,7 +301,7 @@ export class CheckpointManager {
       const path = row['path']
       const tid = row['tid']
       if (typeof path === 'string' && !foreign.has(path)) {
-        // Worker sub-agent threads owned by this turn are part of this work  
+        // Worker sub-agent threads owned by this turn are part of this work
         // their completions must not mark paths as foreign.
         if (own?.has(typeof tid === 'string' ? tid : '')) continue
         foreign.set(path, Number(row['completed_at'] ?? turnStart))
@@ -388,6 +335,51 @@ export class CheckpointManager {
     if (!checkpoint || checkpoint.status !== 'active') return
     if (checkpoint.sourceMessageId === sourceMessageId) return
     await this.save({ ...checkpoint, sourceMessageId })
+  }
+
+  /**
+   * The process that recorded the thread's in-flight turn, or `null` when no
+   * turn is in flight. `null` also covers a row written before `owner_pid`
+   * existed, which no instance can claim as its own.
+   */
+  async activeTurnOwnerPid(projectId: string, threadId: string): Promise<number | null> {
+    assertId(projectId)
+    assertId(threadId)
+    const active = this.db.get<{ owner_pid: number | null }>(
+      'SELECT owner_pid FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active) return null
+    const owner = Number(active.owner_pid)
+    return Number.isInteger(owner) && owner > 0 ? owner : null
+  }
+
+  /**
+   * Take ownership of an in-flight turn another process recorded, atomically.
+   *
+   * Restart recovery and a take-over pass can reconcile the same orphaned turn in
+   * two instances at the same moment, and both would then resume one harness
+   * session   spawning a second concurrent run that interleaves output and strips
+   * the original run of its tools. The claim is a conditional write on the shared
+   * ledger, so exactly one process can take a given orphaned turn: whoever's
+   * expected owner still matches wins, and every other claimant is told `false`
+   * and must leave the turn alone. Claiming a turn this process already owns is a
+   * no-op that reports `true`.
+   */
+  async claimActiveTurnOwner(
+    projectId: string,
+    threadId: string,
+    expectedOwnerPid: number
+  ): Promise<boolean> {
+    assertId(projectId)
+    assertId(threadId)
+    const outcome = this.db
+      .prepare(
+        'UPDATE active_turns SET owner_pid = ? WHERE project_id = ? AND thread_id = ? AND owner_pid = ?'
+      )
+      .run(process.pid, projectId, threadId, expectedOwnerPid)
+    return outcome.changes === 1
   }
 
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
@@ -502,153 +494,23 @@ export class CheckpointManager {
     )
   }
 
-  /**
-   * One-time repair pass for checkpoints whose line stats were recorded as
-   * `{ truncated: true }` by the previous gating, which measured whole-file
-   * line counts instead of the trimmed changed region and therefore rejected
-   * large files with small edits. The blob-backed history is intact, so the
-   * exact counts can be recomputed and persisted. Idempotent: repaired
-   * checkpoints no longer match the candidate query, and checkpoints whose
-   * blobs are genuinely gone keep their honest truncated marker. Only terminal
-   * checkpoints are touched   `active` and `interrupted` rows can still be
-   * finalized by `completeTurn` and must never be rewritten from a read path.
-   */
-  async repairTruncatedLineStats(): Promise<number> {
-    let rows: Record<string, unknown>[]
-    try {
-      rows = await this.queryRows(
-        `SELECT DISTINCT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
-         FROM turn_checkpoints tc, json_each(tc.data, '$.lineStats') ls
-         WHERE json_extract(ls.value, '$.truncated') = 1
-         LIMIT ?`,
-        [REPAIR_MAX_CHECKPOINTS],
-        REPAIR_MAX_CHECKPOINTS
-      )
-    } catch (error) {
-      Logger.error('Line-stats repair could not list candidates (non-fatal):', error)
-      return 0
+  /** Host bridge for the one-time maintenance passes. */
+  private maintenanceHost(): CheckpointMaintenanceHost {
+    return {
+      get: (projectId, threadId, turnId) => this.get(projectId, threadId, turnId),
+      save: (checkpoint) => this.save(checkpoint),
+      tracker: (projectId) => this.tracker(projectId),
+      queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
+      withBlobLock: (projectId, operation) => this.withBlobLock(projectId, operation)
     }
-    let repaired = 0
-    let repairedFiles = 0
-    for (const row of rows) {
-      if (repairedFiles >= REPAIR_MAX_FILES) break
-      const turnId = row['turn_id']
-      const projectId = row['project_id']
-      const threadId = row['thread_id']
-      if (
-        typeof turnId !== 'string' ||
-        typeof projectId !== 'string' ||
-        typeof threadId !== 'string'
-      ) {
-        continue
-      }
-      try {
-        const checkpoint = await this.get(projectId, threadId, turnId)
-        if (!checkpoint) continue
-        if (checkpoint.status === 'active' || checkpoint.status === 'interrupted') continue
-        const pending = checkpoint.changes.filter((change) => {
-          const stats = checkpoint.lineStats?.[change.path]
-          return stats !== undefined && stats.truncated === true && stats.additions === undefined
-        })
-        if (pending.length === 0) continue
-        const recomputed = await this.calculateLineStats(this.tracker(projectId), pending)
-        const lineStats: Record<string, CheckpointLineStats> = { ...(checkpoint.lineStats ?? {}) }
-        let recovered = 0
-        for (const change of pending) {
-          const stats = recomputed.stats[change.path]
-          if (stats && stats.additions !== undefined) {
-            lineStats[change.path] = stats
-            recovered += 1
-            repairedFiles += 1
-          }
-        }
-        if (recovered === 0) {
-          // Nothing recovered for this checkpoint (blobs genuinely unavailable);
-          // keep the honest truncated marker instead of rewriting the row.
-          continue
-        }
-        await this.save({ ...checkpoint, lineStats })
-        repaired += 1
-        // Yield between checkpoints so a large first-run repair never
-        // monopolizes the main process.
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      } catch (error) {
-        Logger.error('Line-stats repair skipped a checkpoint (non-fatal):', error)
-      }
-    }
-    return repaired
   }
 
-  /** One-time repair pass for checkpoints created before internal-turn
-   *  attribution existed: their label and sourceMessageId point at the hidden
-   *  internal prompt (a search nudge, mermaid repair, incomplete-turn
-   *  continuation) instead of the user's message, so the changes sidebar and
-   *  file-changes cards showed the internal text as if the user asked for it.
-   *  Repairs re-point them at the latest conversation-visible user message of
-   *  the thread before the checkpoint started. Idempotent: repaired
-   *  checkpoints no longer match the candidate query. Only terminal
-   *  checkpoints are touched   active/interrupted rows can still be finalized
-   *  by `completeTurn` and must never be rewritten from a read path. */
+  async repairTruncatedLineStats(): Promise<number> {
+    return repairTruncatedLineStats(this.maintenanceHost())
+  }
+
   async repairMisattributedInternalCheckpoints(): Promise<number> {
-    let rows: Record<string, unknown>[]
-    try {
-      rows = await this.queryRows(
-        `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
-         FROM turn_checkpoints tc, agent_messages am
-         WHERE json_extract(tc.data, '$.sourceMessageId') = am.id
-           AND am.role = 'user' AND am.visibility = 'hidden'
-           AND json_extract(tc.data, '$.status') NOT IN ('active', 'interrupted')
-         LIMIT ?`,
-        [REPAIR_MAX_CHECKPOINTS],
-        REPAIR_MAX_CHECKPOINTS
-      )
-    } catch (error) {
-      Logger.error('Internal-attribution repair could not list candidates (non-fatal):', error)
-      return 0
-    }
-    let repaired = 0
-    for (const row of rows) {
-      const turnId = row['turn_id']
-      const projectId = row['project_id']
-      const threadId = row['thread_id']
-      if (
-        typeof turnId !== 'string' ||
-        typeof projectId !== 'string' ||
-        typeof threadId !== 'string'
-      ) {
-        continue
-      }
-      try {
-        const checkpoint = await this.get(projectId, threadId, turnId)
-        if (!checkpoint || checkpoint.status === 'active' || checkpoint.status === 'interrupted') {
-          continue
-        }
-        const userRows = await this.queryRows(
-          `SELECT id, substr(json_extract(parts, '$[0].text'), 1, 80) AS label
-           FROM agent_messages
-           WHERE thread_id = ? AND role = 'user' AND visibility = 'conversation'
-             AND created_at <= ?
-           ORDER BY created_at DESC`,
-          [threadId, checkpoint.createdAt],
-          1
-        )
-        const userRow = userRows[0]
-        const sourceMessageId = typeof userRow?.['id'] === 'string' ? userRow['id'] : undefined
-        if (!sourceMessageId || sourceMessageId === checkpoint.sourceMessageId) continue
-        const label =
-          typeof userRow?.['label'] === 'string' && userRow['label'].trim()
-            ? userRow['label']
-            : checkpoint.label
-        await this.save({ ...checkpoint, sourceMessageId, label })
-        repaired += 1
-        // Yield between checkpoints so a large first-run repair never
-        // monopolizes the main process.
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      } catch (error) {
-        Logger.error('Internal-attribution repair skipped a checkpoint (non-fatal):', error)
-      }
-    }
-    return repaired
+    return repairMisattributedInternalCheckpoints(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that
@@ -683,8 +545,8 @@ export class CheckpointManager {
       delete reopened.completedAt
       await this.save(reopened)
       await this.writeRow(
-        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-        [projectId, threadId, turnId]
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id, owner_pid) VALUES(?, ?, ?, ?)',
+        [projectId, threadId, turnId, process.pid]
       )
       return reopened
     })
@@ -692,60 +554,7 @@ export class CheckpointManager {
 
   /** Remove project checkpoint blobs that no remaining thread references. */
   async pruneUnusedBlobs(projectId: string): Promise<number> {
-    assertId(projectId)
-    return this.withBlobLock(projectId, async () => {
-      // Invalidate every process's snapshot cache before deleting anything.
-      // Snapshot capture uses the same cross-process lock, so the new revision
-      // is observed before a later cache entry can be reused.
-      const projectStorage = join(getConfigRoot(), `projects/${projectId}`)
-      await mkdir(projectStorage, { recursive: true })
-      await writeFile(join(projectStorage, 'blob-revision'), generateId(), {
-        encoding: 'utf-8',
-        mode: 0o600
-      })
-      // Collect referenced hashes in SQL   a full scan used to ship every
-      // checkpoint JSON blob across the worker port, which crashed the process
-      // on large projects.
-      let rows: Record<string, unknown>[]
-      try {
-        rows = await this.queryRows(
-          `SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.before.files') je
-           WHERE tc.project_id = ?
-           UNION
-           SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.after.files') je
-           WHERE tc.project_id = ?`,
-          [projectId, projectId],
-          100_000
-        )
-      } catch {
-        // A malformed checkpoint row fails the whole extraction; preserving
-        // the project blob directory is safer than risking data loss.
-        return 0
-      }
-      const referenced = new Set<string>()
-      for (const row of rows) {
-        const hash = row['hash']
-        if (typeof hash === 'string') referenced.add(hash)
-      }
-
-      const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
-      let entries
-      try {
-        entries = await readdir(directory, { withFileTypes: true })
-      } catch (error) {
-        if (isMissing(error)) return 0
-        throw error
-      }
-      let deleted = 0
-      for (const entry of entries) {
-        if (!entry.isFile() || referenced.has(entry.name)) continue
-        await rm(join(directory, entry.name), { force: true })
-        deleted++
-      }
-      return deleted
-    })
+    return pruneUnusedBlobs(this.maintenanceHost(), projectId)
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
@@ -1104,229 +913,4 @@ export class CheckpointManager {
       throw new Error(result.error ?? 'checkpoint write failed')
     }
   }
-
-  private async calculateLineStats(
-    tracker: ChangeTrackingService,
-    changes: CheckpointChange[]
-  ): Promise<{
-    stats: Record<string, CheckpointLineStats>
-    unavailablePaths: string[]
-  }> {
-    const stats: Record<string, CheckpointLineStats> = {}
-    const unavailablePaths: string[] = []
-    for (const change of changes) {
-      if (change.before?.binary ?? change.after?.binary ?? false) continue
-      let before: Uint8Array | null
-      let after: Uint8Array | null
-      try {
-        before = change.before ? await tracker.readBlob(change.before.hash) : new Uint8Array()
-        after = change.after ? await tracker.readBlob(change.after.hash) : new Uint8Array()
-      } catch {
-        stats[change.path] = { truncated: true }
-        unavailablePaths.push(change.path)
-        continue
-      }
-      if ((change.before && !before) || (change.after && !after)) {
-        stats[change.path] = { truncated: true }
-        unavailablePaths.push(change.path)
-        continue
-      }
-      stats[change.path] = calculateBoundedLineStats(
-        before ?? new Uint8Array(),
-        after ?? new Uint8Array()
-      )
-    }
-    return { stats, unavailablePaths }
-  }
-
-  private captureWarning(paths: string[]): string | undefined {
-    const unique = [...new Set(paths)].sort()
-    if (unique.length === 0) return undefined
-    const visible = unique.slice(0, 5)
-    const remainder = unique.length - visible.length
-    return (
-      `File paths were recorded, but checkpoint content is unavailable for ${unique.length} ` +
-      `${unique.length === 1 ? 'file' : 'files'}; diffs, line counts, and undo may be incomplete: ` +
-      `${visible.join(', ')}${remainder > 0 ? ` (+${remainder} more)` : ''}.`
-    )
-  }
-}
-
-function assertId(value: string): void {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error(`Unsafe checkpoint identifier: ${value}`)
-}
-
-function assertHash(value: string): void {
-  if (!/^[a-f0-9]{64}$/u.test(value)) throw new Error(`Invalid checkpoint blob hash: ${value}`)
-}
-
-function isMissing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
-}
-
-function isAlreadyExists(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'EEXIST'
-}
-
-function calculateBoundedLineStats(
-  beforeContent: Uint8Array,
-  afterContent: Uint8Array
-): CheckpointLineStats {
-  if (
-    beforeContent.byteLength > MAX_LINE_DIFF_BYTES ||
-    afterContent.byteLength > MAX_LINE_DIFF_BYTES
-  ) {
-    return { truncated: true }
-  }
-
-  let before: string[]
-  let after: string[]
-  try {
-    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
-    before = splitLines(decoder.decode(beforeContent))
-    after = splitLines(decoder.decode(afterContent))
-  } catch {
-    return { truncated: true }
-  }
-
-  let prefix = 0
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
-    prefix += 1
-  }
-  let beforeEnd = before.length
-  let afterEnd = after.length
-  while (beforeEnd > prefix && afterEnd > prefix && before[beforeEnd - 1] === after[afterEnd - 1]) {
-    beforeEnd -= 1
-    afterEnd -= 1
-  }
-
-  const oldLines = before.slice(prefix, beforeEnd)
-  const newLines = after.slice(prefix, afterEnd)
-  // The line budget guards the expensive alignment below, which only ever sees
-  // the trimmed changed region   never the full files. Gating on whole-file
-  // line counts here would reject large files with small edits (the common
-  // case) even though computing their exact stats is cheap.
-  if (oldLines.length + newLines.length > MAX_LINE_DIFF_LINES) {
-    return { truncated: true }
-  }
-  if (oldLines.length === 0) return { additions: newLines.length, deletions: 0 }
-  if (newLines.length === 0) return { additions: 0, deletions: oldLines.length }
-
-  const distance = boundedEditDistance(oldLines, newLines)
-  if (distance === null) return { truncated: true }
-  const delta = newLines.length - oldLines.length
-  return {
-    additions: (distance + delta) / 2,
-    deletions: (distance - delta) / 2
-  }
-}
-
-function boundedEditDistance(before: string[], after: string[]): number | null {
-  const maximumDistance = Math.min(before.length + after.length, MAX_LINE_DIFF_DISTANCE)
-  const offset = maximumDistance + 1
-  const frontier = new Int32Array(maximumDistance * 2 + 3)
-  frontier.fill(-1)
-  frontier[offset + 1] = 0
-  let work = 0
-
-  for (let distance = 0; distance <= maximumDistance; distance += 1) {
-    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
-      work += 1
-      if (work > MAX_LINE_DIFF_WORK) return null
-      const index = offset + diagonal
-      let oldIndex =
-        diagonal === -distance ||
-        (diagonal !== distance && frontier[index - 1] < frontier[index + 1])
-          ? frontier[index + 1]
-          : frontier[index - 1] + 1
-      let newIndex = oldIndex - diagonal
-      while (
-        oldIndex < before.length &&
-        newIndex < after.length &&
-        before[oldIndex] === after[newIndex]
-      ) {
-        oldIndex += 1
-        newIndex += 1
-        work += 1
-        if (work > MAX_LINE_DIFF_WORK) return null
-      }
-      frontier[index] = oldIndex
-      if (oldIndex >= before.length && newIndex >= after.length) return distance
-    }
-  }
-  return null
-}
-
-function splitLines(content: string): string[] {
-  if (!content) return []
-  const lines = content.split(/\r?\n/u)
-  if (lines.at(-1) === '') lines.pop()
-  return lines
-}
-
-interface DecodedDiffWindow {
-  before: string | undefined
-  after: string | undefined
-  truncated: boolean
-}
-
-/**
- * Returns a bounded text window around the changed region of a file instead of
- * always the head. Without this, an edit sitting past the first `maxBytes` of a
- * large file made the diff look empty ("No textual changes"). For created or
- * deleted files the existing side is shown from its head.
- */
-function decodeDiffWindow(
-  before: Uint8Array | null,
-  after: Uint8Array | null,
-  maxBytes: number,
-  contextBytes: number
-): DecodedDiffWindow {
-  const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
-
-  if (!before || !after) {
-    const content = before ?? after
-    if (!content) return { before: undefined, after: undefined, truncated: false }
-    const truncated = content.length > maxBytes
-    const text = decoder.decode(content.subarray(0, maxBytes))
-    return before
-      ? { before: text, after: undefined, truncated }
-      : { before: undefined, after: text, truncated }
-  }
-
-  const minLength = Math.min(before.length, after.length)
-  let prefix = 0
-  while (prefix < minLength && before[prefix] === after[prefix]) prefix += 1
-  let suffix = 0
-  while (
-    suffix < minLength - prefix &&
-    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-  ) {
-    suffix += 1
-  }
-
-  const changeEnd = Math.max(before.length - suffix, after.length - suffix)
-  const changeSize = changeEnd - prefix
-
-  const fitsWithContext = changeSize + contextBytes * 2 <= maxBytes
-  let start = fitsWithContext
-    ? Math.max(0, prefix - contextBytes)
-    : Math.max(0, prefix + Math.floor(changeSize / 2) - Math.floor(maxBytes / 2))
-
-  const snapped = lineStartIndex(before, start)
-  if (snapped + maxBytes >= changeEnd) start = snapped
-
-  const end = Math.min(start + maxBytes, Math.max(before.length, after.length))
-  const beforeText = decoder.decode(before.subarray(start, Math.min(end, before.length)))
-  const afterText = decoder.decode(after.subarray(start, Math.min(end, after.length)))
-  const truncated = start > 0 || before.length > end || after.length > end
-  return { before: beforeText, after: afterText, truncated }
-}
-
-/** Index just after the last newline at or before `index`, or 0. */
-function lineStartIndex(data: Uint8Array, index: number): number {
-  if (index <= 0) return 0
-  let current = index
-  while (current > 0 && data[current - 1] !== 0x0a) current -= 1
-  return current
 }

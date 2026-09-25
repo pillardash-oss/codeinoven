@@ -101,6 +101,8 @@ describe('RendererRecoveryStore', () => {
       recentModels: [],
       chatFavoriteModels: [],
       chatRecentModels: [],
+      assistantFavoriteModels: [],
+      assistantRecentModels: [],
       queuedMessages: {}
     })
 

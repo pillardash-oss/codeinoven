@@ -1,10 +1,8 @@
 import { Logger } from '../../system/logger'
+import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
-  AccountUsageBreakdown,
-  AccountUsageSummary,
-  AgentMessage,
   AgentTokenUsage,
   HarnessModelUsage,
   HarnessUsage,
@@ -14,8 +12,8 @@ import type {
   LocalProfileUsageDay,
   LocalProfileUsageBreakdown,
   LocalProfileUsageHour,
-  SyncedDeviceProject,
   ThinkingLevel,
+  UsageBearingMessage,
   UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
   UsageEvent
@@ -100,7 +98,20 @@ interface LocalUsageHourRow extends UsageAggregateRow {
  * parent agent turn.
  */
 const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search_nudge'] as const
-const PROFILE_MODEL_FEATURES = "'main','audit','assignment'"
+
+/**
+ * Features counted as model work in the profile, daily and hourly totals.
+ * `subagent` and `ephemeral` belong here: both are real model calls with their
+ * own recorded tokens, and neither is a subset of a parent turn's numbers (a
+ * nested worker session and a disposable session are billed separately), so
+ * counting them cannot double count anything.
+ */
+const PROFILE_MODEL_FEATURES = ['main', 'audit', 'assignment', 'subagent', 'ephemeral'] as const
+
+/** Quoted feature list for the profile SQL fragments and the record purges. */
+function featureSqlList(features: readonly string[]): string {
+  return features.map((feature) => `'${feature}'`).join(',')
+}
 
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
@@ -195,10 +206,10 @@ function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
 }
 
 /** Sum of step-finish cost parts on an assistant message, mirroring the renderer. */
-function messageCost(message: AgentMessage): number | null {
+function messageCost(message: UsageBearingMessage): number | null {
   let stepCost = 0
   let hasStepCost = false
-  for (const part of message.parts) {
+  for (const part of message.parts ?? []) {
     if (part.type === 'step-finish' && typeof part.cost === 'number') {
       stepCost += part.cost
       hasStepCost = true
@@ -231,8 +242,8 @@ export class HarnessUsageRepo {
           success, retry_cause, duration_ms, created_at
         ) VALUES(
           ?,?,?,
-          (SELECT project_id FROM threads WHERE id = ?),
-          (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?),
+          COALESCE(?, (SELECT project_id FROM threads WHERE id = ?)),
+          COALESCE((SELECT name FROM projects WHERE id = ?), (SELECT projects.name FROM threads JOIN projects ON projects.id = threads.project_id WHERE threads.id = ?)),
           ?,?,?,
           ?,?,?,?,?,?,
           ?,
@@ -243,7 +254,9 @@ export class HarnessUsageRepo {
         event.id,
         event.threadId,
         event.parentTurnId,
+        event.projectId ?? null,
         event.threadId,
+        event.projectId ?? null,
         event.threadId,
         event.featureCallId,
         event.attempt,
@@ -583,106 +596,6 @@ export class HarnessUsageRepo {
     return rows.map(rowToHarnessUsage)
   }
 
-  /**
-   * Top projects by runtime across the whole database, for the per-device
-   * usage snapshot synced to the account profile.
-   */
-  async projectUsageSummary(): Promise<SyncedDeviceProject[]> {
-    const rows = await this.aggregate<{
-      project_id: string
-      name: string
-      message_count: number
-      cost_usd: number
-      tokens_total: number
-      duration_ms: number
-      thread_count: number
-    }>(
-      `SELECT h.project_id AS project_id,
-              p.name AS name,
-              SUM(h.message_count) AS message_count,
-              SUM(h.cost_usd) AS cost_usd,
-              SUM(h.tokens_total) AS tokens_total,
-              SUM(h.duration_ms) AS duration_ms,
-              COUNT(DISTINCT h.thread_id) AS thread_count
-       FROM harness_usage h
-       JOIN projects p ON p.id = h.project_id
-       GROUP BY h.project_id, p.name
-       ORDER BY SUM(h.duration_ms) DESC
-       LIMIT 10`,
-      []
-    )
-    return rows.map((row) => ({
-      id: row.project_id,
-      name: row.name,
-      messageCount: row.message_count,
-      costUsd: row.cost_usd,
-      tokens: row.tokens_total,
-      durationMs: row.duration_ms,
-      threadCount: row.thread_count
-    }))
-  }
-
-  /** App-wide totals and ranked breakdowns for the signed-in profile. */
-  async profileSummary(): Promise<AccountUsageSummary> {
-    const [harnessRows, modelRows, activityRows] = await Promise.all([
-      this.aggregate<UsageAggregateRow>(
-        `SELECT harness_id AS id,
-                SUM(message_count) AS message_count,
-                SUM(cost_usd) AS cost_usd,
-                SUM(tokens_total) AS tokens_total,
-                SUM(duration_ms) AS duration_ms
-         FROM harness_usage
-         GROUP BY harness_id
-         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
-        []
-      ),
-      this.aggregate<UsageAggregateRow>(
-        `SELECT model_id AS id,
-                SUM(message_count) AS message_count,
-                SUM(cost_usd) AS cost_usd,
-                SUM(tokens_total) AS tokens_total,
-                SUM(duration_ms) AS duration_ms
-         FROM harness_usage_models
-         GROUP BY model_id
-         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
-        []
-      ),
-      this.aggregate<{ date: string; message_count: number }>(
-        `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-                COUNT(*) AS message_count
-         FROM agent_messages
-         WHERE role = 'assistant' AND harness_id IS NOT NULL
-         GROUP BY date
-         ORDER BY date ASC`,
-        []
-      )
-    ])
-    const toBreakdown = (row: UsageAggregateRow): AccountUsageBreakdown => ({
-      id: row.id,
-      messageCount: row.message_count,
-      costUsd: row.cost_usd,
-      tokens: row.tokens_total
-    })
-    const harnesses = harnessRows.map(toBreakdown)
-    const models = modelRows.map(toBreakdown)
-    const activity: AccountActivityDay[] = activityRows.map((row) => ({
-      date: row.date,
-      messageCount: row.message_count
-    }))
-    return {
-      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
-      costUsd: harnessRows.reduce((sum, row) => sum + row.cost_usd, 0),
-      tokens: harnessRows.reduce((sum, row) => sum + row.tokens_total, 0),
-      durationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
-      topHarnessId: harnesses[0]?.id ?? null,
-      topModelId: models[0]?.id ?? null,
-      harnesses,
-      models,
-      activityDays: activity,
-      generatedAt: Date.now()
-    }
-  }
-
   /** Range-aware local Profile analytics derived only from usage snapshots. */
   async profileAnalytics(range: LocalProfileAnalyticsRange): Promise<LocalProfileAnalytics> {
     const activityRange = rollingActivityRange(range)
@@ -690,14 +603,14 @@ export class HarnessUsageRepo {
               SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
               SUM(COALESCE(tokens_total, 0)) AS tokens_total,
               SUM(duration_ms) AS duration_ms`
-    const modelRange = `feature IN (${PROFILE_MODEL_FEATURES})
+    const modelRange = `feature IN (${featureSqlList(PROFILE_MODEL_FEATURES)})
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
     const utilityPlaceholders = PROFILE_UTILITY_FEATURES.map(() => '?').join(',')
     const utilityRange = `feature IN (${utilityPlaceholders})
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
-    const profileRange = `(feature IN (${PROFILE_MODEL_FEATURES}) OR feature IN (${utilityPlaceholders}))
+    const profileRange = `(feature IN (${featureSqlList(PROFILE_MODEL_FEATURES)}) OR feature IN (${utilityPlaceholders}))
        AND usage_events.created_at >= ?
        AND usage_events.created_at < ?`
     const params = [range.startAt, range.endAt] as const
@@ -864,6 +777,8 @@ export class HarnessUsageRepo {
     const harnessTokens = harnessRows.reduce((sum, row) => sum + row.tokens_total, 0)
     const utilityCost = utilityRows.reduce((sum, row) => sum + row.cost_usd, 0)
     const utilityTokens = utilityRows.reduce((sum, row) => sum + row.tokens_total, 0)
+    const utilityMessageCount = utilityRows.reduce((sum, row) => sum + row.message_count, 0)
+    const agentResponses = harnessRows.reduce((sum, row) => sum + row.message_count, 0)
     const projects: LocalProfileProjectBreakdown[] = projectRows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -901,7 +816,7 @@ export class HarnessUsageRepo {
     return {
       range,
       activityRange,
-      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      messageCount: agentResponses,
       responseDurationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
@@ -926,8 +841,38 @@ export class HarnessUsageRepo {
       gradingSpend: {
         costUsd: 0
       },
+      records: {
+        agentResponses,
+        utilities: utilityMessageCount,
+        // The ranking store is overlaid by the IPC layer with the same repo it
+        // reads the aggregates from, so the counts and the rows always agree.
+        modelRankings: 0,
+        pendingGrades: 0
+      },
       generatedAt: Date.now()
     }
+  }
+
+  /**
+   * Delete one Usage page ledger store's rows inside a calendar range.
+   *
+   * Batched on the maintenance worker connection, so a clean slate over tens of
+   * thousands of rows never blocks the Electron main thread. Only `usage_events`
+   * is touched: the per-thread `harness_usage` snapshots are derived from
+   * `agent_messages` and would be rebuilt by the next reconcile, so deleting
+   * them would only desynchronize the two ledgers.
+   */
+  async clearLedgerRecords(
+    store: 'agentResponses' | 'utilities',
+    range: LocalProfileAnalyticsRange
+  ): Promise<RowsPurged> {
+    const features = store === 'utilities' ? PROFILE_UTILITY_FEATURES : PROFILE_MODEL_FEATURES
+    return purgeRowsViaWorker(
+      this.db,
+      'usage_events',
+      `created_at >= ? AND created_at < ? AND feature IN (${featureSqlList(features)})`,
+      [range.startAt, range.endAt]
+    )
   }
 
   /**
@@ -955,7 +900,7 @@ export class HarnessUsageRepo {
   async accumulateTurn(
     projectId: string,
     threadId: string,
-    messages: AgentMessage[]
+    messages: readonly UsageBearingMessage[]
   ): Promise<{ ok: boolean; error?: string }> {
     const candidateIds = [
       ...new Set(

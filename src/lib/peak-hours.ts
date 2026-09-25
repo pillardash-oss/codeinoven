@@ -18,6 +18,8 @@
  * apply their windows every day of the week.
  */
 
+import { formatTime } from './date-time-format'
+
 /** A single daily peak window, clamped to `[0, 24]` UTC hours. */
 export interface PeakHoursWindow {
   /** Inclusive start hour (UTC), `0-23`. */
@@ -178,16 +180,12 @@ export function isPeakHour(schedule: PeakHoursSchedule, now = new Date()): boole
  * transitions are honored on the day the badge is drawn.
  */
 function peakHoursLocalWindows(schedule: PeakHoursSchedule, now: Date): string[] {
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit'
-  })
   // UTC midnight of the user's current UTC day; adding the UTC window hours
-  // yields exact UTC boundary instants that `formatter` renders in local time.
+  // yields exact UTC boundary instants that `formatTime` renders in local time.
   const utcDayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   return schedule.windows.map((window) => {
-    const start = formatter.format(new Date(utcDayStart + window.startHour * 3_600_000))
-    const end = formatter.format(new Date(utcDayStart + window.endHour * 3_600_000))
+    const start = formatTime(new Date(utcDayStart + window.startHour * 3_600_000))
+    const end = formatTime(new Date(utcDayStart + window.endHour * 3_600_000))
     return `${start}–${end}`
   })
 }

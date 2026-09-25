@@ -5,7 +5,42 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 
 const RECOVERABLE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
-export type RecoveryOperation = 'checkpoint' | 'thread'
+export type RecoveryOperation = 'checkpoint' | 'thread' | 'claim'
+
+/**
+ * Which stopped process this pass is allowed to clean up after.
+ *
+ * - `restart`: nothing else is running, so every thread left in an active status
+ *   belongs to a process that is gone. This is the classic restart contract and
+ *   the default.
+ * - `take-over`: a sibling instance may own in-flight work, so only the turns
+ *   whose recorded owner is gone are adoptable. A turn with no owner record
+ *   cannot be told apart from one a live process is starting right now, and is
+ *   left alone. Both the take-over pass and a launch that finds a live sibling
+ *   use this scope.
+ */
+export type RestartRecoveryScope = 'restart' | 'take-over'
+
+export interface RestartRecoveryOptions {
+  scope?: RestartRecoveryScope
+  /**
+   * Whether the process that recorded a turn as in flight is still running,
+   * consulted for the `take-over` scope. A turn whose owner is alive is never
+   * settled here, whichever instance asks.
+   */
+  isRunOwnerAlive?: (pid: number) => boolean
+  /**
+   * Atomically take ownership of a turn before it is settled, returning whether
+   * this process won it.
+   *
+   * Two instances can reconcile the same orphaned turn at the same moment, and
+   * both would then resume one harness session. The claim makes adoption
+   * exactly-once: a process that loses it must leave the turn alone. Omitted
+   * means no claim is made, which is only safe when a single instance can run
+   * this pass (a plain restart with no sibling).
+   */
+  claimTurn?: (projectId: string, threadId: string, ownerPid: number) => Promise<boolean>
+}
 
 export interface RestartRecoveryFailure {
   projectId: string
@@ -37,6 +72,10 @@ export interface RestartRecoveryResult {
  * as `completed` (full diff, no interruption error) and the thread is not resumed,
  * so no premature partial file-changes card or "stopped before completion" message
  * surfaces while the work was actually done.
+ *
+ * A process that is running while a sibling exits passes `scope: 'take-over'`,
+ * which adopts only the turns the departed process owned (see
+ * {@link RestartRecoveryScope}).
  */
 export class RestartRecoveryService {
   private readonly threads: ThreadRepo
@@ -49,17 +88,37 @@ export class RestartRecoveryService {
     this.db = db
   }
 
-  async recover(): Promise<RestartRecoveryResult> {
+  async recover(options: RestartRecoveryOptions = {}): Promise<RestartRecoveryResult> {
     const allThreads = await this.threads.listAllViaWorker()
-    const activeTurnThreadIds = await this.activeTurnThreadIds()
+    const activeTurnOwners = await this.activeTurnOwners()
     const recovered: Thread[] = []
     const completed: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
 
     for (const thread of allThreads) {
-      const completedWithOrphanCheckpoint =
-        thread.status === 'completed' && activeTurnThreadIds.has(thread.id)
+      const hasActiveTurn = activeTurnOwners.has(thread.id)
+      const completedWithOrphanCheckpoint = thread.status === 'completed' && hasActiveTurn
       if (!RECOVERABLE_STATUSES.has(thread.status) && !completedWithOrphanCheckpoint) continue
+      const ownerPid = activeTurnOwners.get(thread.id)
+      if (options.scope === 'take-over') {
+        // Only a turn a departed process was running can be adopted here. A turn
+        // with no owner record is either a legacy row or one this process is
+        // starting right now, and nothing can tell those apart.
+        if (typeof ownerPid !== 'number') continue
+        if (options.isRunOwnerAlive?.(ownerPid) === true) continue
+      }
+
+      // Adoption is exactly-once: a sibling may be reconciling the same orphaned
+      // turn right now, and only one of us may resume its harness session.
+      if (typeof ownerPid === 'number' && options.claimTurn) {
+        const claimed = await options
+          .claimTurn(thread.projectId, thread.id, ownerPid)
+          .catch((error: unknown) => {
+            failures.push(this.failure(thread, 'claim', error))
+            return null
+          })
+        if (claimed !== true) continue
+      }
 
       if (completedWithOrphanCheckpoint || (await this.turnDemonstrablyCompleted(thread))) {
         try {
@@ -108,12 +167,33 @@ export class RestartRecoveryService {
     }
   }
 
-  private async activeTurnThreadIds(): Promise<Set<string>> {
-    const result = await this.db.queryViaWorker('SELECT thread_id FROM active_turns', [], 100_000)
+  /**
+   * Claim one orphaned turn for this process, for {@link RestartRecoveryOptions.claimTurn}.
+   */
+  async claimTurn(projectId: string, threadId: string, ownerPid: number): Promise<boolean> {
+    return this.checkpoints.claimActiveTurnOwner(projectId, threadId, ownerPid)
+  }
+
+  /**
+   * The process that recorded each in-flight turn, keyed by thread. A thread
+   * with no row, or a row written before `owner_pid` existed, maps to `null`.
+   */
+  private async activeTurnOwners(): Promise<Map<string, number | null>> {
+    const result = await this.db.queryViaWorker(
+      'SELECT thread_id, owner_pid FROM active_turns',
+      [],
+      100_000
+    )
     if (!result.ok) {
       throw new Error(result.error ?? 'active checkpoint recovery query failed')
     }
-    return new Set(result.rows.map((row) => String(row['thread_id'])))
+    const owners = new Map<string, number | null>()
+    for (const row of result.rows) {
+      const owner = row['owner_pid']
+      const pid = typeof owner === 'number' ? owner : Number(owner)
+      owners.set(String(row['thread_id']), Number.isInteger(pid) && pid > 0 ? pid : null)
+    }
+    return owners
   }
 
   /**

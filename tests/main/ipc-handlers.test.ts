@@ -51,6 +51,7 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent
 } from '../../src/lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -89,24 +90,31 @@ const defaultConfig: AppConfig = {
   onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
+  agentQuestionCap: 3,
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: true,
+  prototypeCdnAllowlist: [],
+  inAppNotificationSound: { success: true, issue: true },
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  auxiliaryAgents: {},
+  design: { assignments: [] },
+  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
-  keepAwakeWhileRemoteConnected: true,
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: false,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
+  maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
@@ -133,7 +141,8 @@ describe('validateAppConfigPatch', () => {
           label: 'Style',
           content: 'Prefer small contextual commits.',
           enabled: true,
-          updatedAt: 1
+          updatedAt: 1,
+          scopes: ['projects', 'chat']
         }
       ]
     }
@@ -198,7 +207,7 @@ describe('validateAppConfigPatch', () => {
             frequency: 1,
             lastReinforced: expect.any(Number),
             priority: 'medium',
-            scope: 'global',
+            scopes: ['projects', 'chat'],
             source: 'manual'
           })
         ]
@@ -609,10 +618,14 @@ describe('git IPC', () => {
 
     const checkoutHandler = handlers.get('git:checkout')
     expect(checkoutHandler).toBeDefined()
+    // The contract result of a refusing git channel is the `GitInvocation`
+    // envelope: `{ ok: true, value }` on success, `{ ok: false, refusal }` when
+    // git refused. invokeGit unwraps the value on the renderer side.
     await expect(
       checkoutHandler?.(trustedEvent(), 'git-project', 'feature/git')
     ).resolves.toMatchObject({
-      branch: 'feature/git'
+      ok: true,
+      value: { branch: 'feature/git' }
     })
 
     const thread = new ThreadRepo(database).get('git-thread')
@@ -627,6 +640,7 @@ describe('git IPC', () => {
     expect(handlers.has('git:status')).toBe(true)
     expect(handlers.has('git:reset')).toBe(true)
     expect(handlers.has('git:amend')).toBe(true)
+    expect(handlers.has('git:removeCommitChanges')).toBe(true)
     expect(handlers.has('git:checkout')).toBe(true)
   })
 

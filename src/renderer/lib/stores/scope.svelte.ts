@@ -1,8 +1,7 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { SvelteMap } from 'svelte/reactivity'
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
-import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   isOrchestrationChildThread,
@@ -10,225 +9,50 @@ import {
   type ManagedWorktreeDescriptor,
   type Project,
   type ScopeBoard,
+  type ScopeBoardChangedEvent,
   type ScopeBucket,
-  type ScopeEnvironmentMode,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight,
   type ScopeMergeMode,
   type ScopeMergeOutcome,
   type ScopeMergePreflight,
-  type ScopeSetupCommandSpec,
-  type ScopeSlice,
   type ScopeTarget,
+  type ScopeWorktreeCreateInput,
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
-  type ScopeWorktreeHealthCategory,
-  type ScopeWorktreeProgress,
   type ScopeWorktreeSourceInfo,
-  type Thread,
-  scopeSliceForStatus
+  type Thread
 } from '$shared/types'
-import type { ThreadStatusTone } from '$shared/thread-status-policy'
+import {
+  cloneBoard,
+  EMPTY_BOARD,
+  loadScopeSnapshot,
+  orderedBuckets,
+  persistScopeSnapshot,
+  type ProjectBadge,
+  type ScopeBucketEdit,
+  type ScopeProject,
+  type ScopeSidebarContext,
+  type ThreadStage
+} from './scope-board'
+import { ScopeThreads } from './scope-threads.svelte'
+import { ScopeWorktrees } from './scope-worktrees.svelte'
 
-export type ThreadStage = ScopeSlice
-
-export interface ScopeProject {
-  id: string
-  name: string
-  path?: string
-  source?: 'local' | 'ssh'
-  host?: string
-  iconUrl?: string | null
-  color?: string
-}
-
-export interface ScopeSidebarContext {
-  projectId: string
-  bucketId: string
-  stage: ThreadStage
-  threadId: string
-}
-
-export interface ScopeBucketEdit {
-  name: string
-  color?: string
-  iconType?: string
-}
-
-export interface ProjectBadge {
-  hasWorking: boolean
-  hasUnread: boolean
-  hasAttention: boolean
-  hasError: boolean
-}
-
-export const STAGE_LABELS: Record<ThreadStage, string> = {
-  pinned: 'Pinned',
-  todo: 'Todo',
-  working: 'Working',
-  spec: 'Spec',
-  issue: 'Issue',
-  unread: 'Unread',
-  done: 'Done'
-}
-
-export const STAGE_COLORS: Record<ThreadStage, string> = {
-  pinned: 'var(--color-thread-pinned)',
-  todo: 'var(--color-dimmed)',
-  working: 'var(--color-thread-working)',
-  spec: 'var(--color-thread-spec)',
-  issue: 'var(--color-warning)',
-  unread: 'var(--color-thread-unread)',
-  done: 'var(--color-thread-done)'
-}
-
-export const STATUS_TONE_COLORS: Record<ThreadStatusTone, string> = {
-  todo: 'var(--color-dimmed)',
-  working: 'var(--color-thread-working)',
-  'working-paused': 'var(--color-thread-working-paused)',
-  attention: 'var(--color-warning)',
-  spec: 'var(--color-thread-spec)',
-  done: 'var(--color-thread-done)',
-  error: 'var(--color-thread-error)'
-}
-
-export const STAGE_ORDER: ThreadStage[] = [
-  'pinned',
-  'todo',
-  'working',
-  'spec',
-  'issue',
-  'unread',
-  'done'
-]
-
-const EMPTY_BOARD: ScopeBoard = {
-  version: 2,
-  buckets: [
-    {
-      id: DEFAULT_SCOPE_BUCKET_ID,
-      name: 'Default',
-      sortOrder: 0,
-      collapsed: false,
-      collapsedSlices: [],
-      root: { kind: 'project' }
-    }
-  ],
-  worktreeDefaults: { setupCommands: [], runSetupByDefault: true, environmentMode: 'copy' }
-}
-
-interface ScopeSnapshot {
-  activeProjectId: string | null
-  sidebarContext: ScopeSidebarContext | null
-}
-
-const SCOPE_STORAGE_KEY = `${APP_SLUG}.scope.v1`
-
-function parseSidebarContext(value: unknown): ScopeSidebarContext | null {
-  if (!value || typeof value !== 'object') return null
-  const obj = value as Record<string, unknown>
-  if (
-    typeof obj.projectId !== 'string' ||
-    typeof obj.bucketId !== 'string' ||
-    typeof obj.threadId !== 'string' ||
-    typeof obj.stage !== 'string' ||
-    !STAGE_ORDER.includes(obj.stage as ThreadStage)
-  ) {
-    return null
-  }
-  return {
-    projectId: obj.projectId,
-    bucketId: obj.bucketId,
-    stage: obj.stage as ThreadStage,
-    threadId: obj.threadId
-  }
-}
-
-function loadScopeSnapshot(): ScopeSnapshot {
-  if (typeof window === 'undefined') return { activeProjectId: null, sidebarContext: null }
-  try {
-    const raw = window.localStorage.getItem(SCOPE_STORAGE_KEY)
-    if (!raw) return { activeProjectId: null, sidebarContext: null }
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    return {
-      activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : null,
-      sidebarContext: parseSidebarContext(parsed.sidebarContext)
-    }
-  } catch {
-    return { activeProjectId: null, sidebarContext: null }
-  }
-}
-
-function persistScopeSnapshot(snapshot: ScopeSnapshot): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(SCOPE_STORAGE_KEY, JSON.stringify(snapshot))
-  } catch {
-    // Scope persistence is optional; unavailable storage must not break the app.
-  }
-}
-
-export function clearScopeSnapshot(): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(SCOPE_STORAGE_KEY)
-  } catch {
-    // Best-effort cleanup.
-  }
-}
-
-export function threadStage(thread: Thread, draftThreadId?: string | null): ThreadStage {
-  if (draftThreadId && thread.id === draftThreadId) return 'todo'
-  if (thread.pinned) return 'pinned'
-  if (thread.status === 'completed' && !thread.read && !isOrchestrationChildThread(thread)) {
-    return 'unread'
-  }
-  return scopeSliceForStatus(thread.status)
-}
-
-/** Typed health categories a repair action can fix (mirrors main's repair guard). */
-const REPAIRABLE_HEALTH_CATEGORIES: readonly ScopeWorktreeHealthCategory[] = [
-  'missing',
-  'unregistered',
-  'locked',
-  'prunable',
-  'branch-mismatch',
-  'path-mismatch'
-]
-
-/** True while cached health reports a problem the user can repair. */
-export function hasRepairableScopeIssue(health: ScopeWorktreeHealth | undefined): boolean {
-  if (!health) return false
-  return REPAIRABLE_HEALTH_CATEGORIES.includes(health.category)
-}
-
-function orderedBuckets(board: ScopeBoard): ScopeBucket[] {
-  return [...board.buckets].sort((a, b) => a.sortOrder - b.sortOrder)
-}
-
-function cloneBoard(board: ScopeBoard): ScopeBoard {
-  return {
-    version: 2,
-    buckets: orderedBuckets(board).map((bucket) => ({
-      ...bucket,
-      collapsedSlices: [...bucket.collapsedSlices],
-      root:
-        bucket.root.kind === 'worktree'
-          ? {
-              ...bucket.root,
-              setup: {
-                ...bucket.root.setup,
-                commands: bucket.root.setup.commands.map((command) => ({ ...command }))
-              }
-            }
-          : { kind: 'project' }
-    })),
-    worktreeDefaults: {
-      ...board.worktreeDefaults,
-      setupCommands: board.worktreeDefaults.setupCommands.map((command) => ({ ...command }))
-    }
-  }
-}
+export type {
+  ProjectBadge,
+  ScopeBucketEdit,
+  ScopeProject,
+  ScopeSidebarContext,
+  ThreadStage
+} from './scope-board'
+export {
+  clearScopeSnapshot,
+  STAGE_COLORS,
+  STAGE_LABELS,
+  STAGE_ORDER,
+  STATUS_TONE_COLORS,
+  threadStage
+} from './scope-board'
 
 class ScopeState {
   projectRecords: Project[] = $state([])
@@ -236,7 +60,6 @@ class ScopeState {
   activeProjectId: string | null = $state(loadScopeSnapshot().activeProjectId)
   board: ScopeBoard = $state(cloneBoard(EMPTY_BOARD))
   boards: Map<string, ScopeBoard> = $state(new SvelteMap())
-  allScopeThreads: Thread[] = $state([])
   sidebarContext: ScopeSidebarContext | null = $state(loadScopeSnapshot().sidebarContext)
   /**
    * Saved scope context for when the user navigates away from the project view
@@ -256,34 +79,57 @@ class ScopeState {
   /** Signal for ScopeView to create a thread in a specific bucket (triggered by Cmd+N). */
   requestCreateScopedThreadCount = $state(0)
   pendingCreateBucketId: string | null = $state(null)
-  /** Target-keyed health of managed worktrees, refreshed on demand. */
-  healthByTarget: Map<string, ScopeWorktreeHealth> = $state(new SvelteMap())
-  /** Board signature of the last background health refresh, so views can ask
-   *  for a refresh from any reactive block without hammering the IPC channel. */
-  private healthSyncSignature = ''
-  /** Transient worktree creation/setup progress. */
-  worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
-  /** Projects whose full non-archived thread list has been merged into memory. */
-  private fullyHydratedProjects: SvelteSet<string> = $state(new SvelteSet())
-  private hydratingProjects = new Set<string>()
-  /** Threads holding unsent composer content. Draft state lives in renderer
-   *  storage only, so it is applied here as an in-memory stage: drafted
-   *  threads slice into 'todo' and return to their DB-derived slice (done)
-   *  the moment the draft is cleared. */
-  draftStageThreadIds: SvelteSet<string> = $state(new SvelteSet())
+
+  private threads = new ScopeThreads({
+    activeProjectId: () => this.activeProjectId,
+    draftThreadId: () => this.draftThreadId,
+    boardForProject: (projectId) => this.boards.get(projectId),
+    boardForProjectOrActive: (projectId) => this.boards.get(projectId) ?? this.board,
+    ensureBoardLoaded: (projectId) => this.ensureBoardLoaded(projectId),
+    currentSidebarContext: () => this.sidebarContext,
+    updateSidebarContext: (context) => {
+      this.sidebarContext = context
+    },
+    persist: () => this.persistSnapshot()
+  })
+
+  private worktrees = new ScopeWorktrees({
+    bucketFor: (projectId, bucketId) => this.bucketFor(projectId, bucketId),
+    boardForProject: (projectId) => this.boards.get(projectId),
+    applyBoard: (projectId, board) => this.applyBoard(projectId, board),
+    reloadBoard: (projectId) => this.reloadBoard(projectId),
+    setError: (message) => {
+      this.error = message
+    }
+  })
+
+  /** Live thread list shared across every scope surface. */
+  get allScopeThreads(): Thread[] {
+    return this.threads.allScopeThreads
+  }
+
+  set allScopeThreads(value: Thread[]) {
+    this.threads.allScopeThreads = value
+  }
+
+  /** Target-keyed health of managed worktrees, refreshed on demand. */
+  get healthByTarget(): Map<string, ScopeWorktreeHealth> {
+    return this.worktrees.healthByTarget
+  }
+
+  set healthByTarget(value: Map<string, ScopeWorktreeHealth>) {
+    this.worktrees.healthByTarget = value
+  }
 
   setDraftStageThreadIds(ids: readonly string[]): void {
-    const next = new SvelteSet<string>(ids)
-    const current = this.draftStageThreadIds
-    if (next.size === current.size && [...next].every((id) => current.has(id))) return
-    this.draftStageThreadIds = next
+    this.threads.setDraftStageThreadIds(ids)
   }
 
   /** Whether a project's full thread list has been merged into `allScopeThreads`. */
   isProjectFullyHydrated(projectId: string): boolean {
-    return this.fullyHydratedProjects.has(projectId)
+    return this.threads.isProjectFullyHydrated(projectId)
   }
 
   /**
@@ -294,30 +140,7 @@ class ScopeState {
    * on failure nothing is marked hydrated and the next open retries.
    */
   async ensureProjectThreadsLoaded(projectId: string): Promise<void> {
-    if (projectId === '' || this.fullyHydratedProjects.has(projectId)) return
-    if (this.hydratingProjects.has(projectId)) return
-    this.hydratingProjects.add(projectId)
-    try {
-      const threads = await invoke('thread:list', projectId)
-      for (const thread of threads) {
-        if (thread.archived || isOrchestrationChildThread(thread)) continue
-        if (this.allScopeThreads.some((existing) => existing.id === thread.id)) {
-          this.updateThread(thread)
-        } else {
-          this.allScopeThreads = [...this.allScopeThreads, thread]
-        }
-      }
-      this.fullyHydratedProjects.add(projectId)
-    } catch {
-      // Keep the bounded slice; the next open of this scope retries.
-    } finally {
-      this.hydratingProjects.delete(projectId)
-    }
-  }
-
-  /** Whether a project's board holds any scope beyond the Default bucket. */
-  private boardHasCustomScopes(board: ScopeBoard): boolean {
-    return board.buckets.some((bucket) => bucket.id !== DEFAULT_SCOPE_BUCKET_ID)
+    await this.threads.ensureProjectThreadsLoaded(projectId)
   }
 
   /**
@@ -330,17 +153,13 @@ class ScopeState {
    * cover them. Runs once per project; on failure the next board open retries.
    */
   async ensureScopeBoardThreadsLoaded(projectId: string): Promise<void> {
-    if (projectId === '') return
-    await this.ensureBoardLoaded(projectId)
-    const board = this.boards.get(projectId)
-    if (!board || !this.boardHasCustomScopes(board)) return
-    await this.ensureProjectThreadsLoaded(projectId)
+    await this.threads.ensureScopeBoardThreadsLoaded(projectId)
   }
 
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
     for (const project of this.projects) {
-      const projectThreads = this.allScopeThreads.filter(
+      const projectThreads = this.threads.allScopeThreads.filter(
         (t) => t.projectId === project.id && !t.archived
       )
       const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
@@ -359,10 +178,7 @@ class ScopeState {
   }
 
   get currentProjectThreads(): Thread[] {
-    if (!this.activeProjectId) return []
-    return this.allScopeThreads.filter(
-      (thread) => thread.projectId === this.activeProjectId && !thread.archived
-    )
+    return this.threads.currentProjectThreads
   }
 
   setScopesFromProjects(
@@ -400,29 +216,7 @@ class ScopeState {
   }
 
   setThreads(threads: Thread[]): void {
-    // Projects already fully hydrated for the scope board must survive this
-    // bounded re-seed: replacing the whole array would empty their custom
-    // scopes even though `fullyHydratedProjects` still marks them complete.
-    const hydrated = this.fullyHydratedProjects
-    if (hydrated.size === 0) {
-      this.allScopeThreads = threads
-      return
-    }
-    const merged: Thread[] = []
-    const seen = new SvelteSet<string>()
-    for (const thread of this.allScopeThreads) {
-      if (hydrated.has(thread.projectId) && !seen.has(thread.id)) {
-        seen.add(thread.id)
-        merged.push(thread)
-      }
-    }
-    for (const thread of threads) {
-      if (!seen.has(thread.id)) {
-        seen.add(thread.id)
-        merged.push(thread)
-      }
-    }
-    this.allScopeThreads = merged
+    this.threads.setThreads(threads)
   }
 
   setSelectedThreadDraftState(threadId: string | null, hasDraft: boolean): void {
@@ -463,6 +257,27 @@ class ScopeState {
   async ensureBoardLoaded(projectId: string): Promise<void> {
     if (this.boards.has(projectId)) return
     await this.loadBoard(projectId)
+  }
+
+  /** Whether a project's scope board is already cached for read-only lookups. */
+  hasBoard(projectId: string): boolean {
+    return this.boards.has(projectId)
+  }
+
+  /**
+   * Cache one project's scope board for a read-only lookup (the cross-project
+   * thread search resolves a thread's scope badge from it) without touching the
+   * active board, the shared loading flag, or the visible error. Safe to call
+   * concurrently for different projects: each call owns its own cache entry.
+   */
+  async cacheBoardForLookup(projectId: string): Promise<void> {
+    if (this.boards.has(projectId)) return
+    try {
+      const board = await invoke('scope:get', projectId)
+      this.boards.set(projectId, cloneBoard(board))
+    } catch {
+      // Lookup-only warm-up: a failure here must never surface as a scope error.
+    }
   }
 
   async loadBoard(projectId = this.activeProjectId): Promise<void> {
@@ -627,37 +442,11 @@ class ScopeState {
   }
 
   bucketForThread(thread: Thread): string {
-    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    // Resolve against the thread's OWN project board, not the active project's.
-    // The regular thread list spans many projects; validating against `this.board`
-    // (the active project) would misclassify every non-active thread as default
-    // whenever its bucket isn't on the active board. Fall back to the active board
-    // only when the thread's project board hasn't been loaded yet.
-    const board = this.boards.get(thread.projectId) ?? this.board
-    return board.buckets.some((bucket) => bucket.id === bucketId)
-      ? bucketId
-      : DEFAULT_SCOPE_BUCKET_ID
+    return this.threads.bucketForThread(thread)
   }
 
   threadsFor(bucketId: string, slice: ThreadStage): Thread[] {
-    const threads = this.currentProjectThreads.filter(
-      (thread) => this.bucketForThread(thread) === bucketId && this.stageForThread(thread) === slice
-    )
-    return threads.sort((a, b) => {
-      // Pinned threads share one pin-time order across every surface; manual
-      // reorder (pinned_at) is the only override. Other slices use scope order.
-      if (slice === 'pinned') {
-        const aAt = a.pinnedAt ?? -1
-        const bAt = b.pinnedAt ?? -1
-        if (aAt !== bAt) return bAt - aAt
-      } else {
-        const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-        const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-        if (aPosition !== bPosition) return aPosition - bPosition
-      }
-      if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
-      return a.id.localeCompare(b.id)
-    })
+    return this.threads.threadsFor(bucketId, slice)
   }
 
   async reorderThreads(
@@ -667,47 +456,26 @@ class ScopeState {
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const projectId = this.activeProjectId
-    if (!projectId || draggedId === targetId) return
-
-    const orderedIds = this.threadsFor(bucketId, slice).map((thread) => thread.id)
-    const draggedIndex = orderedIds.indexOf(draggedId)
-    if (draggedIndex === -1) return
-    orderedIds.splice(draggedIndex, 1)
-
-    const targetIndex = orderedIds.indexOf(targetId)
-    if (targetIndex === -1) return
-    orderedIds.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedId)
-
-    const updatedThreads = await invoke(
-      'thread:reorderScope',
-      projectId,
-      bucketId,
-      slice,
-      orderedIds
-    )
-    const updates = new Map(updatedThreads.map((thread) => [thread.id, thread]))
-    this.allScopeThreads = this.allScopeThreads.map((thread) => updates.get(thread.id) ?? thread)
+    await this.threads.reorderThreads(bucketId, slice, draggedId, targetId, position)
   }
 
   stageForThread(thread: Thread): ThreadStage {
-    if (this.draftStageThreadIds.has(thread.id)) return 'todo'
-    return threadStage(thread, this.draftThreadId)
+    return this.threads.stageForThread(thread)
   }
 
   threadsByStage(stage: ThreadStage): Thread[] {
-    return this.currentProjectThreads.filter((thread) => this.stageForThread(thread) === stage)
+    return this.threads.threadsByStage(stage)
   }
 
   showSidebarForThread(thread: Thread, bucketId?: string): void {
     if (thread.projectId !== this.activeProjectId) {
       void this.activateProject(thread.projectId)
     }
-    void this.ensureProjectThreadsLoaded(thread.projectId)
+    void this.threads.ensureProjectThreadsLoaded(thread.projectId)
     this.sidebarContext = {
       projectId: thread.projectId,
       bucketId: bucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
-      stage: this.stageForThread(thread),
+      stage: this.threads.stageForThread(thread),
       threadId: thread.id
     }
     persistScopeSnapshot({
@@ -720,7 +488,7 @@ class ScopeState {
     if (projectId !== this.activeProjectId) {
       void this.activateProject(projectId)
     }
-    void this.ensureProjectThreadsLoaded(projectId)
+    void this.threads.ensureProjectThreadsLoaded(projectId)
     this.sidebarContext = {
       projectId,
       bucketId: this.lastBucketForProject(projectId),
@@ -739,7 +507,7 @@ class ScopeState {
   dockScope(bucketId: string): void {
     const projectId = this.activeProjectId
     if (!projectId) return
-    void this.ensureProjectThreadsLoaded(projectId)
+    void this.threads.ensureProjectThreadsLoaded(projectId)
     this.sidebarContext = {
       projectId,
       bucketId,
@@ -823,206 +591,100 @@ class ScopeState {
   }
 
   updateThread(updated: Thread): void {
-    const exists = this.allScopeThreads.some((thread) => thread.id === updated.id)
-    this.allScopeThreads = exists
-      ? this.allScopeThreads.map((thread) => (thread.id === updated.id ? updated : thread))
-      : [updated, ...this.allScopeThreads]
-    if (this.sidebarContext?.threadId === updated.id) {
-      this.sidebarContext = {
-        projectId: updated.projectId,
-        bucketId: this.bucketForThread(updated),
-        stage: this.stageForThread(updated),
-        threadId: updated.id
-      }
-      persistScopeSnapshot({
-        activeProjectId: this.activeProjectId,
-        sidebarContext: this.sidebarContext
-      })
-    }
+    this.threads.updateThread(updated)
   }
 
   removeThread(threadId: string): void {
-    const removedIds = new Set(
-      this.allScopeThreads
-        .filter((thread) => thread.id === threadId || thread.coordinatorThreadId === threadId)
-        .map((thread) => thread.id)
-    )
-    this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
+    this.threads.removeThread(threadId)
   }
 
   // ─── Managed worktree lifecycle ─────────────────────────────────────────
 
-  /** Create an isolated managed worktree for an existing scope bucket. */
-  async createWorktree(
+  /** Create a managed worktree for an existing scope bucket. */
+  createWorktree(
     projectId: string,
     bucketId: string,
-    input: {
-      title: string
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      /** Source branch the worktree forks from; defaults to the current branch. */
-      baseBranch?: string
-      /** Setup commands executed for exactly this worktree. */
-      setupCommands?: ScopeSetupCommandSpec[]
-    }
+    input: ScopeWorktreeCreateInput
   ): Promise<ManagedWorktreeDescriptor | null> {
-    this.worktreeProgress = { stage: 'naming' }
-    try {
-      const descriptor = await invoke(
-        'scope:worktree:create',
-        { projectId, scopeBucketId: bucketId },
-        input
-      )
-      this.worktreeProgress = { stage: 'done' }
-      await this.reloadBoard(projectId)
-      return descriptor
-    } catch (error) {
-      this.worktreeProgress = { stage: 'failed' }
-      this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
-      throw error
-    }
-  }
-
-  /**
-   * Kick the full new-scope creation off in the background so the app stays
-   * usable while git + setup commands run. Progress is shown as a persistent
-   * docked toast; it flips to a success check on completion (auto-dismisses)
-   * or an error toast that stays until dismissed.
-   */
-  beginWorktreeCreation(
-    projectId: string,
-    input: {
-      title: string
-      /** Whether an isolated worktree is requested; shared-directory scopes skip setup entirely. */
-      isolated: boolean
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      baseBranch?: string
-      setupCommands?: ScopeSetupCommandSpec[]
-    },
-    options: { existingBucketId?: string | null; onCreated?: (bucketId: string) => void } = {}
-  ): void {
-    const creation = (async (): Promise<string> => {
-      let bucketId = options.existingBucketId ?? null
-      if (!bucketId) {
-        const bucket = await this.createBucketForProject(projectId, input.title)
-        bucketId = bucket?.id ?? null
-        if (!bucketId) throw new Error('The scope could not be created')
-      }
-      if (input.isolated) {
-        // Persist the entered configuration as project defaults BEFORE creating
-        // so the saved defaults can never race ahead of this worktree.
-        await this.setWorktreeDefaults(projectId, {
-          setupCommands: input.setupCommands ?? [],
-          runSetupByDefault: input.runSetup,
-          environmentMode: input.environmentMode
-        })
-        await this.createWorktree(projectId, bucketId, input)
-      }
-      options.onCreated?.(bucketId)
-      return input.title
-    })().catch((cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : 'The scope could not be created.'
-      // Never let an unhandled rejection surface: the toast already reports it.
-      return Promise.reject(new Error(message))
-    })
-    void toast.promise(creation, {
-      loading: `Creating “${input.title}”…`,
-      success: `“${input.title}” is ready`,
-      error: (cause: unknown) =>
-        cause instanceof Error ? cause.message : 'The scope could not be created.'
-    })
+    return this.worktrees.createWorktree(projectId, bucketId, input)
   }
 
   /** Inspect the source checkout before creating a worktree. */
   worktreeSourceInfo(projectId: string): Promise<ScopeWorktreeSourceInfo> {
-    return invoke('scope:worktree:sourceInfo', projectId)
+    return this.worktrees.worktreeSourceInfo(projectId)
   }
 
   /** Read the typed health of a managed scope worktree. */
-  async worktreeHealth(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
-    const health = await invoke('scope:worktree:health', target)
-    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
-    return health
+  worktreeHealth(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    return this.worktrees.worktreeHealth(target)
   }
 
   /** Repair an unhealthy managed scope and refresh its cached health. */
-  async repairWorktree(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
-    const health = await invoke('scope:worktree:repair', target)
-    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
-    await this.reloadBoard(target.projectId)
-    return health
+  repairWorktree(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    return this.worktrees.repairWorktree(target)
   }
 
   /** Preview whether an existing Git worktree checkout can be adopted. */
   detectAdoptableWorktree(projectId: string, sourcePath: string): Promise<AdoptableWorktreeInfo> {
-    return invoke('scope:worktree:detectAdopt', projectId, sourcePath)
+    return this.worktrees.detectAdoptableWorktree(projectId, sourcePath)
   }
 
   /** Adopt an existing raw Git worktree as a managed scope root. */
-  async adoptWorktree(
+  adoptWorktree(
     projectId: string,
     bucketId: string,
     input: { sourcePath: string; runSetup: boolean }
   ): Promise<ManagedWorktreeDescriptor | null> {
-    this.worktreeProgress = { stage: 'naming' }
-    try {
-      const descriptor = await invoke(
-        'scope:worktree:adopt',
-        { projectId, scopeBucketId: bucketId },
-        input
-      )
-      this.worktreeProgress = { stage: 'done' }
-      await this.reloadBoard(projectId)
-      await this.worktreeHealth({ projectId, scopeBucketId: bucketId })
-      return descriptor
-    } catch (error) {
-      this.worktreeProgress = { stage: 'failed' }
-      this.error = error instanceof Error ? error.message : 'The worktree could not be adopted.'
-      throw error
-    }
+    return this.worktrees.adoptWorktree(projectId, bucketId, input)
   }
 
   /** Cached typed health of one scope (undefined until it has been refreshed). */
   healthFor(bucketId: string, projectId?: string | null): ScopeWorktreeHealth | undefined {
-    const targetProjectId = projectId ?? this.activeProjectId
-    if (!targetProjectId) return undefined
-    return this.healthByTarget.get(`${targetProjectId}:${bucketId}`)
+    return this.worktrees.healthFor(bucketId, projectId ?? this.activeProjectId)
   }
 
   /**
    * Refresh managed-worktree health for a board in the background. Deduped by
    * board signature, so reactive callers (the scope board and the scoped-threads
    * sidebar) can call it on every update while the health they render stays fresh.
+   * Targets whose scope no longer exists are dropped, so a stale verdict can
+   * never outlive its scope.
    */
   syncBoardWorktreeHealth(
     projectId: string | null | undefined,
     buckets: readonly ScopeBucket[] | undefined
   ): void {
-    if (!projectId || !buckets) return
-    const managed = buckets.filter((bucket) => bucket.root.kind === 'worktree')
-    if (managed.length === 0) return
-    const signature = `${projectId}:${managed.map((bucket) => bucket.id).join(',')}`
-    if (signature === this.healthSyncSignature) return
-    this.healthSyncSignature = signature
-    for (const bucket of managed) {
-      void this.worktreeHealth({ projectId, scopeBucketId: bucket.id }).catch(() => undefined)
-    }
+    this.worktrees.syncBoardWorktreeHealth(projectId, buckets)
+  }
+
+  /**
+   * Re-read one managed scope's health when its cached verdict is older than the
+   * throttle window. Detection stays passive (nothing polls the filesystem), but
+   * every surface that has a reason to touch a scope (board switch, scoped
+   * sidebar, Git panel, scope actions menu, a failed operation) calls this, so a
+   * checkout that changed on disk is re-detected at the moment it matters.
+   */
+  revalidateWorktreeHealth(
+    projectId: string,
+    bucketId: string,
+    options?: { force?: boolean }
+  ): Promise<ScopeWorktreeHealth | undefined> {
+    return this.worktrees.revalidateWorktreeHealth(projectId, bucketId, options)
+  }
+
+  /** Revalidate every managed scope of a board in the background. */
+  revalidateBoardWorktreeHealth(
+    projectId: string | null | undefined,
+    buckets: readonly ScopeBucket[] | undefined
+  ): void {
+    this.worktrees.revalidateBoardWorktreeHealth(projectId, buckets)
   }
 
   /** Refresh the cached health of every managed bucket on the active board. */
   async refreshWorktreeHealth(projectId?: string): Promise<void> {
     const targetProjectId = projectId ?? this.activeProjectId
     if (!targetProjectId) return
-    const buckets = this.boards.get(targetProjectId)?.buckets ?? []
-    for (const bucket of buckets) {
-      if (bucket.root.kind !== 'worktree') continue
-      try {
-        await this.worktreeHealth({ projectId: targetProjectId, scopeBucketId: bucket.id })
-      } catch {
-        // Health stays at its previous cached value; failures surface in UI state.
-      }
-    }
+    await this.worktrees.refreshWorktreeHealth(targetProjectId)
   }
 
   /** Compute a state-bound preflight and mint a single-use confirmation token. */
@@ -1031,7 +693,7 @@ class ScopeState {
     bucketId: string,
     action: ScopeLifecycleAction
   ): Promise<ScopeLifecyclePreflight> {
-    return invoke('scope:worktree:preflight', action, { projectId, scopeBucketId: bucketId })
+    return this.worktrees.preflightWorktree(projectId, bucketId, action)
   }
 
   /** Consume a confirmation token to apply a guarded lifecycle action. */
@@ -1042,34 +704,23 @@ class ScopeState {
     confirmationId: string,
     options?: { force?: boolean }
   ): Promise<void> {
-    const target = { projectId, scopeBucketId: bucketId }
-    switch (action) {
-      case 'detach':
-        return invoke('scope:worktree:confirmDetach', target, confirmationId)
-      case 'remove-worktree':
-        return invoke(
-          'scope:worktree:confirmRemove',
-          target,
-          confirmationId,
-          options?.force ?? false
-        )
-      case 'delete-branch':
-        return invoke('scope:worktree:confirmDeleteBranch', target, confirmationId)
-      default:
-        return Promise.reject(new Error(`Unsupported lifecycle action for this path: ${action}`))
-    }
+    return this.worktrees.confirmWorktreeLifecycle(
+      projectId,
+      bucketId,
+      action,
+      confirmationId,
+      options
+    )
   }
 
   /** Preflight merging a managed scope into another scope and mint a token. */
-  async mergeToScopePreflight(
+  mergeToScopePreflight(
     projectId: string,
     bucketId: string,
     mergeTargetBucketId: string,
     mode: ScopeMergeMode
   ): Promise<ScopeMergePreflight> {
-    const source = { projectId, scopeBucketId: bucketId }
-    const dest = { projectId, scopeBucketId: mergeTargetBucketId }
-    return invoke('scope:worktree:mergePreflight', source, dest, mode)
+    return this.worktrees.mergeToScopePreflight(projectId, bucketId, mergeTargetBucketId, mode)
   }
 
   /**
@@ -1077,55 +728,84 @@ class ScopeState {
    * scope bucket, and (by default) its branch. Threads are handled by the
    * caller before this runs.
    */
-  async confirmDeleteScope(
+  confirmDeleteScope(
     projectId: string,
     bucketId: string,
     confirmationId: string,
     deleteBranch = true
   ): Promise<void> {
-    const target = { projectId, scopeBucketId: bucketId }
-    await invoke('scope:worktree:confirmDeleteScope', target, confirmationId, deleteBranch)
-    await this.reloadBoard(projectId)
+    return this.worktrees.confirmDeleteScope(projectId, bucketId, confirmationId, deleteBranch)
   }
 
   /** Consume a merge token to merge a scope and apply its post-merge mode. */
-  async confirmScopeMerge(
+  confirmScopeMerge(
     projectId: string,
     bucketId: string,
     mergeTargetBucketId: string,
     mode: ScopeMergeMode,
     confirmationId: string
   ): Promise<ScopeMergeOutcome> {
-    const source = { projectId, scopeBucketId: bucketId }
-    const dest = { projectId, scopeBucketId: mergeTargetBucketId }
-    return invoke('scope:worktree:confirmMerge', source, dest, mode, confirmationId)
+    return this.worktrees.confirmScopeMerge(
+      projectId,
+      bucketId,
+      mergeTargetBucketId,
+      mode,
+      confirmationId
+    )
   }
 
   /** Retry from a failed/interrupted setup, or continue without setup. */
-  async retryWorktreeSetup(projectId: string, bucketId: string, runSetup: boolean): Promise<void> {
-    await invoke('scope:worktree:retrySetup', { projectId, scopeBucketId: bucketId }, { runSetup })
-    await this.reloadBoard(projectId)
+  retryWorktreeSetup(projectId: string, bucketId: string, runSetup: boolean): Promise<void> {
+    return this.worktrees.retryWorktreeSetup(projectId, bucketId, runSetup)
   }
 
   /** Archive or restore a custom scope. Never touches its worktree. */
-  async setArchive(projectId: string, bucketId: string, archived: boolean): Promise<void> {
-    const board = await invoke('scope:setArchive', projectId, bucketId, archived)
-    const cloned = cloneBoard(board)
-    this.boards.set(projectId, cloned)
-    if (projectId === this.activeProjectId) this.board = cloned
+  setArchive(projectId: string, bucketId: string, archived: boolean): Promise<void> {
+    return this.worktrees.setArchive(projectId, bucketId, archived)
   }
 
   /** Pin or unpin a scope. Pinned scopes are exempt from thread eviction. */
-  async setPinned(projectId: string, bucketId: string, pinned: boolean): Promise<void> {
-    const board = await invoke('scope:setPinned', projectId, bucketId, pinned)
-    const cloned = cloneBoard(board)
-    this.boards.set(projectId, cloned)
-    if (projectId === this.activeProjectId) this.board = cloned
+  setPinned(projectId: string, bucketId: string, pinned: boolean): Promise<void> {
+    return this.worktrees.setPinned(projectId, bucketId, pinned)
   }
 
   /** Persistent project-level managed-worktree defaults. */
-  async setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
-    const board = await invoke('scope:setWorktreeDefaults', projectId, defaults)
+  setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
+    return this.worktrees.setWorktreeDefaults(projectId, defaults)
+  }
+
+  /**
+   * An agent changed scope state in main. Reload the project's board so the new
+   * or removed scope appears immediately instead of waiting for a navigation,
+   * and say what happened so the user is never looking at a silent change.
+   */
+  async handleBoardChangedEvent(event: ScopeBoardChangedEvent): Promise<void> {
+    const { projectId } = event
+    if (!projectId) return
+    // A project whose board was never opened has nothing stale to fix; it will
+    // read the current board the first time the user looks.
+    if (this.boards.has(projectId)) {
+      try {
+        await this.reloadBoard(projectId)
+      } catch (cause) {
+        this.error = cause instanceof Error ? cause.message : 'The scope board could not reload.'
+      }
+    }
+    const project = this.projects.find((candidate) => candidate.id === projectId)
+    toast.info(`An agent ${event.summary}`, {
+      description: project ? `in ${project.name}` : undefined,
+      closeButton: true
+    })
+  }
+
+  private persistSnapshot(): void {
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  private applyBoard(projectId: string, board: ScopeBoard): void {
     const cloned = cloneBoard(board)
     this.boards.set(projectId, cloned)
     if (projectId === this.activeProjectId) this.board = cloned

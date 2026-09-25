@@ -14,9 +14,9 @@ The repo must be clean before it goes public   no stale config pointing at priva
 - [x] **Point release metadata at the OSS repo.** `electron-builder.yml` (`publish.owner`/`publish.repo`) and every `github.com/pillardash/codeinoven` link in `README.md` must reference **`pillardash-oss/codeinoven`**, not the private `pillardash/codeinoven`.
 - [x] **Verify the default `main` branch is the one that publishes.** Currently `origin/main` on the OSS remote matches local `main`.
 - [x] **Scan git history for leaked secrets before going public**   `gitleaks` or `trufflehog` over the full history. You cannot un-leak a secret once the repo is public; if anything is found, rotate it and scrub history before the first push.
-- [x] **Confirm `.gitignore` covers every local/private artifact**: `node_modules/`, `out/`, `dist/`, `.env*`, `agent-out/`, `.cio/`, `.opencode/`, logs, `.DS_Store`. Already present   verify nothing private is force-added.
+- [x] **Confirm `.gitignore` covers every local/private artifact**: `node_modules/`, `out/`, `dist/`, `.env*`, `.cio/`, `.opencode/`, logs, `.DS_Store`. Already present   verify nothing private is force-added.
 - [x] **Add `.env.example`** (see Phase 4) with placeholder values so CI and contributors know which env vars exist.
-- [x] **Verify `LICENSE` matches `package.json` `"license"`** (PolyForm Noncommercial 1.0.0   commercial use requires a separate license from Pillardash Solutions).
+- [x] **Verify `LICENSE` matches `package.json` `"license"`** (MIT).
 - [x] **Add `SECURITY.md`**   how to report vulnerabilities privately (security@email or GitHub private vulnerability reporting), expected response SLA, and scope (app, website, auto-update feed, server).
 - [x] **Add `CODE_OF_CONDUCT.md`**   short, enforceable contributor covenant; link it from `README.md` and the issue templates.
 - [x] **Add issue templates** (Phase 5) and a **PR template**.
@@ -49,6 +49,8 @@ Control who can merge, what must pass, and what runs automatically.
 - [x] **Enable GitHub secret scanning & push protection** on the repo (repo Settings → Security).
 - [x] **Environment branches created and protected**: `dev` (PR review + quality checks + linear history) and `nightly` (PR review + quality checks) exist and are protected; CI runs on all three (`main`/`dev`/`nightly`).
 - [x] **Nightly build workflow** (`.github/workflows/nightly.yml`): scheduled daily build from `nightly` branch publishing a `nightly` prerelease with checksums.
+- [x] **Mirror releases to our own download origin** (`.github/workflows/download-mirror.yml` + `scripts/publish-release-mirror.ts`): when the release workflow finishes it dispatches the mirror job, which copies the same verified artifacts to Cloudflare R2 and serves them from `dl.codeinoven.com`, which is what the app downloads updates from (GitHub stays the fallback). Setup and verification: `docs/DOWNLOAD-MIRROR.md`.
+- [ ] **Set the mirror repository variables/secrets** (`DOWNLOAD_MIRROR_S3_ENDPOINT`, `DOWNLOAD_MIRROR_S3_BUCKET`, `DOWNLOAD_MIRROR_S3_ACCESS_KEY_ID`, `DOWNLOAD_MIRROR_S3_SECRET_ACCESS_KEY`) so the mirror job runs instead of being skipped; see `docs/SECRETS.md` § 1.
 - [ ] **Require signed/verified commits** for maintainer pushes (optional but recommended for auditability).
 
 ## 3. Secrets security
@@ -108,6 +110,7 @@ The public-facing cutover.
 - [ ] **Tag and release `v0.5.0`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.
 - [x] **Verify the auto-update feed** points at the OSS GitHub Releases (README/`electron-builder.yml` now reference `pillardash-oss`). Resolution of `latest.yml`/`latest-mac.yml` is only testable after the first release is published   pending.
 - [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing.
+- [ ] **Verify the download mirror** after a release: `curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq .version` reports the version just released, the versionless installer URLs (`stable/codeinoven-arm64.dmg` and friends) serve the new bytes, and an installer downloaded from the mirror hashes to the `sha256` in that manifest (commands in `docs/DOWNLOAD-MIRROR.md`).
 - [ ] **Post-launch hygiene**: enable discussions, announce on X/Twitter and relevant communities, and pin a "first contribution" issue.
 - [x] **Document the security model publicly** (README privacy section already covers data & privacy; add a short "Security" note pointing to `SECURITY.md`).
 - [x] **Set expectations for response time** so you don't get worn out: `SECURITY.md` SLA, Discussions for questions, Issues triaged weekly.
@@ -136,6 +139,9 @@ The public-facing cutover.
 | `.github/workflows/security.yml`   | Gitleaks + `bun audit`                      |
 | `.github/workflows/stale.yml`      | Stale issue/PR cleanup                      |
 | `.github/workflows/nightly.yml`    | Scheduled nightly prerelease build          |
+| `.github/workflows/download-mirror.yml` | Copies each release to `dl.codeinoven.com` |
+| `scripts/publish-release-mirror.ts` | Verifies and uploads a release to the mirror |
+| `docs/DOWNLOAD-MIRROR.md`          | Download-mirror setup, layout, verification |
 | `docs/SECRETS.md`                  | Where to get and store every secret         |
 
 ## Quick reference: files fixed

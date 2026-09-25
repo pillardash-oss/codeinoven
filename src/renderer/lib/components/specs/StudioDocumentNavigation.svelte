@@ -56,9 +56,8 @@
     <ArrowLeft size={13} class="shrink-0" />
     <span class="conversation-text max-md:hidden">Conversation</span>
   </button>
-  <!-- Show/hide the studio's own section rail. On a phone it stands in for the
-       agent-messages button below, whose rail lives in the desktop sidebar that
-       the remote shell never mounts. -->
+  <!-- Show/hide the studio's own section rail. On a narrow layout it stands in
+       for the agent-messages button below, whose rail lives in the sidebar. -->
   {#if onToggleSections}
     <button
       class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md md:hidden {sectionsOpen
@@ -107,22 +106,18 @@
         PRD
       </button>
     {/if}
-    <button
-      class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
-        ? 'bg-surface font-semibold text-foreground shadow-sm'
-        : specAvailable
-          ? 'text-muted hover:bg-overlay hover:text-foreground'
-          : 'cursor-not-allowed text-dimmed opacity-50'}"
-      aria-pressed={active === 'spec'}
-      aria-disabled={!specAvailable}
-      disabled={!specAvailable}
-      title={specAvailable
-        ? 'Open specification'
-        : 'Finalize the brainstorm to create a specification'}
-      onclick={onOpenSpec}
-    >
-      Spec
-    </button>
+    {#if specAvailable || active === 'spec'}
+      <button
+        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
+          ? 'bg-surface font-semibold text-foreground shadow-sm'
+          : 'text-muted hover:bg-overlay hover:text-foreground'}"
+        aria-pressed={active === 'spec'}
+        title="Open specification"
+        onclick={onOpenSpec}
+      >
+        Spec
+      </button>
+    {/if}
     {#if assignmentAvailable && onOpenAssignment}
       <button
         class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===

@@ -1,20 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
-  import { mergeStreamedPart } from '$lib/agent-part-merge'
+  import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { formatDurationMs } from '$lib/format/duration'
+  import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
-  import { fly } from 'svelte/transition'
+  import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-
-  interface ThreadScrollState {
-    top: number
-    /** Whether the user was scrolled away from the bottom when saved. */
-    awayFromBottom: boolean
-  }
-
-  /** Persists each thread's scroll position across component remounts. */
-  const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
-  const HISTORY_WINDOW_SIZE = 40
 
   import {
     AudioLines,
@@ -44,9 +36,11 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import ForeignRunCard from './ForeignRunCard.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
-  import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
+  import { normalizeComposerMessage } from '../chats/composer-mentions'
+  import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -54,25 +48,31 @@
   import MediaPreview from '../chats/MediaPreview.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
+  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
+  import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
+  import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
@@ -82,9 +82,6 @@
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
-  import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
-  import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
-  import IndependentAuditCoordinatorPanel from './IndependentAuditCoordinatorPanel.svelte'
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
@@ -101,6 +98,7 @@
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { isAtLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
   import { actionContext } from '$lib/stores/action-context.svelte'
+  import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
   import BrainstormStudio from '../specs/BrainstormStudio.svelte'
@@ -112,11 +110,8 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import {
-    classifyProviderIssue,
-    isUsageResetWaitIssue,
-    rateLimitWindowFromProviderIssue
-  } from '$shared/provider-issue'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
+  import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -132,16 +127,33 @@
   } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
-    threadSettings,
-    chatSettings,
-    chatEffectiveSettings
+    initialSettingsFor,
+    settingsStoreFor,
+    type ModelScope
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    FIRST_RUN_PROVIDER_SEARCH,
+    providerConnectFlow
+  } from '$lib/stores/provider-connect-flow.svelte'
+  import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import {
+    connectionsFromPlan,
+    isRoutineConfirmation,
+    latestHowToDraft as latestHowToDraftIn,
+    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
+    type RoutinePlanDraft
+  } from '$lib/components/assistant/assistant-view'
+  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import {
+    coordinatorDockState,
+    type CoordinatorDockPanel
+  } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
     rendererRecovery,
@@ -153,6 +165,7 @@
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
@@ -160,6 +173,7 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
+  import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
@@ -171,7 +185,8 @@
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     DEFAULT_THREAD_TITLE,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
   import type {
     Thread,
@@ -179,14 +194,12 @@
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
-    PermissionLevel,
     ScopedHarnessCommand,
     AgentCapabilityEntry,
     AgentMessage,
     AgentPart,
     AgentEvent,
     AgentContextUsage,
-    AgentRateLimitWindow,
     AgentHarnessUsage,
     AgentProviderIssue,
     AgentSessionStatus,
@@ -194,7 +207,7 @@
     AgentModelSelection,
     AgentRole,
     AgentQuestion,
-    ProviderCatalog,
+    AgentSecretSubmission,
     PromptAttachment,
     PromptAssignmentTaskReference,
     PromptProjectReference,
@@ -217,6 +230,7 @@
     AssignmentPlanContent,
     AssignmentTask,
     AssignmentModelSelection,
+    ScopeChoice,
     AuditReport,
     AuditSectionId,
     SpecContextReference,
@@ -244,15 +258,59 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
-  import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
-  import { LiveTokenRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
-  import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
+  import {
+    auditReportForTurn,
+    buildTranscriptIndex,
+    getTurnFinalText,
+    getTurnWorkingParts,
+    hasRenderableWorkingParts,
+    isActivityOnlyUserMessage,
+    isTurnCompleted,
+    lastTurnStartIndex,
+    resolvedSubagentPart,
+    streamWorkingPartsForTurn,
+    turnStartPromptsBefore,
+    type SubagentPart
+  } from './thread-turn-parts'
+  import {
+    applyResponseHighlights,
+    captureResponseSelection,
+    measureResponseBubblePositions,
+    releaseResponseHighlights,
+    responseRangeFor,
+    responseRangeIsCurrent,
+    RESPONSE_BUBBLE_SIZE,
+    type ResponseBubblePosition,
+    type ResponseSelectionCandidate
+  } from './thread-response-ranges'
+  import {
+    explicitMessagePresentation,
+    harnessDisplayName,
+    inlineFileTagsForMessage,
+    messageHarnessName,
+    messageModelLabel,
+    messageProvider,
+    messageText,
+    messageThinkingLevel,
+    messageTokenRate,
+    resolveMessageHarnessId,
+    specActionLabel,
+    tracePreviewByUserMessage
+  } from './thread-message-presentation'
+  import { mergeContextUsage, providerReportedWindows } from './thread-usage-merge'
+  import {
+    HISTORY_WINDOW_SIZE,
+    mergedUserMessageSummaries,
+    promptPagesBefore
+  } from './thread-history'
+  import { threadScrollPositions } from './thread-scroll-memory'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -266,6 +324,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
+    /** True in Assistant View   the thread authors a routine's how-to. */
+    assistantMode?: boolean
+    /** Routine the assistant task belongs to, when any. */
+    assistantRoutineId?: string | null
+    /** Routine name, shown in the authoring head start. */
+    assistantRoutineName?: string | null
+    /** Whether the routine already has a saved how-to. */
+    assistantHowToComplete?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -296,11 +362,20 @@
     /** Opens the scoped projects view with the sidebar focused on this thread
      *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
+    /** True while this thread's view is actually on screen. The workspace shell
+     *  keeps a thread mounted behind Settings/Scope and other top-level views,
+     *  so this   not unmount   is what tells the view the reader has left it:
+     *  live polling stops and the working trace re-bounds to its newest page. */
+    active?: boolean
   }
 
   let {
     thread: threadProp,
     chatMode = false,
+    assistantMode = false,
+    assistantRoutineId = null,
+    assistantRoutineName = null,
+    assistantHowToComplete = false,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -310,7 +385,8 @@
     controller,
     headerSnippet,
     allowCenteredComposer = true,
-    onOpenScopeView
+    onOpenScopeView,
+    active = true
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -379,7 +455,7 @@
       }
       return countStart
     }
-    const covered = promptPagesBefore(turnStart, 2)
+    const covered = promptPagesBefore(messages, turnStart, 2)
     return Math.min(countStart, covered === -1 ? 0 : covered)
   })
   /** The mounted window: everything from the reader's anchor (or the newest
@@ -391,6 +467,26 @@
    *  always extends to the tail, so streaming trace entries render the
    *  moment they land   never staged, never evicted from below the reader. */
   let visibleMessages = $derived(hasController ? messages : messages.slice(mountedStartIndex))
+
+  let checkpoints = $state<TurnCheckpointSummary[]>([])
+  /**
+   * The transcript as of its last structural change: identity, role, and
+   * timestamps, without subscribing to streamed content. A delta replaces text
+   * inside an existing part without moving this reference, so everything that
+   * only needs the shape of the conversation   which window is mounted, where
+   * the last turn starts, what the user has already asked   reads this instead
+   * of the live `messages` array and stops recomputing at the stream cadence.
+   */
+  let structureMessages = $derived(
+    hasController ? messages : threadMessages.structureMessages(thread.projectId, thread.id)
+  )
+  /**
+   * Every per-message turn question, answered once per structural change. The
+   * transcript asks these once per mounted message per render; reading them from
+   * here turns that into an array lookup and keeps a long transcript from being
+   * rescanned on every streamed frame.
+   */
+  let transcriptIndex = $derived(buildTranscriptIndex(structureMessages, checkpoints))
 
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
@@ -444,11 +540,11 @@
    *  user follow-up is handled separately until its first assistant message is
    *  mirrored, so it can never lend live state to the preceding trace. */
   const latestTurnInfo = $derived.by(() => {
-    const startIndex = lastTurnStartIndex(messages)
+    const startIndex = lastTurnStartIndex(structureMessages)
     if (startIndex === -1) return { startIndex: -1, active: false }
     let endIndex = startIndex
-    while (endIndex + 1 < messages.length) {
-      const next = messages[endIndex + 1]
+    while (endIndex + 1 < structureMessages.length) {
+      const next = structureMessages[endIndex + 1]
       if (!next) break
       if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
         endIndex += 1
@@ -457,9 +553,9 @@
       break
     }
     const trailingUserOnly =
-      endIndex < messages.length - 1 &&
-      messages.slice(endIndex + 1).every((message) => message.role === 'user')
-    const turnCompleted = messages[endIndex]?.completedAt !== undefined
+      endIndex < structureMessages.length - 1 &&
+      structureMessages.slice(endIndex + 1).every((message) => message.role === 'user')
+    const turnCompleted = structureMessages[endIndex]?.completedAt !== undefined
     const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
@@ -475,33 +571,20 @@
   let hasOlderMessages = $derived(
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
-  /** Merge the lazily loaded persisted full history with any live/optimistic
-   *  user messages still pending in the mirror, deduped by id (the live window
-   *  wins, e.g. after an edit) and kept in chronological order. This is the
-   *  single source shared by the history side panel and the composer's
-   *  arrow-up recall, so navigation can reach every message without the whole
-   *  conversation being loaded into the view. */
-  function mergedUserMessageSummaries(): UserMessageSummary[] {
-    const byId: Record<string, UserMessageSummary> = {}
-    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
-    for (const message of messages) {
-      if (message.role !== 'user') continue
-      byId[message.id] = {
-        id: message.id,
-        content: messageText(message),
-        createdAt: message.createdAt
-      }
-    }
-    return Object.values(byId).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-  }
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. */
+   *  would only produce an empty recall step. Keyed on the structure snapshot  
+   *  a user message's text only ever changes through a merge that reports
+   *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
-    mergedUserMessageSummaries()
+    mergedUserMessageSummaries(structureMessages, fullUserMessageHistory)
       .map((entry) => entry.content)
       .filter((text) => text.trim().length > 0)
   )
   let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
+  /** Another live instance owns this thread's in-flight turn. Its stream never
+   *  reaches this window, so the composer cannot drive the run and is replaced
+   *  by the transfer card instead. */
+  let foreignRunActive = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
   let conversationBusy = $derived(
     (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
   )
@@ -529,8 +612,8 @@
     if (!conversationBusy || brainstormReportRefreshing) return null
     const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
     if (!userMessageId) return null
-    const userMessageIndex = messages.findIndex((message) => message.id === userMessageId)
-    const userMessage = messages[userMessageIndex]
+    const userMessageIndex = structureMessages.findIndex((message) => message.id === userMessageId)
+    const userMessage = structureMessages[userMessageIndex]
     if (
       userMessageIndex === -1 ||
       !userMessage ||
@@ -539,7 +622,7 @@
     ) {
       return null
     }
-    const assistantMirrored = messages
+    const assistantMirrored = structureMessages
       .slice(userMessageIndex + 1)
       .some((message) => message.role === 'assistant')
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
@@ -563,20 +646,27 @@
     if (conversationBusy && lastMessage?.role === 'user' && !isActivityOnlyUserMessage(lastMessage))
       return []
     if (latestTurnInfo.startIndex === -1) return []
-    return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
+    const { leading, body } = getTurnWorkingParts(
+      messages,
+      latestTurnInfo.startIndex,
+      conversationBusy && latestTurnInfo.active
+    )
+    return [...leading, ...body]
   })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
-  // This removes the false working flash on refresh and on view remounts.
+  // This removes the false working flash on refresh and on view remounts, and it
+  // covers controller-driven side chats too: a stale busy flag there hides the
+  // newest answer behind the working trace (the final-answer block is gated on
+  // it) and turns the composer into a queue/steer surface for a run that is
+  // already over.
   // svelte-ignore state_referenced_locally
-  if (!hasController) {
-    if (
-      !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
-      agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
-    ) {
-      agentRuns.setIdle(thread.projectId, thread.id)
-    }
+  if (
+    !agentRuns.isLiveBusy(thread.projectId, conversationId) &&
+    agentRuns.activity(thread.projectId, conversationId) !== 'brainstorm_report'
+  ) {
+    agentRuns.setIdle(thread.projectId, conversationId)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived(
@@ -599,35 +689,40 @@
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const knownEphemeralSessionIds = new Set<string>()
   // Live tokens-per-second tracker for the assistant message currently streaming,
-  // plus finalized per-message rates kept for the turn's hover row.
-  const liveTokenRate = new LiveTokenRate()
+  // plus finalized per-message rates kept for the turn's hover row. The tracker
+  // learns its characters-per-token factor from the requests that report token
+  // counts, so a harness that reports late (pi reports at each request end,
+  // cline only at turn end, muse never) is estimated at its own tokenization
+  // rather than a fixed average.
+  const liveTokenRate = new LiveGenerationRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  // Feed the live rate tracker from real usage reports only   the streamed-text
-  // estimate was too crude to display and has been removed with the live rate.
-  // The tracker remains for the finalized end-of-turn rate.
   $effect(() => {
-    if (!busy) return
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (message.role !== 'assistant') continue
-      // Only stream-observe an unfinished message so restored history can never
-      // restart the clock for an old turn.
-      if (message.tokens && !message.completedAt) {
-        liveTokenRate.observe(message.id, generatedTokens(message.tokens), false)
-      }
-      break
-    }
+    liveTokenRate.begin(sessionId)
   })
   // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
+  /**
+   * Which model memory this conversation belongs to: an assistant task, a
+   * standalone chat, or a project thread. It decides the settings a thread
+   * starts on, the store a change is committed to, and the model lists the
+   * pickers show, so a model picked for one kind of conversation never reshapes
+   * another kind's. Props, not state: the view is remounted (keyed) per thread.
+   */
+  function modelScope(): ModelScope {
+    if (assistantMode) return 'assistant'
+    return chatMode ? 'chat' : 'project'
+  }
+
+  /** The settings a thread starts on: its own, else its family's model memory. */
+  function initialThreadSettings(source: Thread): ThreadSettings {
+    const next = initialSettingsFor(modelScope(), source)
+    return chatMode ? normalizeChatSettings(next) : next
+  }
+
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
-    hasController
-      ? normalizeChatSettings(controller!.settings)
-      : chatMode
-        ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-        : threadSettings.initialFor(thread)
+    hasController ? normalizeChatSettings(controller!.settings) : initialThreadSettings(thread)
   )
 
   function shouldHydrateEngineeringState(): boolean {
@@ -654,6 +749,10 @@
    *  first | Jump directly into…" choice is shown only after the user tries to send,
    *  never when the Toolbox switch is toggled. */
   let pendingEngineeringEntry = $state<'prd' | 'spec' | null>(null)
+  /** The send that opened the entry card. The composer clears its buffer at
+   *  submit time, so the payload waits here and its draft is handed back while
+   *  the card is up; the resolved entry choice resends it. */
+  let pendingEntrySend = $state<ParkedEntrySend | null>(null)
   /** Toolbox presentation mirrors the staged selection so switches flip
    *  immediately, while every side effect stays deferred until the send. */
   const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
@@ -866,19 +965,40 @@
   }
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
-   *  session, an app restart, or a relay drop mid-turn). The trace renders the
+   *  session, or an app restart mid-turn). The trace renders the
    *  last-known saved parts with an explicit saved-activity note instead of the
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
   /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. */
+   *  the live mirror and restore the latest trace after an app refresh. Only a
+   *  bounded window is ever held here: the newest page plus whatever older pages
+   *  the reader has actually paged into, so opening a long running thread never
+   *  pulls (or parses) a whole turn's worth of streamed work. */
   let streamParts = $state<AgentPart[]>([])
+  /** True when the durable log still folds entries older than `streamParts[0]`. */
+  let streamHasOlder = $state(false)
+  /** Newest durable task-list parts for the turn. They never render in the
+   *  trace, so they ride beside the trace window and keep the task card correct
+   *  no matter which page of the trace is mounted. */
+  let streamTodoParts = $state<AgentPart[]>([])
+  /** Stream events the durable log has consumed for this fold: the live poll's
+   *  change cursor. `null` until a read lands, so the first poll falls back to
+   *  a window read. */
+  let streamCursor = $state<number | null>(null)
   let streamPartsLoadGeneration = 0
+  /** Bumped whenever the durable fold is dropped (a steer, a new local turn).
+   *  An older-page read started before it must not resurrect entries from the
+   *  turn the reader has left. */
+  let streamFoldVersion = 0
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
+    streamFoldVersion += 1
     streamParts = []
+    streamHasOlder = false
+    streamTodoParts = []
+    streamCursor = null
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -898,12 +1018,10 @@
     return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
   }
 
-  /** Commit to the chat-scoped last-used store on the Chats tab, and to the
-   *  project last-used store everywhere else, so switching a chat model never
-   *  changes the model used for project work. */
+  /** Commit to the model memory of this conversation's family, so a model picked
+   *  for a chat or an assistant task never changes what another kind starts on. */
   function commitSettings(next: ThreadSettings): void {
-    if (chatMode) chatSettings.commit(next)
-    else threadSettings.commit(next)
+    settingsStoreFor(modelScope()).commit(next)
   }
 
   function captureLiveWorkingSelection(): void {
@@ -925,9 +1043,10 @@
    *  inherited or otherwise preselected model without opening the picker. */
   function recordModelUse(): void {
     if (!settings.harnessId || !settings.providerId || !settings.modelId) return
-    const key = modelKey(settings.harnessId, settings.providerId, settings.modelId)
-    if (chatMode) rendererRecovery.addChatRecentModel(key)
-    else rendererRecovery.addRecentModel(key)
+    rendererRecovery.addModelRecentFor(
+      modelScope(),
+      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+    )
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
@@ -960,19 +1079,31 @@
    * from the live event path and can be newer than the bounded message mirror
    * that arrives with the final thread update. Feed that freshest snapshot to
    * the task card so a trailing provider snapshot cannot rewind the visible
-   * task state.
+   * task state. Task-list parts never render in the trace, so they are carried
+   * beside its window instead of inside it.
    */
   let todoMessages = $derived.by(() => {
-    if (streamParts.length === 0) return messages
+    if (streamTodoParts.length === 0) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
-      parts: streamParts,
+      parts: streamTodoParts,
       createdAt: Number.MAX_SAFE_INTEGER
     }
     return [...messages, streamMessage]
   })
   let activeTodo = $derived(latestAgentTodo(todoMessages))
+  /**
+   * A closed task list stays closed across thread switches and restarts, because
+   * the dismissal lives per thread in `dismissedTodo` instead of this mount. A
+   * different task list shows again, and a running turn always shows the card, so
+   * closing it can never hide live progress.
+   */
+  let visibleTodo = $derived(
+    activeTodo && (busy || !dismissedTodo.isDismissed(thread.id, activeTodo.signature))
+      ? activeTodo
+      : null
+  )
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
@@ -1002,7 +1133,18 @@
       isNewThread: messages.length === 0 && !busy,
       isWorking: busy,
       onOpenScopeView: () => onOpenScopeView?.(thread),
-      onSwitchProject: (pid: string) => void switchProject(pid)
+      onSwitchProject: (pid: string) => void switchProject(pid),
+      // Only a worker has a coordinator to report to, so only a worker gets the
+      // control. Reporting stays on unless this thread switched it off, which
+      // keeps the worker in a private iteration loop the user drives.
+      report:
+        thread.assignmentRole === 'worker'
+          ? {
+              enabled: settings.reportToCoordinator !== false,
+              onChange: (enabled: boolean) =>
+                updateSettings({ ...settings, reportToCoordinator: enabled })
+            }
+          : undefined
     }
   })
   let errorMessage = $state('')
@@ -1063,33 +1205,7 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
-  const providerIssueRateLimits = $derived.by(() => {
-    const issue = visibleProviderStatus?.issue
-    if (!issue) return []
-    const limit = rateLimitWindowFromProviderIssue(issue)
-    return limit ? [limit] : []
-  })
-  function mergeRateLimitWindows(
-    reported: readonly AgentRateLimitWindow[],
-    authoritative: readonly AgentRateLimitWindow[]
-  ): AgentRateLimitWindow[] {
-    const merged = [...reported]
-    for (const incoming of authoritative) {
-      const match = merged.findIndex(
-        (candidate) =>
-          (incoming.windowMinutes !== undefined &&
-            candidate.windowMinutes === incoming.windowMinutes) ||
-          candidate.label.toLowerCase() === incoming.label.toLowerCase()
-      )
-      if (match === -1) {
-        merged.push(incoming)
-      } else {
-        const current = merged[match]
-        if (current) merged[match] = { ...current, ...incoming, id: current.id }
-      }
-    }
-    return merged
-  }
+
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -1157,11 +1273,6 @@
     })
     return levels
   })
-  const actionPermissionLevels: Array<{ id: PermissionLevel; label: string }> = [
-    { id: 'auto_review', label: 'Auto Review' },
-    { id: 'full_access', label: 'Full Access' }
-  ]
-
   /** Engineering lifecycle stages exposed as individual action-menu toggles.
    *  Mirrors the Engineering Toolbox rows so both surfaces stay in sync. */
   const engineeringStageActions: ReadonlyArray<{
@@ -1300,22 +1411,10 @@
       })
     }
 
-    // Chat mode only surfaces permission levels once File System is enabled
+    // Chat mode only surfaces permission levels once File System is enabled:
     // chats run with auto permission review until the user opts into files.
     if (!chatMode || settings.fileSystemMode === true) {
-      for (const permission of actionPermissionLevels) {
-        actions.push({
-          id: actionId(`mode:permission:${permission.id}`),
-          title: `Permissions: ${permission.label}`,
-          description:
-            permission.id === 'full_access'
-              ? 'Run in yolo mode   every operation auto-approved'
-              : 'Auto-run every permission unless it is explicitly denied',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['access', 'approval', 'security', permission.label]
-        })
-      }
+      actions.push(...permissionLevelActions(applicationActionSource))
     }
 
     actions.push({
@@ -1374,6 +1473,39 @@
       slashCommand: true,
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
+
+    // CodeInOven design session   the slash spelling of the @cio-design composer
+    // tag. The tag promotes the app-owned design capability to an active
+    // capability for the turn, so the agent starts designing instead of first
+    // looking for a tool that designs.
+    actions.push({
+      id: 'command:cio-design',
+      title: '/cio-design',
+      description: 'Start a design session: design an interface and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'design', 'designer', 'prototype', 'ui', 'landing', 'page', 'wireframe'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
+    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // and asks the user to confirm the recap. The recap card commits the agreed
+    // draft in one click; this command is only the fallback for when that path
+    // cannot run, so it appears only while a draft is waiting to be committed
+    // and disappears for good once the routine is saved.
+    if (assistantRoutineDraft) {
+      actions.push({
+        id: 'command:save-how-to',
+        title: '/save-how-to',
+        description: 'Fallback: save the how-to the agent drafted for this routine',
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
+        slashCommand: true,
+        ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
 
     // Skills the thread's harness can see but does not expose as native slash
     // commands: global-layer skills and CodeInOven-registered skills. Harness-
@@ -1524,7 +1656,6 @@
       contextUsed === undefined &&
       latestTokens === undefined &&
       latestRateLimits === undefined &&
-      providerIssueRateLimits.length === 0 &&
       latestCredits === undefined &&
       costUsd <= 0
     ) {
@@ -1539,7 +1670,7 @@
         : {}),
       costUsd,
       ...(latestTokens ? { tokens: latestTokens } : {}),
-      rateLimits: mergeRateLimitWindows(latestRateLimits ?? [], providerIssueRateLimits),
+      rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
@@ -1686,20 +1817,6 @@
         }
       }
     }
-    if (providerIssueRateLimits.length > 0 && visibleProviderStatus) {
-      const harnessId = visibleProviderStatus.issue.harnessId ?? settings.harnessId
-      const entry = byHarness[harnessId]
-      if (entry) {
-        entry.rateLimits = mergeRateLimitWindows(entry.rateLimits, providerIssueRateLimits)
-      } else {
-        byHarness[harnessId] = {
-          harnessId,
-          providerId: settings.providerId,
-          costUsd: 0,
-          rateLimits: providerIssueRateLimits
-        }
-      }
-    }
     return Object.values(byHarness).filter(
       (entry) =>
         entry.rateLimits.length > 0 ||
@@ -1726,7 +1843,13 @@
     if (snapshot.harnessId !== settings.harnessId || snapshot.providerId !== settings.providerId) {
       return
     }
-    contextUsageDisplay = snapshot
+    // A snapshot persisted before the synthetic usage-limit bar was retired can
+    // still carry that window; strip it on read so the battery only ever shows
+    // provider-reported quota.
+    contextUsageDisplay = {
+      ...snapshot,
+      rateLimits: providerReportedWindows(snapshot.rateLimits ?? [])
+    }
   }
 
   // Re-evaluate asynchronously: settings may be corrected by loadLocal after the
@@ -1740,43 +1863,6 @@
   let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
-
-  /**
-   * Fold a fresh usage snapshot over whatever the meter already shows without
-   * ever *losing* telemetry. A quota refresh that returns no rate limits, no
-   * credits, or no context fields must not erase the bars/value the user is
-   * currently viewing   only a newer, richer snapshot may replace them.
-   */
-  function mergeContextUsage(
-    previous: AgentContextUsage | undefined,
-    incoming: AgentContextUsage
-  ): AgentContextUsage {
-    if (!previous) return incoming
-    return {
-      ...previous,
-      ...incoming,
-      tokens: incoming.tokens ?? previous.tokens,
-      costUsd: incoming.costUsd ?? previous.costUsd,
-      contextUsed: incoming.contextUsed ?? previous.contextUsed,
-      contextEstimated:
-        incoming.contextUsed !== undefined
-          ? incoming.contextEstimated === true
-          : previous.contextEstimated === true,
-      contextWindow: incoming.contextWindow ?? previous.contextWindow,
-      contextPercent: incoming.contextPercent ?? previous.contextPercent,
-      rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,
-      ...(incoming.credits
-        ? { credits: incoming.credits }
-        : previous.credits
-          ? { credits: previous.credits }
-          : {}),
-      ...(incoming.bankedResets
-        ? { bankedResets: incoming.bankedResets }
-        : previous.bankedResets
-          ? { bankedResets: previous.bankedResets }
-          : {})
-    }
-  }
 
   function commitContextUsage(usage: AgentContextUsage): void {
     contextUsageDisplay = usage
@@ -1878,7 +1964,6 @@
       }
     }
   })
-  let checkpoints = $state<TurnCheckpointSummary[]>([])
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
@@ -1886,26 +1971,16 @@
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
 
-  interface ResponseSelectionCandidate {
-    text: string
-    messageId: string
-    range: Range
-    startOffset: number
-    endOffset: number
-    x: number
-    y: number
-  }
-
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
-  const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
+  /** Identity of this view as the CSS highlight registry's owner, so its
+   *  teardown can never clear highlights another view published. */
+  const responseHighlightOwner = {}
   /** Viewport position for the comment bubble of each reference anchor. */
-  let responseBubblePositions = $state<Record<string, { x: number; y: number; visible: boolean }>>(
-    {}
-  )
+  let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
@@ -1916,134 +1991,22 @@
     )
   }
 
-  function responseElementFor(node: Node | null): HTMLElement | null {
-    const element = node instanceof Element ? node : node?.parentElement
-    const response = element?.closest<HTMLElement>('[data-assistant-response]')
-    return response ?? null
+  function handleResponsePointerUp(): void {
+    responseSelection = captureResponseSelection()
   }
 
-  function textOffsetWithin(root: HTMLElement, node: Node, offset: number): number | null {
-    try {
-      const prefix = document.createRange()
-      prefix.selectNodeContents(root)
-      prefix.setEnd(node, offset)
-      return prefix.toString().length
-    } catch {
-      return null
-    }
-  }
-
-  function textPointAtOffset(
-    root: HTMLElement,
-    requestedOffset: number
-  ): { node: Node; offset: number } {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let remaining = Math.max(0, requestedOffset)
-    let node = walker.nextNode()
-    while (node) {
-      const length = node.textContent?.length ?? 0
-      if (remaining <= length) return { node, offset: remaining }
-      remaining -= length
-      node = walker.nextNode()
-    }
-    return { node: root, offset: root.childNodes.length }
-  }
-
-  function responseRangeFor(reference: ResponseReferenceAnchor): Range | null {
-    const response = Array.from(
-      scrollEl?.querySelectorAll<HTMLElement>('[data-assistant-response]') ?? []
-    ).find((element) => element.dataset.messageId === reference.messageId)
-    if (!response) return null
-    const start = textPointAtOffset(response, reference.startOffset)
-    const end = textPointAtOffset(response, reference.endOffset)
-    try {
-      const range = document.createRange()
-      range.setStart(start.node, start.offset)
-      range.setEnd(end.node, end.offset)
-      return range
-    } catch {
-      return null
-    }
-  }
-
-  function captureResponseSelection(): void {
-    const selection = document.getSelection()
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      responseSelection = null
-      return
-    }
-    const anchorResponse = responseElementFor(selection.anchorNode)
-    const focusResponse = responseElementFor(selection.focusNode)
-    if (!anchorResponse || anchorResponse !== focusResponse) {
-      responseSelection = null
-      return
-    }
-    const text = selection.toString().trim()
-    const messageId = anchorResponse.dataset.messageId
-    if (!text || !messageId) {
-      responseSelection = null
-      return
-    }
-    const range = selection.getRangeAt(0).cloneRange()
-    const startOffset = textOffsetWithin(anchorResponse, range.startContainer, range.startOffset)
-    const endOffset = textOffsetWithin(anchorResponse, range.endContainer, range.endOffset)
-    if (startOffset === null || endOffset === null) {
-      responseSelection = null
-      return
-    }
-    const rect = range.getBoundingClientRect()
-    const estimatedWidth = 430
-    const x = Math.max(12, Math.min(rect.left, window.innerWidth - estimatedWidth - 12))
-    // Anchor the actions bubble above the selection so the native right-click
-    // menu (which appears at the cursor, usually below the selection) opens
-    // beneath it without colliding. Fall back below when there is no room above.
-    const estimatedHeight = 48
-    const y =
-      rect.top - estimatedHeight >= 12
-        ? rect.top - estimatedHeight
-        : Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - estimatedHeight - 8))
-    responseSelection = { text, messageId, range, startOffset, endOffset, x, y }
-  }
-
+  /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    if (typeof Highlight === 'undefined' || !CSS.highlights) return
-    if (responseReferenceRanges.size === 0) {
-      CSS.highlights.delete(RESPONSE_HIGHLIGHT_NAME)
-      return
-    }
-    CSS.highlights.set(RESPONSE_HIGHLIGHT_NAME, new Highlight(...responseReferenceRanges.values()))
+    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
   }
 
-  const RESPONSE_BUBBLE_SIZE = 44
-  const RESPONSE_BUBBLE_HEIGHT = 24
-
-  /** Recompute the viewport position of each reference's comment bubble from
-   *  the live highlight ranges so the bubbles track scroll and layout. */
+  /** Re-measure where each annotation's comment bubble belongs in the viewport. */
   function updateResponseBubblePositions(): void {
-    const next: Record<string, { x: number; y: number; visible: boolean }> = {}
-    const containerRect = scrollEl?.getBoundingClientRect()
-    for (const [id, range] of responseReferenceRanges) {
-      const rect = range.getBoundingClientRect()
-      if (rect.width === 0 && rect.height === 0) continue
-      const visible = containerRect
-        ? rect.top < containerRect.bottom - 8 && rect.bottom > containerRect.top + 8
-        : true
-      const x = Math.max(
-        8,
-        Math.min(
-          Math.round(rect.left + rect.width / 2 - RESPONSE_BUBBLE_SIZE / 2),
-          window.innerWidth - RESPONSE_BUBBLE_SIZE - 8
-        )
-      )
-      const above = rect.top - RESPONSE_BUBBLE_HEIGHT - 1
-      const below = rect.bottom + 6
-      const y = Math.max(
-        8,
-        Math.min(above >= 8 ? above : below, window.innerHeight - RESPONSE_BUBBLE_HEIGHT - 8)
-      )
-      next[id] = { x, y, visible }
-    }
-    responseBubblePositions = next
+    // Nothing annotated (and nothing measured): skip the forced layout that
+    // reading every range rect costs, so the common conversation pays nothing.
+    if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
+      return
+    responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
   }
 
   let responseBubblePositionFrame = 0
@@ -2056,19 +2019,51 @@
     })
   }
 
-  function restoreResponseHighlights(references: ResponseReferenceAnchor[]): void {
-    responseReferenceRanges.clear()
+  /**
+   * Bring the live annotation ranges back in line with the conversation DOM.
+   *
+   * This is deliberately not a one-shot restore. An annotation is anchored to a
+   * character range inside `[data-assistant-response]`, and that element is not
+   * stable across a view's life: the newest answer renders inside the working
+   * trace while the conversation reads as busy and only moves into its
+   * final-answer block once the run settles, the mounted history window grows
+   * after the first paint, and every publish re-renders message blocks. A range
+   * built before any of those points at nodes that are gone, which paints no
+   * highlight and measures no bubble.
+   *
+   * Only ranges that actually went stale are rebuilt (see
+   * `responseRangeIsCurrent`), so this stays cheap enough to run on every
+   * conversation publish.
+   */
+  function syncResponseHighlights(references: ResponseReferenceAnchor[]): void {
+    let changed = false
+    const liveIds = references.map((reference) => reference.id)
     for (const reference of references) {
-      const range = responseRangeFor(reference)
-      if (range) responseReferenceRanges.set(reference.id, range)
+      const existing = responseReferenceRanges.get(reference.id)
+      if (responseRangeIsCurrent(existing, reference)) continue
+      const range = responseRangeFor(scrollEl, reference)
+      if (range) {
+        responseReferenceRanges.set(reference.id, range)
+        changed = true
+      } else if (existing) {
+        responseReferenceRanges.delete(reference.id)
+        changed = true
+      }
     }
-    refreshResponseHighlights()
-    updateResponseBubblePositions()
+    // A detached selection is no longer part of the chat component.
+    for (const id of [...responseReferenceRanges.keys()]) {
+      if (liveIds.includes(id)) continue
+      responseReferenceRanges.delete(id)
+      changed = true
+    }
+    if (changed) refreshResponseHighlights()
+    scheduleResponseBubbleUpdate()
   }
 
   function scheduleResponseHighlightRestore(references: ResponseReferenceAnchor[]): void {
     void tick().then(() => {
-      restoreResponseHighlights(references)
+      if (!alive) return
+      syncResponseHighlights(references)
     })
   }
 
@@ -2179,19 +2174,24 @@
     return responseReferences.find((reference) => reference.id === id) ?? null
   }
 
-  // Keep comment bubbles anchored to their highlights as the conversation
-  // re-renders (message streaming, history windowing, thread restore).
+  // Keep comment bubbles and highlights anchored to their text as the
+  // conversation re-renders. Every trigger below can change which DOM nodes
+  // carry the annotated text: a streamed publish, the mounted history window
+  // growing after the first paint, and the run state settling (which moves the
+  // newest answer out of the working trace into its final-answer block, the
+  // only place that carries the annotation anchor). Without them the restore
+  // ran once - before that anchor existed - and never ran again, so the
+  // highlights and comment bubbles stayed missing until a new selection
+  // happened to re-trigger it.
   $effect(() => {
     void responseReferences.length
     void visibleMessages.length
+    void conversationBusy
+    void threadMessages.streamRevision(thread.projectId, conversationId)
+    if (responseReferences.length === 0) return
     void tick().then(() => {
-      // Highlights depend on the message DOM; re-create them whenever the
-      // conversation re-renders so annotations/comments come back after a
-      // thread switch (onMount runs before the async mirror finishes loading).
-      if (responseReferences.length > 0) {
-        restoreResponseHighlights(responseReferences)
-      }
-      scheduleResponseBubbleUpdate()
+      if (!alive) return
+      syncResponseHighlights(responseReferences)
     })
   })
 
@@ -2217,6 +2217,13 @@
     startAfterThreads: StartAfterThreadReference[]
   }
 
+  /** The entry-card park: the guarded payload plus the action intent and the
+   *  user-message presentation, so the resend after a choice keeps both. */
+  interface ParkedEntrySend extends GuardedSendPayload {
+    specAction?: SpecActionIntent
+    presentation?: UserMessagePresentation
+  }
+
   function sendComposerMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -2225,6 +2232,19 @@
     taskReferences: PromptAssignmentTaskReference[] = [],
     startAfterThreads: StartAfterThreadReference[] = []
   ): void {
+    // The user answered the agent's "shall I save it?" with a plain yes. The app
+    // owns the commit: save the pending draft, then have the agent post its
+    // next-steps list. The yes is consumed as the confirmation and never sent,
+    // so it cannot become a user bubble or re-open the recap.
+    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
+      void confirmRoutineSave()
+      return
+    }
+    // The primary is, by definition, the model the user triggers the how-to with.
+    // While the how-to is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the routine's
+    // primary   a fresh install has no last-used model to default from.
+    syncRoutinePrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -2246,6 +2266,10 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
+    // The assistant how-to authoring contract is not assembled here: the chat
+    // engine attaches it to every user turn in a routine that still has no
+    // how-to, so a resend from the message editor or a queued delivery can
+    // never drop it.
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
@@ -2448,11 +2472,10 @@
             )
       return
     }
-    if (!specGenerationTraceActive || update.field !== 'text') return
-    specGenerationTraceParts = specGenerationTraceParts.map((part) => {
-      if (part.id !== update.partId || part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
+    if (!specGenerationTraceActive) return
+    specGenerationTraceParts = specGenerationTraceParts.map((part) =>
+      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
+    )
   }
 
   /** Live trace of the isolated Assignment draft offshoot   mirrors the spec
@@ -2486,11 +2509,10 @@
             )
       return
     }
-    if (!assignmentGenerationTraceActive || update.field !== 'text') return
-    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) => {
-      if (part.id !== update.partId || part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
+    if (!assignmentGenerationTraceActive) return
+    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) =>
+      part.id === update.partId ? appendPartDelta(part, update.field, update.delta) : part
+    )
   }
 
   let brainstormError = $state('')
@@ -2502,6 +2524,11 @@
   let specError = $state('')
   let idleAttentionHandled = false
   let specReadyToolVisible = $state(false)
+  /** True once the persisted workflow lookup has resolved for this mount, so no
+   *  ready card can flash before the thread's real Spec/Assignment is known. */
+  let workflowReady = $state(false)
+  /** Session-local dismissal of the spec-less Assignment entry card. */
+  let conversationAssignmentDismissed = $state(false)
   let assignment = $state<AssignmentPlan | null>(null)
   let assignmentVersions = $state<AssignmentPlan[]>([])
   let selectedAssignmentVersion = $state<number | undefined>()
@@ -2509,13 +2536,29 @@
   let assignmentAuditThread = $state<Thread | undefined>()
   let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
+  /** The coordinator (Sr. Engineer) that owns the open thread when it is a
+   *  worker or auditor child. Children are hidden from every thread list, so
+   *  this view carries the way back to the parent itself. */
+  let coordinatorParentThread = $state<Thread | null>(null)
   let assignmentBusy = $state(false)
   /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
   let assignmentFormulating = $state(false)
   let assignmentError = $state('')
+  /** Spec-less Assignment entry: the Assignment stage is selected, this thread
+   *  has no Spec, and no Assignment draft exists yet. */
+  const conversationAssignmentVisible = $derived(
+    workflowReady &&
+      !conversationAssignmentDismissed &&
+      settings.assignmentMode === true &&
+      spec === null &&
+      assignment === null &&
+      !specFormulating &&
+      !assignmentFormulating
+  )
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
   let assignmentWorkerRetryingId = $state<string | null>(null)
+  let assignmentWorkerReportingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
   /** A retry may only follow a completed, non-error assistant response for the
@@ -2598,6 +2641,21 @@
    *  coordinator: identical view, but they never enable engineering mode
    *  themselves, so the composer hides the toolbox and lifecycle actions. */
   let orchestrationChild = $derived(isOrchestrationChildThread(thread))
+  /** The coordinator this view belongs to, when the open thread is a worker or
+   *  auditor child. Null for every normal, user-facing thread. */
+  const coordinatorParentId = $derived(
+    isOrchestrationChildThread(thread) ? (thread.coordinatorThreadId ?? null) : null
+  )
+  /** The open thread is a worker of this Assignment whose reporting the user
+   *  switched off, so it can be asked to hand its finished work back now. */
+  const workerCanReportToCoordinator = $derived(
+    coordinatorParentId !== null &&
+      thread.assignmentRole === 'worker' &&
+      assignment !== null &&
+      assignment.status !== 'draft' &&
+      assignment.status !== 'stopped' &&
+      settings.reportToCoordinator === false
+  )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
   let studioOnlyAuditWorkflow = $derived(
     settings.assignmentMode !== true &&
@@ -2645,6 +2703,12 @@
     pendingIndependentAudit !== null ? pendingIndependentAudit : independentAuditEnabled
   )
   let independentAuditRunning = $derived(independentAuditEnabled && auditBusy)
+  /** The Independent Audit coordinator is the board for a thread that audits
+   *  itself, and for the auditor child that thread owns. */
+  const independentAuditPanelActive = $derived.by(() => {
+    if (orchestrationChild) return coordinatorParentThread?.independentAudit === true
+    return independentAuditDisplayEnabled
+  })
   /** The switch only exists once the thread has work and no Engineering mode
    *  is on   a staged (intent-only) Toolbox selection counts as on, so the
    *  two controls can never be lit at the same time before a send commits
@@ -2659,9 +2723,27 @@
           threadMessages.messages(thread.projectId, thread.id).length > 0))
   )
 
+  /** The coordinator row this view publishes under: a worker/auditor child
+   *  publishes under its parent, so moving between children never swaps the
+   *  sidebar tab. */
+  const coordinatorDockThreadId = $derived(coordinatorParentId ?? thread.id)
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
-    if (isAssignmentAuditorThread) return null
+    // A worker/auditor child presents the coordination it belongs to, so it can
+    // show that board and carry the way back to it instead of dead-ending.
+    if (orchestrationChild) {
+      if (assignment && assignment.status !== 'draft') return 'assignment'
+      const parent = coordinatorParentThread
+      if (!parent) return null
+      if (parent.assignmentId !== undefined || parent.assignmentRole === 'coordinator') {
+        return 'assignment'
+      }
+      if (parent.settings?.loopMode === true || parent.achievementRole === 'coordinator') {
+        return 'achievement'
+      }
+      if (parent.independentAudit === true) return 'audit'
+      return null
+    }
     if (assignment && assignment.status !== 'draft') return 'assignment'
     // A staged (not-yet-run) Independent Audit already docks its coordinator:
     // the sidebar appears the moment the switch is turned on, and clicking
@@ -2675,7 +2757,144 @@
   // The coordinator is a sidebar tool, not a floating panel: the thread owns the
   // data and the callbacks, so it publishes the panel as a snippet and the
   // context dock renders it. Only the coordination kind is tracked here, so a
-  // task update never re-registers (and never remounts) the panel.
+  // task update never re-mounts the panel.
+  // The coordinator is a sidebar tool, not a floating panel: the thread owns the
+  // data and the callbacks, so it publishes the panel data and the context dock
+  // renders the matching component. The sidebar picks the component from the
+  // registration, so a task update or a worker/auditor switch updates props
+  // instead of remounting the panel.
+  function coordinatorPanel(
+    kind: 'assignment' | 'achievement' | 'audit'
+  ): CoordinatorDockPanel | null {
+    // Only an orchestration child carries the way back to the Sr. Engineer.
+    const onBackToCoordinator = coordinatorParentId ? openCoordinatorParent : undefined
+    if (kind === 'assignment') {
+      const activeAssignment = assignment
+      if (!activeAssignment) return null
+      return {
+        component: 'assignment',
+        props: {
+          assignment: activeAssignment,
+          threads: assignmentThreads,
+          auditThread: assignmentAuditThread,
+          auditState: assignmentAuditState,
+          finalComplete: assignmentFinalComplete,
+          reportAvailable: assignmentReportAvailable,
+          selectedThreadId: thread.id,
+          coordinatorWorking: busy || delegatedWorkBusy,
+          onOpenAssignment: () => {
+            if (!openOwnerStudio('assignment')) openAssignmentStudio()
+          },
+          onOpenAuditWork: openAssignmentAuditWork,
+          onViewReport: () => {
+            if (!openOwnerStudio('audit')) openAuditStudio()
+          },
+          onOpenThread: (worker) => workspaceState.openThread(worker, project),
+          onOpenTask: openAssignmentTask,
+          onResume: resumeAssignmentCoordination,
+          onStop: stopAssignment,
+          onResumeAssignment: resumeStoppedAssignment,
+          onBackToCoordinator,
+          onReportToCoordinator: workerCanReportToCoordinator
+            ? reportWorkerToCoordinator
+            : undefined
+        }
+      }
+    }
+    if (kind === 'achievement') {
+      const activeSpec = spec
+      if (!activeSpec) return null
+      return {
+        component: 'achievement',
+        props: {
+          specTitle: thread.title,
+          specSummary: activeSpec.content.resolutionSummary,
+          auditThread: durableAuditThread,
+          auditState,
+          reportAvailable: auditReport !== null,
+          achievementReached: thread.status === 'completed' && (thread.loopIteration ?? 0) > 0,
+          selectedThreadId: thread.id,
+          auditorSettings: auditSettings,
+          providers,
+          projectId: thread.projectId,
+          favoriteModels: rendererRecovery.favoriteModels,
+          recentModels: rendererRecovery.recentModels,
+          onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+          coordinatorWorking: busy || delegatedWorkBusy,
+          onOpenAudit: () => void generateAudit(auditSettings),
+          onViewReport: openAuditStudio,
+          onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+          onResume: resumeAchievementCoordination,
+          onModelChange: changeAuditModel,
+          onToggleFavorite: (providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+          onReorderFavorite: (draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+          onBackToCoordinator
+        }
+      }
+    }
+    if (independentAuditPanelActive) {
+      return {
+        component: 'independent-audit',
+        props: {
+          running: independentAuditRunning,
+          auditThread: durableAuditThread,
+          reportAvailable: auditReport !== null,
+          partialReport: auditReport?.evidenceValidation === 'partial',
+          selectedThreadId: thread.id,
+          auditorSettings: auditSettings,
+          providers,
+          projectId: thread.projectId,
+          favoriteModels: rendererRecovery.favoriteModels,
+          recentModels: rendererRecovery.recentModels,
+          onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+          onOpenAudit: () => void generateIndependentAudit(auditSettings),
+          onViewReport: openAuditStudio,
+          onNewAudit: () => startFreshIndependentAudit(auditSettings),
+          onDeleteThread: deleteAuditorThread,
+          onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+          onModelChange: changeAuditModel,
+          onToggleFavorite: (providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+          onReorderFavorite: (draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+          onBackToCoordinator
+        }
+      }
+    }
+    const auditSpec = spec
+    if (!auditSpec) return null
+    return {
+      component: 'achievement',
+      props: {
+        mode: 'audit',
+        specTitle: thread.title,
+        specSummary: auditSpec.content.resolutionSummary,
+        auditThread: durableAuditThread,
+        auditState,
+        reportAvailable: auditReport !== null,
+        selectedThreadId: thread.id,
+        auditorSettings: auditSettings,
+        providers,
+        projectId: thread.projectId,
+        favoriteModels: rendererRecovery.favoriteModels,
+        recentModels: rendererRecovery.recentModels,
+        onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
+        coordinatorWorking: auditBusy,
+        onOpenAudit: () => void generateAudit(auditSettings),
+        onViewReport: openAuditStudio,
+        onOpenThread: (auditor) => workspaceState.openThread(auditor, project),
+        onModelChange: changeAuditModel,
+        onToggleFavorite: (providerId, modelId, harnessId) =>
+          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+        onReorderFavorite: (draggedKey, targetKey, position) =>
+          rendererRecovery.reorderFavorite(draggedKey, targetKey, position),
+        onBackToCoordinator
+      }
+    }
+  }
+
   $effect(() => {
     const kind = coordinatorKind
     if (!kind) return
@@ -2685,27 +2904,37 @@
         : kind === 'achievement'
           ? 'Achievement coordinator'
           : 'Audit coordinator'
-    const dispose = coordinatorDockState.register({
+    const panel = coordinatorPanel(kind)
+    if (!panel) return
+    // No unmount cleanup: publishing is a prop update for the row, and the
+    // sibling view that takes over on a thread switch republishes. Tearing the
+    // registration down on unmount blanked the sidebar (and rebuilt the whole
+    // board) for the frame or two the entering view needed to hydrate.
+    coordinatorDockState.register({
       projectId: thread.projectId,
-      threadId: thread.id,
+      threadId: coordinatorDockThreadId,
       label,
       icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
-      panel:
-        kind === 'assignment'
-          ? assignmentCoordinatorPanel
-          : kind === 'achievement'
-            ? achievementCoordinatorPanel
-            : auditCoordinatorPanel
+      panel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
     // closed it before; later runs are no-ops because the tab already exists.
     if (
       coordinatorDockState.autoOpen &&
-      !contextSidebarState.hasCoordinator(thread.projectId, thread.id)
+      !contextSidebarState.hasCoordinator(thread.projectId, coordinatorDockThreadId)
     ) {
-      contextSidebarState.openCoordinator(thread.projectId, thread.id, label)
+      contextSidebarState.openCoordinator(thread.projectId, coordinatorDockThreadId, label)
     }
-    return dispose
+  })
+
+  /** A mount that settles without a coordinator withdraws its row's dock, so a
+   *  panel can never outlive the coordination it belonged to. Runs only after
+   *  the mount settles, which is what lets the entering view of a thread switch
+   *  keep the previous row's panel on screen instead of blanking it. */
+  $effect(() => {
+    if (hasController || !workflowReady) return
+    if (coordinatorKind !== null) return
+    coordinatorDockState.withdraw(thread.projectId, coordinatorDockThreadId)
   })
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
@@ -2724,15 +2953,26 @@
     }
   })
 
-  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
+  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed' | 'partial'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
     const cycleStatus = assignment?.auditCycle?.status
     if (cycleStatus === 'failed') return 'failed'
     if (cycleStatus === 'available' && assignmentAuditThread?.status === 'failed') return 'failed'
-    if (cycleStatus === 'available') return 'offered'
+    // An `available` cycle means "the implementation finished, review it", so it
+    // is only an offer while the plan really is finished. A plan whose tasks were
+    // reopened after the offer appeared would otherwise pin the card to the
+    // composer with no way out: the audit cannot start from there and Cancel
+    // cannot dismiss it, so the card returned on every refresh.
+    if (cycleStatus === 'available') {
+      return assignment?.status === 'completed' ? 'offered' : undefined
+    }
     if (cycleStatus === 'running') return 'running'
-    if (cycleStatus === 'report_ready') return 'report_ready'
+    // A report that was generated but whose verification evidence could not be
+    // fully validated surfaces as the half-report card instead of a final one.
+    if (cycleStatus === 'report_ready') {
+      return auditReport?.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     if (
       cycleStatus === 'planning_rework' ||
       cycleStatus === 'awaiting_rework_approval' ||
@@ -2740,13 +2980,22 @@
     )
       return 'reworking'
     if (cycleStatus === 'completed') return undefined
-    if (auditState === 'report_ready' && auditReport) return 'report_ready'
+    if (auditState === 'report_ready' && auditReport) {
+      return auditReport.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+    }
     return auditState
   })
   let assignmentReworkCycle = $derived(assignment?.auditCycle?.reworkCycle)
   let assignmentAuditFailure = $derived(assignment?.auditCycle?.failure ?? auditError)
   let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
   let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
+  /** The composer's "Implementation finished" prompt is dismissed while the cycle
+   *  stays `available`, so the coordinator panel and the studios keep their audit
+   *  entry. Dismissing reveals the ordinary composer for the Sr. Engineer. */
+  let assignmentAuditOfferDismissed = $derived(
+    assignment?.auditCycle?.status === 'available' &&
+      assignment.auditCycle.offerDismissedAt !== undefined
+  )
   function delegatedThreadWorking(candidate: Thread | undefined): boolean {
     if (!candidate) return false
     if (agentRuns.hasSettled(candidate.projectId, candidate.id)) {
@@ -2794,6 +3043,17 @@
     return busy ? 'Sr. Engineer and the auditor are working' : 'The auditor is working'
   })
   let assignmentFinalComplete = $derived(assignment?.auditCycle?.status === 'completed')
+  /** The Assignment audit cycle belongs to the coordinator that owns the plan.
+   *  A worker mirrors that plan to render its own view, so without this the
+   *  coordinator's audit offer would cover the worker's conversation and the
+   *  worker could not be chatted with. */
+  let assignmentAuditOwner = $derived(assignment?.coordinatorThreadId === thread.id)
+  /** Whether an audit report exists for the Assignment's coordinator. A worker
+   *  reads the plan but not the coordinator's audit report, so its availability
+   *  comes from the recorded cycle report instead. */
+  const assignmentReportAvailable = $derived(
+    auditReport !== null || assignment?.auditCycle?.reportId !== undefined
+  )
   let achievementAutonomous = $derived(
     settings.loopMode === true &&
       spec?.status === 'approved' &&
@@ -3167,11 +3427,13 @@
   // a short work-trace preview from the turn that follows it.
   $effect(() => {
     const tracePreviews = tracePreviewByUserMessage(messages)
-    const userMessages = mergedUserMessageSummaries().map(({ id, content }) => ({
-      id,
-      content,
-      ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
-    }))
+    const userMessages = mergedUserMessageSummaries(messages, fullUserMessageHistory).map(
+      ({ id, content }) => ({
+        id,
+        content,
+        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+      })
+    )
     if (hasController) return
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
@@ -3225,6 +3487,12 @@
   // close the studio and pop the project sidebar open while the studio is up.
   $effect(() => {
     if (hasController) return
+    // A new mount must not publish a half-loaded state: doing so cleared the
+    // header's Spec control (and the studio state) on every thread switch, then
+    // restored it once the async reads finished, which read as a flash. Wait
+    // for the mount to settle so moving between a coordinator's workers keeps
+    // the chrome in place.
+    if (!workflowReady) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
@@ -3270,13 +3538,10 @@
       }
     }
     return () => {
+      // Keep the shared studio flags: the next ThreadView publishes them once
+      // it is ready, so switching threads does not blink the header control.
+      // Only the per-instance bindings are cleared here.
       workspaceState.toggleSpecStudio = null
-      workspaceState.specStudioAvailable = false
-      workspaceState.specStudioOpen = false
-      workspaceState.specStudioBusy = false
-      workspaceState.specStudioFormulating = false
-      workspaceState.specStudioError = ''
-      workspaceState.specStudioRetryable = false
       workspaceState.specAgentSidebarOpen = false
       workspaceState.specAgentResponses = []
     }
@@ -3333,29 +3598,6 @@
 
   let loadingOlderMessages = $state(false)
 
-  /** Walk back `pages` user-prompt page starts from `fromIndex`. Returns the
-   *  index of the prompt that begins the `pages`-th older page, or -1 when
-   *  the store does not hold that many complete pages. Every prompt found in
-   *  the store defines a complete page: the store is contiguous, and a
-   *  prompt is by definition the first message of its turn. */
-  function promptPagesBefore(fromIndex: number, pages: number): number {
-    let cursor = fromIndex
-    for (let page = 0; page < pages; page++) {
-      let found = -1
-      for (let i = cursor - 1; i >= 0; i--) {
-        const message = messages[i]
-        if (!message) return -1
-        if (message.role !== 'user') continue
-        if (isActivityOnlyUserMessage(message)) continue
-        found = i
-        break
-      }
-      if (found === -1) return -1
-      cursor = found
-    }
-    return cursor
-  }
-
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     if (controller) {
@@ -3374,8 +3616,10 @@
       // holds some of them, so fetch only while it does not   each fetch is a
       // bounded 40-message page and turns that span more than one page keep
       // it fetching until three deduped turn starts exist before the anchor.
+      let pagesWithoutTurnStart = 0
       for (let attempt = 0; attempt < 30; attempt++) {
-        if (turnStartPromptsBefore(mountedStartIndex, 3).length === 3) break
+        const startsBefore = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+        if (startsBefore.length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
         const oldest = messages[0]
@@ -3400,6 +3644,13 @@
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
         mountedCount += page.messages.length
         await tick()
+        // A prompt-less run (a worker trace, or a thread whose opening prompt
+        // is still hidden) has no turn boundary to align to. Three pages is
+        // the whole chunk one click should mount; stop before over-fetching.
+        if (startsBefore.length === 0) {
+          pagesWithoutTurnStart += 1
+          if (pagesWithoutTurnStart >= 3) break
+        }
       }
       // Turn-align the store's oldest boundary: a raw 40-row page can end
       // mid-turn, cutting that turn's prompt out of the cache entirely   the
@@ -3410,6 +3661,16 @@
         const oldest = messages[0]
         if (!oldest) break
         if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
+        // Nothing to align to when the thread holds no user prompt at all:
+        // keep the three pages already fetched instead of walking the whole
+        // thread looking for a boundary that does not exist.
+        if (
+          !messages.some(
+            (message) => message.role === 'user' && !isActivityOnlyUserMessage(message)
+          )
+        ) {
+          break
+        }
         if (!olderMessagesAvailable) break
         const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
@@ -3450,13 +3711,18 @@
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
-      const starts = turnStartPromptsBefore(mountedStartIndex, 3)
+      const starts = turnStartPromptsBefore(messages, mountedStartIndex, 3)
       let target = starts.length === 3 ? starts[starts.length - 1] : 0
       const isRealPrompt = (index: number): boolean => {
         const message = messages[index]
         return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
       }
       while (target < mountedStartIndex && !isRealPrompt(target)) target += 1
+      // No user prompt exists before the mounted window (a worker thread whose
+      // opening prompt is still hidden, or a trace-only run). There is no turn
+      // boundary to align to, so mount everything that was just loaded instead
+      // of refusing to move the window and leaving the click a no-op.
+      if (target >= mountedStartIndex) target = 0
       if (target < mountedStartIndex) {
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
@@ -3560,20 +3826,6 @@
     })
   }
 
-  function formatTime(ts: number): string {
-    if (!ts) return ''
-    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  }
-
-  function formatDuration(ms: number): string {
-    if (ms < 1000) return '<1s'
-    const total = Math.round(ms / 1000)
-    if (total < 60) return `${total}s`
-    const m = Math.floor(total / 60)
-    const s = total % 60
-    return s > 0 ? `${m}m ${s}s` : `${m}m`
-  }
-
   /** For a user message that follows an assistant turn (a steer), return the
    *  previous turn's start/end timestamps and total duration so it can be
    *  rendered as an audit line above the user's message. */
@@ -3598,28 +3850,6 @@
 
   /** For the final assistant message of a turn, return the total duration from
    *  the user's prompt to the agent's final output. */
-  function getCurrentTurnDuration(msgIndex: number): number | null {
-    const assistantMsg = messages[msgIndex]
-    if (assistantMsg?.role !== 'assistant' || !assistantMsg.completedAt) return null
-    let turnStartIndex = msgIndex - 1
-    while (turnStartIndex >= 0) {
-      const message = messages[turnStartIndex]
-      if (!message) break
-      if (message.role === 'assistant') {
-        turnStartIndex--
-        continue
-      }
-      if (message.role === 'user' && isActivityOnlyUserMessage(message)) {
-        turnStartIndex--
-        continue
-      }
-      break
-    }
-    const userMsg = messages[turnStartIndex]
-    if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
-    return assistantMsg.completedAt - userMsg.createdAt
-  }
-
   /** When the agent started working on the turn whose trace opens at msgIndex.
    *  Activity-only user messages between the prompt and the first assistant
    *  message are skipped so the trace timer starts at the real prompt. */
@@ -3661,13 +3891,18 @@
     // project boundary through the now-null live prop.
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
-    void invoke('providerAccounts:list', settings.harnessId)
-      .then((accounts) => {
-        if (alive) harnessAccounts = accounts
-      })
-      .catch(() => {
-        if (alive) harnessAccounts = []
-      })
+    // The composer's account selector is an enrichment: reading the harness's
+    // account registry must not share the switch frame with the conversation
+    // mount, so it is queued for after the paint.
+    scheduleDeferredWork('threadView:providerAccounts', () => {
+      void invoke('providerAccounts:list', settings.harnessId)
+        .then((accounts) => {
+          if (alive) harnessAccounts = accounts
+        })
+        .catch(() => {
+          if (alive) harnessAccounts = []
+        })
+    })
     if (!controller) {
       workspaceState.jumpToMessage = jumpToMessage
       workspaceState.loadUserMessageHistory = refreshUserMessageHistory
@@ -3692,8 +3927,12 @@
       void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
-      void refreshCommands()
-      void refreshCapabilitySkills()
+      // Slash commands and skills only feed the composer's menus, so they are
+      // read after the switch has painted instead of during it.
+      scheduleDeferredWork('threadView:commands', () => {
+        void refreshCommands()
+        void refreshCapabilitySkills()
+      })
       // Remounting into a side chat that is already blocked on a permission
       // request rehydrates its card; the parent thread is never asked for it.
       void refreshPendingPermissions()
@@ -3731,6 +3970,9 @@
     }
 
     if (shouldHydrateEngineeringState()) {
+      // Deliberately *not* deferred: this state decides which cards render above
+      // the composer (terminal-failure retry, stage cards), so loading it after
+      // the paint would shift the conversation's layout on every switch.
       void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
         .then((state) => {
           if (alive) engineeringLifecycle = state
@@ -3763,12 +4005,24 @@
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
+    // A voice transcript sent while this thread's composer was not mounted was
+    // dispatched headlessly (or parked in the queue). Drop the stale composer
+    // buffer and surface a freshly parked message in the queue card.
+    const unsubscribeVoiceSend = onVoiceComposerReset((resetProjectId, resetThreadId) => {
+      if (resetProjectId !== thread.projectId || resetThreadId !== thread.id) return
+      composerRestoreKey += 1
+      restoreQueuedMessage()
+      scheduleIdleAttention()
+    })
 
     // Slash menu inputs: harness commands and the skills visible to the
     // thread's harness. Previously commands only loaded after a harness
-    // switch, leaving a freshly mounted thread's slash menu empty.
-    void refreshCommands()
-    void refreshCapabilitySkills()
+    // switch, leaving a freshly mounted thread's slash menu empty. Both only
+    // feed composer menus, so they are read after the switch has painted.
+    scheduleDeferredWork('threadView:commands', () => {
+      void refreshCommands()
+      void refreshCapabilitySkills()
+    })
 
     // Subscribe to agent events for streaming
     unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
@@ -3779,10 +4033,10 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        // Another renderer (notably the PWA) can create or resume the harness
+        // Another renderer window can create or resume the harness
         // session while this desktop view stays mounted. Adopt that persisted
         // binding before its stream arrives, then reconcile the user message
-        // that the remote renderer optimistically owns in its own cache.
+        // that the other window optimistically owns in its own cache.
         if (updatedThread.sessionId && updatedThread.sessionId !== sessionId) {
           sessionBindingVersion += 1
           sessionId = updatedThread.sessionId
@@ -3857,6 +4111,7 @@
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
       unsubscribeLifecycleInheritance?.()
+      unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
@@ -3987,9 +4242,7 @@
       queueMicrotask(() => {
         if (!alive) return
         if (thread.settings) {
-          settings = chatMode
-            ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-            : threadSettings.initialFor(thread)
+          settings = initialThreadSettings(thread)
         }
         auditSettings = auditSettingsForThread()
         syncOpenSubagentTabs()
@@ -4021,11 +4274,7 @@
           queueMicrotask(() => {
             if (!alive) return
             if (threadData?.settings) {
-              settings = chatMode
-                ? normalizeChatSettings(
-                    chatSettings.initialFor(threadData, chatEffectiveSettings())
-                  )
-                : threadSettings.initialFor(threadData)
+              settings = initialThreadSettings(threadData)
             }
             agentDefaults = config.agentDefaults
             imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -4057,9 +4306,7 @@
       // around the newest tail now. No-op when the warm path already revealed.
       beginInitialPaintReveal()
       if (threadData?.settings) {
-        settings = chatMode
-          ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
-          : threadSettings.initialFor(threadData)
+        settings = initialThreadSettings(threadData)
       }
       agentDefaults = config.agentDefaults
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
@@ -4188,17 +4435,24 @@
       // Always rebuild the latest logical turn from the durable SSE log. The
       // bounded mirror can contain only the newest snapshot of a long turn,
       // and a finished thread still needs the same complete trace after a
-      // refresh or thread switch.
+      // refresh or thread switch. Only the newest page is read here; older
+      // entries page in on the trace's own inner scroll.
       const generation = ++streamPartsLoadGeneration
-      void invoke('thread:loadStreamParts', projectId, id)
-        .then((parts) => {
+      void invoke('thread:loadStreamParts', projectId, id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+        .then((page) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = mergeWorkingParts(streamParts, parts)
+          if (page.kind !== 'window') return
+          streamParts = mergeWorkingParts(streamParts, page.parts)
+          streamHasOlder = page.hasOlder
+          streamTodoParts = page.todoParts
+          streamCursor = page.cursor
           if (
             providerStatus === null &&
             thread.status !== 'working-paused' &&
             !restoredBusy &&
-            hasRenderableWorkingParts(parts)
+            hasRenderableWorkingParts(page.parts)
           ) {
             // Only a saved run that is still the newest work may claim the
             // restored-trace state. Once the user has sent a newer message
@@ -4272,61 +4526,101 @@
     return loadPromise
   }
 
-  function switchProject(targetProjectId: string): void {
+  /** True while a move is in flight. Choosing a second project before the first
+   *  create settles would otherwise leave an orphan thread behind in the project
+   *  the user skipped past. */
+  let switchingProject = false
+
+  /**
+   * Hand this not-yet-used thread to another project.
+   *
+   * A thread is owned by exactly one project, so handing it over is a create and
+   * a delete, in that order: the destination project gets a thread that inherits
+   * this one's provider, settings and title, the unsent draft moves across
+   * object-to-object (never through the clipboard), and only once the new thread
+   * owns the draft is the source thread deleted. The sidebar needs no special
+   * handling   opening the new thread puts its row in the list, and the
+   * `thread:deleted` broadcast removes the old row, exactly as they do for every
+   * other thread.
+   */
+  async function switchProject(targetProjectId: string): Promise<void> {
+    if (switchingProject) return
     const oldProjectId = thread.projectId
     const oldThreadId = thread.id
+    // Picking the project the thread already lives in is not a move: without this
+    // guard it would churn the thread id for nothing.
+    if (targetProjectId === oldProjectId) return
+
+    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
+    if (!targetProject) return
+
     const oldTitle = thread.title
+    const providerId = thread.providerId
+    const settings = thread.settings
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)
     const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
     const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
-    rendererRecovery.clearDraft(oldProjectId, oldThreadId)
-    publishDraftActivity(oldProjectId, oldThreadId, false)
+    const hasDraftContent =
+      draft.length > 0 ||
+      attachments.length > 0 ||
+      references.length > 0 ||
+      taskReferences.length > 0 ||
+      promptReferences.length > 0
 
-    const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
-    if (!targetProject) return
+    switchingProject = true
+    try {
+      let newThread: Thread
+      try {
+        newThread = await invoke('thread:create', {
+          projectId: targetProjectId,
+          providerId,
+          title: oldTitle,
+          workingDirectory: targetProject.path,
+          settings,
+          scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+        })
+      } catch (error) {
+        // The source thread and its draft are untouched, so the composer still
+        // holds whatever the user had typed and the move can simply be retried.
+        reportError(error, 'The thread could not be moved.')
+        return
+      }
 
-    invoke('thread:create', {
-      projectId: targetProjectId,
-      providerId: thread.providerId,
-      title: oldTitle,
-      workingDirectory: targetProject.path,
-      settings: thread.settings,
-      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        if (
-          draft ||
-          attachments.length > 0 ||
-          references.length > 0 ||
-          taskReferences.length > 0 ||
-          promptReferences.length > 0
-        ) {
-          rendererRecovery.setDraft(
-            targetProjectId,
-            newThread.id,
-            draft,
-            attachments,
-            references,
-            taskReferences,
-            promptReferences
-          )
-        }
-        workspaceState.requestMoveThread(oldThreadId, newThread)
-        invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
-        scopeState.removeThread(oldThreadId)
-        workspaceState.openThread(newThread, targetProject)
-        scopeState.updateThread(newThread)
-        scopeState.activeProjectId = targetProjectId
-        void scopeState.ensureBoardLoaded(targetProjectId)
-        invoke('project:getIcon', targetProjectId)
-          .then((url) => {
-            projectIconUrl = url
-          })
-          .catch(() => {})
-      })
-      .catch(() => {})
+      if (hasDraftContent) {
+        rendererRecovery.setDraft(
+          targetProjectId,
+          newThread.id,
+          draft,
+          attachments,
+          references,
+          taskReferences,
+          promptReferences
+        )
+      }
+      // Only now that the new thread owns the draft is the source cleared.
+      // Clearing it up front would silently destroy the user's unsent text
+      // whenever the create failed.
+      rendererRecovery.clearDraft(oldProjectId, oldThreadId)
+
+      // Fire-and-forget: main owns the outcome and toasts either way   it restores
+      // the row when the delete failed, and broadcasts `thread:deleted` when the row
+      // is gone, so this side never has to guess which state the thread is in.
+      invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
+      scopeState.removeThread(oldThreadId)
+      workspaceState.openThread(newThread, targetProject)
+      scopeState.updateThread(newThread)
+      scopeState.activeProjectId = targetProjectId
+      void scopeState.ensureBoardLoaded(targetProjectId)
+      invoke('project:getIcon', targetProjectId)
+        .then((url) => {
+          projectIconUrl = url
+        })
+        .catch(() => {})
+    } finally {
+      switchingProject = false
+    }
   }
 
   /** Retry after an error or a paused provider retry   replace the live turn first. */
@@ -4479,7 +4773,10 @@
       return
     }
     if (
-      (event.type === 'spec.ready' || event.type === 'brainstorm.ready') &&
+      (event.type === 'spec.ready' ||
+        event.type === 'brainstorm.ready' ||
+        event.type === 'prd.ready' ||
+        event.type === 'assignment.ready') &&
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
@@ -4521,17 +4818,39 @@
             : streamParts.map((part, index) =>
                 index === streamPartIndex ? mergeStreamedPart(part, event.part) : part
               )
+        // Every harness publishes its output as part snapshots, so the text
+        // length is the one progress signal available everywhere. Snapshots
+        // repeat the whole text, so only growth counts.
+        const part = event.part
+        if (part.type === 'text' || part.type === 'reasoning') {
+          liveTokenRate.noteSnapshot(
+            part.messageID,
+            part.id,
+            part.text.length + (part.type === 'reasoning' ? (part.summary?.length ?? 0) : 0)
+          )
+        }
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
       case 'message.part.delta': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
+        if (event.delta.length > 0) {
+          liveTokenRate.noteDelta(event.messageId, event.partId, event.delta.length)
+        }
         break
       }
       case 'message.completed': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
+        // Record what the harness reported before closing the window, so this
+        // request's own count teaches the characters-per-token calibration.
+        if (event.tokens && generatedTokens(event.tokens) > 0) {
+          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+        }
+        // The request's generation window ends here, so the next request starts
+        // a fresh one and the tool wait between them is never counted.
+        liveTokenRate.completeRequest(event.messageId)
         if (event.compaction) {
           turnSawCompaction = true
         } else {
@@ -4554,11 +4873,14 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        liveTokenRate.observe(event.messageId, generatedTokens(event.tokens), false)
+        if (event.tokens && generatedTokens(event.tokens) > 0) {
+          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+        }
         break
       }
       case 'session.idle': {
         if (event.sessionId !== sessionId) return
+        liveTokenRate.settle()
         if (liveTokenRate.messageId) {
           const finalizedId = liveTokenRate.messageId
           const rate = liveTokenRate.finalize()
@@ -4575,6 +4897,7 @@
         if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
           providerStatus = null
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -4596,6 +4919,7 @@
             errorMessage = event.error ?? 'The harness session failed.'
           }
         }
+        void refreshStreamTailAfterTurn()
         void refreshCheckpoints()
         break
       }
@@ -4766,6 +5090,7 @@
   async function refreshCompletedTurn(): Promise<void> {
     const staleMessageRefresh = refreshMessagesInFlight
     const checkpointRefresh = refreshCheckpoints()
+    void refreshStreamTailAfterTurn()
     if (staleMessageRefresh) await staleMessageRefresh
     await Promise.all([refreshMessages(), checkpointRefresh])
   }
@@ -4882,7 +5207,9 @@
   }
 
   /** Resolve a pending image-descriptor error card: retry with a (possibly new)
-   *  vision model, or ignore and send whatever partial output exists onward. */
+   *  vision model, or ignore and send whatever partial output exists onward.
+   *  Dismissing always clears the card, even when the engine already settled the
+   *  request, because the user must never be trapped behind a dead card. */
   async function replyImageDescriptor(
     requestId: string,
     action: ImageDescriptorReplyAction,
@@ -4890,6 +5217,9 @@
     imagePath?: string
   ): Promise<void> {
     const { projectId, id } = thread
+    if (action === 'ignore' && pendingImageDescriptorError?.id === requestId) {
+      pendingImageDescriptorError = null
+    }
     try {
       await invoke(
         'agent:replyImageDescriptor',
@@ -4900,8 +5230,15 @@
         selection,
         imagePath
       )
-      pendingImageDescriptorError = null
+      if (pendingImageDescriptorError?.id === requestId) pendingImageDescriptorError = null
     } catch (error) {
+      // A dismissal is a request to close the card, never a request the engine
+      // must still hold: when the request is already settled the card closes
+      // anyway, so a dead card can never become undismissable.
+      if (action === 'ignore') {
+        pendingImageDescriptorError = null
+        return
+      }
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
       throw error
@@ -5123,12 +5460,20 @@
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
+  /** Folds the queued-message card down to its header so the conversation above
+   *  the composer stays readable while a message waits in the queue. */
+  let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
-  let prevFocusComposerCount = 0
+  /** Baseline captured at mount. A focus request that was issued *before* this
+   *  conversation mounted is already satisfied by the composer's own autofocus,
+   *  so only requests that arrive afterwards may remount the composer. Starting
+   *  from zero made every thread switch remount ChatComposer a second time the
+   *  moment the first focus request of the session had ever been issued. */
+  let prevFocusComposerCount = workspaceState.focusComposerCount
   $effect(() => {
     const current = workspaceState.focusComposerCount
     if (current !== prevFocusComposerCount) {
@@ -5313,10 +5658,15 @@
       return
     }
 
-    const selectedAssignment = engineeringLifecycle?.activeStage === 'assignment'
+    const selectedAssignment =
+      engineeringLifecycle?.activeStage === 'assignment' ||
+      engineeringLifecycle?.humanGate === 'assignment_approval'
     if (selectedAssignment && specAction === undefined) {
-      if (!spec || spec.status !== 'approved') {
-        assignmentError = 'Assignment requires an approved Spec.'
+      // A Spec that exists but is not approved still owns the Assignment, so ask
+      // for approval first. Only while no Assignment exists yet: once the board
+      // is there, the message belongs to the Assignment conversation.
+      if (spec && spec.status !== 'approved' && assignment === null) {
+        assignmentError = 'Approve the Spec before generating an Assignment from it.'
         return
       }
       if (engineeringLifecycle?.activeStage === undefined) {
@@ -5324,9 +5674,31 @@
           await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
         ).state
       }
-      await generateAssignmentDraft()
-      return
+      if (engineeringLifecycle?.autopilot === true) {
+        // Autopilot has nobody to answer, so it keeps the forced background
+        // decomposition instead of opening an interview.
+        await generateAssignmentDraft(msg)
+        return
+      }
+      // Fall through on purpose: an Assignment-stage message is the Assignment
+      // interview. The Sr. Engineer either submits the task graph or asks the
+      // questions the thread and the message together cannot settle.
     }
+
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
+    const selectedPrd =
+      engineeringLifecycle?.activeStage === 'prd' ||
+      (hasSelectedStage(engineeringLifecycle, 'prd') &&
+        engineeringLifecycle?.activeStage === undefined &&
+        !lifecycleStarted)
+    // Read once: the entry card below and the PRD branch further down both need
+    // the persisted PRD workflow stage.
+    const selectedPrdWorkflow = selectedPrd
+      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+      : null
 
     // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
     // card at SEND time, never when the Toolbox switch is toggled. Jumping in
@@ -5342,10 +5714,48 @@
       !hasSelectedStage(engineeringLifecycle, 'achievement') &&
       (entryPrd || entrySpec)
     ) {
+      // A resolved entry choice, not a produced document, is what makes the
+      // message routable. Asking for documents reopened the card on every later
+      // send, because both choices leave them absent for a while: "Start PRD"
+      // moves the PRD workflow to `drafting` and "Brainstorm first" saves the
+      // entry on the Brainstorm workflow.
       const contextReady = entryPrd
-        ? Boolean(brainstorm?.status === 'finalized' || prd)
-        : Boolean(brainstorm?.status === 'finalized' || prd || spec)
+        ? !selectedPrd || selectedPrdWorkflow?.stage !== 'choice_pending'
+        : Boolean(
+            brainstorm?.status === 'finalized' ||
+            prd !== null ||
+            spec !== null ||
+            brainstormWorkflow?.entryChoice !== undefined
+          )
       if (!contextReady) {
+        // Park the send and hand its draft back while the card is up. Returning
+        // without this dropped both: the composer had already cleared its
+        // buffer, and nothing resent the message once the choice resolved.
+        pendingEntrySend = {
+          text,
+          attachments,
+          ...(direct ? { direct } : {}),
+          ...(promptContext ? { promptContext } : {}),
+          ...(specAction ? { specAction } : {}),
+          ...(presentation ? { presentation } : {}),
+          promptReferences,
+          projectReferences,
+          taskReferences,
+          startAfterThreads
+        }
+        rendererRecovery.setDraft(
+          thread.projectId,
+          thread.id,
+          text,
+          attachments,
+          projectReferences,
+          taskReferences
+        )
+        if (promptReferences.length > 0) {
+          responseReferencesState.setForThread(thread.projectId, thread.id, promptReferences)
+          scheduleResponseHighlightRestore(promptReferences)
+        }
+        composerRestoreKey += 1
         if (pendingEngineeringEntry === null) {
           pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
         }
@@ -5353,53 +5763,21 @@
       }
     }
 
-    const lifecycleStarted =
-      engineeringLifecycle !== null &&
-      engineeringLifecycle !== undefined &&
-      engineeringLifecycle.startedAt !== undefined
-    const selectedPrd =
-      engineeringLifecycle?.activeStage === 'prd' ||
-      (hasSelectedStage(engineeringLifecycle, 'prd') &&
-        engineeringLifecycle?.activeStage === undefined &&
-        !lifecycleStarted)
-    const selectedPrdWorkflow = selectedPrd
-      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-      : null
     if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
       if (selectedPrdWorkflow?.stage === 'choice_pending') {
         prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
         return
       }
-      const userMessageId = messageId()
-      const { projectId, id } = thread
-      beginLocalTurn(userMessageId)
-      agentRuns.setBusy(projectId, id, true, userMessageId)
-      try {
-        if (engineeringLifecycle?.activeStage === undefined) {
-          const started = await invoke('engineeringLifecycle:start', projectId, id)
-          engineeringLifecycle = started.state
-        }
-        prd = await invoke(
-          'agent:generatePrd',
-          projectId,
-          id,
-          settings,
-          [msg, promptContext].filter(Boolean).join('\n\n'),
-          attachments,
-          userMessageId
-        )
-        prdVersions = prd ? [prd] : []
-        selectedPrdVersion = prd?.version ?? null
-        engineeringLifecycle = await invoke('engineeringLifecycle:get', projectId, id)
-        await threadMessages.load(projectId, id)
-        clearLocalTurn()
-        agentRuns.setIdle(projectId, id)
-      } catch (error) {
-        clearLocalTurn()
-        agentRuns.setIdle(projectId, id)
-        errorMessage = error instanceof Error ? error.message : 'The PRD could not be generated.'
+      // The PRD stage is conversational: this message becomes an ordinary turn
+      // under the PRD prompt, and the agent either writes the document or asks the
+      // product questions the document still needs. The document itself arrives
+      // through the `prd.ready` broadcast once the agent submits it.
+      prdError = ''
+      if (engineeringLifecycle?.activeStage === undefined) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
       }
-      return
     }
 
     recordModelUse()
@@ -5410,14 +5788,10 @@
     // unmount   releasing the tail lock here would re-window and hide them.
     idleAttentionHandled = false
 
-    // Persist settings as last-used. On the Chats tab this seeds the chat's own
-    // store, so the next chat inherits this chat's model, thinking level, and
-    // File System state   never the project view's configuration.
-    if (chatMode) {
-      chatSettings.commit(settings)
-    } else {
-      threadSettings.commit(settings)
-    }
+    // Persist settings as last-used. Each family seeds its own store, so the
+    // next chat or assistant task inherits this thread's model, thinking level
+    // and File System state, never another family's configuration.
+    commitSettings(settings)
 
     errorMessage = ''
     providerStatus = null
@@ -5569,6 +5943,14 @@
     sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
   }
 
+  /** Open a design session   the slash spelling of the @cio-design composer tag.
+   *  The main process owns the design contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioDesignTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -5591,10 +5973,192 @@
     requestSkillUse(skill.name, args)
   }
 
+  /** The routine this assistant thread is authoring, when it is one. */
+  const assistantRoutine = $derived(
+    assistantRoutineId
+      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
+      : null
+  )
+
+  /**
+   * The complete draft the agent has presented for this routine: the how-to it
+   * wrote plus the machine-readable plan (schedule and connections). A draft is
+   * what makes the routine committable, so the recap card and the fallback
+   * command both key off it. It is computed only while the agent is idle: a
+   * running turn streams the draft token by token, and re-parsing fences on
+   * every delta would be wasted work for a card that cannot show yet anyway.
+   * The authoring conversation is short and lives only until the routine is
+   * saved, so scanning it once per settled turn is bounded work.
+   */
+  const assistantRoutineDraft = $derived.by(
+    (): {
+      howTo: string
+      plan: RoutinePlanDraft | null
+    } | null => {
+      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
+      const howTo = latestHowToDraft()
+      if (!howTo) return null
+      return { howTo, plan: latestRoutinePlanDraft() }
+    }
+  )
+
+  /**
+   * Identity of the current draft. Dismissing the recap card hides it only for
+   * this revision, so a revised draft brings the card back.
+   */
+  const assistantRoutineDraftSignature = $derived(
+    assistantRoutineDraft
+      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+      : ''
+  )
+
+  /** The draft revision the user chose to keep editing; empty means none. */
+  let routineRecapDismissed = $state('')
+  let routineSaving = $state(false)
+
+  const routineRecapVisible = $derived(
+    assistantRoutineDraft !== null &&
+      !routineSaving &&
+      routineRecapDismissed !== assistantRoutineDraftSignature
+  )
+
+  function keepEditingRoutine(): void {
+    routineRecapDismissed = assistantRoutineDraftSignature
+  }
+
+  /**
+   * The how-to the agent last drafted for this routine, taken from the newest
+   * how-to fenced block in an assistant message. The authoring contract asks
+   * for a `how-to` fence, but a bare fence whose body starts with a
+   * `how-to: <title>` line is accepted too.
+   */
+  function latestHowToDraft(): string | null {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestHowToDraftIn(assistantTexts)
+  }
+
+  /** The machine-readable routine plan the agent last emitted, if any. */
+  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
+    const assistantTexts: string[] = []
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantTexts.push(messageText(message))
+    }
+    return latestRoutinePlanDraftIn(assistantTexts)
+  }
+
+  /**
+   * Keep the routine's primary in step with the model the user is working on
+   * while the how-to is still being written. The primary is the model that
+   * triggers the how-to, so a model switched in the composer before the first
+   * turn must become the model the routine runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the how-to
+   * is saved, and no-op while the composer already matches the primary.
+   */
+  function syncRoutinePrimaryToCurrentModel(): void {
+    const routineId = assistantRoutineId
+    if (!routineId || assistantHowToComplete) return
+    const current = settings
+    if (!current.modelId) return
+    const primary = assistantRoutine?.agents?.primary
+    if (
+      primary &&
+      primary.harnessId === current.harnessId &&
+      primary.providerId === current.providerId &&
+      primary.modelId === current.modelId
+    ) {
+      return
+    }
+    void assistantRoutines
+      .updateRoutine(routineId, {
+        agents: {
+          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          primary: {
+            harnessId: current.harnessId,
+            providerId: current.providerId,
+            modelId: current.modelId,
+            ...(current.accountId ? { accountId: current.accountId } : {}),
+            ...(current.thinkingLevel ? { thinkingLevel: current.thinkingLevel } : {})
+          }
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  /**
+   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * have the agent post a short next-steps list in the Getting started thread.
+   * Both the recap card's Save button and a typed confirmation route here, so
+   * the follow-up turn happens whichever way the user agreed.
+   */
+  async function confirmRoutineSave(): Promise<void> {
+    const routineId = assistantRoutineId
+    if (!routineId) return
+    const saved = await saveRoutineHowTo()
+    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+  }
+
+  /**
+   * Commit the agent-drafted how-to, schedule, and connections to the routine
+   * once the user agrees. Called by the recap card and by the `/save-how-to`
+   * fallback. The plan block is optional: without it the how-to is saved on its
+   * own and the existing schedule is left untouched.
+   */
+  async function saveRoutineHowTo(draftOverride?: {
+    howTo: string
+    plan: RoutinePlanDraft | null
+  }): Promise<boolean> {
+    const routineId = assistantRoutineId
+    if (!routineId || routineSaving) return false
+    const draft = draftOverride ?? assistantRoutineDraft
+    if (!draft) {
+      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      return false
+    }
+    routineSaving = true
+    try {
+      const plan = draft.plan
+      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
+      if (plan?.schedule) patch.schedule = plan.schedule
+      if (plan?.delivery) patch.delivery = plan.delivery
+      if (plan?.priority) patch.priority = plan.priority
+      if (plan && plan.connections.length > 0) {
+        const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
+        const catalog = await invoke('utilities:list').catch(() => null)
+        patch.connections = connectionsFromPlan(
+          plan.connections,
+          routine?.connections ?? [],
+          catalog?.utilities ?? []
+        )
+      }
+      await assistantRoutines.updateRoutine(routineId, patch)
+      toast.success(plan?.schedule ? 'How-to and schedule saved' : 'How-to saved')
+      routineRecapDismissed = ''
+      return true
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      return false
+    } finally {
+      routineSaving = false
+    }
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:save-how-to') {
+      await saveRoutineHowTo()
+      return
+    }
     if (commandId === 'command:cio-utility') {
       triggerCioUtilityTurn(args)
+      return
+    }
+    if (commandId === 'command:cio-design') {
+      triggerCioDesignTurn(args)
       return
     }
     if (commandId.startsWith('cio-skill:')) {
@@ -5684,9 +6248,7 @@
       return
     }
 
-    const permissionLevel = actionPermissionLevels.find(
-      (permission) => actionId(`mode:permission:${permission.id}`) === action.id
-    )?.id
+    const permissionLevel = permissionLevelForAction(action)
     if (permissionLevel) {
       updateSettings({ ...settings, permissionLevel })
       return
@@ -5702,9 +6264,13 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility and capability skills) route
-    // through the same handler the composer's submit path uses.
-    if (action.id === 'command:cio-utility' || action.id.startsWith('cio-skill:')) {
+    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
+    // route through the same handler the composer's submit path uses.
+    if (
+      action.id === 'command:cio-utility' ||
+      action.id === 'command:cio-design' ||
+      action.id.startsWith('cio-skill:')
+    ) {
       await executeHarnessCommand(action.id, '')
       return
     }
@@ -5922,20 +6488,6 @@
     pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
   }
 
-  function checkpointForTurn(messageIndex: number): TurnCheckpointSummary | null {
-    const assistant = messages[messageIndex]
-    if (!assistant || assistant.role !== 'assistant') return null
-
-    // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
-    // (completedAt). Every message of that turn   including steers,
-    // question-answers, permission prompts, sub-agent spawns, and compaction
-    // falls inside this window, so match the card by time instead of walking
-    // back to a "user" message (whose role/shape varies with what the agent
-    // did mid-turn). Choosing the most recent window resolves
-    // interrupted-then-resumed turns to the resumed checkpoint.
-    return CheckpointMatching.checkpointForTurn(messages, checkpoints, messageIndex)
-  }
-
   /** True when `messageIndex` is the final assistant message of `checkpoint`'s
    *  turn   the single place its file card should render. Keeps a card from
    *  being drawn multiple times when mid-turn question-answer user messages
@@ -6041,6 +6593,14 @@
   async function reconcileReadySpecNow(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
+    // A worker never owns the Assignment: it implements one task of its
+    // coordinator's plan, and the main process keys every Assignment read on
+    // that coordinator. Resolve it there so the child can present the parent's
+    // board instead of an empty one.
+    const assignmentThreadId =
+      thread.assignmentRole === 'worker'
+        ? (thread.coordinatorThreadId ?? workflowThreadId)
+        : workflowThreadId
     const [
       active,
       workflowThread,
@@ -6052,12 +6612,17 @@
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
       invoke('thread:get', projectId, workflowThreadId),
-      invoke('assignment:getActive', projectId, workflowThreadId),
+      invoke('assignment:getActive', projectId, assignmentThreadId),
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
       invoke('prd:getActive', projectId, workflowThreadId)
     ])
+    if (!alive) return
+    coordinatorParentThread = coordinatorParentId
+      ? (projectThreads.find((candidate) => candidate.id === coordinatorParentId) ??
+        (await invoke('thread:get', projectId, coordinatorParentId)))
+      : null
     if (!alive) return
     const staleSpecGeneration =
       active !== null &&
@@ -6121,7 +6686,7 @@
       updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     assignmentVersions = activeAssignment
-      ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
+      ? await invoke('assignment:listVersions', projectId, assignmentThreadId, activeAssignment.id)
       : []
     assignmentCoordinatorThread = projectThreads.find(
       (candidate) => candidate.id === activeAssignment?.coordinatorThreadId
@@ -6157,6 +6722,9 @@
       specVersions = []
       specReadyToolVisible = false
     }
+    // The Spec/Assignment state above is now authoritative for this mount, so the
+    // composer may show its ready card without a stale flash.
+    workflowReady = true
     auditState = workflowThread?.auditState
     const activeAudit = await invoke('audit:getActive', projectId, workflowThreadId)
     if (!alive) return
@@ -6362,6 +6930,52 @@
     }
   }
 
+  /**
+   * The scope an `inherit` worker choice resolves to. Before sign-off the plan
+   * carries no scope yet, so it falls back to the coordinator's own, which is
+   * exactly what the engine freezes at activation.
+   */
+  let assignmentScopeBucketId = $derived(
+    assignment?.scopeBucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+  )
+
+  async function updateAssignmentTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      assignment = await invoke(
+        'assignment:updateUnlinkedWorkerScope',
+        thread.projectId,
+        thread.id,
+        taskId,
+        scope
+      )
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The task scope could not be updated.'
+    } finally {
+      assignmentBusy = false
+    }
+  }
+
+  /**
+   * Move every worker of a signed-off Assignment that has no scope of its own.
+   * The choice is a request: a dedicated worktree is created at dispatch, so this
+   * stays instant however many tasks the Assignment carries.
+   */
+  async function updateAssignmentWorkerScope(scope: ScopeChoice): Promise<void> {
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      assignment = await invoke('assignment:updateWorkerScope', thread.projectId, thread.id, scope)
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The worker scope could not be updated.'
+    } finally {
+      assignmentBusy = false
+    }
+  }
+
   async function approveAssignment(content: AssignmentPlanContent): Promise<void> {
     assignmentBusy = true
     assignmentError = ''
@@ -6459,41 +7073,47 @@
     })
   }
 
-  async function generateAssignmentDraft(): Promise<void> {
-    if (!spec || assignmentBusy) return
+  /**
+   * Generate the Assignment draft. An active Spec is approved in place first so
+   * the explicit "Generate Assignment" action never fails on an unapproved Spec;
+   * without any Spec the main process decomposes the supplied conversation
+   * instead, which is why `instructions` can carry the user's own request.
+   */
+  async function generateAssignmentDraft(instructions?: string): Promise<void> {
+    if (assignmentBusy) return
     assignmentBusy = true
     assignmentFormulating = true
     assignmentError = ''
     try {
-      // The main process only generates an Assignment from an approved Spec.
-      // Sign the active Spec in place (draft -> in_review -> approved) so the
-      // explicit "Generate Assignment" action never fails on an unapproved Spec.
       let signingSpec = spec
-      if (signingSpec.status === 'draft') {
-        signingSpec = await invoke(
-          'spec:setReview',
-          signingSpec.projectId,
-          signingSpec.threadId,
-          signingSpec.id,
-          signingSpec.version
-        )
-        spec = signingSpec
-      }
-      if (signingSpec.status === 'in_review') {
-        signingSpec = await invoke(
-          'spec:approve',
-          signingSpec.projectId,
-          signingSpec.threadId,
-          signingSpec.id,
-          signingSpec.version
-        )
-        await setActiveSpec(signingSpec)
+      if (signingSpec) {
+        if (signingSpec.status === 'draft') {
+          signingSpec = await invoke(
+            'spec:setReview',
+            signingSpec.projectId,
+            signingSpec.threadId,
+            signingSpec.id,
+            signingSpec.version
+          )
+          spec = signingSpec
+        }
+        if (signingSpec.status === 'in_review') {
+          signingSpec = await invoke(
+            'spec:approve',
+            signingSpec.projectId,
+            signingSpec.threadId,
+            signingSpec.id,
+            signingSpec.version
+          )
+          await setActiveSpec(signingSpec)
+        }
       }
       assignment = await invoke(
         'agent:generateAssignmentDraft',
         thread.projectId,
         thread.id,
-        settings
+        settings,
+        instructions && instructions.trim() ? instructions : undefined
       )
       assignmentVersions = await invoke(
         'assignment:listVersions',
@@ -6671,6 +7291,37 @@
     } else {
       await chooseBrainstormEntry(choice === 'brainstorm_first' ? 'brainstorm' : 'spec')
     }
+    await resumePendingEntrySend()
+  }
+
+  /** Send the message that opened the entry card, now that the choice deciding
+   *  how it is handled is persisted. The draft went back to the composer while
+   *  the card was up, so it clears first and a failed send restores it through
+   *  the same `restorable` path every other send uses. */
+  async function resumePendingEntrySend(): Promise<void> {
+    const parked = pendingEntrySend
+    if (!parked) return
+    pendingEntrySend = null
+    const { projectId, id } = thread
+    rendererRecovery.clearDraft(projectId, id)
+    publishDraftActivity(projectId, id, false)
+    composerRestoreKey += 1
+    // The quoted excerpts the draft put back on screen now travel with the
+    // parked payload, exactly as a composer send consumes them once.
+    if (parked.promptReferences.length > 0) clearResponseReferences()
+    await sendMessage(
+      parked.text,
+      parked.attachments,
+      parked.specAction,
+      parked.direct,
+      parked.promptContext,
+      parked.promptReferences,
+      parked.projectReferences,
+      parked.presentation,
+      parked.taskReferences,
+      true,
+      parked.startAfterThreads
+    )
   }
 
   async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
@@ -6911,46 +7562,6 @@
   }
 
   async function openPrototypePreview(previewPath: string): Promise<void> {
-    if (isRemotePwaRuntime()) {
-      const configuredOrigin = await invoke('prototypePreview:getOrigin')
-      if (!configuredOrigin) {
-        throw new Error('Prototype preview origin is not configured for this deployment.')
-      }
-      let offset = 0
-      let size = 0
-      let mime = 'text/html; charset=utf-8'
-      const chunks: ArrayBuffer[] = []
-      while (offset === 0 || offset < size) {
-        const chunk = await invoke(
-          'prototypePreview:readChunk',
-          thread.projectId,
-          thread.id,
-          previewPath,
-          offset
-        )
-        if (
-          chunk.nextOffset <= offset ||
-          chunk.size < 1 ||
-          chunk.size > 25 * 1024 * 1024 ||
-          chunk.nextOffset > chunk.size
-        ) {
-          throw new Error('The prototype preview returned invalid chunk metadata.')
-        }
-        const binary = atob(chunk.base64)
-        const bytes = new Uint8Array(binary.length)
-        for (let index = 0; index < binary.length; index += 1) {
-          bytes[index] = binary.charCodeAt(index)
-        }
-        chunks.push(bytes.buffer)
-        offset = chunk.nextOffset
-        size = chunk.size
-        mime = chunk.mime
-      }
-      const url = URL.createObjectURL(new Blob(chunks, { type: mime }))
-      window.open(url, '_blank', 'noopener,noreferrer')
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      return
-    }
     const origin = await invoke('prototypePreview:getOrigin')
     if (!origin) {
       errorMessage = 'Prototype preview origin is not configured for this deployment.'
@@ -7443,6 +8054,14 @@
     }
   }
 
+  /** Hide the spec-less Assignment entry for this mount. Nothing persisted is
+   *  dismissed   there is no Spec review to record   so re-enabling the
+   *  Assignment stage in the Toolbox brings the card back. */
+  function dismissConversationAssignment(): void {
+    conversationAssignmentDismissed = true
+    assignmentError = ''
+  }
+
   async function cancelSpecReadyTool(): Promise<void> {
     const current = spec
     if (!current) return
@@ -7509,6 +8128,9 @@
       void openAssignmentTaskThread(task.threadId)
       return
     }
+    // A task with no worker thread yet opens the Assignment document, which
+    // belongs to the coordinator when this view is a worker or auditor child.
+    if (openOwnerStudio('assignment')) return
     assignmentFocusTaskId = task.id
     workspaceState.specAgentSidebarOpen = false
     studioDocument = 'assignment'
@@ -7522,6 +8144,42 @@
         : (assignmentThreads.find((candidate) => candidate.id === threadId) ??
           (await invoke('thread:get', thread.projectId, threadId)))
     if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  /** The live thread a dispatched task currently runs in. A reassigned task
+   *  points at its newest worker, so resolution needs no history; an unassigned
+   *  or deleted thread resolves to nothing and its review badge stays inert. */
+  function resolveAssignmentTaskThread(threadId: string | undefined): Thread | undefined {
+    if (!threadId) return undefined
+    if (threadId === thread.id) return thread
+    return (
+      assignmentThreads.find((candidate) => candidate.id === threadId) ??
+      (assignmentCoordinatorThread?.id === threadId ? assignmentCoordinatorThread : undefined)
+    )
+  }
+
+  /** Leave a worker/auditor view for the coordinator that owns it. The child is
+   *  hidden from every thread list, so this control is the way back. */
+  function openCoordinatorParent(): void {
+    const parent = coordinatorParentThread
+    if (parent) {
+      workspaceState.openThread(parent, project)
+      return
+    }
+    if (coordinatorParentId) void openAssignmentTaskThread(coordinatorParentId)
+  }
+
+  /**
+   * Studio surfaces belong to the thread that owns the work. From a worker or
+   * auditor view the coordinator owns them, so the callback switches to that
+   * thread rather than replacing the child's conversation with a document it
+   * does not own. Returns false when this view already owns the Studio.
+   */
+  function openOwnerStudio(documentKind: 'assignment' | 'audit'): boolean {
+    const owner = coordinatorParentThread
+    if (!owner || owner.id === thread.id) return false
+    workspaceState.openThreadStudio(owner, project, documentKind)
+    return true
   }
 
   async function openStartAfterThread(threadId: string): Promise<void> {
@@ -7575,16 +8233,6 @@
       if (threadMessages.loaded(thread.projectId, threadId)) return
       void threadMessages.preload(thread.projectId, threadId)
     }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
-  }
-
-  function harnessDisplayName(harnessId: string): string {
-    if (harnessId === 'opencode') return 'OpenCode'
-    if (harnessId === 'claude-code') return 'Claude Code'
-    if (harnessId === 'codex') return 'Codex'
-    if (harnessId === 'cline') return 'Cline'
-    if (harnessId === 'pi') return 'Pi'
-    if (harnessId === 'antigravity') return 'Antigravity'
-    return harnessId
   }
 
   /** True when the selected model exposes a fast tier, per the live catalog. */
@@ -7676,6 +8324,34 @@
       errorMessage = error instanceof Error ? error.message : 'The worker could not be retried.'
     } finally {
       assignmentWorkerRetryingId = null
+    }
+  }
+
+  /**
+   * Ask the open not-reporting worker to hand its finished work back. The main
+   * process switches reporting on and prompts the worker, so this mirrors the
+   * setting locally: the composer control and this button reflect it at once
+   * instead of waiting for the thread broadcast.
+   */
+  async function reportWorkerToCoordinator(): Promise<void> {
+    const current = assignment
+    if (!current || assignmentWorkerReportingId) return
+    assignmentWorkerReportingId = thread.id
+    try {
+      assignment = await invoke(
+        'agent:reportWorkerToCoordinator',
+        current.projectId,
+        current.coordinatorThreadId,
+        thread.id
+      )
+      updateSettings({ ...settings, reportToCoordinator: true })
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The worker could not be asked to report.'
+      throw error
+    } finally {
+      assignmentWorkerReportingId = null
     }
   }
 
@@ -7784,6 +8460,19 @@
       openAuditStudio()
       return
     }
+    // Nothing to open yet: the offer prompt is the audit entry, so bring a
+    // dismissed offer back before scrolling it into view.
+    if (assignmentAuditOfferDismissed) {
+      const restored = await invoke(
+        'audit:restoreOffer',
+        thread.projectId,
+        auditWorkflowThreadId()
+      ).catch(() => null)
+      if (restored) {
+        assignment = restored
+        auditState = 'offered'
+      }
+    }
     showSpecStudio = false
     await tick()
     scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
@@ -7795,7 +8484,11 @@
       return
     }
     coordinatorDockState.setAutoOpen(true)
-    contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+    contextSidebarState.openCoordinator(
+      thread.projectId,
+      coordinatorDockThreadId,
+      'Audit coordinator'
+    )
   }
 
   async function openCoordinatorAuditReport(
@@ -8232,6 +8925,15 @@
         settings = { ...settings, loopMode: false }
         commitSettings(settings)
         await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+      } else if (assignment) {
+        // Dismissing an Assignment offer lands on the plan, so refresh it here
+        // or the composer card would stay up until the next reconcile.
+        const refreshedAssignment = await invoke(
+          'assignment:getActive',
+          thread.projectId,
+          auditWorkflowThreadId()
+        ).catch(() => null)
+        if (refreshedAssignment) assignment = refreshedAssignment
       }
       auditState = undefined
       await reconcileReadySpec()
@@ -9093,135 +9795,6 @@
     void invoke('config:update', { imageDescriptorAskAgain: value }).catch(() => undefined)
   }
 
-  /** Extract display text only; transport instructions never enter `parts`. */
-  function rawMessageText(msg: AgentMessage): string {
-    return msg.parts
-      .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
-      .map((p) => p.text)
-      .join('\n')
-  }
-
-  function explicitMessagePresentation(msg: AgentMessage): UserMessagePresentation | null {
-    const part = msg.parts.find(
-      (candidate): candidate is Extract<AgentPart, { type: 'user-presentation' }> =>
-        candidate.type === 'user-presentation'
-    )
-    return part?.presentation ?? null
-  }
-
-  function specActionLabel(action: SpecActionIntent): string {
-    if (action === 'request') return 'Spec requested'
-    return action === 'implement' ? 'Implement spec' : 'Review spec'
-  }
-
-  /**
-   * Short work-trace snippets per user message, used as tree children in the
-   * history side panel: up to three labels from the turn that follows the
-   * message (its assistant reply), stopping at the next user message.
-   */
-  function tracePreviewByUserMessage(entries: AgentMessage[]): SvelteMap<string, string[]> {
-    const TRACE_PREVIEW_LIMIT = 3
-    const SNIPPET_LIMIT = 80
-    const previews = new SvelteMap<string, string[]>()
-    let currentUser: string | null = null
-    let snippets: string[] = []
-    const push = (snippet: string): void => {
-      if (currentUser === null || snippets.length >= TRACE_PREVIEW_LIMIT) return
-      const line = snippet.trim().split('\n', 1)[0] ?? ''
-      if (line.length === 0) return
-      snippets.push(line.length > SNIPPET_LIMIT ? `${line.slice(0, SNIPPET_LIMIT)}…` : line)
-    }
-    const flush = (): void => {
-      if (currentUser !== null && snippets.length > 0) previews.set(currentUser, snippets)
-      currentUser = null
-      snippets = []
-    }
-    for (const message of entries) {
-      if (message.role === 'user') {
-        flush()
-        currentUser = message.id
-        continue
-      }
-      if (currentUser === null) continue
-      for (const part of message.parts) {
-        if (part.type === 'tool') push(part.tool)
-        else if (part.type === 'reasoning') push(part.summary ?? part.text)
-        else if (part.type === 'subagent') push(part.activity.description)
-      }
-    }
-    flush()
-    return previews
-  }
-
-  /** Return only content stored in the durable display parts. */
-  function messageText(msg: AgentMessage): string {
-    const text = rawMessageText(msg)
-    const explicit = explicitMessagePresentation(msg)
-    if (explicit) return [explicit.action, explicit.body].filter(Boolean).join('\n\n')
-    // Restore the separator a tagged path lost when it was glued to the next
-    // word, so already-sent messages read with a clean space before the chip.
-    return msg.projectReferences?.length
-      ? spaceOutProjectReferences(text, msg.projectReferences)
-      : text
-  }
-
-  function escapeHtmlForChip(value: string): string {
-    return value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;')
-  }
-
-  function inlineChipHtml(reference: PromptProjectReference): string {
-    const safeName = escapeHtmlForChip(reference.name)
-    const safePath = escapeHtmlForChip(reference.path)
-    const safeTitle = escapeHtmlForChip(
-      `Tagged ${reference.kind}: ${reference.name}   ${reference.path}`
-    )
-    const icon =
-      reference.kind === 'directory'
-        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
-        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
-  }
-
-  function inlineUtilityChipHtml(): string {
-    // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
-    // selector can see the theme class on `<html>`   the mark's ink follows
-    // the active theme (black on light, white on dark). The chip's
-    // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
-    const icon = getVendorIconSvg(APP_NAME)
-    const safeTitle = escapeHtmlForChip(`${APP_NAME} utility`)
-    const iconHtml = icon
-      ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
-      : ''
-    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-utility-chip="cio-utility">${iconHtml}<span class="max-w-48 truncate font-medium">utility</span></span>`
-  }
-
-  function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
-    const text = messageText(msg)
-    const tags: Array<{ token: string; html: string }> = []
-    // The `@cio-utility` tag renders as a badge on the conversation screen too,
-    // mirroring the composer badge for the same token.
-    if (text.includes('@cio-utility')) {
-      tags.push({ token: '@cio-utility', html: inlineUtilityChipHtml() })
-    }
-    if (!msg.projectReferences?.length) return tags
-    // Only inline references that actually appear as `@path` in the stored text;
-    // remaining references will still render as the legacy top pills so no tag
-    // is lost. Longest paths first prevents a parent directory token from
-    // swallowing the prefix of a longer child path.
-    const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
-    for (const reference of ordered) {
-      const token = `@${reference.path}`
-      if (!token || !text.includes(token)) continue
-      tags.push({ token, html: inlineChipHtml(reference) })
-    }
-    return tags
-  }
-
   // ─── Message actions (copy / fork / edit) ──────────────────────────────
 
   let copiedMessageId = $state<string | null>(null)
@@ -9382,7 +9955,7 @@
       })
     } catch (error) {
       toast.dismiss(progressToast)
-      toast.error(error instanceof Error ? error.message : 'The transcript could not be exported.')
+      reportError(error, 'The transcript could not be exported.')
     }
   }
 
@@ -9528,6 +10101,55 @@
     )
   }
 
+  /**
+   * Send pasted secret values to the main process. It stores them (vault, and a
+   * utility credential when the agent named one) and hands them to the harness;
+   * the values never enter the transcript or the model's context.
+   */
+  async function handleSecretSubmit(
+    requestId: string,
+    secrets: AgentSecretSubmission[]
+  ): Promise<void> {
+    await invoke('agent:answerSecret', thread.projectId, thread.id, requestId, secrets)
+    resolvedQuestionRequestIds.add(requestId)
+    pendingQuestionRequests = pendingQuestionRequests.filter(
+      (request) => request.requestId !== requestId
+    )
+  }
+
+  /**
+   * Answer a secret request with an instruction instead of a value. The main
+   * process reuses whatever the device already holds for the requested names
+   * (this thread, another thread, or a utility credential) and hands the
+   * instruction to the agent, so a value the user cannot reach any more never has
+   * to be asked for twice.
+   */
+  async function handleSecretAlternative(requestId: string, alternative: string): Promise<void> {
+    await invoke(
+      'agent:answerSecretAlternative',
+      thread.projectId,
+      thread.id,
+      requestId,
+      alternative
+    )
+    resolvedQuestionRequestIds.add(requestId)
+    pendingQuestionRequests = pendingQuestionRequests.filter(
+      (request) => request.requestId !== requestId
+    )
+  }
+
+  /**
+   * Pause a secret card's countdown while the user reads a temporary chat: the
+   * same interaction that pauses a question (an update with no next index)
+   * clears the request's deadline. Best-effort, so the chat still opens when the
+   * request is already resolving.
+   */
+  function handleSecretPause(requestId: string, questionIndex: number): void {
+    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
+      // The request may already be resolving; the chat still opens.
+    })
+  }
+
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
@@ -9563,16 +10185,15 @@
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
   function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
-    const selection = formatQuestionForTemporaryChat(question)
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
       'elaborate',
-      selection,
+      formatQuestionForTemporaryChat(question),
       temporaryConversationContext(),
       settings,
       true,
-      EXPLAIN_QUESTION_PROMPT
+      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT
     )
   }
 
@@ -9592,11 +10213,23 @@
   const EXPLAIN_QUESTION_PROMPT =
     'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral   do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
+  const EXPLAIN_SECRET_PROMPT =
+    'Explain this secret request clearly so the user can understand what the agent needs, why it needs it, and where the user can obtain or create it, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral: never invent, guess, or suggest an actual secret value, and do not recommend a specific provider or credential unless the context already names one. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this secret request.'
+
   function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
     if (question.header) parts.push(`Question: ${question.header}`)
     if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
     if (question.description) parts.push(`Description: ${question.description}`)
+    if (question.secretRequest) {
+      if (question.secretEnvironmentVariable) {
+        parts.push(`Exposed to the agent as: ${question.secretEnvironmentVariable}`)
+      }
+      if (question.secretUtilityId) parts.push(`Bound to utility: ${question.secretUtilityId}`)
+      parts.push(
+        '(The user pastes the value; it is stored in the encrypted vault and is never sent to the model.)'
+      )
+    }
     if (question.richOptions && question.richOptions.length > 0) {
       parts.push(
         'Options:',
@@ -9620,6 +10253,12 @@
   // ─── Message attribution (model + harness) ────────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /**
+   * Harness attribution fallback for persisted messages: the session's owning
+   * harness first (stable across mid-run settings switches), then the thread's.
+   */
+  const messageHarnessFallback = $derived(thread.sessionHarnessId ?? settings.harnessId)
 
   /** True when the thread has no conversation yet   the composer is centered
    *  with suggested prompts instead of docked at the bottom. Declared here,
@@ -9654,75 +10293,22 @@
    *  allows it (sole untouched thread in project mode, always in chat mode). */
   let centeredComposer = $derived(emptyConversation && allowCenteredComposer)
 
-  /** Provider catalog entry the message was answered through, when known. */
-  function messageProvider(msg: AgentMessage): ProviderCatalog | undefined {
-    if (msg.providerId) {
-      const direct = providers.find((p) => p.id === msg.providerId)
-      if (direct) return direct
-    }
-    if (!msg.modelId) return undefined
-    return providers.find((p) => p.models.some((m) => m.id === msg.modelId))
-  }
+  /** True while this thread holds both a provider and a model it can run on. */
+  let threadCanRunTurns = $derived(!threadNeedsAiAccount(settings))
+  /** Armed by the composer refusing a send the thread has no account for. */
+  let aiAccountPromptOpen = $state(false)
+  /** The prompt also keeps showing while the user picks the model to run with. */
+  let aiAccountPromptVisible = $derived(aiAccountPromptOpen && !threadCanRunTurns)
 
-  /** Human model name   catalog display name, else the raw model id. */
-  function messageModelLabel(msg: AgentMessage): string | null {
-    if (!msg.modelId) return null
-    const model =
-      allModels.find(
-        (m) => m.id === msg.modelId && (!msg.providerId || m.providerId === msg.providerId)
-      ) ?? allModels.find((m) => m.id === msg.modelId)
-    if (model) return model.name
-    // Fast variants may be absent from harness catalogs   fall back to a derived label.
-    return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
-  }
-
-  /** Harness that produced the message   the session's owning harness first
-   *  (stable across mid-run settings switches), then the thread's harness. */
-  function messageHarnessId(msg: AgentMessage): string {
-    return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
-  }
-
-  /** Generation rate (tok/s) to show for a completed message: the rate
-   *  finalized at turn end when this view observed the turn live, otherwise
-   *  derived from the message's cumulative generated tokens over its own
-   *  duration (approximate   tool waits are included). `null` when the
-   *  harness reported no tokens. */
-  function messageTokenRate(msg: AgentMessage): number | null {
-    const finalized = finalizedTokenRates[msg.id]
-    if (finalized !== undefined && finalized > 0) return finalized
-    const generated = generatedTokens(msg.tokens)
-    if (generated <= 0) return null
-    if (msg.id === liveTokenRate.messageId) return liveTokenRate.rate()
-    // Persisted generation window (first output token → turn end)   excludes
-    // pre-generation tool/setup time, so it is the accurate history basis.
-    if (msg.generationMs !== undefined && msg.generationMs > 0) {
-      return generated / (msg.generationMs / 1000)
-    }
-    if (msg.completedAt && msg.completedAt > msg.createdAt) {
-      return generated / ((msg.completedAt - msg.createdAt) / 1000)
-    }
-    return null
-  }
-
-  /** Thinking level used for the message's turn, when its model reasons. */
-  function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
-    if (!msg.modelId) return null
-    const modelId = fastBaseModelId(msg.modelId)
-    const model =
-      allModels.find(
-        (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
-      ) ?? allModels.find((m) => m.id === modelId)
-    const presets = model?.thinkingPresets ?? []
-    // A model known not to reason never shows a thinking badge, even when a
-    // generic level was stamped onto its rows.
-    if (model && presets.length === 0) return null
-    // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the model's own default. Never fall back to the live
-    // composer settings here: a finished message's badge must not mutate when
-    // the user changes the thinking level mid-conversation.
-    if (msg.thinkingLevel) return msg.thinkingLevel
-    if (presets.length === 0) return null
-    return resolveDefaultThinkingLevel(presets, undefined) ?? null
+  /** Open the harness's provider list, then re-probe so the models it just
+   *  connected appear without the user having to open the picker first. */
+  function openAiAccountSetup(): void {
+    providerConnectFlow.open(settings.harnessId, {
+      search: FIRST_RUN_PROVIDER_SEARCH,
+      onConnected: () => {
+        void providerCatalog.refresh(thread.projectId, true)
+      }
+    })
   }
 
   /**
@@ -9774,54 +10360,6 @@
     }
   })
 
-  function messageHarnessName(msg: AgentMessage): string {
-    const id = messageHarnessId(msg)
-    return getAgentIcon(id)?.name ?? id
-  }
-
-  type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
-
-  function mergeSubagentParts(current: SubagentPart, update: SubagentPart): SubagentPart {
-    const currentTime = current.activity.time
-    const updateTime = update.activity.time
-    const start = currentTime?.start ?? updateTime?.start
-    return {
-      ...current,
-      activity: {
-        ...current.activity,
-        status: update.activity.status,
-        agent: update.activity.agent || current.activity.agent,
-        description:
-          update.activity.description === 'Delegated task'
-            ? current.activity.description
-            : update.activity.description,
-        prompt: update.activity.prompt ?? current.activity.prompt,
-        childSessionId: update.activity.childSessionId ?? current.activity.childSessionId,
-        providerTaskId: update.activity.providerTaskId ?? current.activity.providerTaskId,
-        providerId: update.activity.providerId ?? current.activity.providerId,
-        modelId: update.activity.modelId ?? current.activity.modelId,
-        background: current.activity.background || update.activity.background,
-        output: update.activity.output ?? current.activity.output,
-        error: update.activity.error ?? current.activity.error,
-        time: start !== undefined ? { start, end: updateTime?.end ?? currentTime?.end } : undefined
-      }
-    }
-  }
-
-  function resolvedSubagentPart(part: SubagentPart): SubagentPart | null {
-    const childSessionId = part.activity.childSessionId
-    if (!childSessionId) return part
-    const related = messages.flatMap((message) =>
-      message.parts.filter(
-        (candidate): candidate is SubagentPart =>
-          candidate.type === 'subagent' && candidate.activity.childSessionId === childSessionId
-      )
-    )
-    const first = related[0]
-    if (!first || first.id !== part.id || first.messageID !== part.messageID) return null
-    return related.slice(1).reduce(mergeSubagentParts, first)
-  }
-
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
   }
@@ -9830,7 +10368,7 @@
     for (const message of messages) {
       for (const part of message.parts) {
         if (part.type !== 'subagent') continue
-        const resolved = resolvedSubagentPart(part)
+        const resolved = resolvedSubagentPart(part, messages)
         if (!resolved) continue
         contextSidebarState.updateSubagent(
           thread.projectId,
@@ -9842,172 +10380,6 @@
     }
   }
 
-  function appendWorkingPart(parts: AgentPart[], part: AgentPart): void {
-    if (part.type === 'compaction-summary') {
-      const compactionIndex = parts.findLastIndex((candidate) => candidate.type === 'compaction')
-      const compaction = parts[compactionIndex]
-      if (compaction?.type === 'compaction') {
-        parts[compactionIndex] = { ...compaction, summary: part.text }
-      } else {
-        parts.push(part)
-      }
-      return
-    }
-    if (part.type !== 'subagent') {
-      parts.push(part)
-      return
-    }
-    const resolved = resolvedSubagentPart(part)
-    if (resolved) parts.push(resolved)
-  }
-
-  function isActivityOnlyUserMessage(message: AgentMessage): boolean {
-    return (
-      message.parts.length > 0 &&
-      message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-    )
-  }
-
-  /** Deduped turn-start prompt indices before `fromIndex`, newest-first.
-   *  Every persisted turn carries the prompt twice (the display row and the
-   *  harness echo under its own id); counting both corrupts the "three pages"
-   *  anchor math, so adjacent prompt copies count as one turn start. */
-  function turnStartPromptsBefore(fromIndex: number, count: number): number[] {
-    const starts: number[] = []
-    for (let index = fromIndex - 1; index >= 0 && starts.length < count; index--) {
-      const message = messages[index]
-      if (!message) break
-      if (message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
-      const previous = messages[index - 1]
-      if (previous?.role === 'user' && !isActivityOnlyUserMessage(previous)) continue
-      starts.push(index)
-    }
-    return starts
-  }
-
-  /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
-   *  mid-turn on the user role. They must stay invisible in the transcript but
-   *  also transparent to turn grouping: one prompt → one working trace, with
-   *  the final output after it. */
-  function isTurnStartIndex(index: number): boolean {
-    for (let i = index - 1; i >= 0; i--) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'assistant') return false
-      if (!isActivityOnlyUserMessage(message)) return true
-    }
-    return true
-  }
-
-  function isTurnEndIndex(index: number): boolean {
-    for (let i = index + 1; i < messages.length; i++) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'assistant') return false
-      if (!isActivityOnlyUserMessage(message)) return true
-    }
-    return true
-  }
-
-  /** Return the index of the first assistant message of the last turn in the
-   *  list. A trailing steer   a user message the agent has not responded to yet
-   *    does not end the turn it intervenes in, so the last turn is the one that
-   *  contains the last assistant message, regardless of unresponded steers
-   *  appended after it. Returns -1 when no assistant message exists. */
-  function lastTurnStartIndex(messageList: AgentMessage[]): number {
-    for (let i = messageList.length - 1; i >= 0; i--) {
-      if (messageList[i]?.role !== 'assistant') continue
-      let j = i
-      while (j > 0) {
-        const previous = messageList[j - 1]
-        if (previous?.role === 'assistant') {
-          j--
-          continue
-        }
-        if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
-          j--
-          continue
-        }
-        break
-      }
-      return j
-    }
-    return -1
-  }
-
-  /** Collect every ordered intermediate part; only the final text is rendered below the trace.
-   *  Activity-only user messages (sub-agent envelopes, compaction notices) are
-   *  transparent: the turn spans them and their sub-agent/compaction parts are
-   *  harvested so one prompt keeps a single continuous working trace. */
-  function getTurnWorkingParts(startMsgIndex: number, includeCurrentFinal: boolean): AgentPart[] {
-    const parts: AgentPart[] = []
-    for (let i = startMsgIndex - 1; i >= 0; i--) {
-      const preceding = messages[i]
-      if (!preceding || preceding.role !== 'user') break
-      for (const part of preceding.parts) {
-        if (part.type === 'compaction' || part.type === 'subagent') {
-          appendWorkingPart(parts, part)
-        }
-      }
-      if (!isActivityOnlyUserMessage(preceding)) break
-    }
-    let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length) {
-      const next = messages[turnEndIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        turnEndIndex += 1
-        continue
-      }
-      break
-    }
-    const finalText = getTurnFinalText(turnEndIndex)
-    for (let i = startMsgIndex; i <= turnEndIndex; i++) {
-      const m = messages[i]
-      if (!m) break
-      if (m.role === 'user') {
-        if (!isActivityOnlyUserMessage(m)) break
-        for (const part of m.parts) {
-          if (part.type === 'compaction' || part.type === 'subagent') {
-            appendWorkingPart(parts, part)
-          }
-        }
-        continue
-      }
-      for (const p of m.parts) {
-        if (
-          p.type === 'text' &&
-          finalText &&
-          p.id === finalText.id &&
-          (!includeCurrentFinal || p.phase === 'final_answer')
-        ) {
-          continue
-        }
-        if (p.type === 'question') continue
-        if (isTodoToolPart(p)) continue
-        appendWorkingPart(parts, p)
-      }
-    }
-    return parts
-  }
-
-  /** True once the turn starting at `startMsgIndex` produced a completed
-   *  assistant message   the only state in which the working trace may fold. */
-  function isTurnCompleted(startMsgIndex: number): boolean {
-    let endIndex = startMsgIndex
-    while (endIndex + 1 < messages.length) {
-      const next = messages[endIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        endIndex += 1
-        continue
-      }
-      break
-    }
-    const last = messages[endIndex]
-    return last?.role === 'assistant' && last.completedAt !== undefined
-  }
-
   /** True when the persisted latest turn shows a run was mid-flight when the
    *  live stream went away: the turn has not completed a terminal message but
    *  already persisted real working parts (reasoning, tool calls, sub-agents).
@@ -10017,132 +10389,18 @@
   function hasPersistedInFlightWork(): boolean {
     const startIndex = latestTurnInfo.startIndex
     if (startIndex === -1) return false
-    if (isTurnCompleted(startIndex)) return false
-    const parts = getTurnWorkingParts(startIndex, false)
-    return hasRenderableWorkingParts(parts)
-  }
-
-  function hasRenderableWorkingParts(parts: AgentPart[]): boolean {
-    return parts.some(
-      (part) =>
-        part.type === 'reasoning' ||
-        part.type === 'tool' ||
-        part.type === 'subagent' ||
-        part.type === 'compaction' ||
-        part.type === 'compaction-summary' ||
-        part.type === 'step-finish' ||
-        part.type === 'file'
-    )
+    if (isTurnCompleted(messages, startIndex)) return false
+    const { leading, body } = getTurnWorkingParts(messages, startIndex, false)
+    return hasRenderableWorkingParts([...leading, ...body])
   }
 
   function isLatestTurnCompleted(): boolean {
     const startIndex = latestTurnInfo.startIndex
-    return startIndex !== -1 && isTurnCompleted(startIndex)
+    return startIndex !== -1 && isTurnCompleted(messages, startIndex)
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
-   *  and preserving first-seen order. The stream log may hold parts the mirror
-   *  has not persisted yet, so it takes precedence for the restored trace. */
-  function mergeWorkingParts(preferred: AgentPart[], fallback: AgentPart[]): AgentPart[] {
-    const byId: Record<string, AgentPart> = {}
-    const order: string[] = []
-    for (const part of preferred) {
-      if (!byId[part.id]) order.push(part.id)
-      byId[part.id] = part
-    }
-    for (const part of fallback) {
-      if (!byId[part.id]) {
-        order.push(part.id)
-        byId[part.id] = part
-      } else {
-        byId[part.id] = moreCompleteWorkingPart(byId[part.id], part)
-      }
-    }
-    return order.flatMap((id) => {
-      const part = byId[id]
-      return part ? [part] : []
-    })
-  }
-
-  /** A part has finished its lifecycle when its terminal status or an explicit
-   *  end timestamp is present. Terminal snapshots must always win part merges:
-   *  letting a stale `running` snapshot survive keeps tool durations ticking
-   *  forever after the call actually completed. */
-  function isTerminalWorkingPart(part: AgentPart): boolean {
-    if (part.type === 'tool') {
-      return (
-        part.state.status === 'completed' ||
-        part.state.status === 'error' ||
-        part.state.time?.end !== undefined
-      )
-    }
-    if (part.type === 'subagent') {
-      return (
-        part.activity.status === 'completed' ||
-        part.activity.status === 'error' ||
-        part.activity.time?.end !== undefined
-      )
-    }
-    return false
-  }
-
-  function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
-    if (
-      current.type === incoming.type &&
-      isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)
-    ) {
-      // Whichever side carries the terminal lifecycle state wins, regardless
-      // of which list was passed as "preferred".
-      return isTerminalWorkingPart(incoming) ? incoming : current
-    }
-    if (
-      current.type === incoming.type &&
-      (current.type === 'text' || current.type === 'reasoning') &&
-      (incoming.type === 'text' || incoming.type === 'reasoning')
-    ) {
-      if (incoming.text.startsWith(current.text) && incoming.text.length > current.text.length) {
-        return incoming
-      }
-      if (current.text.startsWith(incoming.text) && current.text.length > incoming.text.length) {
-        return current
-      }
-    }
-    if (current.type === 'subagent' && incoming.type === 'subagent') {
-      return mergeSubagentParts(current, incoming)
-    }
-    return current
-  }
-
-  function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
-    let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length) {
-      const next = messages[turnEndIndex + 1]
-      if (!next) break
-      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
-        turnEndIndex += 1
-        continue
-      }
-      break
-    }
-    const finalText = getTurnFinalText(turnEndIndex)
-    // The durable stream log is thread-wide and its turn tags are not a safe
-    // scope: a steered continuation keeps the original turn's anchor, and log
-    // segments written before turn binding fold into the latest turn. Drop
-    // every durable part the mirror already persisted BEFORE this turn started
-    // so earlier traces can never bleed into the newest one; parts not yet in
-    // the mirror (the current turn's in-flight work) are exactly the gap this
-    // list exists to fill.
-    const priorPartIds = new SvelteSet<string>()
-    for (let i = 0; i < startMsgIndex; i++) {
-      for (const part of messages[i]?.parts ?? []) priorPartIds.add(part.id)
-    }
-    return streamParts.filter((part) => {
-      if (part.type === 'question' || isTodoToolPart(part)) return false
-      if (part.type === 'text' && finalText?.id === part.id) return false
-      return !priorPartIds.has(part.id)
-    })
-  }
-
+   *  and preserving the preferred list's order (see `mergeWorkingParts`). */
   /** The main-process stream fold is already scoped to the newest real user
    *  message by event timestamp. Do not filter it against historical part IDs:
    *  a resumed Pi process may restart its local message counter, so an old and
@@ -10159,85 +10417,150 @@
 
   /** Find the last text part in a turn ending at the given message index.
    *  Activity-only user messages are transparent to the turn span. */
-  function getTurnFinalText(endMsgIndex: number): AgentPart | null {
-    let turnStart = endMsgIndex
-    for (let i = endMsgIndex; i >= 0; i--) {
-      const message = messages[i]
-      if (!message) break
-      if (message.role !== 'user') continue
-      if (isActivityOnlyUserMessage(message)) continue
-      turnStart = i + 1
-      break
-    }
-    let finalText: AgentPart | null = null
-    for (let i = turnStart; i <= endMsgIndex; i++) {
-      if (i >= messages.length) break
-      const message = messages[i]
-      if (!message) break
-      if (message.role === 'user') {
-        if (isActivityOnlyUserMessage(message)) continue
-        break
-      }
-      for (const p of message.parts) {
-        if (p.type === 'text') finalText = p
-      }
-    }
-    return finalText
-  }
-
-  /** Match a completed auditor turn to the report version created before the next turn. */
-  function auditReportForTurn(msgIndex: number): AuditReport | null {
-    let turnStartedAt = 0
-    for (let index = msgIndex; index >= 0; index -= 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'user') continue
-      turnStartedAt = candidate.createdAt
-      break
-    }
-    let nextTurnStartedAt = Number.POSITIVE_INFINITY
-    for (let index = msgIndex + 1; index < messages.length; index += 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'user') continue
-      nextTurnStartedAt = candidate.createdAt
-      break
-    }
-    return (
-      auditVersions.find(
-        (report) => report.createdAt >= turnStartedAt && report.createdAt < nextTurnStartedAt
-      ) ?? null
-    )
-  }
-
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
+
+  /** What "find in conversation" reads: every message plus the composer's own
+   *  draft, so a word can be located in what was said and in what is being
+   *  written. The draft lives in the bottom chrome rather than the transcript
+   *  scroller, which is why the surface is searched as a whole instead of just
+   *  its scrolling message list. */
+  const CONVERSATION_FIND_SELECTOR = `[data-conversation-searchable], ${COMPOSER_DRAFT_SELECTOR}`
 
   function closeFind(): void {
     findNavState.closeConversationFind()
   }
 
-  // While a run is streaming, re-pull the durable SSE log every second so the
-  // trace stays fresh even when live 'agent:event' broadcasts are not the
+  /** Poll the durable stream once: only what the log touched since the last
+   *  read crosses IPC, so a long live turn neither re-ships nor re-mounts the
+   *  whole turn once a second. A change read (not a growth read) because an
+   *  entry that is already mounted has to keep up with its own updates, not just
+   *  with whatever appears after it. */
+  async function pollStreamParts(): Promise<void> {
+    const { projectId, id } = thread
+    const generation = ++streamPartsLoadGeneration
+    const cursor = streamCursor
+    try {
+      const page = await invoke(
+        'thread:loadStreamParts',
+        projectId,
+        id,
+        cursor === null ? { limit: WORKING_TRACE_PAGE_SIZE } : { changedSince: cursor }
+      )
+      if (!alive || generation !== streamPartsLoadGeneration) return
+      if (page.kind === 'window') {
+        // No cursor yet (a mount read that has not landed): adopt the window.
+        streamParts = mergeWorkingParts(streamParts, page.parts)
+        streamHasOlder = page.hasOlder
+        streamTodoParts = page.todoParts
+        streamCursor = page.cursor
+        return
+      }
+      streamCursor = page.cursor
+      streamTodoParts = page.todoParts
+      // A fold that shrank under us belongs to another turn (a steered
+      // continuation, or a log rewritten after the fact): remount the newest
+      // page instead of keeping entries that no longer belong here.
+      if (page.total < streamParts.length) {
+        await remountNewestStreamParts(generation)
+        return
+      }
+      if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
+    } catch {
+      // Transient read failure   keep what we have and try again next tick.
+    }
+  }
+
+  /**
+   * One bounded durable read at a turn boundary. The 1s poll dies the moment
+   * `busy` flips false, so task-list checkoffs that streamed into the log in
+   * the last poll gap — or the whole tail that streamed while this view sat
+   * inactive — would otherwise never reach the card, and the stale snapshot
+   * outranks the fresher message cache because the synthetic stream message is
+   * appended last and a todo-list snapshot replaces the whole task map. A turn
+   * boundary is the one moment the card must read the durable truth, so a
+   * finished thread can still clear its card on its own.
+   */
+  async function refreshStreamTailAfterTurn(): Promise<void> {
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+      if (!alive || page.kind !== 'window') return
+      streamParts = mergeWorkingParts(streamParts, page.parts)
+      streamHasOlder = page.hasOlder
+      streamTodoParts = page.todoParts
+      streamCursor = page.cursor
+    } catch {
+      // Best-effort: the message cache still carries the checkoffs, and the
+      // next turn's poll or mount read rebuilds the fold again.
+    }
+  }
+
+  /** Replace the mounted window with the newest durable page. */
+  async function remountNewestStreamParts(generation: number): Promise<void> {
+    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+      limit: WORKING_TRACE_PAGE_SIZE
+    })
+    if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
+    streamParts = page.parts
+    streamHasOlder = page.hasOlder
+    streamTodoParts = page.todoParts
+    streamCursor = page.cursor
+  }
+
+  /** Pull the next older durable page for the trace's own inner-scroll paging,
+   *  prepending it in the log's own order. The page is authoritative for the
+   *  entries it carries: an entry the poll had already appended out of place
+   *  (a part older than the mounted window that kept updating) adopts its real
+   *  position instead of staying stuck at the tail. */
+  async function loadOlderStreamParts(): Promise<void> {
+    const oldest = streamParts[0]
+    if (!oldest || !streamHasOlder) return
+    const foldVersion = streamFoldVersion
+    const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+      beforeId: oldest.id,
+      limit: WORKING_TRACE_PAGE_SIZE
+    })
+    if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
+    streamHasOlder = page.hasOlder
+    if (page.parts.length === 0) return
+    const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
+    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
+  }
+
+  // While a run is streaming on screen, re-read the durable SSE log every second
+  // so the trace stays fresh even when live 'agent:event' broadcasts are not the
   // transport (e.g. a second app instance viewing the same thread, which never
   // receives this instance's in-process window broadcasts and would otherwise
-  // show a trace frozen at whatever was on disk at mount).
+  // show a trace frozen at whatever was on disk at mount). The poll is change-only,
+  // and it stops while this thread is off screen: nobody is watching, so the
+  // live turn does not need a reader's worth of IPC every second. It stops on the
+  // quit signal too, because this read reaches the database through the message
+  // mirror and the main process closes that database while the window is still up.
   $effect(() => {
-    if (!busy) return
-    const poll = setInterval(() => {
-      const generation = ++streamPartsLoadGeneration
-      void invoke('thread:loadStreamParts', thread.projectId, thread.id)
-        .then((parts) => {
-          if (!alive || generation !== streamPartsLoadGeneration) return
-          streamParts = mergeWorkingParts(streamParts, parts)
-        })
-        .catch(() => {})
-    }, 1000)
+    if (!busy || !active || appQuitState.quitting) return
+    const poll = setInterval(() => void pollStreamParts(), 1000)
     return () => {
       clearInterval(poll)
       streamPartsLoadGeneration += 1
     }
   })
 
+  // Leaving this thread (another thread, another top-level view) paginates its
+  // working trace in the background: the poll above stops and the durable window
+  // collapses to the newest page, so coming back mounts a bounded trace instead
+  // of every entry the turn streamed while nobody was reading it. The trim keeps
+  // the newest page rather than dropping the fold, so a restored trace is still
+  // there on return.
+  $effect(() => {
+    if (active) return
+    if (streamParts.length <= WORKING_TRACE_PAGE_SIZE) return
+    streamHasOlder = true
+    streamParts = streamParts.slice(streamParts.length - WORKING_TRACE_PAGE_SIZE)
+  })
+
   onDestroy(() => {
-    CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
+    releaseResponseHighlights(responseHighlightOwner)
     imageUrls.destroy()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
@@ -10313,6 +10636,7 @@
   bind:this={threadViewElement}
   class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col"
   data-region={showSpecStudio ? 'spec-studio' : undefined}
+  data-drop-region={showSpecStudio ? undefined : 'conversation'}
 >
   {#if headerSnippet}
     {@render headerSnippet()}
@@ -10408,6 +10732,7 @@
           assignmentAvailable={assignment !== null}
           brainstormAvailable={brainstorm !== null}
           prdAvailable={prd !== null}
+          specAvailable={spec !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
@@ -10437,6 +10762,7 @@
         <AssignmentStudio
           assignment={studioAssignment}
           threadId={thread.id}
+          projectId={thread.projectId}
           versions={assignmentVersions}
           history={assignmentStudioHistories.forDocument(
             `${studioAssignment.id}:${studioAssignment.version}`
@@ -10457,6 +10783,7 @@
           auditAvailable={auditReport !== null}
           brainstormAvailable={brainstorm !== null}
           prdAvailable={prd !== null}
+          specAvailable={spec !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}
@@ -10476,6 +10803,11 @@
           onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
           onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
+          onTaskScopeChange={updateAssignmentTaskScope}
+          onWorkerScopeChange={updateAssignmentWorkerScope}
+          {assignmentScopeBucketId}
+          onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+          resolveTaskThread={resolveAssignmentTaskThread}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -10559,9 +10891,9 @@
   {:else}
     {#if showFind}
       <FindInSurface
-        container={scrollEl ?? null}
+        container={threadViewElement}
         focusTrigger={findNavState.conversationFindFocusTrigger}
-        searchSelector="[data-conversation-searchable]"
+        searchSelector={CONVERSATION_FIND_SELECTOR}
         placeholder="Find in conversation…"
         label="Find in conversation"
         onClose={closeFind}
@@ -10575,7 +10907,7 @@
         : ''}"
       onscroll={onScroll}
       onwheel={onWheel}
-      onpointerup={captureResponseSelection}
+      onpointerup={handleResponsePointerUp}
       role="log"
       aria-label="Conversation"
       data-region="conversation"
@@ -10650,7 +10982,7 @@
                         <span>Previous turn completed</span>
                         <span>·</span>
                         <span class="tabular-nums"
-                          >{formatDuration(previousTurnAudit.duration)}</span
+                          >{formatDurationMs(previousTurnAudit.duration)}</span
                         >
                         <span>·</span>
                         <span>{formatTime(previousTurnAudit.endTime)}</span>
@@ -10881,44 +11213,55 @@
               {/if}
             {:else}
               <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = isTurnStartIndex(absIndex)}
-              {@const isTurnEnd = isTurnEndIndex(absIndex)}
+              {@const isTurnStart = transcriptIndex.isTurnStart[absIndex] ?? false}
+              {@const isTurnEnd = transcriptIndex.isTurnEnd[absIndex] ?? false}
               {@const isLatestTurn = absIndex === latestTurnInfo.startIndex}
-              {@const provider = messageProvider(msg)}
-              {@const modelLabel = messageModelLabel(msg)}
-              {@const msgThinking = messageThinkingLevel(msg)}
+              {@const provider = messageProvider(msg, providers)}
+              {@const modelLabel = messageModelLabel(msg, allModels)}
+              {@const msgThinking = messageThinkingLevel(msg, allModels)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
-              {@const harnessId = messageHarnessId(msg)}
-              {@const harnessName = messageHarnessName(msg)}
+              {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
+              {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
               {@const useLiveAttribution = isLatestTurn && liveBusy}
               {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
               )}
-              {@const turnDuration = getCurrentTurnDuration(absIndex)}
-              {@const turnCheckpoint = checkpointForTurn(absIndex)}
+              {@const turnDuration = transcriptIndex.duration[absIndex] ?? null}
+              {@const turnCheckpoint = transcriptIndex.checkpoint[absIndex] ?? null}
               {@const turnAuditReport =
-                isAssignmentAuditorThread && isTurnEnd ? auditReportForTurn(absIndex) : null}
+                isAssignmentAuditorThread && isTurnEnd
+                  ? auditReportForTurn(messages, auditVersions, absIndex)
+                  : null}
 
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const turnDone = isTurnCompleted(absIndex)}
+                    {@const turnDone = transcriptIndex.turnCompleted[absIndex] ?? false}
                     {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
-                    {@const accumulatedTurnParts = getTurnWorkingParts(absIndex, traceIsLive)}
+                    {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
+                    {@const turnWorkingParts = getTurnWorkingParts(messages, absIndex, traceIsLive)}
                     {@const durableTurnParts = pendingLiveTurn
                       ? []
-                      : streamWorkingPartsForTurn(absIndex)}
+                      : streamWorkingPartsForTurn(streamParts, transcriptIndex, absIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isCurrentAssistantTurn
-                        ? traceIsRestored
-                          ? mergeWorkingParts(durableTurnParts, accumulatedTurnParts)
-                          : mergeWorkingParts(accumulatedTurnParts, durableTurnParts)
-                        : withoutPendingLiveParts(accumulatedTurnParts)}
+                        ? // The durable log is the turn's stream order, so it orders the
+                          // body; entries that streamed before this view mounted only
+                          // exist there. The leading context is not in the durable fold
+                          // (the fold scopes it out), so it keeps its place in front.
+                          mergeWorkingParts(
+                            [...turnWorkingParts.leading, ...durableTurnParts],
+                            turnWorkingParts.body
+                          )
+                        : withoutPendingLiveParts([
+                            ...turnWorkingParts.leading,
+                            ...turnWorkingParts.body
+                          ])}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
@@ -10932,6 +11275,10 @@
                         latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
+                        foreignRun={traceRunIsForeign}
+                        {active}
+                        olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
+                        onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -10984,8 +11331,11 @@
                       {#if !conversationBusy || !isLatest || turnAuditReport}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
-                            state="report_ready"
+                            state={turnAuditReport.evidenceValidation === 'partial'
+                              ? 'partial'
+                              : 'report_ready'}
                             version={turnAuditReport.version}
+                            validationIssues={turnAuditReport.evidenceIssues ?? []}
                             settings={auditSettings}
                             {providers}
                             projectId={thread.projectId}
@@ -11005,7 +11355,7 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnFinalText = getTurnFinalText(absIndex)}
+                      {@const turnFinalText = getTurnFinalText(messages, absIndex)}
                       {@const finalAnswerReady =
                         turnFinalText?.type === 'text' &&
                         turnFinalText.text.trim().length > 0 &&
@@ -11140,8 +11490,11 @@
                               class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
                               <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                                <AgentIcon agentId={messageHarnessId(msg)} size={14} />
-                                {messageHarnessName(msg)}
+                                <AgentIcon
+                                  agentId={resolveMessageHarnessId(msg, messageHarnessFallback)}
+                                  size={14}
+                                />
+                                {messageHarnessName(msg, messageHarnessFallback)}
                               </span>
                               {#if modelLabel}
                                 <span class="text-[0.625rem] text-dimmed">·</span>
@@ -11187,15 +11540,17 @@
                               >
                               {#if turnDuration !== null}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                  >· {formatDuration(turnDuration)}</span
+                                  >· {formatDurationMs(turnDuration)}</span
                                 >
                               {:else if msg.completedAt && msg.createdAt}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                  >· {formatDuration(msg.completedAt - msg.createdAt)}</span
+                                  >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
                                 >
                               {/if}
-                              {#if messageTokenRate(msg) !== null}
-                                {@const rate = messageTokenRate(msg) ?? 0}
+                              {#if messageTokenRate( msg, { finalizedTokenRates, liveTokenRate } ) !== null}
+                                {@const rate =
+                                  messageTokenRate(msg, { finalizedTokenRates, liveTokenRate }) ??
+                                  0}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums">
                                   · {formatTokenRate(rate)}</span
                                 >
@@ -11217,6 +11572,9 @@
               open
               busy
               latest
+              {active}
+              olderPartsAvailable={streamHasOlder}
+              onLoadOlderParts={loadOlderStreamParts}
               startTime={activeTurnStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
@@ -11349,25 +11707,22 @@
                     : settings)}
                 {providers}
                 projectId={thread.projectId}
-                favoriteModels={chatMode
-                  ? rendererRecovery.chatFavoriteModels
-                  : rendererRecovery.favoriteModels}
-                recentModels={chatMode
-                  ? rendererRecovery.chatRecentModels
-                  : rendererRecovery.recentModels}
-                onRemoveRecent={(key) =>
-                  chatMode
-                    ? rendererRecovery.removeChatRecentModel(key)
-                    : rendererRecovery.removeRecentModel(key)}
+                favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
-                  chatMode
-                    ? rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))
-                    : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  rendererRecovery.toggleModelFavoriteFor(
+                    modelScope(),
+                    modelKey(harnessId, providerId, modelId)
+                  )}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
-                  chatMode
-                    ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                    : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  rendererRecovery.reorderModelFavoriteFor(
+                    modelScope(),
+                    draggedKey,
+                    targetKey,
+                    position
+                  )}
                 onStop={abortRun}
                 onRetry={retryConnection}
                 retrying={providerRetrying}
@@ -11422,8 +11777,16 @@
         {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
-              <div class="rounded-t-xl border border-border bg-surface shadow-sm">
-                <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+              <div
+                out:slide={dismissSlide()}
+                class="rounded-t-xl border border-border bg-surface shadow-sm"
+              >
+                <div
+                  class={[
+                    'flex items-center justify-between gap-2 px-3 pt-2.5',
+                    queuedFolded ? 'pb-2.5' : 'pb-1'
+                  ]}
+                >
                   <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
                     >{queuedCount > 1
                       ? `Queued · ${queuedCount}`
@@ -11503,91 +11866,100 @@
                         </div>
                       {/if}
                     </div>
+                    <CardFoldToggle bind:folded={queuedFolded} label="queued message" compact />
                   </div>
                 </div>
-                {#if queuedPromptReferences.length > 0}
-                  <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                    {#each queuedPromptReferences as reference (reference.id)}
-                      <span
-                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
-                        title={reference.comment
-                          ? `${reference.comment}\n\n${reference.text}`
-                          : reference.text}
-                      >
-                        <MessageSquare size={11} class="shrink-0 text-accent" />
-                        <span class="font-medium text-foreground">{reference.label}</span>
-                        <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                        {#if reference.comment}
-                          <span class="max-w-48 truncate italic text-foreground">
-                            “{reference.comment}”
+                {#if !queuedFolded}
+                  <div transition:slide={foldSlide()}>
+                    {#if queuedPromptReferences.length > 0}
+                      <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                        {#each queuedPromptReferences as reference (reference.id)}
+                          <span
+                            class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
+                            title={reference.comment
+                              ? `${reference.comment}\n\n${reference.text}`
+                              : reference.text}
+                          >
+                            <MessageSquare size={11} class="shrink-0 text-accent" />
+                            <span class="font-medium text-foreground">{reference.label}</span>
+                            <span class="max-w-56 truncate text-muted">{reference.text}</span>
+                            {#if reference.comment}
+                              <span class="max-w-48 truncate italic text-foreground">
+                                “{reference.comment}”
+                              </span>
+                            {/if}
                           </span>
-                        {/if}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
-                {#if queuedStartAfterThreads.length > 0}
-                  <div class="flex flex-col gap-1 px-3 pb-2.5">
-                    {#each queuedStartAfterThreads as dependency (dependency.id)}
-                      <div
-                        class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
-                        role="group"
-                        onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                      >
-                        <Clock size={12} class="shrink-0 text-info" />
-                        <button
-                          type="button"
-                          class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
-                          title={`Open ${dependency.title}`}
-                          aria-label={`Open ${dependency.title}`}
-                          onclick={() => void openStartAfterThread(dependency.id)}
-                        >
-                          {dependency.title}
-                        </button>
-                        <button
-                          type="button"
-                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                          title={`Remove ${dependency.title} from Starts after`}
-                          aria-label={`Remove ${dependency.title} from Starts after`}
-                          onclick={() => (queuedStartAfterPendingRemoval = dependency)}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                          title={`Open ${dependency.title}`}
-                          aria-label={`Open ${dependency.title}`}
-                          onclick={() => void openStartAfterThread(dependency.id)}
-                        >
-                          <ArrowUpRight size={12} />
-                        </button>
+                        {/each}
                       </div>
-                    {/each}
-                  </div>
-                {/if}
-                {#if queuedPresentation}
-                  <div class="px-3 pb-2.5">
-                    <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
-                    {#if queuedPresentation.body}
-                      <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
-                        {queuedPresentation.body}
+                    {/if}
+                    {#if queuedStartAfterThreads.length > 0}
+                      <div class="flex flex-col gap-1 px-3 pb-2.5">
+                        {#each queuedStartAfterThreads as dependency (dependency.id)}
+                          <div
+                            class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
+                            role="group"
+                            onmouseenter={() => preloadStartAfterThread(dependency.id)}
+                          >
+                            <Clock size={12} class="shrink-0 text-info" />
+                            <button
+                              type="button"
+                              class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
+                              title={`Open ${dependency.title}`}
+                              aria-label={`Open ${dependency.title}`}
+                              onclick={() => void openStartAfterThread(dependency.id)}
+                            >
+                              {dependency.title}
+                            </button>
+                            <button
+                              type="button"
+                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                              title={`Remove ${dependency.title} from Starts after`}
+                              aria-label={`Remove ${dependency.title} from Starts after`}
+                              onclick={() => (queuedStartAfterPendingRemoval = dependency)}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                              title={`Open ${dependency.title}`}
+                              aria-label={`Open ${dependency.title}`}
+                              onclick={() => void openStartAfterThread(dependency.id)}
+                            >
+                              <ArrowUpRight size={12} />
+                            </button>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if queuedPresentation}
+                      <div class="px-3 pb-2.5">
+                        <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
+                        {#if queuedPresentation.body}
+                          <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
+                            {queuedPresentation.body}
+                          </p>
+                        {/if}
+                      </div>
+                    {:else}
+                      <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">
+                        {queuedMessage}
                       </p>
                     {/if}
-                  </div>
-                {:else}
-                  <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">{queuedMessage}</p>
-                {/if}
-                {#if queuedCount > 1}
-                  <div class="border-t px-3 pb-2.5 pt-2">
-                    <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-                      Next up
-                    </p>
-                    {#each rendererRecovery
-                      .queuedMessagesFor(thread.projectId, thread.id)
-                      .slice(1) as next (next.text)}
-                      <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
-                    {/each}
+                    {#if queuedCount > 1}
+                      <div class="border-t px-3 pb-2.5 pt-2">
+                        <p
+                          class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
+                        >
+                          Next up
+                        </p>
+                        {#each rendererRecovery
+                          .queuedMessagesFor(thread.projectId, thread.id)
+                          .slice(1) as next (next.id)}
+                          <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 {/if}
               </div>
@@ -11600,25 +11972,78 @@
         <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
-              <div class="mb-5 text-center">
-                <h1
-                  class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
-                >
-                  {#if centeredProjectIconUrl}
-                    <img
-                      src={centeredProjectIconUrl}
-                      alt=""
-                      aria-hidden="true"
-                      class="size-7 rounded-[0.375rem] object-cover"
-                    />
-                  {/if}
-                  {project?.name ?? 'New thread'}
-                </h1>
-                <p class="mt-1 text-[0.875rem] text-muted">
-                  {centeredModelName
-                    ? `What should ${centeredModelName} work on?`
-                    : 'How can CIO serve you today?'}
-                </p>
+              {#if assistantMode}
+                <div class="mb-5 text-center">
+                  <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
+                    {assistantRoutineName ?? thread.title}
+                  </h1>
+                  <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
+                    {#if assistantRoutineName && !assistantHowToComplete}
+                      How should this routine happen? Describe it properly for the agent. Say what
+                      it should do, how often, and where the information comes from. The agent works
+                      out what it needs, asks about anything missing, and drafts the how-to with you
+                      until you agree. It then shows a recap for you to save.
+                    {:else if assistantRoutineName}
+                      This task follows the <span class="text-foreground"
+                        >{assistantRoutineName}</span
+                      >
+                      how-to. Send a message to run it now, or adjust anything in How to.
+                    {:else}
+                      Describe what this task should do and the agent will take it from there.
+                    {/if}
+                  </p>
+                </div>
+              {:else}
+                <div class="mb-5 text-center">
+                  <h1
+                    class="flex items-center justify-center gap-2.5 text-[1.375rem] font-semibold tracking-tight text-foreground"
+                  >
+                    {#if centeredProjectIconUrl}
+                      <img
+                        src={centeredProjectIconUrl}
+                        alt=""
+                        aria-hidden="true"
+                        class="size-7 rounded-[0.375rem] object-cover"
+                      />
+                    {/if}
+                    {chatMode ? 'Start a new chat' : (project?.name ?? 'New thread')}
+                  </h1>
+                  <p class="mt-1 text-[0.875rem] text-muted">
+                    {chatMode
+                      ? 'Send a message to begin no project needed'
+                      : centeredModelName
+                        ? `What should ${centeredModelName} work on?`
+                        : 'How can CIO serve you today?'}
+                  </p>
+                </div>
+              {/if}
+            {/if}
+            {#if aiAccountPromptVisible}
+              <div class="mb-2">
+                <AiAccountSetupCard
+                  harnessName={harnessDisplayName(settings.harnessId)}
+                  {providers}
+                  {settings}
+                  projectId={thread.projectId}
+                  favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                  recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                  onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleModelFavoriteFor(
+                      modelScope(),
+                      modelKey(harnessId, providerId, modelId)
+                    )}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderModelFavoriteFor(
+                      modelScope(),
+                      draggedKey,
+                      targetKey,
+                      position
+                    )}
+                  onModelChange={updateSettings}
+                  onConnect={openAiAccountSetup}
+                  onDismiss={() => (aiAccountPromptOpen = false)}
+                />
               </div>
             {/if}
             {#if pendingImageDescriptorError && !achievementAutonomous}
@@ -11670,6 +12095,20 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {/if}
+            {#if routineRecapVisible && assistantRoutineDraft}
+              <div class="conversation-gutter shrink-0 px-6 pb-2">
+                <div class="mx-auto max-w-3xl">
+                  <RoutineRecapCard
+                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
+                    howTo={assistantRoutineDraft.howTo}
+                    plan={assistantRoutineDraft.plan}
+                    saving={routineSaving}
+                    onSave={() => void confirmRoutineSave()}
+                    onKeepEditing={keepEditingRoutine}
+                  />
+                </div>
+              </div>
             {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
@@ -11750,31 +12189,44 @@
                   onAlternative={providePermissionAlternative}
                 />
               {/key}
-            {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}
+            {:else if pendingQuestionRequests.length > 0 && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
               {@const pendingRequest = pendingQuestionRequests[0]}
               {#key pendingRequest.requestId}
-                <AgentQuestionCard
-                  request={pendingRequest}
-                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
-                  onAnswer={handleQuestionAnswer}
-                  onDismiss={handleQuestionDismiss}
-                  onUpdate={handleQuestionUpdate}
-                  onExplain={handleQuestionExplain}
-                  onQuickChat={handleQuestionQuickChat}
-                  {settings}
-                  {providers}
-                  projectId={thread.projectId}
-                  favoriteModels={rendererRecovery.favoriteModels}
-                  recentModels={rendererRecovery.recentModels}
-                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-                  onModelChange={changeThreadModel}
-                  onToggleFavorite={(providerId, modelId, harnessId) =>
-                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                />
+                {#if pendingRequest.questions.some((question) => question.secretRequest === true)}
+                  <AgentSecretCard
+                    request={pendingRequest}
+                    scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                    onSubmit={handleSecretSubmit}
+                    onAlternative={handleSecretAlternative}
+                    onDismiss={handleQuestionDismiss}
+                    onExplain={handleQuestionExplain}
+                    onQuickChat={handleQuestionQuickChat}
+                    onPause={handleSecretPause}
+                  />
+                {:else}
+                  <AgentQuestionCard
+                    request={pendingRequest}
+                    scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                    onAnswer={handleQuestionAnswer}
+                    onDismiss={handleQuestionDismiss}
+                    onUpdate={handleQuestionUpdate}
+                    onExplain={handleQuestionExplain}
+                    onQuickChat={handleQuestionQuickChat}
+                    {settings}
+                    {providers}
+                    projectId={thread.projectId}
+                    favoriteModels={rendererRecovery.favoriteModels}
+                    recentModels={rendererRecovery.recentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                    onModelChange={changeThreadModel}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  />
+                {/if}
               {/key}
-            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous && !failureRetryVisible}
+            {:else if assignmentAuditState === 'running' && assignmentAuditOwner && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 reworkCycle={assignmentReworkCycle}
@@ -11811,7 +12263,7 @@
                 onViewTrace={() => void openDurableAuditWork()}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous && !failureRetryVisible}
+            {:else if assignmentAuditState === 'failed' && assignmentAuditOwner && !busy && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="failed"
                 error={assignmentAuditFailure}
@@ -11834,7 +12286,28 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+            {:else if assignmentAuditState === 'partial' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+              <AuditGeneratedCard
+                state="partial"
+                version={auditReport.version}
+                validationIssues={auditReport.evidenceIssues ?? []}
+                retryLabel="Ask auditor to validate facts"
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                busy={auditBusy}
+                onRetry={generateDurableAssignmentAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
+            {:else if assignmentAuditState === 'offered' && assignmentAuditOwner && !assignmentAuditOfferDismissed && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -11853,7 +12326,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && assignmentAuditOwner && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditReadyCard
                 report={auditReport}
                 {providers}
@@ -11933,12 +12406,40 @@
                   onOpenFullscreen={openAssignmentStudio}
                   onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
                   onSeniorModelChange={updateAssignmentSeniorModel}
+                  onTaskScopeChange={updateAssignmentTaskScope}
+                  onWorkerScopeChange={updateAssignmentWorkerScope}
+                  {assignmentScopeBucketId}
+                  onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+                  resolveTaskThread={resolveAssignmentTaskThread}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
+            {:else if conversationAssignmentVisible && !busy && !failureRetryVisible}
+              <SpecReadyCard
+                {providers}
+                projectId={thread.projectId}
+                {settings}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                busy={assignmentBusy}
+                specless
+                assignmentMode
+                error={assignmentError}
+                onCancel={dismissConversationAssignment}
+                onReview={reviewReadySpec}
+                onProceed={proceedWithReadySpec}
+                onGenerateAssignment={() => void generateAssignmentDraft()}
+                onOpenAssignment={openAssignmentStudio}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
             {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating && !failureRetryVisible}
               <SpecReadyCard
                 {providers}
@@ -11953,7 +12454,7 @@
                 onCancel={cancelSpecReadyTool}
                 onReview={reviewReadySpec}
                 onProceed={proceedWithReadySpec}
-                onGenerateAssignment={generateAssignmentDraft}
+                onGenerateAssignment={() => void generateAssignmentDraft()}
                 onOpenAssignment={openAssignmentStudio}
                 onModelChange={changeSpecModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -11963,206 +12464,212 @@
               />
             {:else}
               {#if !failureRetryVisible}
-                {#if activeTodo}
-                  <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
-                {/if}
-                {#key composerRestoreKey}
-                  <ChatComposer
-                    bind:this={composer}
-                    placeholder={activePlanningEntry === 'brainstorm'
-                      ? 'Add details to the Brainstorm discussion…'
-                      : activePlanningEntry === 'spec'
-                        ? 'Sr. Engineer is preparing the specification…'
-                        : assignmentFormulating
-                          ? 'Sr. Engineer is preparing the Assignment…'
-                          : specFormulating
-                            ? 'Formulating specification…'
-                            : delegatedWorkBusy
-                              ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                              : busy
-                                ? `${APP_NAME} is working   type to queue a message`
-                                : 'Send a message...'}
-                    disabled={specFormulating}
-                    working={busy}
-                    onStop={abortRun}
-                    autofocus
-                    showEngineeringMode={!chatMode && !orchestrationChild}
-                    engineeringLifecycle={pendingLifecycleDisplay}
-                    engineeringActive={engineeringOn}
-                    onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                    {independentAuditAvailable}
-                    independentAuditEnabled={independentAuditDisplayEnabled}
-                    onIndependentAuditToggle={toggleIndependentAudit}
-                    engineeringToolboxHidden={independentAuditDisplayEnabled}
-                    showChatModes={chatMode}
-                    {settings}
-                    onSettingsChange={updateSettings}
-                    onAccountSelected={rememberSelectedAccount}
-                    {providers}
-                    harnessId={settings.harnessId}
-                    actions={activeActions}
-                    onActionSelect={handleActionSelection}
-                    onSlashCommand={executeHarnessCommand}
-                    usageCreditsCommandId={usageCreditsCommand?.id}
-                    contextUsage={contextUsageDisplay}
-                    efficiencyKpis={storedEfficiencyKpis}
-                    onRevealUsage={revealContextUsage}
-                    onHideUsage={hideContextUsage}
-                    usageRefreshing={accountUsageCache.refreshing}
-                    {harnessUsage}
-                    canCompact={supportsManualCompaction(
-                      settings.harnessId,
-                      providerStore.providers
-                    ) && !busy}
-                    {compacting}
-                    onCompact={() => void compactWork()}
-                    onActivateBankedReset={() => {
-                      showBankedResetConfirm = true
-                    }}
-                    projectId={thread.projectId}
-                    threadId={thread.id}
-                    {scopeShoe}
-                    attachmentStorage={{
-                      kind: chatMode ? 'chat' : 'project',
-                      projectId: thread.projectId,
-                      threadId: thread.id
-                    }}
-                    fileTagProjectId={project?.source === 'local' && project.path
-                      ? thread.projectId
-                      : undefined}
-                    assignmentId={assignment?.id}
-                    assignmentTasks={assignment?.content.tasks ?? []}
-                    initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
-                    initialAttachments={rendererRecovery.attachmentsFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialProjectReferences={rendererRecovery.projectReferencesFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialTaskReferences={rendererRecovery.taskReferencesFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
-                      thread.projectId,
-                      thread.id
-                    )}
-                    onValueChange={(value) => {
-                      rendererRecovery.setDraft(thread.projectId, thread.id, value)
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onAttachmentsChange={(files) => {
-                      rendererRecovery.setDraft(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        files
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onProjectReferencesChange={(projectReferences) => {
-                      rendererRecovery.setDraft(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                        projectReferences
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onTaskReferencesChange={(taskReferences) => {
-                      rendererRecovery.setDraft(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.draftFor(thread.projectId, thread.id),
-                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                        rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
-                        taskReferences
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onStartAfterThreadsChange={(startAfterThreads) => {
-                      rendererRecovery.setStartAfterThreads(
-                        thread.projectId,
-                        thread.id,
-                        startAfterThreads
-                      )
-                      publishDraftActivity(
-                        thread.projectId,
-                        thread.id,
-                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                      )
-                    }}
-                    onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                    references={composerReferences}
-                    onRemoveReference={removeComposerReference}
-                    onRemoveAllReferences={clearComposerReferences}
-                    onEditReference={controller ? undefined : editResponseReference}
-                    onSend={sendComposerMessage}
-                    historyMessages={composerHistoryTexts}
-                    onHistoryNavigateStart={() => void refreshUserMessageHistory()}
-                    hidePermissionSelector={chatMode}
-                    favoriteModels={chatMode
-                      ? rendererRecovery.chatFavoriteModels
-                      : rendererRecovery.favoriteModels}
-                    onToggleFavorite={(providerId, modelId, harnessId) =>
-                      chatMode
-                        ? rendererRecovery.toggleChatFavorite(
-                            modelKey(harnessId, providerId, modelId)
-                          )
-                        : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                    onReorderFavorite={(draggedKey, targetKey, position) =>
-                      chatMode
-                        ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                        : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                    recentModels={chatMode
-                      ? rendererRecovery.chatRecentModels
-                      : rendererRecovery.recentModels}
-                    onRemoveRecent={(key) =>
-                      chatMode
-                        ? rendererRecovery.removeChatRecentModel(key)
-                        : rendererRecovery.removeRecentModel(key)}
-                    onModelUsed={(modelKey) =>
-                      chatMode
-                        ? rendererRecovery.addChatRecentModel(modelKey)
-                        : rendererRecovery.addRecentModel(modelKey)}
-                    imageDescriptorDefault={agentDefaults.imageDescriptor}
-                    {imageDescriptorAskAgain}
-                    onImageDescriptorDefaultChange={setImageDescriptorDefault}
-                    onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                {#if visibleTodo}
+                  <AgentTodoCard
+                    items={visibleTodo.items}
+                    signature={visibleTodo.signature}
+                    {busy}
+                    onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
-                  {#if centeredComposer}
-                    <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
-                      {#each suggestedPrompts as prompt (prompt)}
-                        <button
-                          type="button"
-                          class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                          onclick={() => composer?.setComposerText(prompt)}
-                        >
-                          {prompt}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/key}
+                {/if}
+                {#if foreignRunActive}
+                  <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
+                {:else}
+                  {#key composerRestoreKey}
+                    <ChatComposer
+                      bind:this={composer}
+                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
+                        ? 'Describe how this routine should run…'
+                        : activePlanningEntry === 'brainstorm'
+                          ? 'Add details to the Brainstorm discussion…'
+                          : activePlanningEntry === 'spec'
+                            ? 'Sr. Engineer is preparing the specification…'
+                            : assignmentFormulating
+                              ? 'Sr. Engineer is preparing the Assignment…'
+                              : specFormulating
+                                ? 'Formulating specification…'
+                                : delegatedWorkBusy
+                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                  : busy
+                                    ? `${APP_NAME} is working   type to queue a message`
+                                    : 'Send a message...'}
+                      disabled={specFormulating}
+                      working={busy}
+                      onStop={abortRun}
+                      autofocus
+                      showEngineeringMode={!chatMode && !orchestrationChild}
+                      engineeringLifecycle={pendingLifecycleDisplay}
+                      engineeringActive={engineeringOn}
+                      onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                      {independentAuditAvailable}
+                      independentAuditEnabled={independentAuditDisplayEnabled}
+                      onIndependentAuditToggle={toggleIndependentAudit}
+                      engineeringToolboxHidden={independentAuditDisplayEnabled}
+                      showChatModes={chatMode}
+                      {settings}
+                      onSettingsChange={updateSettings}
+                      onAccountSelected={rememberSelectedAccount}
+                      {providers}
+                      harnessId={settings.harnessId}
+                      actions={activeActions}
+                      onActionSelect={handleActionSelection}
+                      onSlashCommand={executeHarnessCommand}
+                      usageCreditsCommandId={usageCreditsCommand?.id}
+                      contextUsage={contextUsageDisplay}
+                      efficiencyKpis={storedEfficiencyKpis}
+                      onRevealUsage={revealContextUsage}
+                      onHideUsage={hideContextUsage}
+                      usageRefreshing={accountUsageCache.refreshing}
+                      {harnessUsage}
+                      canCompact={supportsManualCompaction(
+                        settings.harnessId,
+                        providerStore.providers
+                      ) && !busy}
+                      {compacting}
+                      onCompact={() => void compactWork()}
+                      onActivateBankedReset={() => {
+                        showBankedResetConfirm = true
+                      }}
+                      projectId={thread.projectId}
+                      threadId={thread.id}
+                      {scopeShoe}
+                      attachmentStorage={{
+                        kind: chatMode ? 'chat' : 'project',
+                        projectId: thread.projectId,
+                        threadId: thread.id
+                      }}
+                      fileTagProjectId={project?.source === 'local' && project.path
+                        ? thread.projectId
+                        : undefined}
+                      assignmentId={assignment?.id}
+                      assignmentTasks={assignment?.content.tasks ?? []}
+                      initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
+                      initialAttachments={rendererRecovery.attachmentsFor(
+                        thread.projectId,
+                        thread.id
+                      )}
+                      initialProjectReferences={rendererRecovery.projectReferencesFor(
+                        thread.projectId,
+                        thread.id
+                      )}
+                      initialTaskReferences={rendererRecovery.taskReferencesFor(
+                        thread.projectId,
+                        thread.id
+                      )}
+                      initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
+                        thread.projectId,
+                        thread.id
+                      )}
+                      onValueChange={(value) => {
+                        rendererRecovery.setDraft(thread.projectId, thread.id, value)
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onAttachmentsChange={(files) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          files
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onProjectReferencesChange={(projectReferences) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                          projectReferences
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onTaskReferencesChange={(taskReferences) => {
+                        rendererRecovery.setDraft(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.draftFor(thread.projectId, thread.id),
+                          rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                          rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
+                          taskReferences
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onStartAfterThreadsChange={(startAfterThreads) => {
+                        rendererRecovery.setStartAfterThreads(
+                          thread.projectId,
+                          thread.id,
+                          startAfterThreads
+                        )
+                        publishDraftActivity(
+                          thread.projectId,
+                          thread.id,
+                          rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                        )
+                      }}
+                      onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                      references={composerReferences}
+                      onRemoveReference={removeComposerReference}
+                      onRemoveAllReferences={clearComposerReferences}
+                      onEditReference={controller ? undefined : editResponseReference}
+                      onSend={sendComposerMessage}
+                      onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
+                      historyMessages={composerHistoryTexts}
+                      onHistoryNavigateStart={() => void refreshUserMessageHistory()}
+                      hidePermissionSelector={chatMode}
+                      favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
+                      onToggleFavorite={(providerId, modelId, harnessId) =>
+                        rendererRecovery.toggleModelFavoriteFor(
+                          modelScope(),
+                          modelKey(harnessId, providerId, modelId)
+                        )}
+                      onReorderFavorite={(draggedKey, targetKey, position) =>
+                        rendererRecovery.reorderModelFavoriteFor(
+                          modelScope(),
+                          draggedKey,
+                          targetKey,
+                          position
+                        )}
+                      recentModels={rendererRecovery.modelRecentsFor(modelScope())}
+                      onRemoveRecent={(key) =>
+                        rendererRecovery.removeModelRecentFor(modelScope(), key)}
+                      onModelUsed={(modelKey) =>
+                        rendererRecovery.addModelRecentFor(modelScope(), modelKey)}
+                      imageDescriptorDefault={agentDefaults.imageDescriptor}
+                      {imageDescriptorAskAgain}
+                      onImageDescriptorDefaultChange={setImageDescriptorDefault}
+                      onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                    />
+                    {#if centeredComposer && !assistantMode}
+                      <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
+                        {#each suggestedPrompts as prompt (prompt)}
+                          <button
+                            type="button"
+                            class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            onclick={() => composer?.setComposerText(prompt)}
+                          >
+                            {prompt}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  {/key}
+                {/if}
               {/if}
             {/if}
           </div>
@@ -12174,113 +12681,10 @@
 
 <!--
   The coordinator panels are published to the context dock rather than rendered
-  here: they dock into the right sidebar as their own tool, so the thread keeps
-  its full width and the coordinator gets a rail icon like every other panel.
+  here: the thread registers the panel data, the sidebar renders the matching
+  component as its own tool, and the thread keeps its full width with a rail
+  icon like every other panel.
 -->
-{#snippet assignmentCoordinatorPanel()}
-  {#if assignment}
-    <AssignmentCoordinatorPanel
-      {assignment}
-      auditThread={assignmentAuditThread}
-      auditState={assignmentAuditState}
-      finalComplete={assignmentFinalComplete}
-      reportAvailable={auditReport !== null}
-      threads={assignmentThreads}
-      selectedThreadId={thread.id}
-      coordinatorWorking={busy || delegatedWorkBusy}
-      onOpenAssignment={openAssignmentStudio}
-      onOpenAuditWork={openAssignmentAuditWork}
-      onViewReport={openAuditStudio}
-      onOpenThread={(worker) => workspaceState.openThread(worker, project)}
-      onOpenTask={openAssignmentTask}
-      onResume={resumeAssignmentCoordination}
-      onStop={stopAssignment}
-      onResumeAssignment={resumeStoppedAssignment}
-    />
-  {/if}
-{/snippet}
-
-{#snippet achievementCoordinatorPanel()}
-  {#if spec}
-    <AchievementCoordinatorPanel
-      specTitle={thread.title}
-      specSummary={spec.content.resolutionSummary}
-      auditThread={durableAuditThread}
-      {auditState}
-      reportAvailable={auditReport !== null}
-      achievementReached={thread.status === 'completed' && (thread.loopIteration ?? 0) > 0}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      coordinatorWorking={busy || delegatedWorkBusy}
-      onOpenAudit={() => void generateAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onResume={resumeAchievementCoordination}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {/if}
-{/snippet}
-
-{#snippet auditCoordinatorPanel()}
-  {#if independentAuditDisplayEnabled}
-    <IndependentAuditCoordinatorPanel
-      running={independentAuditRunning}
-      auditThread={durableAuditThread}
-      reportAvailable={auditReport !== null}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      onOpenAudit={() => void generateIndependentAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onNewAudit={() => startFreshIndependentAudit(auditSettings)}
-      onDeleteThread={deleteAuditorThread}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {:else if spec}
-    <AchievementCoordinatorPanel
-      mode="audit"
-      specTitle={thread.title}
-      specSummary={spec.content.resolutionSummary}
-      auditThread={durableAuditThread}
-      {auditState}
-      reportAvailable={auditReport !== null}
-      selectedThreadId={thread.id}
-      auditorSettings={auditSettings}
-      {providers}
-      projectId={thread.projectId}
-      favoriteModels={rendererRecovery.favoriteModels}
-      recentModels={rendererRecovery.recentModels}
-      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-      coordinatorWorking={auditBusy}
-      onOpenAudit={() => void generateAudit(auditSettings)}
-      onViewReport={openAuditStudio}
-      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-      onModelChange={changeAuditModel}
-      onToggleFavorite={(providerId, modelId, harnessId) =>
-        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-      onReorderFavorite={(draggedKey, targetKey, position) =>
-        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-    />
-  {/if}
-{/snippet}
 
 <ContinueInProjectModal
   open={continueInProjectOpen}
@@ -12324,86 +12728,47 @@
   onClose={() => (queuedStartAfterPickerOpen = false)}
 />
 
-<Modal
+<ConfirmDialog
   open={queuedStartAfterPendingRemoval !== null}
   title="Remove wait dependency?"
-  onClose={() => (queuedStartAfterPendingRemoval = null)}
+  onCancel={() => (queuedStartAfterPendingRemoval = null)}
+  onConfirm={confirmRemoveQueuedStartAfterThread}
+  confirmLabel="Remove dependency"
 >
-  <p class="text-sm text-muted">
+  <p>
     The queued message will no longer wait for
     <span class="font-medium text-foreground">{queuedStartAfterPendingRemoval?.title}</span>.
   </p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={() => (queuedStartAfterPendingRemoval = null)}
-    >
-      Cancel
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
-      onclick={confirmRemoveQueuedStartAfterThread}
-    >
-      Remove dependency
-    </button>
-  {/snippet}
-</Modal>
+</ConfirmDialog>
 
-<Modal
+<ConfirmDialog
   open={studioExitConfirmationOpen}
   title="Leave Spec Studio?"
-  onClose={() => (studioExitConfirmationOpen = false)}
+  onCancel={() => (studioExitConfirmationOpen = false)}
+  onConfirm={() => {
+    studioExitConfirmationOpen = false
+    finishCloseSpecStudio()
+  }}
+  confirmLabel="Discard changes"
+  cancelLabel="Stay"
 >
-  <p class="text-sm text-muted">
+  <p>
     You have unsaved changes in Spec Studio. Leaving will discard those edits and clear this
     session's undo and redo history.
   </p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={() => (studioExitConfirmationOpen = false)}
-    >
-      Stay
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
-      onclick={() => {
-        studioExitConfirmationOpen = false
-        finishCloseSpecStudio()
-      }}
-    >
-      Discard changes
-    </button>
-  {/snippet}
-</Modal>
+</ConfirmDialog>
 
-<Modal
+<ConfirmDialog
   open={messagePendingDelete !== null}
   title={deleteConfirmTitle}
-  onClose={cancelDeleteMessage}
+  onCancel={cancelDeleteMessage}
+  onConfirm={confirmDeleteMessage}
+  confirmLabel="Delete"
+  note="This cannot be undone."
+  busy={deletingMessageId !== null}
 >
-  <p class="text-sm text-muted">{deleteConfirmBody}</p>
-  <p class="mt-2 text-sm font-medium text-foreground">This cannot be undone.</p>
-  {#snippet footer()}
-    <button
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={cancelDeleteMessage}
-    >
-      Cancel
-    </button>
-    <button
-      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={deletingMessageId !== null}
-      onclick={() => void confirmDeleteMessage()}
-    >
-      {#if deletingMessageId !== null}
-        <Loader2 size={14} class="animate-spin" />
-      {:else}
-        Delete
-      {/if}
-    </button>
-  {/snippet}
-</Modal>
+  <p>{deleteConfirmBody}</p>
+</ConfirmDialog>
 
 <EngineeringFlowCancelModal
   open={lifecycleCancelModalOpen}

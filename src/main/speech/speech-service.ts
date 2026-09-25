@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { basename, dirname, extname, join } from 'node:path'
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type {
   SpeechCapability,
   SpeechCapabilitySnapshot,
@@ -15,14 +14,16 @@ import type {
   SpeechLesson,
   SpeechModelArtifact,
   SpeechModelCatalog,
+  ModelPathValidationResult,
   SpeechProgressEvent,
   SpeechRecordingAttempt,
+  SpeechAudioBytes,
+  SpeechPlaybackAudio,
   SpeechPreparedPlayback,
   SpeechRefinementFlags,
   SpeechSynthesizedSegment,
   SpeechConfirmation,
   SpeechDestructiveAction,
-  SpeechResult,
   SpeechRuntime,
   SpeechRuntimeAvailability,
   SpeechScope,
@@ -30,7 +31,6 @@ import type {
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
-  DEFAULT_SPEECH_SETTINGS,
   MAX_SPEECH_CHUNK_BYTES,
   recommendedSpeechRuntime,
   resolveSpeechRuntime
@@ -40,14 +40,7 @@ import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
 import { collapseRepetitiveArtifacts } from '../../lib/speech/transcript-sanitizer'
 import { DEFAULT_REFINEMENT_FLAGS } from '../../lib/speech/types'
 import { posixBasename } from '../../lib/paths'
-import {
-  buildParsedIdentityForValidation,
-  CAPABILITY_RUNTIMES,
-  describeSupportedFormatsForCapability,
-  normalizePastedPath
-} from '../../lib/speech/model-path-validation'
-import type { ModelPathValidationResult } from '../../lib/speech/types'
-import { SpeechJobQueue, SpeechQueueError } from './speech-job-queue'
+import { SpeechJobQueue } from './speech-job-queue'
 import { SpeechStorage } from './speech-storage'
 import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
@@ -58,11 +51,20 @@ import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
-import { downloadFileResumable } from '../util/resumable-download'
 import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
 import { NativeSpeechCapture } from './native-speech-capture'
+import { validateSpeechModelPath } from './speech-service/model-path-validation'
+import { SpeechPlaygroundStore } from './speech-service/speech-playground-store'
+import {
+  CAPABILITY_RUNTIME_MAP,
+  SpeechRuntimeEviction
+} from './speech-service/speech-runtime-eviction'
+import { SpeechArtifactDownloader } from './speech-service/speech-artifact-downloader'
+import { toSpeechError } from './speech-service/speech-error-mapping'
+
+export { speechResult } from './speech-service/speech-error-mapping'
 
 interface InstalledArtifactIndex {
   version: 1
@@ -74,43 +76,6 @@ interface SpeechServicePaths {
   mlxWorkerPath: string
   coremlWorkerPath: string
   nativeCaptureWorkerPath: string
-}
-
-const UNLOAD_MS: Record<Exclude<SpeechUnloadOption, 'keep'>, number> = {
-  '5m': 5 * 60_000,
-  '10m': 10 * 60_000,
-  '20m': 20 * 60_000,
-  '30m': 30 * 60_000
-}
-
-/** Audio file extensions accepted by the Sound Playground importer. */
-const PLAYGROUND_AUDIO_EXTENSIONS = new Set([
-  'mp3',
-  'wav',
-  'ogg',
-  'oga',
-  'm4a',
-  'flac',
-  'webm',
-  'aac',
-  'opus',
-  'wma',
-  'aif',
-  'aiff'
-])
-
-/** Hard cap for a single playground audio source. */
-const MAX_PLAYGROUND_AUDIO_BYTES = 200 * 1024 * 1024
-
-const CAPABILITY_RUNTIME_MAP: Record<SpeechCapability, SpeechRuntime[]> = {
-  asr: ['sherpa-onnx', 'mlx', 'coreml'],
-  cleanup: ['gguf'],
-  tts: ['sherpa-onnx', 'mlx']
-}
-
-function unloadMs(option: SpeechUnloadOption): number | null {
-  if (option === 'keep') return null
-  return UNLOAD_MS[option]
 }
 
 /** Cleanup prompt protocol required by the artifact's model family. */
@@ -176,7 +141,7 @@ export class SpeechService {
   private readonly queue = new SpeechJobQueue()
   private readonly backends: Map<SpeechRuntime, SpeechBackend>
   private readonly listeners = new Set<SpeechProgressListener>()
-  private readonly downloadControllers = new Map<string, AbortController>()
+  private readonly downloader: SpeechArtifactDownloader
   private catalog: SpeechModelCatalog | null = null
   private installed: InstalledArtifactIndex = { version: 1, artifacts: [] }
   private readonly cleanup = new SpeechCleanupService()
@@ -185,17 +150,8 @@ export class SpeechService {
   private readonly playback = new TtsPlaybackService()
   private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
-  private unloadOptions: Record<SpeechCapability, SpeechUnloadOption> = {
-    asr: DEFAULT_SPEECH_SETTINGS.asrUnload,
-    cleanup: DEFAULT_SPEECH_SETTINGS.cleanupUnload,
-    tts: DEFAULT_SPEECH_SETTINGS.ttsUnload
-  }
-  private readonly unloadTimers = new Map<SpeechCapability, NodeJS.Timeout>()
-  private readonly lastUsed = new Map<SpeechCapability, number>()
-  private readonly playgroundAudio = new Map<
-    string,
-    { path: string; byteSize: number; mimeType: string }
-  >()
+  private readonly eviction: SpeechRuntimeEviction
+  private readonly playground = new SpeechPlaygroundStore()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -224,6 +180,16 @@ export class SpeechService {
         )
       ]
     ])
+    this.eviction = new SpeechRuntimeEviction({
+      isCapabilityBusy: (capability) => this.isCapabilityBusy(capability),
+      isRuntimeIdle: (runtime) => this.queue.isIdle(runtime),
+      disposeRuntime: (runtime) => this.disposeRuntime(runtime)
+    })
+    this.downloader = new SpeechArtifactDownloader(this.storage, {
+      catalog: () => this.requireCatalog(),
+      emitDownload: (artifact, download) => this.emitDownload(artifact, download),
+      recordInstalled: (artifact, installedAt) => this.recordInstalled(artifact, installedAt)
+    })
   }
 
   async initialize(): Promise<void> {
@@ -584,10 +550,6 @@ export class SpeechService {
     }
   }
 
-  private playgroundDirectory(): string {
-    return join(tmpdir(), 'codeinoven-speech-playground')
-  }
-
   /**
    * Stage renderer-recorded audio bytes for the ephemeral Sound Playground.
    * The copy lives only in a temp directory tracked in memory; it is never
@@ -597,19 +559,7 @@ export class SpeechService {
     audio: Uint8Array,
     mimeType: string
   ): Promise<{ token: string; byteSize: number }> {
-    if (!(audio instanceof Uint8Array) || audio.byteLength === 0) {
-      throw new RangeError('Audio is empty or invalid.')
-    }
-    if (audio.byteLength > MAX_PLAYGROUND_AUDIO_BYTES) {
-      throw new RangeError('Audio is too large (limit 200 MB).')
-    }
-    const type = mimeType === '' ? 'audio/webm' : mimeType.slice(0, 128)
-    await mkdir(this.playgroundDirectory(), { recursive: true })
-    const token = randomUUID()
-    const target = join(this.playgroundDirectory(), `playground-${token}.webm`)
-    await writeFile(target, audio)
-    this.playgroundAudio.set(token, { path: target, byteSize: audio.byteLength, mimeType: type })
-    return { token, byteSize: audio.byteLength }
+    return this.playground.stage(audio, mimeType)
   }
 
   /**
@@ -620,36 +570,12 @@ export class SpeechService {
   async importPlaygroundAudioFromPath(
     rawPath: string
   ): Promise<{ token: string; byteSize: number; fileName: string }> {
-    const normalizedPath = normalizePastedPath(rawPath)
-    if (!normalizedPath.normalized) throw new RangeError('The audio path is not allowed.')
-    const extension = extname(normalizedPath.normalized).toLowerCase()
-    if (!PLAYGROUND_AUDIO_EXTENSIONS.has(extension.replace(/^\./u, ''))) {
-      throw new RangeError(`Unsupported audio file type "${extension || '(none)'}".`)
-    }
-    const original = await readFile(normalizedPath.normalized)
-    if (original.byteLength === 0) throw new RangeError('The audio file is empty.')
-    if (original.byteLength > MAX_PLAYGROUND_AUDIO_BYTES) {
-      throw new RangeError('Audio is too large (limit 200 MB).')
-    }
-    await mkdir(this.playgroundDirectory(), { recursive: true })
-    const token = randomUUID()
-    const target = join(this.playgroundDirectory(), `playground-${token}.${extension}`)
-    await writeFile(target, original)
-    this.playgroundAudio.set(token, {
-      path: target,
-      byteSize: original.byteLength,
-      mimeType: `audio/${extension === '.mp3' ? 'mpeg' : extension.replace(/^\./u, '')}`
-    })
-    return { token, byteSize: original.byteLength, fileName: basename(normalizedPath.normalized) }
+    return this.playground.importFromPath(rawPath)
   }
 
   /** Read staged playground audio so the renderer can build a playback URL. */
-  async readPlaygroundAudio(token: string): Promise<Uint8Array> {
-    const staged = this.playgroundAudio.get(token)
-    if (!staged) {
-      throw new Error('The playground audio is no longer available. Record or import it again.')
-    }
-    return new Uint8Array(await readFile(staged.path))
+  async readPlaygroundAudio(token: string): Promise<SpeechAudioBytes> {
+    return this.playground.read(token)
   }
 
   /**
@@ -664,10 +590,7 @@ export class SpeechService {
     language: string | 'auto',
     cleanupMode: SpeechCleanupMode = { kind: 'disabled' }
   ): Promise<{ rawTranscript: string; finalTranscript: string }> {
-    const staged = this.playgroundAudio.get(token)
-    if (!staged) {
-      throw new Error('The playground audio is no longer available. Record or import it again.')
-    }
+    const staged = this.playground.resolve(token)
     this.clearEvict('asr')
     if (cleanupMode.kind === 'local') this.clearEvict('cleanup')
     const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
@@ -720,10 +643,7 @@ export class SpeechService {
 
   /** Delete a staged playground audio copy. Ephemeral by contract. */
   async discardPlaygroundAudio(token: string): Promise<void> {
-    const staged = this.playgroundAudio.get(token)
-    if (!staged) return
-    this.playgroundAudio.delete(token)
-    await rm(staged.path, { force: true }).catch(() => undefined)
+    return this.playground.discard(token)
   }
 
   async history(cursor?: string, limit?: number): Promise<SpeechHistoryPage> {
@@ -816,8 +736,12 @@ export class SpeechService {
     await this.storage.deleteAllAttempts()
   }
 
-  readAudio(attemptId: string): Promise<Uint8Array<ArrayBuffer>> {
-    return this.storage.readAudio(attemptId)
+  /**
+   * Read a stored recording as playable audio: containers Chromium can demux
+   * are returned as stored, everything else is converted once and cached.
+   */
+  readPlaybackAudio(attemptId: string): Promise<SpeechPlaybackAudio> {
+    return this.storage.readPlaybackAudio(attemptId)
   }
 
   async deleteArtifact(artifactId: string, token: string): Promise<void> {
@@ -838,405 +762,7 @@ export class SpeechService {
     rawPath: string,
     capability: SpeechCapability = 'asr'
   ): Promise<ModelPathValidationResult> {
-    const { normalized, wasNormalized } = normalizePastedPath(rawPath)
-    const cap: SpeechCapability =
-      capability === 'asr' || capability === 'tts' || capability === 'cleanup' ? capability : 'asr'
-    const allowed = CAPABILITY_RUNTIMES[cap]
-    const hint = describeSupportedFormatsForCapability(cap)
-    const parsedFor = (runtime: import('../../lib/speech/types').SpeechRuntime | null) =>
-      buildParsedIdentityForValidation(normalized, runtime)
-    if (normalized.length === 0) {
-      return {
-        ok: false,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        code: 'empty',
-        reason: hint,
-        parsedIdentity: parsedFor(
-          null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    if (normalized.length > 4_096) {
-      return {
-        ok: false,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        code: 'unsupported-format',
-        reason: 'Path is too long. Paste a local file or folder path.',
-        parsedIdentity: parsedFor(
-          null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    const lower = normalized.toLowerCase()
-    const isMlx = lower.endsWith('.mlx') || lower.endsWith('/.mlx') || lower.endsWith('\\mlx')
-    const isGgufFile = lower.endsWith('.gguf')
-    const isCoreMlFile = lower.endsWith('.mlmodelc') || lower.endsWith('.mlpackage')
-    const isOnnxFile = lower.endsWith('.onnx')
-    // Stat the path (batched, non-blocking) - avoid blocking renderer
-    let stat: { isFile: boolean; isDirectory: boolean } | null
-    try {
-      const { stat: fsStat } = await import('node:fs/promises')
-      const s = await fsStat(normalized)
-      stat = { isFile: s.isFile(), isDirectory: s.isDirectory() }
-    } catch (cause) {
-      const code = (cause as NodeJS.ErrnoException)?.code ?? ''
-      if (code === 'ENOENT') {
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          code: 'not-found',
-          reason: 'No file or folder exists at that path. Check the path and try again.',
-          parsedIdentity: parsedFor(
-            null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      if (code === 'EACCES' || code === 'EPERM') {
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          code: 'permission-denied',
-          reason: 'Permission denied at that path. Check access and try again.',
-          parsedIdentity: parsedFor(
-            null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      return {
-        ok: false,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        code: 'not-found',
-        reason: 'That path cannot be read. Verify it and try again.',
-        parsedIdentity: parsedFor(
-          null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-
-    const forbid = (runtime: string, reason: string): ModelPathValidationResult => ({
-      ok: false,
-      capability: cap,
-      normalizedPath: normalized,
-      wasNormalized,
-      runtime: runtime as SpeechRuntime,
-      code: 'unsupported-format',
-      reason,
-      detectedExtension:
-        runtime === 'gguf'
-          ? '.gguf'
-          : runtime === 'mlx'
-            ? '.mlx'
-            : runtime === 'coreml'
-              ? '.mlmodelc'
-              : '.onnx',
-      parsedIdentity: parsedFor(runtime as import('../../lib/speech/types').SpeechRuntime)
-    })
-
-    // Direct file hits - check capability before accepting
-    if (isMlx) {
-      if (!allowed.includes('mlx')) {
-        return forbid('mlx', `MLX models cannot run as ${cap.toUpperCase()}. ${hint}`)
-      }
-      const target = this.platformTarget()
-      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          runtime: 'mlx',
-          code: 'platform-unsupported',
-          reason: 'MLX models are only supported on Apple Silicon.',
-          detectedExtension: '.mlx',
-          parsedIdentity: parsedFor(
-            'mlx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      return {
-        ok: true,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        runtime: 'mlx',
-        code: 'valid',
-        reason: `Supported model found   MLX ${cap.toUpperCase()}   ready to import.`,
-        detectedExtension: '.mlx',
-        parsedIdentity: parsedFor(
-          'mlx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    if (isGgufFile) {
-      if (!allowed.includes('gguf')) {
-        return forbid(
-          'gguf',
-          `GGUF models only run as LLM / Cleanup, not as ${cap.toUpperCase()}. ${hint}`
-        )
-      }
-      if (stat?.isDirectory) {
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          code: 'unsupported-format',
-          reason: 'That .gguf path is a directory. Paste the file path to the .gguf.',
-          detectedExtension: '.gguf',
-          parsedIdentity: parsedFor(
-            null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      return {
-        ok: true,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        runtime: 'gguf',
-        code: 'valid',
-        reason: 'Supported model found   GGUF (LLM / Cleanup)   ready to import.',
-        detectedExtension: '.gguf',
-        parsedIdentity: parsedFor(
-          'gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    if (isCoreMlFile) {
-      if (!allowed.includes('coreml')) {
-        return forbid(
-          'coreml',
-          `Core ML bundles only run as ASR, not as ${cap.toUpperCase()}. ${hint}`
-        )
-      }
-      const target = this.platformTarget()
-      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          runtime: 'coreml',
-          code: 'platform-unsupported',
-          reason: 'Core ML models are only supported on Apple Silicon.',
-          detectedExtension: '.mlmodelc',
-          parsedIdentity: parsedFor(
-            'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      return {
-        ok: true,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        runtime: 'coreml',
-        code: 'valid',
-        reason: 'Supported model found   Core ML ASR bundle   ready to import.',
-        detectedExtension: lower.endsWith('.mlpackage') ? '.mlpackage' : '.mlmodelc',
-        parsedIdentity: parsedFor(
-          'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    if (isOnnxFile) {
-      if (!allowed.includes('sherpa-onnx')) {
-        return forbid(
-          'sherpa-onnx',
-          `ONNX models cannot run as ${cap.toUpperCase()} in this context. ${hint}`
-        )
-      }
-      return {
-        ok: true,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        runtime: 'sherpa-onnx',
-        code: 'valid',
-        reason: 'Supported model found   sherpa-onnx (.onnx)   ready to import.',
-        detectedExtension: '.onnx',
-        parsedIdentity: parsedFor(
-          'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-
-    // Directory scans - contextual per capability
-    if (stat?.isDirectory) {
-      let entries: import('node:fs').Dirent[]
-      try {
-        entries = await readdir(normalized, { withFileTypes: true })
-      } catch (cause) {
-        const code = (cause as NodeJS.ErrnoException)?.code ?? ''
-        if (code === 'EACCES' || code === 'EPERM') {
-          return {
-            ok: false,
-            capability: cap,
-            normalizedPath: normalized,
-            wasNormalized,
-            code: 'permission-denied',
-            reason: 'Permission denied reading that folder.',
-            parsedIdentity: parsedFor(
-              null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-            )
-          }
-        }
-        return {
-          ok: false,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          code: 'unsupported-format',
-          reason: hint,
-          parsedIdentity: parsedFor(
-            null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      const lowerNames = entries.map((e) => e.name.toLowerCase())
-      const hasGguf = lowerNames.some((n) => n.endsWith('.gguf'))
-      const hasOnnx = lowerNames.some((n) => n.endsWith('.onnx'))
-      const hasCoreMl = entries.some(
-        (e) =>
-          e.isDirectory() &&
-          (e.name.toLowerCase().endsWith('.mlmodelc') ||
-            e.name.toLowerCase().endsWith('.mlpackage'))
-      )
-      const hasTokens = lowerNames.includes('tokens.txt')
-
-      // Core ML bundle folder (e.g. FluidAudio parakeet-tdt-0.6b-v2)
-      if (hasCoreMl) {
-        if (!allowed.includes('coreml')) {
-          return forbid(
-            'coreml',
-            `That folder contains a Core ML bundle   only valid for ASR, not ${cap.toUpperCase()}. ${hint}`
-          )
-        }
-        const target = this.platformTarget()
-        if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
-          return {
-            ok: false,
-            capability: cap,
-            normalizedPath: normalized,
-            wasNormalized,
-            runtime: 'coreml',
-            code: 'platform-unsupported',
-            reason: 'Core ML models are only supported on Apple Silicon.',
-            detectedExtension: '.mlmodelc',
-            parsedIdentity: parsedFor(
-              'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-            )
-          }
-        }
-        return {
-          ok: true,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          runtime: 'coreml',
-          code: 'valid',
-          reason: 'Supported model found   folder containing Core ML ASR bundle   ready to import.',
-          detectedExtension: '.mlmodelc',
-          parsedIdentity: parsedFor(
-            'coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      if (hasGguf) {
-        if (!allowed.includes('gguf')) {
-          return forbid(
-            'gguf',
-            `That folder contains .gguf   only valid for LLM / Cleanup, not ${cap.toUpperCase()}. ${hint}`
-          )
-        }
-        return {
-          ok: true,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          runtime: 'gguf',
-          code: 'valid',
-          reason: 'Supported model found   folder containing .gguf   ready to import.',
-          detectedExtension: '.gguf',
-          parsedIdentity: parsedFor(
-            'gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      if (hasOnnx) {
-        if (!allowed.includes('sherpa-onnx')) {
-          return forbid(
-            'sherpa-onnx',
-            `That folder contains .onnx   not valid for ${cap.toUpperCase()}. ${hint}`
-          )
-        }
-        // Heuristic: sherpa-onnx ASR/TTS expects tokens.txt sibling; warn but still accept
-        if (cap === 'asr' && !hasTokens) {
-          return {
-            ok: true,
-            capability: cap,
-            normalizedPath: normalized,
-            wasNormalized,
-            runtime: 'sherpa-onnx',
-            code: 'valid',
-            reason:
-              'Found sherpa-onnx model (.onnx)   missing tokens.txt; may still import but verify the directory is a full sherpa model.',
-            detectedExtension: '.onnx',
-            parsedIdentity: parsedFor(
-              'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-            )
-          }
-        }
-        return {
-          ok: true,
-          capability: cap,
-          normalizedPath: normalized,
-          wasNormalized,
-          runtime: 'sherpa-onnx',
-          code: 'valid',
-          reason: `Supported model found   sherpa-onnx ${cap.toUpperCase()} folder   ready to import.`,
-          detectedExtension: '.onnx',
-          parsedIdentity: parsedFor(
-            'sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null
-          )
-        }
-      }
-      return {
-        ok: false,
-        capability: cap,
-        normalizedPath: normalized,
-        wasNormalized,
-        code: 'unsupported-format',
-        reason: hint,
-        detectedExtension: undefined,
-        parsedIdentity: parsedFor(
-          null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-        )
-      }
-    }
-    // File with unsupported extension
-    return {
-      ok: false,
-      capability: cap,
-      normalizedPath: normalized,
-      wasNormalized,
-      code: 'unsupported-format',
-      reason: hint,
-      detectedExtension: undefined,
-      parsedIdentity: parsedFor(
-        null as unknown as import('../../lib/speech/types').SpeechRuntime | null
-      )
-    }
+    return validateSpeechModelPath(rawPath, capability, this.platformTarget())
   }
 
   async registerImportedModel(
@@ -1544,134 +1070,12 @@ export class SpeechService {
     return this.playback.cancel(sessionId)
   }
 
-  /**
-   * Preflight a model download against the available disk space so a nearly
-   * full disk produces a clear, actionable error up front instead of a raw
-   * ENOSPC failure midway through writing gigabytes of model files.
-   */
-  private async assertDiskSpace(path: string, byteSize: number): Promise<void> {
-    if (!Number.isFinite(byteSize) || byteSize <= 0) return
-    try {
-      const stats = await statfs(path)
-      const available = Number(stats.bavail) * Number(stats.bsize)
-      // Require the artifact size plus a small working margin (the app
-      // database, logs, and temp files share the same volume).
-      const margin = Math.min(Math.max(byteSize * 0.05, 64 * 1024 * 1024), 1_073_741_824)
-      if (available < byteSize + margin) {
-        throw new Error(
-          `Not enough disk space to download this model: ${Math.round(
-            (byteSize + margin) / (1024 * 1024)
-          )} MB is needed, ${Math.round(available / (1024 * 1024))} MB is available. Free up space and try again.`
-        )
-      }
-    } catch (cause) {
-      if (cause instanceof Error && cause.message.startsWith('Not enough disk space')) throw cause
-      // statfs itself failing must never block a download; the streaming write
-      // below still surfaces a real error if the disk is genuinely unwritable.
-    }
-  }
-
   async downloadArtifact(artifactId: string): Promise<void> {
-    if (this.downloadControllers.has(artifactId))
-      throw new Error('Model download is already active.')
-    const artifact = this.requireCatalog().artifacts.find((item) => item.id === artifactId)
-    if (!artifact) throw new Error('Model artifact was not found.')
-    if (artifact.qualification.status === 'retired') {
-      throw new Error('Retired model artifacts cannot be downloaded.')
-    }
-    const controller = new AbortController()
-    this.downloadControllers.set(artifactId, controller)
-    const staging = this.storage.stagingFile(`${artifactId}.${randomUUID()}.download`)
-    const destination = this.storage.modelDirectory(artifactId)
-    let received = 0
-    try {
-      await this.assertDiskSpace(staging, artifact.byteSize)
-      await mkdir(staging, { recursive: true })
-      this.emitDownload(artifact, {
-        state: 'downloading',
-        bytesReceived: 0,
-        totalBytes: artifact.byteSize
-      })
-      let lastEmitAt = 0
-      for (const file of artifact.files) {
-        const target = join(staging, file.path)
-        await mkdir(dirname(target), { recursive: true })
-        received += await this.downloadFile(
-          file.sourceUrl,
-          target,
-          file.byteSize,
-          file.sha256,
-          controller.signal,
-          (fileReceivedSoFar) => {
-            const now = Date.now()
-            if (now - lastEmitAt < 120) return
-            lastEmitAt = now
-            this.emitDownload(artifact, {
-              state: 'downloading',
-              bytesReceived: received + fileReceivedSoFar,
-              totalBytes: artifact.byteSize
-            })
-          }
-        )
-        this.emitDownload(artifact, {
-          state: 'downloading',
-          bytesReceived: received,
-          totalBytes: artifact.byteSize
-        })
-      }
-      this.emitDownload(artifact, {
-        state: 'verifying',
-        bytesReceived: received,
-        totalBytes: artifact.byteSize
-      })
-      const previous = `${destination}.${randomUUID()}.previous`
-      const hadPrevious = await access(destination)
-        .then(() => true)
-        .catch(() => false)
-      if (hadPrevious) await rename(destination, previous)
-      try {
-        await rename(staging, destination)
-      } catch (cause) {
-        if (hadPrevious) await rename(previous, destination).catch(() => undefined)
-        throw cause
-      }
-      if (hadPrevious) await rm(previous, { recursive: true, force: true })
-      const installedAt = Date.now()
-      this.installed.artifacts = this.installed.artifacts.filter(
-        (item) => item.artifactId !== artifactId
-      )
-      this.installed.artifacts.push({
-        artifactId,
-        runtime: artifact.runtime,
-        revision: artifact.repositoryRevision,
-        installedAt,
-        byteSize: artifact.byteSize,
-        source: 'download',
-        externalReference: false,
-        available: true
-      })
-      await this.persistInstalledIndex()
-      this.emitDownload(artifact, { state: 'installed', installedAt })
-    } catch (cause) {
-      await rm(staging, { recursive: true, force: true })
-      const cancelled = controller.signal.aborted
-      this.emitDownload(
-        artifact,
-        cancelled
-          ? { state: 'cancelled', cancelledAt: Date.now() }
-          : { state: 'failed', failedAt: Date.now(), error: this.asError(cause, 'download-failed') }
-      )
-      throw cause
-    } finally {
-      this.downloadControllers.delete(artifactId)
-    }
+    return this.downloader.download(artifactId)
   }
 
   cancelDownload(artifactId: string): boolean {
-    const controller = this.downloadControllers.get(artifactId)
-    if (!controller) return false
-    controller.abort()
-    return true
+    return this.downloader.cancel(artifactId)
   }
 
   cancelJob(jobId: string): boolean {
@@ -1679,23 +1083,7 @@ export class SpeechService {
   }
 
   updateUnloadOptions(options: Partial<Record<SpeechCapability, SpeechUnloadOption>>): void {
-    let changed = false
-    for (const capability of ['asr', 'cleanup', 'tts'] as const) {
-      const next = options[capability]
-      if (next && next !== this.unloadOptions[capability]) {
-        this.unloadOptions[capability] = next
-        changed = true
-        // reschedule with new delay based on last activity
-        if (this.lastUsed.has(capability)) {
-          this.scheduleEvict(capability)
-        } else if (next === 'keep') {
-          this.clearEvict(capability)
-        }
-      }
-    }
-    if (changed) {
-      Logger.dev('Speech unload options updated', { ...this.unloadOptions })
-    }
+    this.eviction.updateUnloadOptions(options)
   }
 
   /**
@@ -1734,39 +1122,11 @@ export class SpeechService {
   }
 
   private touch(capability: SpeechCapability): void {
-    this.lastUsed.set(capability, Date.now())
-    // While work is active, ensure no pending evict races; reschedule after current work settles
-    this.clearEvict(capability)
-    // Don't schedule while a job is actively running for this capability
-    if (this.isCapabilityBusy(capability)) return
-    this.scheduleEvict(capability)
+    this.eviction.touch(capability)
   }
 
   private clearEvict(capability: SpeechCapability): void {
-    const timer = this.unloadTimers.get(capability)
-    if (timer) {
-      clearTimeout(timer)
-      this.unloadTimers.delete(capability)
-    }
-  }
-
-  private scheduleEvict(capability: SpeechCapability): void {
-    this.clearEvict(capability)
-    const option = this.unloadOptions[capability]
-    const delay = unloadMs(option)
-    if (delay === null) return
-    const last = this.lastUsed.get(capability) ?? Date.now()
-    // If we already have elapsed time, shorten first delay
-    const elapsed = Date.now() - last
-    const remaining = Math.max(500, delay - elapsed)
-    const timer = setTimeout(() => {
-      void this.evictCapability(capability)
-    }, remaining)
-    // Don't prevent app quit
-    if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
-      ;(timer as unknown as { unref: () => void }).unref?.()
-    }
-    this.unloadTimers.set(capability, timer)
+    this.eviction.clearEvict(capability)
   }
 
   private isCapabilityBusy(capability: SpeechCapability): boolean {
@@ -1776,44 +1136,16 @@ export class SpeechService {
     return false
   }
 
-  private async evictCapability(capability: SpeechCapability): Promise<void> {
-    this.unloadTimers.delete(capability)
-    const last = this.lastUsed.get(capability)
-    const option = this.unloadOptions[capability]
-    const delay = unloadMs(option)
-    if (delay === null) return
-    if (last !== undefined && Date.now() - last < delay - 250) {
-      // Activity happened sooner than expected   reschedule
-      this.scheduleEvict(capability)
-      return
-    }
-    if (this.isCapabilityBusy(capability)) {
-      // Defer while busy; will be rescheduled on next touch
-      Logger.dev('Speech auto-evict deferred   capability busy', { capability })
-      return
-    }
-    const runtimes = CAPABILITY_RUNTIME_MAP[capability]
-    const targets = runtimes.filter((runtime) => this.queue.isIdle(runtime))
-    if (targets.length === 0) return
-    Logger.dev('Speech auto-evict', { capability, runtimes: targets, option })
-    await Promise.all(
-      targets.map(async (runtime) => {
-        const backend = this.backends.get(runtime)
-        if (!backend) return
-        try {
-          await backend.dispose()
-        } catch (cause) {
-          Logger.error('Speech auto-evict dispose failed', { capability, runtime, cause })
-        }
-      })
-    )
+  /** Dispose one idle runtime's backend, keeping eviction decoupled from the registry. */
+  private async disposeRuntime(runtime: SpeechRuntime): Promise<void> {
+    const backend = this.backends.get(runtime)
+    if (!backend) return
+    await backend.dispose()
   }
 
   async dispose(): Promise<void> {
-    for (const timer of this.unloadTimers.values()) clearTimeout(timer)
-    this.unloadTimers.clear()
-    for (const controller of this.downloadControllers.values()) controller.abort()
-    this.downloadControllers.clear()
+    this.eviction.dispose()
+    this.downloader.abortAll()
     const activeNativeSession = this.nativeCapture.activeSessionId
     if (activeNativeSession) {
       await this.failNativeCapture(
@@ -1821,10 +1153,7 @@ export class SpeechService {
         'Recording stopped because the application shut down.'
       ).catch(() => undefined)
     }
-    for (const staged of this.playgroundAudio.values()) {
-      await rm(staged.path, { force: true }).catch(() => undefined)
-    }
-    this.playgroundAudio.clear()
+    await this.playground.dispose()
     await this.nativeCapture.dispose()
     await this.queue.dispose()
     await Promise.all([...this.backends.values()].map((backend) => backend.dispose()))
@@ -1832,24 +1161,6 @@ export class SpeechService {
     // the next launch has nothing to reap.
     await this.llamaRuntime.clearOrphanJournal()
     await this.storage.dispose()
-  }
-
-  private downloadFile(
-    url: string,
-    destination: string,
-    expectedBytes: number,
-    expectedSha256: string,
-    signal: AbortSignal,
-    onProgress?: (receivedSoFar: number) => void
-  ): Promise<number> {
-    return downloadFileResumable({
-      url,
-      destination,
-      expectedBytes,
-      checksum: { algorithm: 'sha256', encoding: 'hex', digest: expectedSha256 },
-      signal,
-      onProgress
-    })
   }
 
   private requireSelectableArtifact(
@@ -2150,6 +1461,24 @@ export class SpeechService {
     this.emit({ kind: 'download', artifactId: artifact.id, download })
   }
 
+  /** Record a downloaded artifact in the installed index and persist it. */
+  private async recordInstalled(artifact: SpeechModelArtifact, installedAt: number): Promise<void> {
+    this.installed.artifacts = this.installed.artifacts.filter(
+      (item) => item.artifactId !== artifact.id
+    )
+    this.installed.artifacts.push({
+      artifactId: artifact.id,
+      runtime: artifact.runtime,
+      revision: artifact.repositoryRevision,
+      installedAt,
+      byteSize: artifact.byteSize,
+      source: 'download',
+      externalReference: false,
+      available: true
+    })
+    await this.persistInstalledIndex()
+  }
+
   private installedIndexPath(): string {
     return join(this.storage.modelDirectory('artifact-index'), 'installed.json')
   }
@@ -2192,50 +1521,6 @@ export class SpeechService {
   }
 
   private asError(cause: unknown, fallback: SpeechError['code']): SpeechError {
-    if (cause instanceof SpeechQueueError) return cause.speechError
-    return {
-      code: fallback,
-      message: cause instanceof Error ? cause.message : String(cause),
-      retryable: true
-    }
+    return toSpeechError(cause, fallback)
   }
-}
-
-export function speechResult<T>(operation: () => Promise<T>): Promise<SpeechResult<T>> {
-  return operation().then(
-    (value) => ({ ok: true, value }),
-    (cause: unknown) => ({
-      ok: false,
-      error: speechIpcError(cause)
-    })
-  )
-}
-
-function speechIpcError(cause: unknown): SpeechError {
-  if (cause instanceof SpeechQueueError) return cause.speechError
-  const message = cause instanceof Error ? cause.message : String(cause)
-  const normalized = message.toLowerCase()
-  const code: SpeechError['code'] =
-    cause instanceof RangeError
-      ? 'invalid-request'
-      : normalized.includes('stale')
-        ? 'capture-session-stale'
-        : normalized.includes('disk space')
-          ? 'insufficient-disk'
-          : normalized.includes('checksum')
-            ? 'checksum-mismatch'
-            : normalized.includes('not qualified')
-              ? 'model-not-qualified'
-              : normalized.includes('not installed')
-                ? 'model-unavailable'
-                : normalized.includes('incompatible')
-                  ? 'model-incompatible'
-                  : normalized.includes('not found')
-                    ? 'not-found'
-                    : normalized.includes('cancel')
-                      ? 'cancelled'
-                      : normalized.includes('download')
-                        ? 'download-failed'
-                        : 'backend-failed'
-  return { code, message, retryable: code !== 'invalid-request' && code !== 'model-incompatible' }
 }

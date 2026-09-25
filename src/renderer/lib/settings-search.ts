@@ -2,20 +2,22 @@ import {
   BrainCircuit,
   ChartColumn,
   Cloud,
-  Globe,
   HeartPulse,
   Info,
   Keyboard,
   MessageSquareCode,
   MonitorUp,
+  Palette,
   Plug,
   Puzzle,
   Router,
   SlidersHorizontal,
+  Sparkles,
   UsersRound,
   Volume2
 } from '@lucide/svelte'
 import type { SettingsSection } from './stores/renderer-recovery'
+import type { HarnessesTab } from './stores/settings-ui.svelte'
 
 /**
  * A searchable destination inside Settings — either a whole section page
@@ -37,6 +39,12 @@ export interface SettingsSearchEntry {
    * (rendered as `settings-block-<blockId>`). Absent = the whole page.
    */
   blockId?: string
+  /**
+   * Inner tab to select before the block is revealed, for a section page that
+   * splits its content into tabs. Without it a card inside a non-default tab
+   * cannot be scrolled to, because it is not on screen when the reveal runs.
+   */
+  harnessesTab?: HarnessesTab
 }
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
@@ -65,6 +73,28 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: UsersRound
   },
   {
+    id: 'design',
+    section: 'design',
+    title: 'Design',
+    description: 'Who does each kind of design work: copy, images, video, voice-over.',
+    keywords: [
+      'design',
+      'assignments',
+      'copywriter',
+      'illustrator',
+      'video editor',
+      'voice-over',
+      'copy',
+      'seo',
+      'script',
+      'storyboard',
+      'delegate',
+      'image generation',
+      'video'
+    ],
+    icon: Palette
+  },
+  {
     id: 'cio-prompts',
     section: 'cio-prompts',
     title: 'CIO Prompts',
@@ -85,8 +115,25 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'harnesses',
     title: 'Harnesses',
     description: 'Agent harness connections and model providers.',
-    keywords: ['providers', 'models', 'api keys'],
+    keywords: [
+      'providers',
+      'models',
+      'api keys',
+      'auxiliary agents',
+      'background model',
+      'cheap model'
+    ],
     icon: Plug
+  },
+  {
+    id: 'harnesses-typesafe',
+    section: 'harnesses',
+    blockId: 'harnesses-typesafe',
+    harnessesTab: 'auxiliary',
+    title: 'TypeSafe decisions',
+    description: 'The API key CodeInOven uses for TypeSafe judgments, and its connection state.',
+    keywords: ['typesafe', 'jev', 'api key', 'credits', 'decision', 'auxiliary'],
+    icon: Sparkles
   },
   {
     id: 'utilities',
@@ -109,7 +156,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'computer-use',
     title: 'Computer use',
     description: 'Bridge settings for computer-control agents.',
-    keywords: ['cua', 'bridge', 'automation'],
+    keywords: ['cua', 'bridge', 'automation', 'update'],
     icon: MonitorUp
   },
   {
@@ -129,14 +176,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: Keyboard
   },
   {
-    id: 'remote',
-    section: 'remote',
-    title: 'Remote',
-    description: 'Remote access and pairing.',
-    keywords: ['pairing', 'access'],
-    icon: Globe
-  },
-  {
     id: 'cloud-deployments',
     section: 'cloud-deployments',
     title: 'Cloud Deployments',
@@ -148,8 +187,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'profile',
     section: 'profile',
     title: 'Usage',
-    description: 'Usage, quotas, and account profile.',
-    keywords: ['quota', 'account', 'billing'],
+    description: 'Local usage, cost, and model rankings.',
+    keywords: ['quota', 'usage', 'spend', 'activity'],
     icon: ChartColumn
   },
   {
@@ -175,8 +214,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-notifications',
     title: 'Notifications',
-    description: 'System notification alerts and permission status.',
-    keywords: ['alerts', 'permission', 'test'],
+    description: 'System notification alerts, in-app notification sounds, and permission status.',
+    keywords: ['alerts', 'permission', 'test', 'sound', 'in-app', 'toast'],
     icon: SlidersHorizontal
   },
   {
@@ -184,8 +223,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-browser',
     title: 'Browser',
-    description: 'Open localhost links in CIO’s browser.',
-    keywords: ['localhost', 'links'],
+    description:
+      'Open localhost links in CIO’s browser, and approve the CDNs prototype previews may load.',
+    keywords: ['localhost', 'links', 'prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
     icon: SlidersHorizontal
   },
   {
@@ -211,8 +251,19 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-git',
     title: 'Git',
-    description: 'Default pull strategy, merge method, and maximum diff lines.',
-    keywords: ['pull', 'merge', 'squash', 'rebase', 'fast-forward', 'diff'],
+    description: 'Default pull strategy, merge method, maximum diff lines, and merge editor limit.',
+    keywords: [
+      'pull',
+      'merge',
+      'squash',
+      'rebase',
+      'fast-forward',
+      'diff',
+      'conflict',
+      'merge editor',
+      'file size',
+      'too large'
+    ],
     icon: SlidersHorizontal
   },
   {

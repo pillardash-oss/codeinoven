@@ -34,8 +34,6 @@ interface InstanceEntry {
   pid: number
   startedAt: number
   lastHeartbeat: number
-  /** Live app-utility gateway owned by this process, when one has been started. */
-  mcpHost?: string
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
 }
@@ -56,7 +54,12 @@ export class InstanceRegistry {
   private checkpointEventSequence = 0
   private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
   private readonly liveInstanceListeners = new Set<() => void>()
+  private readonly liveSetListeners = new Set<() => void>()
+  /** Local consumers of this process's turn-activity announcements. */
+  private readonly turnActivityListeners = new Set<() => void>()
   private readonly seenCheckpointEvents = new Set<string>()
+  /** Live process ids as of the last membership check, to filter heartbeat noise. */
+  private liveSetSignature = ''
 
   constructor() {
     this.dir = join(getConfigRoot(), 'instances')
@@ -73,8 +76,11 @@ export class InstanceRegistry {
         // Pruning is hygiene only   never block startup over it.
       }
       this.writeEntry()
+      // Seed the membership baseline with our own registration so the first
+      // heartbeat cannot report a change that already existed at launch.
+      this.liveSetSignature = this.readLiveSetSignature()
       this.startWatcher()
-      this.heartbeatTimer = setInterval(() => this.writeEntry(), HEARTBEAT_MS)
+      this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS)
       if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
     } catch {
       // A failure to register must never block startup.
@@ -93,20 +99,6 @@ export class InstanceRegistry {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
       // Best effort   the file may already be gone.
-    }
-  }
-
-  /**
-   * Publish the utility gateway owned by this process. Recovery helpers read
-   * every live instance entry instead of assuming the port from one app window.
-   */
-  setMcpHost(mcpHost: string | null): void {
-    if (mcpHost) this.selfEntry.mcpHost = mcpHost
-    else delete this.selfEntry.mcpHost
-    try {
-      this.writeEntry()
-    } catch {
-      // Recovery metadata is best effort; the gateway remains usable directly.
     }
   }
 
@@ -137,28 +129,100 @@ export class InstanceRegistry {
     return () => this.checkpointListeners.delete(listener)
   }
 
-  /**
-   * Elect the newest live process as the sole owner of shared remote
-   * transports. The process the user opened most recently takes over remote
-   * access, which keeps an older packaged build from pinning a newer instance
-   * in standby.
-   */
-  isPreferredRemoteOwner(): boolean {
-    try {
-      const entries = this.liveEntries()
-      if (entries.length === 0) return true
-      entries.sort((left, right) => right.startedAt - left.startedAt || right.pid - left.pid)
-      return entries[0]?.pid === this.selfEntry.pid
-    } catch {
-      // Registry failures must not make remote mode unavailable.
-      return true
-    }
-  }
-
   /** Wake services that may need to take over after another process exits. */
   onLiveInstancesChanged(listener: () => void): () => void {
     this.liveInstanceListeners.add(listener)
     return () => this.liveInstanceListeners.delete(listener)
+  }
+
+  /**
+   * Subscribe to a change in the *membership* of live instances (a process
+   * appeared, exited, or went stale). Unlike {@link onLiveInstancesChanged},
+   * which fires for every registry file write, this fires only when the set of
+   * live process ids actually changes, so a sibling's 30s heartbeat is never
+   * mistaken for activity. The check runs on our own heartbeat as well as on
+   * filesystem events, because a crashed sibling is detected by heartbeat age
+   * rather than by a write.
+   */
+  onLiveInstanceSetChanged(listener: () => void): () => void {
+    this.liveSetListeners.add(listener)
+    return () => this.liveSetListeners.delete(listener)
+  }
+
+  /**
+   * Elect the longest-running live process as the incumbent owner of work that
+   * must happen exactly once for the whole config root, whoever started it   a
+   * scheduled auto-resume today.
+   *
+   * The election is deterministic: every instance reads the same live entries
+   * and sorts them the same way, so two windows never both claim the slot. It
+   * fails open, so an unreadable registry (or a process whose own entry could
+   * not be written) can never silently stop that work.
+   */
+  isIncumbentInstance(): boolean {
+    try {
+      const entries = this.liveEntries()
+      if (entries.length <= 1) return true
+      // A registry that cannot see our own entry cannot elect anybody.
+      if (!entries.some((entry) => entry.pid === this.selfEntry.pid)) return true
+      entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
+      return entries[0]?.pid === this.selfEntry.pid
+    } catch {
+      // Registry failures must never disable shared scheduled work.
+      return true
+    }
+  }
+
+  /**
+   * Announce that the set of turns this process is running may have changed.
+   *
+   * The shared `active_turns` ledger is the single source of truth for turn
+   * ownership, so no turn data rides in the entry itself: this is the
+   * invalidation, and a consumer that reacts to it re-reads that ledger. Local
+   * consumers are told at once; siblings notice through the registry file they
+   * already watch, which is the only cross-process signal this app delivers
+   * without polling. Publishing on every heartbeat regardless also bounds how
+   * long a missed announcement can stay stale.
+   */
+  publishTurnActivity(): void {
+    for (const listener of this.turnActivityListeners) {
+      try {
+        listener()
+      } catch {
+        // One consumer failing must not prevent the others.
+      }
+    }
+    try {
+      this.writeEntry()
+    } catch {
+      // Best effort: the next heartbeat re-announces it.
+    }
+  }
+
+  /** Subscribe to this process's own turn-activity announcements. */
+  onTurnActivityChanged(listener: () => void): () => void {
+    this.turnActivityListeners.add(listener)
+    return () => this.turnActivityListeners.delete(listener)
+  }
+
+  /**
+   * Whether the process that recorded a turn as in flight is still running.
+   *
+   * A recorded owner is trusted only when its pid is both alive and still
+   * registered: a pid recycled by an unrelated process must never make an
+   * orphaned turn look owned, or the thread would never be recovered. When the
+   * registry itself cannot be read, pid liveness is the only evidence left, so
+   * the answer stays conservative ("still alive") and the turn is left alone.
+   */
+  isRunOwnerAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) return false
+    if (pid === this.selfEntry.pid) return true
+    if (!this.isProcessAlive(pid)) return false
+    try {
+      return this.liveEntries().some((entry) => entry.pid === pid)
+    } catch {
+      return true
+    }
   }
 
   /**
@@ -176,6 +240,61 @@ export class InstanceRegistry {
       // Registry unreadable   assume we are the only instance.
     }
     return false
+  }
+
+  /**
+   * Every process id currently registered and alive, this one included.
+   *
+   * A consumer that reacts to a sibling *disappearing* needs the whole set, not
+   * a boolean: with two siblings, the survivor that notices first must still
+   * adopt the departed work even though another sibling remains. `null` means
+   * the registry could not be read, which is never evidence that anyone exited.
+   */
+  liveInstancePids(): number[] | null {
+    try {
+      return this.liveEntries().map((entry) => entry.pid)
+    } catch {
+      return null
+    }
+  }
+
+  private heartbeat(): void {
+    try {
+      this.writeEntry()
+    } finally {
+      this.checkLiveInstanceSet()
+    }
+  }
+
+  /** Notify membership listeners when the live process ids changed. */
+  private checkLiveInstanceSet(): void {
+    try {
+      const signature = this.readLiveSetSignature()
+      if (signature === this.liveSetSignature) return
+      this.liveSetSignature = signature
+      for (const listener of this.liveSetListeners) {
+        try {
+          listener()
+        } catch {
+          // One service failing to reconcile must not block the others.
+        }
+      }
+    } catch {
+      // Membership is advisory; a later heartbeat re-checks it.
+    }
+  }
+
+  /** Sorted live process ids, or an empty signature when the registry is unreadable. */
+  private readLiveSetSignature(): string {
+    try {
+      return this.liveEntries()
+        .map((entry) => entry.pid)
+        .sort((left, right) => left - right)
+        .join(',')
+    } catch {
+      // A missing signature only costs one spurious membership notification.
+      return ''
+    }
   }
 
   private liveEntries(): InstanceEntry[] {
@@ -232,6 +351,7 @@ export class InstanceRegistry {
               // One service failing to reconcile must not block the others.
             }
           }
+          this.checkLiveInstanceSet()
         } catch {
           // The directory can disappear during shutdown between notification
           // delivery and the read. A later heartbeat restores normal delivery.

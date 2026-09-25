@@ -1,4 +1,6 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { BrowserWindow } from 'electron'
+import { sendToRenderer } from './renderer-delivery'
 import type {
   UtilityBundleInstallRequest,
   UtilityCredentialInput,
@@ -12,6 +14,7 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { CuaBridgeService } from '../utilities/cua-bridge-service'
+import { Logger } from '../system/logger'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
 
 /** Register the strict renderer boundary for utility configuration. */
@@ -20,14 +23,46 @@ export function registerUtilityIpc(
   registry = new UtilityRegistryService(storage),
   vault = new SecretVault(storage),
   cuaBridge = new CuaBridgeService(storage),
-  pip?: ComputerUsePipService
+  pip?: ComputerUsePipService,
+  /** Applied to turns that are already running, after a successful write. */
+  onRegistryChanged?: (utilityId: string) => Promise<void>
 ): void {
+  /**
+   * A write has to reach the turns that are already running, or a capability the
+   * user just switched off stays callable until the turn ends, which reads as the
+   * change needing a restart. Best effort on purpose: the registry write already
+   * succeeded, so a failure here must not report the toggle as failed.
+   */
+  async function afterRegistryChange(utilityId: string): Promise<void> {
+    try {
+      await onRegistryChanged?.(utilityId)
+    } catch (error) {
+      Logger.dev('Utility registry change could not be applied to running turns:', error)
+    }
+  }
+
   ipcMain.handle('computerUse:getCuaStatus', () => cuaBridge.getStatus())
   ipcMain.handle('computerUse:setCuaEnabled', (_, enabled: unknown) => {
     if (typeof enabled !== 'boolean') throw new TypeError('Cua bridge enabled state is invalid')
     return cuaBridge.setEnabled(enabled)
   })
+  ipcMain.handle('computerUse:checkCuaUpdate', (_, skipCache: unknown) => {
+    if (skipCache !== undefined && typeof skipCache !== 'boolean') {
+      throw new TypeError('Cua update cache preference is invalid')
+    }
+    return cuaBridge.checkForUpdate({ skipCache: skipCache === true })
+  })
+  ipcMain.handle('computerUse:updateCua', () =>
+    cuaBridge.applyUpdate((progress) => broadcastToWindows('computerUse:cuaUpdate', progress))
+  )
   ipcMain.handle('computerUse:pipGetState', () => pip?.getState() ?? { active: false })
+  ipcMain.handle('computerUse:activityGet', () => pip?.getActivitySnapshot() ?? [])
+  ipcMain.handle('computerUse:pipSetFrameWidth', (_, requested: unknown) => {
+    if (typeof requested !== 'number' || !Number.isFinite(requested) || requested <= 0) {
+      throw new TypeError('Computer-use frame width must be a positive number')
+    }
+    pip?.setRequestedFrameWidth(requested)
+  })
   ipcMain.handle('computerUse:pipBringToFront', () => pip?.bringToFront() ?? Promise.resolve())
   ipcMain.handle('computerUse:pipDismiss', () => pip?.dismiss() ?? Promise.resolve())
   ipcMain.handle('utilities:list', async (_, options?: UtilitySearchOptions) => ({
@@ -72,9 +107,12 @@ export function registerUtilityIpc(
       throw error
     }
   })
-  ipcMain.handle('utilities:update', (_, id: unknown, patch: UtilityDefinitionPatch) =>
-    registry.update(validateEntityId(id, 'Utility ID', 256), patch)
-  )
+  ipcMain.handle('utilities:update', async (_, id: unknown, patch: UtilityDefinitionPatch) => {
+    const safeId = validateEntityId(id, 'Utility ID', 256)
+    const updated = await registry.update(safeId, patch)
+    await afterRegistryChange(safeId)
+    return updated
+  })
   ipcMain.handle('utilities:delete', async (_, id: unknown) => {
     const safeId = validateEntityId(id, 'Utility ID', 256)
     const utility = await registry.get(safeId)
@@ -82,7 +120,9 @@ export function registerUtilityIpc(
     for (const credential of utility.credentials) {
       await vault.remove(credential.secretRef)
     }
-    return registry.delete(safeId)
+    const deleted = await registry.delete(safeId)
+    if (deleted) await afterRegistryChange(safeId)
+    return deleted
   })
   ipcMain.handle(
     'utilities:setCredential',
@@ -224,6 +264,18 @@ function validateBundleCredentials(value: unknown, entryIndex: number): UtilityC
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Push a utility event to every window, mirroring how the computer-use PiP
+ * broadcasts its own state.
+ */
+function broadcastToWindows(channel: string, payload: unknown): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      sendToRenderer(window.webContents, channel, payload)
+    }
+  }
 }
 
 function validateText(value: unknown, label: string, maximumLength: number, trim = true): string {

@@ -81,6 +81,12 @@ async function runSvelteCheck(
 }
 
 if (requestedPaths.length === 0) {
+  // svelte-check writes generated `.svelte.ts` shims into `.svelte-check` and
+  // leaves them behind. Those shims are picked up by the next run, so a shim
+  // left over from a source file that has since been deleted is still
+  // type-checked and reports errors for code that no longer exists. Start from
+  // a clean directory, exactly as the path-scoped runs below do.
+  await rm(join(projectRoot, '.svelte-check'), { force: true, recursive: true })
   process.exit(await runSvelteCheck(join(projectRoot, 'tsconfig.json')))
 }
 
@@ -91,7 +97,12 @@ if (checkedFiles.length === 0) {
   fail('No .ts or .svelte files were found in the requested paths.')
 }
 
-const checkOutputDirectory = join(projectRoot, 'agent-out')
+// The scoped tsconfigs reference project files with paths relative to this
+// scratch directory. svelte-check rewrites those specs for its overlay by
+// prefixing them with `svelte/`, which only resolves when the temporary
+// tsconfig sits exactly two levels below the project root (`.cio/.check-<id>`).
+// Keep the scratch directory under `.cio/` rather than the repo root.
+const checkOutputDirectory = join(projectRoot, '.cio')
 await mkdir(checkOutputDirectory, { recursive: true })
 const temporaryDirectory = await mkdtemp(join(checkOutputDirectory, '.check-'))
 

@@ -803,55 +803,100 @@ function markRun(key: string, at: number): void {
   }
 }
 
-function runMaintenancePass(): void {
-  const now = Date.now()
-  if (now - lastRun('checkpoint_at') >= DAY_MS) {
-    const result = checkpoint({ kind: 'checkpoint', mode: 'passive' })
-    markRun('checkpoint_at', now)
-    emit({
-      type: 'log',
-      level: 'info',
-      message: `maintenance passive checkpoint: ${JSON.stringify(result)}`
-    })
+/**
+ * A due-checked maintenance step: its own interval, its own single log line,
+ * and its own serialized task.
+ */
+interface MaintenanceStep {
+  /** `maintenance_meta` key recording the last run. */
+  key: string
+  intervalMs: number
+  /** Runs the step and returns the level, label, and detail of its log line. */
+  run: () => { level: 'info' | 'warn'; label: string; detail: string }
+}
+
+const MAINTENANCE_STEPS: readonly MaintenanceStep[] = [
+  {
+    key: 'checkpoint_at',
+    intervalMs: DAY_MS,
+    run: () => {
+      const result = checkpoint({ kind: 'checkpoint', mode: 'passive' })
+      return { level: 'info', label: 'passive checkpoint', detail: JSON.stringify(result) }
+    }
+  },
+  {
+    key: 'integrity_at',
+    intervalMs: DAY_MS,
+    run: () => {
+      const result = integrity({ kind: 'integrity', quick: true })
+      const detail =
+        result.kind === 'integrity'
+          ? result.ok
+            ? result.text
+            : (result.error ?? 'failed')
+          : 'unexpected result'
+      return { level: result.ok ? 'info' : 'warn', label: 'quick_check', detail }
+    }
+  },
+  {
+    key: 'retention_at',
+    intervalMs: DAY_MS,
+    run: () => {
+      const result = retention()
+      return { level: 'info', label: 'retention', detail: JSON.stringify(result) }
+    }
+  },
+  {
+    key: 'fts_optimize_at',
+    intervalMs: WEEK_MS,
+    run: () => {
+      const result = fts({ kind: 'fts', action: 'optimize' })
+      const detail =
+        result.kind === 'fts'
+          ? result.ok
+            ? result.details
+            : (result.error ?? 'failed')
+          : 'unexpected result'
+      return { level: result.ok ? 'info' : 'warn', label: 'fts optimize', detail }
+    }
   }
-  if (now - lastRun('integrity_at') >= DAY_MS) {
-    const result = integrity({ kind: 'integrity', quick: true })
-    markRun('integrity_at', now)
-    const detail =
-      result.kind === 'integrity'
-        ? result.ok
-          ? result.text
-          : (result.error ?? 'failed')
-        : 'unexpected result'
+]
+
+/**
+ * Run one maintenance step as its own serialized task.
+ *
+ * Steps are enqueued one at a time rather than as a single pass, because this
+ * worker also serves every interactive query (thread reads, message pages,
+ * history). An integrity check or an FTS optimize on a multi-hundred-megabyte
+ * file takes seconds, and a query must slot in between steps instead of waiting
+ * for the whole pass to drain. `shuttingDown` is re-checked inside the task:
+ * shutdown closes the connection, and a step starting afterwards would reopen
+ * the database the worker is trying to release.
+ */
+function runMaintenanceStep(step: MaintenanceStep): Promise<void> {
+  return enqueue(() => {
+    if (shuttingDown) return
+    const now = Date.now()
+    if (now - lastRun(step.key) < step.intervalMs) return
+    const result = step.run()
+    markRun(step.key, now)
     emit({
       type: 'log',
-      level: result.ok ? 'info' : 'warn',
-      message: `maintenance quick_check: ${detail}`
+      level: result.level,
+      message: `maintenance ${result.label}: ${result.detail}`
     })
-  }
-  if (now - lastRun('retention_at') >= DAY_MS) {
-    const result = retention()
-    markRun('retention_at', now)
-    emit({
-      type: 'log',
-      level: 'info',
-      message: `maintenance retention: ${JSON.stringify(result)}`
-    })
-  }
-  if (now - lastRun('fts_optimize_at') >= WEEK_MS) {
-    const result = fts({ kind: 'fts', action: 'optimize' })
-    markRun('fts_optimize_at', now)
-    const detail =
-      result.kind === 'fts'
-        ? result.ok
-          ? result.details
-          : (result.error ?? 'failed')
-        : 'unexpected result'
-    emit({
-      type: 'log',
-      level: result.ok ? 'info' : 'warn',
-      message: `maintenance fts optimize: ${detail}`
-    })
+  })
+}
+
+/**
+ * One maintenance pass: every step that is due, in order. Deliberately NOT
+ * wrapped in `enqueue`   each step enqueues itself, and an outer task awaiting
+ * the inner ones would deadlock the single-flight queue.
+ */
+async function runMaintenancePass(): Promise<void> {
+  for (const step of MAINTENANCE_STEPS) {
+    if (shuttingDown) return
+    await runMaintenanceStep(step)
   }
 }
 
@@ -859,7 +904,7 @@ function scheduleMaintenance(): void {
   clearMaintenanceTimer()
   maintenanceTimer = setTimeout(
     () => {
-      void enqueue(runMaintenancePass).finally(() => {
+      void runMaintenancePass().finally(() => {
         if (!shuttingDown && config.maintenanceEnabled) scheduleMaintenance()
       })
     },

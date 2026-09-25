@@ -2,14 +2,21 @@
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Check, Clock, Pin, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    threadHoverPopoverStyle,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS
+  } from '$lib/components/shared/thread-hover-popover-layout'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -19,6 +26,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -26,17 +34,20 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
-  import WaveBars from '$lib/components/speech/WaveBars.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
     coordinatorHasActiveDelegates,
+    coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isThreadWorking,
-    isOrchestrationChildThread,
-    type ScopeBucket
+    isOrchestrationChildThread
   } from '$shared/types'
   import type { Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
@@ -50,6 +61,9 @@
     picker?: boolean
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
+    /** Mark shown in the project-icon slot when the thread's container has no
+     *  project icon of its own   the hidden Chats and Assistant containers. */
+    projectIconGlyph?: Component | null
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
     /** Hide the scope chip   used when the surrounding view is already scoped. */
@@ -71,6 +85,7 @@
     compact = false,
     picker = false,
     projectIconUrl = null,
+    projectIconGlyph = null,
     showChangeScope = true,
     hideScope = false,
     onOpen = () => {},
@@ -114,6 +129,9 @@
   }
 
   function handleDragOver(e: DragEvent): void {
+    // A folder/file dragged in from the OS belongs to the sidebar's drop target,
+    // not to a thread reorder.
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     if (!onMoveThread) return
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -121,6 +139,7 @@
   }
 
   function handleDrop(e: DragEvent): void {
+    if (e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
     const draggedId = e.dataTransfer!.getData('text/plain')
     if (draggedId && draggedId !== thread.id && onMoveThread) {
@@ -270,11 +289,6 @@
     showCopyId: () => true
   })
 
-  const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 290
-  const POPOVER_GAP = 8
-  const VIEWPORT_MARGIN = 8
-
   // ─── Status vs Stage ──────────────────────────────────────────────────────
   //
   //   Status  = overall thread state for the dot indicator
@@ -314,8 +328,15 @@
     rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
 
-  /** Orchestration worker/auditor threads stay silent: never presented as unread. */
-  let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+  /** Orchestration worker/auditor threads stay silent: never presented as unread.
+   *  A coordinator row, though, stays unread while any of its non-reporting
+   *  workers is unread: it clears only once the coordinator itself and all of
+   *  its workers are read. Reporting workers hold nothing open, since their
+   *  progress shows through the Assignment lifecycle instead. */
+  let effectiveRead = $derived(
+    isOrchestrationChildThread(thread) ||
+      (thread.read && !coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))
+  )
 
   /** A finished temporary (side) chat on this thread is still unread   the
    *  parent thread's own `read` flag never changes for side chats, so the
@@ -347,20 +368,57 @@
       : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
   )
   let isRetryPaused = $derived(thread.status === 'working-paused')
+  /** Another CodeInOven instance owns this thread's in-flight turn, so its live
+   *  output and its stop control are there rather than here. */
+  let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  /** The thread's agent is driving the computer right now   window-scoped or
+   *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
+  let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
   /** TTS playing on this thread   shares the recorder's indicator slot. */
-  // Last action wins between ASR and TTS: recording start cancels playback, so
-  // a transcription can only overlap a TTS that began after it   in that case
-  // the newer TTS takes the slot; otherwise the transcription waveform shows.
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
   /** The mic has closed but the transcript has not landed yet   same indicator
    *  slot, distinct label, shown only when neither recording nor speaking. */
   let isTranscribing = $derived(
     !isRecording && !isSpeaking && speechController.isTranscribingThread(thread.id)
   )
+  /** Armed delivery of the transcription in flight: the user has told the app to
+   *  send (or steer) the transcript the moment it lands. */
+  let voiceSendStage = $derived(
+    isTranscribing ? speechController.voiceSendStageForThread(thread.id) : null
+  )
+  /**
+   * The row has one indicator slot and this is what owns it. Last action wins:
+   * of listening, speaking, transcribing, and the agent using the computer, the
+   * action that began most recently is shown. Recording start already cancels
+   * playback, so the speech candidates cannot both be live; the speech
+   * controller reports when each began and computer use reports the agent's
+   * most recent action.
+   */
+  let indicator = $derived.by((): ThreadIndicator | null => {
+    const candidates: Array<{ indicator: ThreadIndicator; at: number }> = []
+    const speechAt = speechController.threadIndicatorActionAt(thread.id) ?? 0
+    if (isRecording) candidates.push({ indicator: 'recording', at: speechAt })
+    if (isSpeaking) candidates.push({ indicator: 'speaking', at: speechAt })
+    if (isTranscribing) {
+      candidates.push({
+        indicator:
+          voiceSendStage === 'steer'
+            ? 'transcribing-steer'
+            : voiceSendStage === 'send'
+              ? 'transcribing-send'
+              : 'transcribing',
+        at: speechAt
+      })
+    }
+    if (isUsingComputerUse) {
+      candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
+    }
+    return resolveThreadIndicator(candidates)
+  })
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -438,11 +496,7 @@
     }
   })
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const bucketId = scopeState.bucketForThread(thread)
-    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return null
-    return scopeState.bucketFor(thread.projectId, bucketId)
-  })
+  let scopeBucket = $derived(threadScopeBucket(thread))
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
@@ -464,6 +518,17 @@
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered)
 
+  /** Tooltip for the state badge: the only place a collapsed row can explain
+   *  itself, since the badge is a bare dot or spinner. */
+  let badgeTitle = $derived.by((): string => {
+    if (isForeignRun) return 'Running in another instance'
+    if (isRetryPaused || isWorking) return stageLabel
+    if (thread.status === 'spec') return 'Spec ready'
+    if (threadState === 'scheduled') return 'Scheduled'
+    if (threadState === 'temporary-unread') return 'Temporary chat unread'
+    return threadState
+  })
+
   /** Maps ThreadState to StatusBadge props   all colours flow through the
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
@@ -482,7 +547,12 @@
         case 'todo':
           return { stage: 'todo' }
         case 'working':
-          return { variant: 'spinner', stage: 'working' }
+          // Work owned by another instance keeps the working colour but gets a
+          // distinct, still icon: a spinner here would promise live output this
+          // window never receives.
+          return isForeignRun
+            ? { variant: 'icon', icon: AppWindow, tone: 'working' }
+            : { variant: 'spinner', stage: 'working' }
         case 'scheduled':
           return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
@@ -526,38 +596,21 @@
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
-  function calculatePopoverPosition(
-    anchor: DOMRect,
-    width: number,
-    height: number
-  ): { x: number; y: number } {
-    const availableRight = window.innerWidth - anchor.right - VIEWPORT_MARGIN
-    const availableLeft = anchor.left - VIEWPORT_MARGIN
-    const placeRight = availableRight >= width || availableRight >= availableLeft
-    const preferredX = placeRight ? anchor.right + POPOVER_GAP : anchor.left - POPOVER_GAP - width
-    const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
-    const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN)
-
-    return {
-      x: Math.max(VIEWPORT_MARGIN, Math.min(preferredX, maxX)),
-      y: Math.max(VIEWPORT_MARGIN, Math.min(anchor.top, maxY))
-    }
-  }
-
   async function revealPopover(): Promise<void> {
     if (!rowEl || showMenu || !hovered) return
 
-    popoverPos = calculatePopoverPosition(
+    const size = resolveThreadHoverPopoverSize()
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
-      POPOVER_WIDTH,
-      POPOVER_ESTIMATED_HEIGHT
+      size.width,
+      size.height
     )
     showPopover = true
     await tick()
 
     if (!rowEl || !popoverEl || showMenu || !hovered) return
     const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculatePopoverPosition(
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
       popoverRect.width,
       popoverRect.height
@@ -619,6 +672,11 @@
     <span class="flex w-full min-w-0 items-center gap-2">
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {:else if projectIconGlyph}
+        {@const ContainerIcon = projectIconGlyph}
+        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+          <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
       {/if}
       <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
         {#if badgeProps}
@@ -631,17 +689,7 @@
             icon={badgeProps.icon}
             animated={badgeProps.animated}
             size="md"
-            title={isRetryPaused
-              ? stageLabel
-              : isWorking
-                ? stageLabel
-                : thread.status === 'spec'
-                  ? 'Spec ready'
-                  : threadState === 'scheduled'
-                    ? 'Scheduled'
-                    : threadState === 'temporary-unread'
-                      ? 'Temporary chat unread'
-                      : threadState}
+            title={badgeTitle}
           />
         {:else}
           <span
@@ -661,12 +709,8 @@
         {displayTitle}
       </span>
       {#if !showBottomRow}
-        {#if isRecording}
-          <RecordingIndicator label="Listening" />
-        {:else if isSpeaking}
-          <RecordingIndicator label="Speaking" tone="speech" />
-        {:else if isTranscribing}
-          <WaveBars label="Transcribing" />
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -736,12 +780,8 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          {#if isRecording}
-            <RecordingIndicator label="Listening" />
-          {:else if isSpeaking}
-            <RecordingIndicator label="Speaking" tone="speech" />
-          {:else if isTranscribing}
-            <WaveBars label="Transcribing" />
+          {#if indicator}
+            <ThreadIndicatorSlot {indicator} />
           {:else}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {relativeTime(thread.lastActivity)}
@@ -789,9 +829,12 @@
       : isBusyIndicator
         ? isRetryPaused
           ? 'border-warning bg-warning/5 hover:bg-elevated'
-          : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
+          : isForeignRun
+            ? 'border-thread-working bg-thread-working/5 hover:bg-elevated'
+            : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
+    aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
     onclick={() => {
       showPopover = false
@@ -810,6 +853,11 @@
       <!-- Project icon -->
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {:else if projectIconGlyph}
+        {@const ContainerIcon = projectIconGlyph}
+        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+          <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+        </span>
       {/if}
 
       <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
@@ -830,17 +878,7 @@
               icon={badgeProps.icon}
               animated={badgeProps.animated}
               size="md"
-              title={isRetryPaused
-                ? stageLabel
-                : isWorking
-                  ? stageLabel
-                  : thread.status === 'spec'
-                    ? 'Spec ready'
-                    : threadState === 'scheduled'
-                      ? 'Scheduled'
-                      : threadState === 'temporary-unread'
-                        ? 'Temporary chat unread'
-                        : threadState}
+              title={badgeTitle}
             />
           {:else}
             <span
@@ -864,7 +902,7 @@
             onTogglePin(thread)
           }}
           onkeydown={(e: KeyboardEvent) => {
-            if (e.key === 'Enter') {
+            if (keymapState.matches('thread-pin', e)) {
               e.stopPropagation()
               onTogglePin(thread)
             }
@@ -888,12 +926,8 @@
       <!-- Single-line default: time rides on the top line, swapped for the
            working model's provider icon while the thread is working -->
       {#if !showBottomRow}
-        {#if isRecording}
-          <RecordingIndicator label="Listening" />
-        {:else if isSpeaking}
-          <RecordingIndicator label="Speaking" tone="speech" />
-        {:else if isTranscribing}
-          <WaveBars label="Transcribing" />
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
         {:else if isBusyIndicator && currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -988,12 +1022,8 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          {#if isRecording}
-            <RecordingIndicator label="Listening" />
-          {:else if isSpeaking}
-            <RecordingIndicator label="Speaking" tone="speech" />
-          {:else if isTranscribing}
-            <WaveBars label="Transcribing" />
+          {#if indicator}
+            <ThreadIndicatorSlot {indicator} />
           {:else}
             <span
               class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
@@ -1037,10 +1067,17 @@
     <Portal>
       <div
         {@attach capturePopoverElement}
-        class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
-        style="left: {popoverPos.x}px; top: {popoverPos.y}px"
+        class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
+        style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
       >
-        <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
+        <ThreadHoverPopover
+          {thread}
+          {isWorking}
+          {isRetryPaused}
+          {stageLabel}
+          {threadState}
+          {isForeignRun}
+        />
       </div>
     </Portal>
   {/if}

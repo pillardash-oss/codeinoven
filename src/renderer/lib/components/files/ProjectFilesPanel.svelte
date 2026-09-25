@@ -2,73 +2,99 @@
   import { onMount, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
-  import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     ChevronRight,
-    Code2,
-    Eye,
-    FileDiff,
-    FileQuestion,
     FolderTree,
     FolderOpen,
     Loader2,
     Minimize2,
     Save,
-    TriangleAlert
+    TriangleAlert,
+    X
   } from '@lucide/svelte'
-  import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
+  import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { RoutineDefaultIcon } from '$lib/routine-icons'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import {
+    conflictSaveActionLabels,
+    conflictSaveActionTitle,
+    conflictSaveStep
+  } from './conflict-resolution'
   import type {
     ConflictResolutionController,
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import {
-    isAudioMime,
-    isDocumentPreviewPath,
-    isHtmlPreviewPath,
-    isImageMime,
-    isSvgMime,
-    isVideoMime,
-    mimeFromPath,
-    supportsFilePreview
-  } from '$lib/mime'
+  import { supportsFilePreview } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import type { FilesContextTab } from '$lib/stores/context-sidebar.svelte'
+  import { projectFilesWorkspace, type ProjectFileTab } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
   import { diffDetails } from './file-diff'
-  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
-  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
+  import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
   import GoToLine from './GoToLine.svelte'
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
+  import FileTypeIcon from './FileTypeIcon.svelte'
+  import FileInfoDialog from './FileInfoDialog.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
+  import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
+  import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
+  import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
+  import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
+  import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
+  import {
+    filePreviewFlags,
+    hasAnyPreview,
+    previewKindLabel as previewKindLabelFor
+  } from './project-files-panel-preview'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
-  import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
-  import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
-  import type { ProjectTextFile } from '$shared/types'
-  import type { ProjectFileInfo } from '$shared/types'
-  import { INBOX_PROJECT_ID } from '$shared/types'
+  import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
     projectId: string
     projectName: string
+    /** Label shown as the tree's root name. Empty when the root names itself
+     *  with the icon alone, which is the case for a routine, whose name is
+     *  often a whole sentence. */
+    projectLabel?: string
     projectIconUrl?: string | null
+    /** True when the tree's root is a routine, so the root icon falls back to
+     *  the routine default mark instead of a generic folder. */
+    routineRoot?: boolean
+    /** Accent colour of the tree's root identity, or null for the default
+     *  accent. An assistant task's tree mounts on its routine's own workspace,
+     *  so the parent passes that routine's colour here. */
+    projectAccentColor?: string | null
   }
 
-  let { projectId, projectName, projectIconUrl = null }: Props = $props()
+  let {
+    projectId,
+    projectName,
+    projectLabel = projectName,
+    projectIconUrl = null,
+    routineRoot = false,
+    projectAccentColor = null
+  }: Props = $props()
 
   let contextTab = $derived(
     contextSidebarState.sidebarActiveTab?.kind === 'files'
@@ -76,11 +102,13 @@
       : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
-  /** Inbox chats mount the file tree on the thread's own artifact directory;
-   *  real projects always use the project root regardless of the open thread. */
-  let chatThreadId = $derived(projectId === INBOX_PROJECT_ID ? activeThreadId : null)
+  /** A conversation's file tree mounts on the thread's own app-owned workspace
+   *  directory (a chat's artifact directory, an assistant task's working
+   *  directory); real projects always use the project root regardless of the
+   *  open thread. */
+  let mountThreadId = $derived(usesThreadWorkspaceMount(projectId) ? activeThreadId : null)
   $effect(() => {
-    projectFilesWorkspace.setChatThread(projectId, chatThreadId)
+    projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
   // This panel can be restored directly from persisted sidebar state before a
   // file action has had a chance to prepare the workspace store.
@@ -89,6 +117,19 @@
   }
   prepareProjectFilesState()
   let projectState = $derived(projectFilesWorkspace.getState(projectId))
+  /** Read the tree for the mount the open thread belongs to. Only remounting
+   *  (closing and reopening the panel) runs this, so a thread switch alone never
+   *  swaps the tree out from under the user: it raises the stale-scope notice
+   *  instead, and the toggle the notice asks for is what lands the new root. */
+  $effect(() => {
+    if (!projectState.explorerVisible) return
+    void projectFilesWorkspace.loadDirectory(projectId, '')
+  })
+  /** This panel is project-scoped: it survives a thread switch, so after the
+   *  open thread moves to another worktree its listings still describe the
+   *  previous scope root. The notice below makes that visible instead of
+   *  silently showing another checkout's files. */
+  let scopeStale = $derived(!projectFilesWorkspace.listingsMatchMount(projectId))
   let activeTab = $derived(
     contextTab?.fileTabId
       ? (projectState.tabs.find((tab) => tab.id === contextTab?.fileTabId) ?? null)
@@ -135,8 +176,22 @@
    * explorer's Conflicts button toggles it directly.
    */
   let conflictsOnly = $derived(gitState.conflictsMode)
-  let activePathIsConflicted = $derived(
-    activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
+  /**
+   * The tab whose conflicted file the user handed to the file editor from the
+   * merge editor's size notice. A conflicted working file belongs to the merge
+   * editor whenever one is open, so without this the escape hatch would route
+   * straight back into the surface that refused the file. The hand-over is held
+   * by the tab itself, so closing the file and opening it again brings the merge
+   * editor back.
+   */
+  let rawConflictTab = $state<ProjectFileTab | null>(null)
+  /** Whether the merge editor owns the active file's body. False while the file
+   *  is conflicted but the user asked for the raw source, which is the case the
+   *  file editor resolves by hand. */
+  let activeFileInMergeEditor = $derived(
+    activeTab?.origin === 'working' &&
+      conflictedPaths.includes(activeTab.path) &&
+      rawConflictTab !== activeTab
   )
   /** Undo/redo toolbar buttons apply to the plain file editor only: the
    *  editable source view with a session, not diffs, previews, the
@@ -144,8 +199,21 @@
   let canUndoRedo = $derived(
     activeSession !== null &&
       !deletedAtCheckpoint &&
-      !activePathIsConflicted &&
+      !activeFileInMergeEditor &&
       activeTab?.view === 'source'
+  )
+  /** Beautify is offered for the same editable source view as undo/redo, and
+   *  only for a format the editor can reformat. The label doubles as the flag,
+   *  so no action is shown that could not run. */
+  let beautifyLabel = $derived(
+    activeTab !== null &&
+      activeSession !== null &&
+      !deletedAtCheckpoint &&
+      !activeFileInMergeEditor &&
+      !projectState.loadingPaths[activeTab.path] &&
+      activeTab.view === 'source'
+      ? fileBeautifyLabel(activeTab.path)
+      : null
   )
   /** The Save button only exists for editable content: a conflicted file being
    *  resolved, or a text session with unsaved changes. Preview-only content
@@ -154,15 +222,16 @@
     activeTab !== null &&
       activeTab.view !== 'diff' &&
       !deletedAtCheckpoint &&
-      (activePathIsConflicted || (activeSession !== null && dirty))
+      (activeFileInMergeEditor || (activeSession !== null && dirty))
   )
-  let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
-  let htmlPreview = $derived(activeTab ? isHtmlPreviewPath(activeTab.path) : false)
-  let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
-  let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
-  let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
-  let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
-  let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
+  const previewFlags = $derived(filePreviewFlags(activeTab?.path ?? null))
+  let markdown = $derived(previewFlags.markdown)
+  let htmlPreview = $derived(previewFlags.html)
+  let pdf = $derived(previewFlags.pdf)
+  let image = $derived(previewFlags.image)
+  let svg = $derived(previewFlags.svg)
+  let video = $derived(previewFlags.video)
+  let audio = $derived(previewFlags.audio)
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
@@ -171,7 +240,7 @@
       ? projectFilePreviewUrl(
           projectId,
           activeTab.path,
-          chatThreadId ?? undefined,
+          mountThreadId ?? undefined,
           previewReloadToken
         )
       : null
@@ -179,172 +248,40 @@
   // SVG is rendered natively in the renderer via a blob URL (animated SVGs
   // play), instead of the privileged `appfile://` scheme, which intentionally
   // refuses to serve project-controlled SVG.
-  let svgPreviewUrl = $state<string | null>(null)
-  let svgPreviewFailed = $state(false)
-  $effect(() => {
-    if (!activeTab || !svg) {
-      if (svgPreviewUrl) {
-        URL.revokeObjectURL(svgPreviewUrl)
-        svgPreviewUrl = null
-      }
-      svgPreviewFailed = false
-      return
-    }
-    // Reading the reload token keeps the effect reactive to explicit reloads:
-    // bumping it revokes the stale blob and re-reads the file from disk.
-    const reloadToken = projectState.previewReloadTokens[activeTab.path] ?? 0
-    let cancelled = false
-    svgPreviewFailed = false
-    void invoke(
-      'projectFiles:read',
+  const svgPreview = new ProjectFilesPanelSvgPreview()
+  $effect(() =>
+    svgPreview.sync({
       projectId,
-      activeTab.path,
-      workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId ?? undefined
-    )
-      .then((source: ProjectTextFile | null) => {
-        if (cancelled || !source) return
-        // A newer reload request superseded this read; its own run will land
-        // the fresh blob, so drop the stale content.
-        if ((projectState.previewReloadTokens[activeTab.path] ?? 0) !== reloadToken) return
-        const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
-        svgPreviewUrl = url
-      })
-      .catch(() => {
-        if (cancelled) return
-        svgPreviewFailed = true
-      })
-    return () => {
-      cancelled = true
-      if (svgPreviewUrl) {
-        URL.revokeObjectURL(svgPreviewUrl)
-        svgPreviewUrl = null
-      }
-      svgPreviewFailed = false
-    }
-  })
-  let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
-  let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
-  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
-  let documentPreview = $derived(activeTab ? isDocumentPreviewPath(activeTab.path) : false)
-  /** Name of the preview renderer for the active file; keeps the Eye toggle's
-   *  labels identical in the inline and fullscreen toolbars. */
-  let previewKindLabel = $derived(
-    pdf
-      ? 'PDF'
-      : video
-        ? 'Video'
-        : audio
-          ? 'Audio'
-          : documentPreview
-            ? 'Document'
-            : htmlPreview
-              ? 'HTML'
-              : image
-                ? 'Image'
-                : 'Markdown'
+      activePath: activeTab?.path ?? null,
+      isSvg: svg,
+      // Reading the reload token keeps the effect reactive to explicit reloads:
+      // bumping it revokes the stale blob and re-reads the file from disk.
+      currentReloadToken: () =>
+        activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
+      scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
+      mountThreadId
+    })
   )
-  let documentHtml = $state<string | null>(null)
-  let documentLoading = $state(false)
-  let documentFailed = $state(false)
-  /** Human-readable reason when a preview fails   surfaced in the pane. */
-  let documentError = $state<string | null>(null)
-  /** Path whose HTML is currently loaded   guards against tab swaps. */
-  let documentHtmlPath = $state<string | null>(null)
-  /** Reload token the loaded HTML belongs to; a bumped token forces a re-read
-   *  even though the path is unchanged. Plain companion of `documentHtmlPath`. */
-  let documentHtmlToken: number | null = null
-  /** Path whose HTML is currently being fetched   guards against effect
-   *  re-runs (driven by `activeTab` reference churn) starting duplicate IPC
-   *  chains that would otherwise cancel or pile on top of each other.
-   *  Deliberately NOT `$state`: the effect both reads and writes it, so a
-   *  reactive variable here would re-trigger the effect on its own write
-   *  (effect_update_depth_exceeded)   same reason the previous run token was
-   *  a plain `let`. Only the async callbacks consult it after each run. */
-  let documentInFlightPath: string | null = null
-  /** Monotonic ownership token, incremented only when a new chain actually
-   *  starts. Lets stale callbacks tell themselves apart from the current
-   *  chain without participating in reactivity. */
-  let documentEffectToken = 0
+  let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
+  let imagePreviewFailed = $derived(svg ? svgPreview.failed : false)
+  /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
+  let documentPreview = $derived(previewFlags.document)
+  let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
+  const docPreview = new ProjectFilesPanelDocumentPreview()
   /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
    *  touches `workspaceState.selectedThread`, which is reassigned on every
    *  thread update. Reading it inside the effect would re-run (and cancel)
-   *  the preview load on each thread churn, leaving `documentLoading` stuck
-   *  true   the infinite spinner. */
+   *  the preview load on each thread churn, leaving the loader stuck true. */
   let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   $effect(() => {
-    if (!activeTab || !documentPreview || activeTab.view !== 'preview') {
-      documentHtml = null
-      documentHtmlPath = null
-      documentHtmlToken = null
-      documentInFlightPath = null
-      documentFailed = false
-      documentError = null
-      documentLoading = false
-      return
-    }
-    const path = activeTab.path
-    const reloadToken = projectState.previewReloadTokens[path] ?? 0
-    // Bail if this path is already loaded (at the same reload token) OR
-    // already being fetched   the in-flight chain settles its own state.
-    // Without the in-flight guard, every `activeTab` reference change restarts
-    // the chain and the previous one never gets to clear `documentLoading`
-    // the infinite spinner. A bumped reload token bypasses both guards so
-    // Reload re-reads the file from disk.
-    if (
-      (documentHtmlPath === path && documentHtmlToken === reloadToken) ||
-      documentInFlightPath === path
+    const tab = activeTab
+    docPreview.sync(
+      projectId,
+      tab?.path ?? null,
+      Boolean(tab && documentPreview && tab.view === 'preview'),
+      tab ? (projectState.previewReloadTokens[tab.path] ?? 0) : 0,
+      documentScopeBucketId
     )
-      return
-    documentInFlightPath = path
-    const token = ++documentEffectToken
-    documentLoading = true
-    documentFailed = false
-    documentError = null
-    // `file:readDocumentPreview` requires an absolute path, but the tab only
-    // carries a project-relative path (which may live inside a managed worktree
-    // scope). Resolve the authoritative absolute path through main first.
-    const scopeBucketId = documentScopeBucketId
-    // Hard cap: a hung IPC chain must never leave the spinner spinning forever.
-    const timeout = setTimeout(() => {
-      if (token !== documentEffectToken) return
-      documentHtml = null
-      documentHtmlPath = path
-      documentHtmlToken = reloadToken
-      documentInFlightPath = null
-      documentFailed = true
-      documentError = 'Document preview timed out'
-      documentLoading = false
-    }, 15000)
-    void invoke('projectFiles:info', projectId, path, scopeBucketId)
-      .then((info: ProjectFileInfo) => invoke('file:readDocumentPreview', info.absolutePath))
-      .then((html: string | null) => {
-        if (token !== documentEffectToken) return
-        // documentPreviewFrame sanitizes and wraps the raw converter HTML in
-        // a styled page (white "paper" surface) so the preview matches the
-        // chat-attachment document preview instead of rendering transparent.
-        documentHtml = html ? documentPreviewFrame(html) : null
-        documentHtmlPath = path
-        documentHtmlToken = reloadToken
-        documentInFlightPath = null
-        documentFailed = html === null
-        documentError = html === null ? 'The document could not be converted for preview' : null
-      })
-      .catch((error: unknown) => {
-        if (token !== documentEffectToken) return
-        documentHtml = null
-        documentHtmlPath = path
-        documentHtmlToken = reloadToken
-        documentInFlightPath = null
-        documentFailed = true
-        documentError = error instanceof Error ? error.message : String(error)
-      })
-      .finally(() => {
-        clearTimeout(timeout)
-        // Only the current chain may settle the spinner; a stale chain that
-        // lands after a newer load started must leave it alone.
-        if (token === documentEffectToken) documentLoading = false
-      })
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
@@ -359,7 +296,7 @@
     return projectFilePreviewUrl(
       projectId,
       directory ? `${directory}/` : '',
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   })
   /** Sanitized page for the active HTML file, built from the live session draft
@@ -371,21 +308,55 @@
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
-  let fullscreenOpen = $state(false)
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', fullscreenOpen)
-  })
-  let handledFullscreenRequest = $state(0)
+  let fullscreenOpen = $derived(projectState.fullscreenActive)
+  // The browser's native view floats above every DOM overlay, so a full-window
+  // editor must register itself as a fullscreen surface while it is up. The
+  // returned cleanup matters here: this panel is unmounted whenever the sidebar
+  // hides or its active tab changes, and a key left behind would suppress the
+  // browser view for the rest of the session.
+  $effect(() =>
+    browserVisibility.hideWhile('files-fullscreen-editor', 'fullscreen-surface', fullscreenOpen)
+  )
+  /**
+   * The conflict editor renders in two places   the sidebar body and the
+   * fullscreen modal   and each mount reports its own controller and status.
+   * The panel keeps only the surface that is on screen: the modal's content
+   * outlives its close until bits-ui's exit check runs a frame later, so the
+   * fullscreen view's teardown would otherwise land after the sidebar view has
+   * registered and leave the sidebar's save button and chord without a
+   * controller. Tagging each report with its surface lets a stale teardown be
+   * recognised and dropped.
+   */
+  type ConflictSurface = 'sidebar' | 'fullscreen'
+  let conflictSurface = $state<ConflictSurface | null>(null)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({
     canSave: false,
+    canSaveDraft: false,
     dirty: false,
     saving: false
   })
-  let fullscreenExplorerOpen = $state(false)
+  /** What the save chord does for a conflicted file right now: the draft lands
+   *  first, and only a press with no draft left to write marks the file
+   *  resolved. The panel's own save controls always mark it resolved. */
+  let conflictStep = $derived(conflictSaveStep(conflictStatus))
+  /** The panel's save controls mark the file resolved, which needs every
+   *  conflict block resolved. It does not need a draft write first. */
+  let conflictSaveReady = $derived(conflictStatus.canSave)
+  let conflictSaveText = $derived(conflictSaveActionLabels.resolve)
+  let conflictSaveTitle = $derived(conflictSaveActionTitle('resolve'))
+  let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
   let deleteTargetPath = $state<string | null>(null)
+  /** The file a Reload confirmation is open for, or null. */
+  let reloadConfirmPath = $state<string | null>(null)
+  let reloadConfirmTitle = $derived(
+    reloadConfirmPath === null
+      ? ''
+      : `Discard unsaved changes to ${reloadConfirmPath} and reload it?`
+  )
+  let info = $state<ProjectFileInfo | null>(null)
   let mutationPending = $state(false)
   let goToLineOpen = $state(false)
   let goToLineFocusTrigger = $state(0)
@@ -393,26 +364,92 @@
   let activeCheckpointPaths = $state<string[]>([])
   let lastTurnRequest = 0
 
-  $effect(() => {
-    const request = projectState.fullscreenRequest
-    if (request <= handledFullscreenRequest) return
-    handledFullscreenRequest = request
-    fullscreenOpen = true
-    if (gitState.conflictsMode) fullscreenExplorerOpen = true
-  })
+  function openFullscreen(): void {
+    // The editor's `open` is derived from the store, so this is the whole
+    // transition: no local mirror to keep in step.
+    projectFilesWorkspace.requestFullscreen(projectId)
+  }
 
-  function handleConflictController(next: ConflictResolutionController | null): void {
+  /** Show the File info dialog (the same one the file tree's context menu
+   *  opens) for the active file. */
+  async function showActiveFileInfo(): Promise<void> {
+    if (!activeTab) return
+    try {
+      info = await projectFilesWorkspace.fileInfo(projectId, activeTab.path)
+    } catch (error) {
+      reportError(error, 'File information is unavailable')
+    }
+  }
+
+  function closeFullscreen(): void {
+    fullscreenOpen = false
+    projectFilesWorkspace.setFullscreenActive(projectId, false)
+  }
+
+  function handleConflictController(
+    surface: ConflictSurface,
+    next: ConflictResolutionController | null
+  ): void {
+    if (next === null) {
+      // Only the surface holding the slot may clear it. The fullscreen editor's
+      // teardown arrives after the sidebar editor is already live, and clearing
+      // the slot then is what left the sidebar's save button doing nothing.
+      if (conflictSurface !== surface) return
+      conflictSurface = null
+      conflictController = null
+      conflictStatus = { canSave: false, canSaveDraft: false, dirty: false, saving: false }
+      return
+    }
+    conflictSurface = surface
     conflictController = next
   }
 
-  function handleConflictStatus(next: ConflictResolutionStatus): void {
+  function handleConflictStatus(surface: ConflictSurface, next: ConflictResolutionStatus): void {
+    // A status from a surface that no longer owns the slot is stale: the view
+    // it describes is either closing or off screen.
+    if (conflictSurface !== surface) return
     conflictStatus = next
   }
 
+  /** What the panel's save button runs for a conflicted file: it marks the file
+   *  resolved directly. Saving a draft is the conflict editor's own button. */
+  async function resolveActiveConflict(): Promise<void> {
+    await conflictController?.save()
+  }
+
+  /**
+   * The merge editor's size notice hands the file over: the tab renders its raw
+   * source, and the file tree opens on the file so the hand-over is visible
+   * rather than implied. The editor's Save then writes the cleared content and
+   * stages the file through the ordinary conflicted-save reconcile.
+   */
+  async function openRawConflictSource(): Promise<void> {
+    const tab = activeTab
+    if (!tab || tab.origin !== 'working') return
+    rawConflictTab = tab
+    await projectFilesWorkspace.revealFile(projectId, tab.path)
+  }
+
+  function runPanelSave(): void {
+    if (activeFileInMergeEditor) {
+      void resolveActiveConflict()
+      return
+    }
+    void saveActiveFile()
+  }
+
+  /** Save the active tab. The Cmd/Ctrl+S chord for a conflicted file keeps a
+   *  rule of its own: it writes the resolved progress as a draft first, and only
+   *  a press with no draft left to write marks the file resolved, so one press
+   *  cannot stage a file whose progress the scratch file has not seen. */
   async function saveActiveFile(): Promise<void> {
     if (!activeTab) return
-    if (activePathIsConflicted) {
-      await conflictController?.save()
+    if (activeFileInMergeEditor) {
+      if (conflictStep === 'draft') {
+        await conflictController?.saveDraft()
+        return
+      }
+      if (conflictStep === 'resolve') await conflictController?.save()
       return
     }
     await projectFilesWorkspace.save(projectId, activeTab.path)
@@ -466,8 +503,7 @@
 
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if (
-      (event.metaKey || event.ctrlKey) &&
-      event.key.toLowerCase() === 'g' &&
+      keymapState.matches('files-goto-line', event) &&
       activeTab &&
       (activeSession || deletedAtCheckpoint)
     ) {
@@ -479,15 +515,25 @@
       goToLineFocusTrigger += 1
       return
     }
+    if (keymapState.matches('files-save', event) && conflictController !== null) {
+      // The conflict editor owns the chord while it is mounted, even when there
+      // is nothing to save yet: consuming it keeps the press from falling
+      // through to the workspace's left-sidebar toggle underneath the user.
+      // Holding the key never escalates either, so a repeat press cannot mark
+      // the file resolved while the draft write is still settling.
+      event.preventDefault()
+      if (event.repeat || conflictStatus.saving || conflictStep === 'none') return
+      void saveActiveFile()
+      return
+    }
     if (
-      (event.metaKey || event.ctrlKey) &&
-      event.key.toLowerCase() === 's' &&
+      keymapState.matches('files-save', event) &&
       activeTab &&
       activeTab.view !== 'diff' &&
-      (activePathIsConflicted || activeSession) &&
-      (activePathIsConflicted ? conflictStatus.canSave : dirty) &&
+      activeSession &&
+      dirty &&
       !deletedAtCheckpoint &&
-      !(activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)
+      !activeSession.saving
     ) {
       event.preventDefault()
       void saveActiveFile()
@@ -519,36 +565,78 @@
       }
       return
     }
-    if (dirty && !window.confirm(`Discard unsaved changes to ${activeTab.path} and reload it?`)) {
+    if (dirty) {
+      reloadConfirmPath = activeTab.path
       return
     }
     void projectFilesWorkspace.reload(projectId, activeTab.path)
   }
 
-  function fullscreenOpenFile(path: string): void {
-    if (path === activeTab?.path) return
+  /** Reload the file the confirmation was raised for, now that the user accepted
+   *  losing the draft. The path is captured at request time, so the reload never
+   *  follows a tab the user switched to while the dialog was open. */
+  function discardAndReloadSelected(): void {
+    const path = reloadConfirmPath
+    reloadConfirmPath = null
+    if (path === null) return
+    void projectFilesWorkspace.reload(projectId, path)
+  }
+
+  /** Reformat the active file's draft in place. The result is left unsaved on
+   *  purpose: the tab goes dirty, the Save button lights up, and the editor's own
+   *  history keeps the previous layout one undo away. */
+  function beautifyActiveFile(): void {
+    if (!activeTab || !activeSession) return
+    const label = fileBeautifyLabel(activeTab.path)
+    if (label === null) return
+    const outcome = beautifyFileContent(activeTab.path, activeSession.draft)
+    if (outcome.status === 'invalid') {
+      toast.error(`${label} could not be beautified`, { description: outcome.message })
+      return
+    }
+    if (outcome.status === 'unchanged') {
+      toast.info(`${label} is already beautified`)
+      return
+    }
+    if (outcome.status !== 'formatted') return
+    projectFilesWorkspace.updateDraft(projectId, activeTab.path, outcome.text)
+    // The document changed under the find bar, so its match count is stale.
+    editorFind.rescan()
+    toast.success(`${label} beautified`, { description: 'Save the file to keep the change.' })
+  }
+
+  function keepFullscreenOpen(): void {
+    if (fullscreenOpen) projectFilesWorkspace.requestFullscreen(projectId)
+  }
+
+  function focusFullscreenFileTab(sidebarId: string): void {
+    keepFullscreenOpen()
+    contextSidebarState.focus(sidebarId)
+  }
+
+  function fullscreenOpenFile(path: string, mode: 'normal' | 'preview' = 'preview'): void {
+    if (path === activeTab?.path) {
+      if (mode === 'normal') {
+        keepFullscreenOpen()
+        void projectFilesWorkspace.openFile(projectId, path)
+      }
+      return
+    }
     // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
     // switch to the new file's diff in place.
     if (activeTab?.checkpointId && activeCheckpointPaths.includes(path)) {
+      keepFullscreenOpen()
       void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
       return
     }
-    if (!activeTab) {
-      void projectFilesWorkspace.openFile(projectId, path)
-      return
-    }
-    if (dirty) {
-      fullscreenPendingPath = path
-      return
-    }
-    const currentPath = activeTab.path
-    contextSidebarState.updateProjectFileMapping(
-      projectId,
-      `working:${currentPath}`,
-      `working:${path}`,
-      path
-    )
-    void projectFilesWorkspace.swapFileSilent(projectId, currentPath, path)
+    // Match the sidebar's single-click behavior: a normal active file stays
+    // open, while the selected file becomes a preview tab that can be pinned
+    // by opening it normally. The fullscreen request survives the context-tab
+    // remount caused by focusing that new tab.
+    keepFullscreenOpen()
+    void (mode === 'normal'
+      ? projectFilesWorkspace.openFile(projectId, path)
+      : projectFilesWorkspace.openFilePreview(projectId, path))
   }
 
   async function confirmFullscreenSaveAndNavigate(): Promise<void> {
@@ -566,10 +654,6 @@
     void projectFilesWorkspace.swapFileSilent(projectId, currentPath, path)
   }
 
-  function cancelFullscreenNavigate(): void {
-    fullscreenPendingPath = null
-  }
-
   function revealBreadcrumb(index: number): void {
     const directory = index < 0 ? '' : breadcrumbParts.slice(0, index + 1).join('/')
     void projectFilesWorkspace.revealDirectory(projectId, directory)
@@ -582,7 +666,7 @@
       projectId,
       activeTab.path,
       workspaceState.activeScopeBucketIdFor(projectId),
-      chatThreadId ?? undefined
+      mountThreadId ?? undefined
     )
   }
 
@@ -610,15 +694,10 @@
       await projectFilesWorkspace.renameFile(projectId, target.path, name)
       renameTarget = null
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file could not be renamed')
+      reportError(error, 'The file could not be renamed')
     } finally {
       mutationPending = false
     }
-  }
-
-  function handleRenameSubmit(event: SubmitEvent): void {
-    event.preventDefault()
-    void renameSelected()
   }
 
   async function deleteSelected(): Promise<void> {
@@ -628,93 +707,75 @@
     try {
       await projectFilesWorkspace.deleteFile(projectId, target)
       deleteTargetPath = null
-      fullscreenOpen = false
+      closeFullscreen()
       toast.success('File moved to Trash')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The file could not be deleted')
+      reportError(error, 'The file could not be deleted')
     } finally {
       mutationPending = false
     }
   }
 
-  let editorFindValue = $state('')
-  let editorFindActive = $state(0)
-  let editorFindTotal = $state(0)
-  let editorFindNonce = $state(0)
-  let editorReplaceValue = $state('')
-  let editorReplaceAction = $state<'one' | 'all'>('one')
-  let editorReplaceNonce = $state(0)
-  let editorReplaceRequest = $derived<{ nonce: number; action: 'one' | 'all'; query: string; replacement: string } | null>(
-    editorReplaceNonce === 0
-      ? null
-      : {
-          nonce: editorReplaceNonce,
-          action: editorReplaceAction,
-          query: editorFindValue,
-          replacement: editorReplaceValue
-        }
-  )
+  const editorFind = new ProjectFilesPanelFind()
 
-  function closeEditorFind(): void {
-    findNavState.closeEditorFind()
-    editorFindValue = ''
-    editorFindActive = 0
-    editorFindTotal = 0
-  }
-
-  function handleEditorFindQuery(query: string): void {
-    editorFindValue = query
-    editorFindActive = 0
-    editorFindTotal = 0
-    findNavState.editorFindQuery = query
-    findNavState.editorFindActiveIndex = 0
-    findNavState.editorFindMatches = 0
-    findNavState.editorFindOpen = true
-  }
-
-  function handleEditorFindMatches(matches: number): void {
-    editorFindTotal = matches
-    findNavState.editorFindMatches = matches
-  }
-
-  function editorFindNext(): void {
-    if (editorFindTotal === 0) return
-    const next = (editorFindActive + 1) % editorFindTotal
-    editorFindActive = next
-    findNavState.editorFindActiveIndex = next
-  }
-
-  function editorFindPrev(): void {
-    if (editorFindTotal === 0) return
-    const prev = (editorFindActive - 1 + editorFindTotal) % editorFindTotal
-    editorFindActive = prev
-    findNavState.editorFindActiveIndex = prev
-  }
-
-  function replaceOneInEditor(): void {
-    if (!editorFindValue || editorFindTotal === 0) return
-    editorReplaceAction = 'one'
-    editorReplaceNonce += 1
-  }
-
-  function replaceAllInEditor(): void {
-    if (!editorFindValue || editorFindTotal === 0) return
-    editorReplaceAction = 'all'
-    editorReplaceNonce += 1
-  }
-
-  function handleEditorReplaceDone(replaced: number): void {
-    if (replaced === 0) return
-    editorFindActive = 0
-    findNavState.editorFindActiveIndex = 0
-    // Force the editor to re-scan matches after the document changed.
-    editorFindNonce += 1
-  }
+  /**
+   * Clear the one-shot requests and matches the panel hands its editor when the
+   * file on screen changes.
+   *
+   * This panel no longer remounts on a sidebar file-tab switch (see the files
+   * panel key in `WorkspaceContextPanelContent`), so what its remount used to
+   * reset has to be reset here. A `replaceRequest` or an undo/redo request left
+   * over from the previous file would be applied by the editor that mounts for
+   * the new one, because that editor's handled-nonce counters start at zero.
+   *
+   * The active file tab is the trigger and not the sidebar tab: a swap that
+   * keeps the sidebar tab (the full screen "save and continue" hand-over rewrites
+   * its file mapping in place, and `swapFileSilent` retitles the tab) still
+   * changes the file the editor is showing.
+   *
+   * `$effect.pre` and not `$effect`: it has to land before the DOM updates in
+   * the new editor. Svelte flushes every `$effect.pre` before any `$effect`, and
+   * `ProjectTextEditor` reads these requests inside effects.
+   *
+   * Writing these back to their empty state is the point, so this is a reset and
+   * not a value kept in step: the requests are raised by user actions, and an
+   * identity check keeps it from firing on anything but the file changing.
+   */
+  let requestTabId: string | null = null
+  $effect.pre(() => {
+    const nextTabId = activeTab?.id ?? null
+    if (nextTabId === requestTabId) return
+    requestTabId = nextTabId
+    editRequest = null
+    editorFind.reset()
+    goToLineOpen = false
+  })
 
   function submitGoToLine(line: number): void {
     if (!activeTab) return
     goToLineOpen = false
     projectFilesWorkspace.focusLine(projectId, activeTab.id, line)
+  }
+
+  /** Open file tabs for this project, so the fullscreen viewer can show the
+   *  same tab strip as the sidebar instead of only the active file. */
+  let fullscreenFileTabs = $derived(
+    contextSidebarState.tabs.filter(
+      (tab): tab is FilesContextTab =>
+        tab.kind === 'files' && tab.projectId === projectId && tab.fileTabId !== null
+    )
+  )
+
+  function closeFullscreenFileTab(sidebarId: string, fileTabId: string): void {
+    const fileTab = projectState.tabs.find((candidate) => candidate.id === fileTabId)
+    const session = fileTab ? projectState.sessions[fileTab.path] : undefined
+    if (fileTab && session && session.draft !== session.source.content) {
+      contextSidebarState.focus(sidebarId)
+      toast.info('Unsaved changes', { description: 'Save the file before closing its tab.' })
+      return
+    }
+    projectFilesWorkspace.closeTab(projectId, fileTabId)
+    contextSidebarState.close(sidebarId)
   }
 </script>
 
@@ -723,7 +784,10 @@
 {#snippet staleVersionAlert(positionClass: string)}
   {#if staleSession}
     <div
-      class={['absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg', positionClass]}
+      class={[
+        'absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 shadow-lg',
+        positionClass
+      ]}
       role="alert"
     >
       <TriangleAlert size={13} class="shrink-0 text-warning" />
@@ -741,6 +805,7 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col bg-app">
+  <StalePanelNotice stale={scopeStale} />
   <div class="flex min-h-0 flex-1">
     <section
       class="relative flex min-h-0 min-w-0 flex-1 flex-col"
@@ -756,13 +821,20 @@
           <button
             type="button"
             class="shrink-0"
-            title="Show project root"
+            title={routineRoot ? projectName : 'Show project root'}
             onclick={() => revealBreadcrumb(-1)}
           >
             {#if projectIconUrl}
               <img src={projectIconUrl} alt={projectName} class="h-4 w-4 shrink-0" />
+            {:else if routineRoot}
+              <RoutineDefaultIcon
+                size={14}
+                strokeWidth={1.8}
+                class="shrink-0"
+                style="color: {projectAccentColor ?? 'var(--color-primary)'}"
+              />
             {:else}
-              <span class="font-medium hover:text-foreground">{projectName}</span>
+              <span class="font-medium hover:text-foreground">{projectLabel}</span>
             {/if}
           </button>
           {#each breadcrumbParts as part, index (`${part}:${index}`)}
@@ -804,114 +876,41 @@
       </div>
 
       {#if activeTab}
-        <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
-              activeTab.view === 'diff'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Show file diff"
-            aria-pressed={activeTab.view === 'diff'}
-            title="Diff"
-            disabled={!checkpointDiff}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'diff')}
-          >
-            <FileDiff size={12} />
-          </button>
-          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
-            <button
-              type="button"
-              class={[
-                'flex h-6 w-6 items-center justify-center rounded transition-colors',
-                activeTab.view === 'preview'
-                  ? 'bg-overlay text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'
-              ]}
-              aria-label={`Preview ${previewKindLabel}`}
-              aria-pressed={activeTab.view === 'preview'}
-              title={`${previewKindLabel} preview`}
-              onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
-            >
-              <Eye size={12} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors',
-              activeTab.view === 'source'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Edit source"
-            aria-pressed={activeTab.view === 'source'}
-            title={deletedAtCheckpoint ? 'View deleted source' : 'Edit source'}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'source')}
-          >
-            <Code2 size={12} />
-          </button>
-          {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
-          {/if}
-          {#if diffStats}
-            <span
-              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
-              aria-label="Added lines">+{diffStats.additions}</span
-            >
-            <span
-              class="font-mono text-[0.625rem] tabular-nums text-danger"
-              aria-label="Deleted lines">−{diffStats.deletions}</span
-            >
-            {#if checkpointDiff?.truncated}
-              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
-                >Truncated</span
-              >
-            {/if}
-            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
-          {/if}
-          <span class="flex-1"></span>
-          <ProjectFileViewerMenu
-            diffView={activeTab.view === 'diff'}
-            lineNumbers={showLineNumbers}
-            wrap={wrapLines}
-            reloadDisabled={reloadDisabled}
-            mutationDisabled={deletedAtCheckpoint || mutationPending}
-            showUndoRedo={canUndoRedo}
-            onUndo={() => requestEdit('undo')}
-            onRedo={() => requestEdit('redo')}
-            onReload={reloadSelected}
-            onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => wrapTextState.toggle()}
-            onFullscreen={() => (fullscreenOpen = true)}
-            onRename={startRename}
-            onDelete={() => (deleteTargetPath = activeTab.path)}
-          />
-          {#if showSaveButton}
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-              disabled={deletedAtCheckpoint ||
-                (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
-                (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-              aria-label={activePathIsConflicted
-                ? 'Replace the original file and mark it resolved'
-                : 'Save file (Cmd/Ctrl+S)'}
-              title={activePathIsConflicted
-                ? 'Replace the original file and mark it resolved'
-                : 'Save file (Cmd/Ctrl+S)'}
-              onclick={() => void saveActiveFile()}
-            >
-              {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
-                <Loader2 size={11} class="animate-spin" />
-              {:else}
-                <Save size={11} />
-              {/if}
-            </button>
-          {/if}
-        </div>
+        <ProjectFilesPanelToolbar
+          {activeTab}
+          {checkpointDiff}
+          {diffStats}
+          {previewKindLabel}
+          showPreviewToggle={hasAnyPreview(previewFlags)}
+          {deletedAtCheckpoint}
+          showUndoRedo={canUndoRedo}
+          {reloadDisabled}
+          mutationDisabled={deletedAtCheckpoint || mutationPending}
+          {showLineNumbers}
+          {wrapLines}
+          {beautifyLabel}
+          {showSaveButton}
+          saveDisabled={deletedAtCheckpoint ||
+            (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
+            (activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving))}
+          saving={activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving)}
+          saveLabel={activeFileInMergeEditor ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
+          saveTitle={activeFileInMergeEditor ? conflictSaveTitle : undefined}
+          fullscreen={false}
+          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          onInfo={() => void showActiveFileInfo()}
+          infoDisabled={deletedAtCheckpoint}
+          onUndo={() => requestEdit('undo')}
+          onRedo={() => requestEdit('redo')}
+          onReload={reloadSelected}
+          onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
+          onToggleWrap={() => wrapTextState.toggle()}
+          onBeautify={beautifyActiveFile}
+          onFullscreen={openFullscreen}
+          onRename={startRename}
+          onDelete={() => (deleteTargetPath = activeTab.path)}
+          onSave={runPanelSave}
+        />
       {/if}
 
       {@render staleVersionAlert('top-[4.5rem]')}
@@ -926,21 +925,21 @@
 
       {#if findNavState.editorFindOpen && !fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
         <FindInBar
-          query={editorFindValue}
-          matches={editorFindTotal}
-          activeIndex={editorFindActive}
+          query={editorFind.value}
+          matches={editorFind.total}
+          activeIndex={editorFind.active}
           label="Find in file"
           floating
           focusTrigger={findNavState.editorFindFocusTrigger}
-          onQueryChange={handleEditorFindQuery}
+          onQueryChange={(query) => editorFind.setQuery(query)}
           enableReplace={!deletedAtCheckpoint}
-          replaceValue={editorReplaceValue}
-          onReplaceChange={(value) => (editorReplaceValue = value)}
-          onReplaceOne={replaceOneInEditor}
-          onReplaceAll={replaceAllInEditor}
-          onNext={editorFindNext}
-          onPrev={editorFindPrev}
-          onClose={closeEditorFind}
+          replaceValue={editorFind.replaceValue}
+          onReplaceChange={(value) => (editorFind.replaceValue = value)}
+          onReplaceOne={() => editorFind.replaceOne()}
+          onReplaceAll={() => editorFind.replaceAll()}
+          onNext={() => editorFind.next()}
+          onPrev={() => editorFind.prev()}
+          onClose={() => editorFind.close()}
         />
       {:else if goToLineOpen && !fullscreenOpen && activeTab}
         <GoToLine
@@ -999,64 +998,21 @@
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
         <FileDiffView diff={checkpointDiff} />
-      {:else if activeTab.view === 'preview' && markdown}
-        <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-          <MarkdownView text={visibleContent} class="text-sm text-foreground" />
-        </div>
-      {:else if activeTab.view === 'preview' && htmlPreview}
-        <div class="min-h-0 flex-1 bg-surface">
-          {#if htmlPreviewSrcdoc}
-            <iframe
-              srcdoc={htmlPreviewSrcdoc}
-              sandbox=""
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && pdf}
-        <div class="min-h-0 flex-1 overflow-auto">
-          {#if previewUrl}
-            <iframe
-              src={previewUrl}
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && documentPreview}
-        <div class="min-h-0 flex-1 overflow-auto bg-surface">
-          {#if documentLoading}
-            <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
-              <Loader2 size={16} class="animate-spin" />
-              <span class="sr-only">Loading document preview</span>
-            </div>
-          {:else if documentHtml}
-            <iframe
-              srcdoc={documentHtml}
-              sandbox=""
-              class="h-full w-full border-0"
-              title={`Preview ${activeTab.path}`}
-            ></iframe>
-          {:else if documentFailed}
-            <div
-              class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
-              role="status"
-            >
-              <FileQuestion size={24} />
-              <span class="text-xs">This document could not be previewed</span>
-              {#if documentError}
-                <span class="max-w-md text-center text-[0.625rem] break-words text-danger">
-                  {documentError}
-                </span>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else if activeTab.view === 'preview' && image}
-        <FileImagePreview src={imagePreviewSrc} alt={activeTab.path} failed={imagePreviewFailed} />
-      {:else if activeTab.view === 'preview' && (video || audio)}
-        <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
+      {:else if activeTab.view === 'preview' && hasAnyPreview(previewFlags)}
+        <ProjectFilesPanelPreviewPane
+          path={activeTab.path}
+          flags={previewFlags}
+          {visibleContent}
+          {htmlPreviewSrcdoc}
+          {previewUrl}
+          {imagePreviewSrc}
+          {imagePreviewFailed}
+          documentLoading={docPreview.loading}
+          documentHtml={docPreview.html}
+          documentFailed={docPreview.failed}
+          documentError={docPreview.error}
+          showDocumentError
+        />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
@@ -1090,15 +1046,16 @@
             </button>
           </div>
         {/if}
-      {:else if activePathIsConflicted && activeTab}
+      {:else if activeFileInMergeEditor && activeTab}
         {#if !fullscreenOpen}
           <ConflictResolutionView
             {projectId}
             path={activeTab.path}
             wrap={wrapLines}
             onToggleWrap={() => wrapTextState.toggle()}
-            onControllerChange={handleConflictController}
-            onStatusChange={handleConflictStatus}
+            onControllerChange={(next) => handleConflictController('sidebar', next)}
+            onStatusChange={(next) => handleConflictStatus('sidebar', next)}
+            onOpenOriginal={() => void openRawConflictSource()}
           />
         {/if}
       {:else if activeSession || deletedAtCheckpoint}
@@ -1111,15 +1068,15 @@
             spellcheck={markdown}
             {showLineNumbers}
             wrap={wrapLines}
-            findQuery={findNavState.editorFindOpen && !fullscreenOpen ? editorFindValue : ''}
-            findActiveIndex={editorFindActive}
-            findNonce={editorFindNonce}
-            replaceRequest={editorReplaceRequest}
+            findQuery={findNavState.editorFindOpen && !fullscreenOpen ? editorFind.value : ''}
+            findActiveIndex={editorFind.active}
+            findNonce={editorFind.nonce}
+            replaceRequest={editorFind.replaceRequest}
             {editRequest}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
-            onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
-            onReplaceDone={handleEditorReplaceDone}
+            onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
+            onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
             onInput={handleEditorInput}
           />
         {/key}
@@ -1134,6 +1091,10 @@
         <ProjectFileExplorer
           {projectId}
           {projectName}
+          {projectLabel}
+          {projectIconUrl}
+          {routineRoot}
+          {projectAccentColor}
           {projectState}
           onWidthChange={(width, persist) =>
             projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
@@ -1150,277 +1111,239 @@
   </div>
 </div>
 
-<Dialog.Root bind:open={fullscreenOpen}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-    <Dialog.Content
-      class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
-    >
-      <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-        style={trafficLightInsetStyle()}
+<Modal
+  open={fullscreenOpen}
+  title={activeTab?.path ?? 'File'}
+  description={activeTab?.view === 'diff' ? 'Fullscreen file diff' : 'Fullscreen file editor'}
+  onClose={closeFullscreen}
+  placement="fullscreen"
+  chrome={false}
+  panelClass="bg-app"
+>
+  <div
+    class="titlebar-drag flex h-12 shrink-0 items-center gap-0 border-b border-border"
+    style={trafficLightInsetStyle()}
+  >
+    <div class="titlebar-no-drag flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+      <FileTypeIcon path={activeTab?.path ?? 'file'} size={14} />
+      <span
+        class="relative top-px min-w-0 max-w-[35%] shrink-0 truncate text-[0.6875rem] font-semibold leading-none text-foreground"
       >
-        <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-          {activeTab?.path ?? 'File'}
-        </Dialog.Title>
-        <Dialog.Description class="sr-only">
-          {activeTab?.view === 'diff' ? 'Fullscreen file diff' : 'Fullscreen file editor'}
-        </Dialog.Description>
-        {#if showSaveButton}
-          <button
-            type="button"
-            class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-            disabled={deletedAtCheckpoint ||
-              (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
-              (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
-            title={activePathIsConflicted
-              ? 'Replace the original file and mark it resolved'
-              : 'Save file (Cmd/Ctrl+S)'}
-            onclick={() => void saveActiveFile()}
-          >
-            {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
-              <Loader2 size={11} class="animate-spin" />
-            {:else}
-              <Save size={11} />
-            {/if}
-            {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
-          </button>
-        {/if}
-        <button
-          type="button"
-          class={[
-            'titlebar-no-drag flex h-7 w-7 items-center justify-center rounded transition-colors',
-            fullscreenExplorerOpen
-              ? 'bg-overlay text-primary'
-              : 'text-dimmed hover:bg-elevated hover:text-foreground'
-          ]}
-          aria-label={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
-          aria-pressed={fullscreenExplorerOpen}
-          title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
-          onclick={() => (fullscreenExplorerOpen = !fullscreenExplorerOpen)}
-        >
-          <FolderTree size={15} />
-        </button>
-        <Dialog.Close
-          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Minimize fullscreen file viewer"
-          title="Minimize fullscreen file viewer"
-        >
-          <Minimize2 size={14} />
-        </Dialog.Close>
-      </div>
-      {#if activeTab && !activePathIsConflicted}
-        <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
-          <button
-            type="button"
+        {activeTab?.path ?? 'File'}
+      </span>
+    </div>
+    {#if fullscreenFileTabs.length > 1}
+      <div
+        class="titlebar-no-drag ml-auto flex min-w-0 max-w-[65%] items-center gap-0 overflow-x-auto"
+        role="tablist"
+        aria-label="Open files"
+      >
+        {#each fullscreenFileTabs as fileTab (fileTab.id)}
+          {@const fileSession = fileTab.path ? (projectState.sessions[fileTab.path] ?? null) : null}
+          {@const fileDirty = Boolean(
+            fileSession && fileSession.draft !== fileSession.source.content
+          )}
+          <div
             class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
-              activeTab.view === 'diff'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
+              'group flex min-w-0 max-w-52 shrink-0 items-center rounded-md',
+              contextTab?.id === fileTab.id
+                ? 'bg-elevated text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'
             ]}
-            aria-label="Show file diff"
-            aria-pressed={activeTab.view === 'diff'}
-            title="Diff"
-            disabled={!checkpointDiff}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'diff')}
+            role="tab"
+            aria-selected={contextTab?.id === fileTab.id}
           >
-            <FileDiff size={12} />
-          </button>
-          {#if markdown || htmlPreview || pdf || image || video || audio || documentPreview}
             <button
               type="button"
-              class={[
-                'flex h-6 w-6 items-center justify-center rounded transition-colors',
-                activeTab.view === 'preview'
-                  ? 'bg-overlay text-foreground'
-                  : 'text-dimmed hover:bg-elevated hover:text-foreground'
-              ]}
-              aria-label={`Preview ${previewKindLabel}`}
-              aria-pressed={activeTab.view === 'preview'}
-              title={`${previewKindLabel} preview`}
-              onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'preview')}
+              data-active={contextTab?.id === fileTab.id ? 'true' : undefined}
+              class="flex min-w-0 items-center gap-1.5 py-1.5 pl-2 text-left"
+              title={fileTab.path ?? fileTab.title}
+              onclick={() => focusFullscreenFileTab(fileTab.id)}
             >
-              <Eye size={12} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class={[
-              'flex h-6 w-6 items-center justify-center rounded transition-colors',
-              activeTab.view === 'source'
-                ? 'bg-overlay text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'
-            ]}
-            aria-label="Edit source"
-            aria-pressed={activeTab.view === 'source'}
-            title={deletedAtCheckpoint ? 'View deleted source' : 'Edit source'}
-            onclick={() => projectFilesWorkspace.setView(projectId, activeTab.id, 'source')}
-          >
-            <Code2 size={12} />
-          </button>
-          {#if deletedAtCheckpoint}
-            <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
-          {/if}
-          {#if diffStats}
-            <span
-              class="ml-1 font-mono text-[0.625rem] tabular-nums text-success"
-              aria-label="Added lines">+{diffStats.additions}</span
-            >
-            <span
-              class="font-mono text-[0.625rem] tabular-nums text-danger"
-              aria-label="Deleted lines">−{diffStats.deletions}</span
-            >
-            {#if checkpointDiff?.truncated}
-              <span class="text-[0.5625rem] text-warning" title="Preview truncated at 64 KiB"
-                >Truncated</span
+              <FileTypeIcon path={fileTab.path ?? fileTab.title} size={12} />
+              <span
+                class={[
+                  'max-w-40 truncate text-[0.6875rem] font-medium',
+                  fileTab.preview ? 'italic' : ''
+                ]}>{fileTab.title}</span
               >
+              {#if fileDirty}
+                <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"
+                ></span>
+              {/if}
+            </button>
+            {#if fileTab.fileTabId}
+              <button
+                type="button"
+                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                aria-label={`Close ${fileTab.title}`}
+                title={`Close ${fileTab.title}`}
+                onclick={() =>
+                  fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
+              >
+                <X size={11} />
+              </button>
             {/if}
-            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
-          {/if}
-          <span class="flex-1"></span>
-          <ProjectFileViewerMenu
-            diffView={activeTab.view === 'diff'}
-            lineNumbers={showLineNumbers}
-            wrap={wrapLines}
-            reloadDisabled={reloadDisabled}
-            mutationDisabled={deletedAtCheckpoint || mutationPending}
-            showUndoRedo={canUndoRedo}
-            onUndo={() => requestEdit('undo')}
-            onRedo={() => requestEdit('redo')}
-            hideFullscreen
-            onReload={reloadSelected}
-            onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => wrapTextState.toggle()}
-            onFullscreen={() => (fullscreenOpen = true)}
-            onRename={startRename}
-            onDelete={() => (deleteTargetPath = activeTab.path)}
-          />
-        </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    {#if showSaveButton}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        disabled={deletedAtCheckpoint ||
+          (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
+          (activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving)}
+        title={activeFileInMergeEditor ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
+        onclick={runPanelSave}
+      >
+        {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <Save size={11} />
+        {/if}
+        {#if activeFileInMergeEditor}
+          {conflictSaveText}
+        {:else}Save{/if}
+      </button>
+    {/if}
+    <button
+      type="button"
+      class={[
+        'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded transition-colors',
+        fullscreenExplorerOpen
+          ? 'bg-overlay text-primary'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
+      aria-pressed={fullscreenExplorerOpen}
+      title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
+      onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
+    >
+      <FolderTree size={15} />
+    </button>
+    <button
+      type="button"
+      class="titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label="Minimize fullscreen file viewer"
+      title="Minimize fullscreen file viewer"
+      onclick={closeFullscreen}
+    >
+      <Minimize2 size={14} />
+    </button>
+  </div>
+  <div class="relative flex min-h-0 min-w-0 flex-1">
+    <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      {#if activeTab && !activeFileInMergeEditor}
+        <ProjectFilesPanelToolbar
+          {activeTab}
+          {checkpointDiff}
+          {diffStats}
+          {previewKindLabel}
+          showPreviewToggle={hasAnyPreview(previewFlags)}
+          {deletedAtCheckpoint}
+          showUndoRedo={canUndoRedo}
+          {reloadDisabled}
+          mutationDisabled={deletedAtCheckpoint || mutationPending}
+          {showLineNumbers}
+          {wrapLines}
+          {beautifyLabel}
+          showSaveButton={false}
+          saveDisabled
+          saving={false}
+          saveLabel=""
+          fullscreen
+          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          onInfo={() => void showActiveFileInfo()}
+          infoDisabled={deletedAtCheckpoint}
+          onUndo={() => requestEdit('undo')}
+          onRedo={() => requestEdit('redo')}
+          onReload={reloadSelected}
+          onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
+          onToggleWrap={() => wrapTextState.toggle()}
+          onBeautify={beautifyActiveFile}
+          onFullscreen={openFullscreen}
+          onRename={startRename}
+          onDelete={() => (deleteTargetPath = activeTab.path)}
+          onSave={runPanelSave}
+        />
       {/if}
-      <div class="relative flex min-h-0 min-w-0 flex-1">
-        {@render staleVersionAlert('top-2')}
-        <div
-          class="relative flex min-h-0 min-w-0 flex-1 flex-col"
-          data-region="editor"
-          data-find-active={fullscreenOpen ? 'true' : undefined}
-        >
-          {#if findNavState.editorFindOpen && fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
-            <FindInBar
-              query={editorFindValue}
-              matches={editorFindTotal}
-              activeIndex={editorFindActive}
-              label="Find in file"
-              floating
-              focusTrigger={findNavState.editorFindFocusTrigger}
-              onQueryChange={handleEditorFindQuery}
-              enableReplace={!deletedAtCheckpoint}
-              replaceValue={editorReplaceValue}
-              onReplaceChange={(value) => (editorReplaceValue = value)}
-              onReplaceOne={replaceOneInEditor}
-              onReplaceAll={replaceAllInEditor}
-              onNext={editorFindNext}
-              onPrev={editorFindPrev}
-              onClose={closeEditorFind}
-            />
-          {:else if goToLineOpen && fullscreenOpen && activeTab}
-            <GoToLine
-              maxLine={visibleLineCount}
-              focusTrigger={goToLineFocusTrigger}
-              floating
-              onSubmit={submitGoToLine}
-              onClose={() => (goToLineOpen = false)}
-            />
-          {/if}
-          {#if activeTab?.view === 'diff' && checkpointDiff}
-            <FileDiffView diff={checkpointDiff} />
-          {:else if activeTab?.view === 'preview' && markdown}
-            <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-              <MarkdownView text={visibleContent} class="text-sm text-foreground" />
-            </div>
-          {:else if activeTab?.view === 'preview' && htmlPreview}
-            <div class="min-h-0 flex-1 bg-surface">
-              {#if htmlPreviewSrcdoc}
-                <iframe
-                  srcdoc={htmlPreviewSrcdoc}
-                  sandbox=""
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && pdf}
-            <div class="min-h-0 flex-1 overflow-auto">
-              {#if previewUrl}
-                <iframe
-                  src={previewUrl}
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && documentPreview}
-            <div class="min-h-0 flex-1 overflow-auto bg-surface">
-              {#if documentLoading}
-                <div
-                  class="flex h-full items-center justify-center gap-2 text-dimmed"
-                  role="status"
-                >
-                  <Loader2 size={16} class="animate-spin" />
-                  <span class="sr-only">Loading document preview</span>
-                </div>
-              {:else if documentHtml}
-                <iframe
-                  srcdoc={documentHtml}
-                  sandbox=""
-                  class="h-full w-full border-0"
-                  title={`Preview ${activeTab.path}`}
-                ></iframe>
-              {:else if documentFailed}
-                <div
-                  class="flex h-full flex-col items-center justify-center gap-2 text-dimmed"
-                  role="status"
-                >
-                  <FileQuestion size={24} />
-                  <span class="text-xs">This document could not be previewed</span>
-                </div>
-              {/if}
-            </div>
-          {:else if activeTab?.view === 'preview' && image}
+      {@render staleVersionAlert('top-2')}
+      <div
+        class="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        data-region="editor"
+        data-find-active={fullscreenOpen ? 'true' : undefined}
+      >
+        {#if findNavState.editorFindOpen && fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
+          <FindInBar
+            query={editorFind.value}
+            matches={editorFind.total}
+            activeIndex={editorFind.active}
+            label="Find in file"
+            floating
+            focusTrigger={findNavState.editorFindFocusTrigger}
+            onQueryChange={(query) => editorFind.setQuery(query)}
+            enableReplace={!deletedAtCheckpoint}
+            replaceValue={editorFind.replaceValue}
+            onReplaceChange={(value) => (editorFind.replaceValue = value)}
+            onReplaceOne={() => editorFind.replaceOne()}
+            onReplaceAll={() => editorFind.replaceAll()}
+            onNext={() => editorFind.next()}
+            onPrev={() => editorFind.prev()}
+            onClose={() => editorFind.close()}
+          />
+        {:else if goToLineOpen && fullscreenOpen && activeTab}
+          <GoToLine
+            maxLine={visibleLineCount}
+            focusTrigger={goToLineFocusTrigger}
+            floating
+            onSubmit={submitGoToLine}
+            onClose={() => (goToLineOpen = false)}
+          />
+        {/if}
+        {#if activeTab?.view === 'diff' && checkpointDiff}
+          <FileDiffView diff={checkpointDiff} />
+        {:else if activeTab?.view === 'preview' && hasAnyPreview(previewFlags)}
+          <ProjectFilesPanelPreviewPane
+            path={activeTab.path}
+            flags={previewFlags}
+            {visibleContent}
+            {htmlPreviewSrcdoc}
+            {previewUrl}
+            {imagePreviewSrc}
+            {imagePreviewFailed}
+            documentLoading={docPreview.loading}
+            documentHtml={docPreview.html}
+            documentFailed={docPreview.failed}
+            documentError={docPreview.error}
+            showDocumentError={false}
+          />
+        {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
+          {#if image}
             <FileImagePreview
               src={imagePreviewSrc}
               alt={activeTab.path}
               failed={imagePreviewFailed}
             />
-          {:else if activeTab?.view === 'preview' && (video || audio)}
+          {:else if video || audio}
             <FileMediaPreview
               src={previewUrl}
               alt={activeTab.path}
               kind={video ? 'video' : 'audio'}
             />
-          {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
-            {#if image}
-              <FileImagePreview
-                src={imagePreviewSrc}
-                alt={activeTab.path}
-                failed={imagePreviewFailed}
-              />
-            {:else if video || audio}
-              <FileMediaPreview
-                src={previewUrl}
-                alt={activeTab.path}
-                kind={video ? 'video' : 'audio'}
-              />
-            {:else if activePathIsConflicted && activeTab}
-              <ConflictResolutionView
-                {projectId}
-                path={activeTab.path}
-                wrap={wrapLines}
-                onToggleWrap={() => wrapTextState.toggle()}
-                onControllerChange={handleConflictController}
-                onStatusChange={handleConflictStatus}
-              />
-            {:else}
+          {:else if activeFileInMergeEditor && activeTab}
+            <ConflictResolutionView
+              {projectId}
+              path={activeTab.path}
+              wrap={wrapLines}
+              onToggleWrap={() => wrapTextState.toggle()}
+              onControllerChange={(next) => handleConflictController('fullscreen', next)}
+              onStatusChange={(next) => handleConflictStatus('fullscreen', next)}
+              onOpenOriginal={() => void openRawConflictSource()}
+            />
+          {:else}
+            {#key activeTab.id}
               <ProjectTextEditor
                 value={visibleContent}
                 path={activeTab.path}
@@ -1429,150 +1352,73 @@
                 spellcheck={markdown}
                 {showLineNumbers}
                 wrap={wrapLines}
-                findQuery={findNavState.editorFindOpen ? editorFindValue : ''}
-                findActiveIndex={editorFindActive}
-                findNonce={editorFindNonce}
-                replaceRequest={editorReplaceRequest}
+                findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
+                findActiveIndex={editorFind.active}
+                findNonce={editorFind.nonce}
+                replaceRequest={editorFind.replaceRequest}
                 {editRequest}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
-                onFindMatches={handleEditorFindMatches}
-                onReplaceDone={handleEditorReplaceDone}
+                onFindMatches={(matches) => editorFind.setMatches(matches)}
+                onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
                 onInput={handleEditorInput}
               />
-            {/if}
+            {/key}
           {/if}
-        </div>
-        {#if fullscreenExplorerOpen && activeTab}
-          <div
-            class="min-h-0"
-            transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
-          >
-            <ProjectFileExplorer
-              {projectId}
-              {projectName}
-              {projectState}
-              onWidthChange={(width, persist) =>
-                projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
-              selectedPath={activeTab?.path ?? null}
-              {lastTurnPaths}
-              {activeCheckpointPaths}
-              activeCheckpointId={activeTab?.checkpointId ?? null}
-              conflictPaths={conflictedPaths}
-              {conflictsOnly}
-              onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
-              onFileSelect={fullscreenOpenFile}
-            />
-          </div>
         {/if}
       </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
-
-<AlertDialog.Root
-  bind:open={
-    () => fullscreenPendingPath !== null, (open) => !open && (fullscreenPendingPath = null)
-  }
->
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Unsaved changes
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Save changes to {activeTab?.path} before viewing another file?
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          onclick={cancelFullscreenNavigate}
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          onclick={() => void confirmFullscreenSaveAndNavigate()}
-        >
-          Save
-        </AlertDialog.Action>
+    </div>
+    {#if fullscreenExplorerOpen && activeTab}
+      <div
+        class="min-h-0"
+        transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+      >
+        <ProjectFileExplorer
+          {projectId}
+          {projectName}
+          {projectLabel}
+          {projectIconUrl}
+          {routineRoot}
+          {projectAccentColor}
+          {projectState}
+          onWidthChange={(width, persist) =>
+            projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+          selectedPath={activeTab?.path ?? null}
+          {lastTurnPaths}
+          {activeCheckpointPaths}
+          activeCheckpointId={activeTab?.checkpointId ?? null}
+          conflictPaths={conflictedPaths}
+          {conflictsOnly}
+          onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
+          onFileSelect={fullscreenOpenFile}
+        />
       </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+    {/if}
+  </div>
+</Modal>
 
-<Dialog.Root bind:open={() => renameTarget !== null, (open) => !open && (renameTarget = null)}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <Dialog.Title class="text-sm font-semibold text-foreground">Rename file</Dialog.Title>
-      <Dialog.Description class="mt-1 text-xs text-muted">
-        Enter a new file name, including its extension.
-      </Dialog.Description>
-      {#if renameTarget}
-        <form class="mt-4" onsubmit={handleRenameSubmit}>
-          <label class="text-xs font-medium text-foreground" for="viewer-rename-file">
-            File name
-          </label>
-          <input
-            id="viewer-rename-file"
-            bind:value={renameTarget.name}
-            class="mt-1 h-9 w-full rounded-lg border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
-            autocomplete="off"
-          />
-          <div class="mt-5 flex justify-end gap-2">
-            <Dialog.Close
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </Dialog.Close>
-            <button
-              type="submit"
-              class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              disabled={mutationPending || !renameTarget.name.trim()}
-            >
-              Rename
-            </button>
-          </div>
-        </form>
-      {/if}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<ProjectFilesPanelDialogs
+  {fullscreenPendingPath}
+  activeTabPath={activeTab?.path}
+  onClearFullscreenPending={() => (fullscreenPendingPath = null)}
+  onConfirmFullscreenSaveAndNavigate={() => void confirmFullscreenSaveAndNavigate()}
+  {renameTarget}
+  onClearRenameTarget={() => (renameTarget = null)}
+  {mutationPending}
+  onRenameSubmit={() => void renameSelected()}
+  {deleteTargetPath}
+  onClearDeleteTarget={() => (deleteTargetPath = null)}
+  onConfirmDelete={() => void deleteSelected()}
+/>
 
-<AlertDialog.Root
-  bind:open={() => deleteTargetPath !== null, (open) => !open && (deleteTargetPath = null)}
+<FileInfoDialog {info} onClear={() => (info = null)} />
+
+<ConfirmDialog
+  open={reloadConfirmPath !== null}
+  title={reloadConfirmTitle}
+  onCancel={() => (reloadConfirmPath = null)}
+  onConfirm={discardAndReloadSelected}
+  confirmLabel="Discard and reload"
 >
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Delete file?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        {deleteTargetPath} will be moved to Trash. Its open tab will close.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-          disabled={mutationPending}
-          onclick={() => void deleteSelected()}
-        >
-          Move to Trash
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+  <p>The version on disk replaces your unsaved edits.</p>
+</ConfirmDialog>

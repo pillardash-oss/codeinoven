@@ -1,14 +1,19 @@
 <script lang="ts">
   import { CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { PullRequestSummary } from '$shared/types'
+  import DockRow from '$lib/components/ui/DockRow.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
 
   const store = prLifecycleStore
+
+  /** One placement for the whole unified row, remembered across restarts. */
+  const DOCK_STORAGE_KEY = `${APP_SLUG}.pullRequestDock.v1`
 
   async function revealPullRequest(
     projectId: string,
@@ -49,7 +54,7 @@
     onView={(pullRequest) => void revealPullRequest(draft.projectId, draft.threadId, pullRequest)}
     storageKey={store.storageKeyFor(draft.id)}
     onCreated={() => {
-      // The per-panel prListRefresh signal is intentionally not wired here  
+      // The per-panel prListRefresh signal is intentionally not wired here
       // the panel refetches on next open. Global drafts still create the PR
       // via `gitState.createPullRequest`.
     }}
@@ -61,53 +66,69 @@
   Unified dock: each minimized draft's sheet suppresses its own dock
   (passes an empty snippet when `draftId` is set), so this single row is
   the only one. Chips sit side by side, one per minimized draft, showing
-  the project icon, project name, live status, and PR title reported by
-  each sheet's `updateDock`.
+  the project icon, project name, live status, live step, and PR title
+  reported by each sheet's `updateDock`.
 -->
 {#if store.drafts.some((draft) => draft.minimized)}
-  <div
-    class="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
-    role="group"
-    aria-label="Docked pull request drafts"
-  >
-    {#each store.drafts as draft (draft.id)}
-      {@const dock = draft.dock}
-      {#if draft.minimized}
-        <button
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={`${dock.projectName || 'Project'}   ${dock.title}`}
-          aria-label={`Expand ${dock.projectName ? `${dock.projectName} ` : ''}${dock.title}`}
-          onclick={() => store.expand(draft.id)}
-        >
-          {#if dock.iconUrl}
-            <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
-          {:else}
-            <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
-          {/if}
-          <span class="flex min-w-0 flex-col">
-            {#if dock.projectName}
-              <span class="max-w-36 truncate text-[0.5625rem] font-medium leading-tight text-muted">
-                {dock.projectName}
-              </span>
+  <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked pull request drafts">
+    <div
+      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+      role="group"
+      aria-label="Docked pull request drafts"
+    >
+      {#each store.drafts as draft (draft.id)}
+        {@const dock = draft.dock}
+        {#if draft.minimized}
+          <!-- While the work runs, the chip names the current step (commit, push,
+             create) so a docked draft always states what is happening. -->
+          {@const detail = dock.status === 'working' ? dock.detail : ''}
+          {@const chipLabel = [dock.projectName, dock.title, detail]
+            .filter((part) => part.length > 0)
+            .join('   ')}
+          <button
+            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            title={chipLabel}
+            aria-label={`Expand ${chipLabel}`}
+            onclick={() => store.expand(draft.id)}
+          >
+            {#if dock.iconUrl}
+              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+            {:else}
+              <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
             {/if}
-            <span class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
-              >{dock.title}</span
-            >
-          </span>
-          {#if dock.status === 'working'}
-            <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
-          {:else if dock.status === 'attention'}
-            <TriangleAlert
-              size={12}
-              class="shrink-0 text-warning"
-              title="Needs attention"
-              aria-hidden="true"
-            />
-          {:else if dock.status === 'composed' || dock.status === 'created'}
-            <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
-          {/if}
-        </button>
-      {/if}
-    {/each}
-  </div>
+            <span class="flex min-w-0 flex-col">
+              {#if dock.projectName}
+                <span
+                  class="max-w-36 truncate text-[0.5625rem] font-medium leading-tight text-muted"
+                >
+                  {dock.projectName}
+                </span>
+              {/if}
+              <span
+                class="max-w-36 truncate text-[0.625rem] font-medium leading-tight text-foreground"
+                >{dock.title}</span
+              >
+              {#if detail}
+                <span class="max-w-36 truncate text-[0.5625rem] leading-tight text-info"
+                  >{detail}</span
+                >
+              {/if}
+            </span>
+            {#if dock.status === 'working'}
+              <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            {:else if dock.status === 'attention'}
+              <TriangleAlert
+                size={12}
+                class="shrink-0 text-warning"
+                title="Needs attention"
+                aria-hidden="true"
+              />
+            {:else if dock.status === 'composed' || dock.status === 'created'}
+              <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
+            {/if}
+          </button>
+        {/if}
+      {/each}
+    </div>
+  </DockRow>
 {/if}

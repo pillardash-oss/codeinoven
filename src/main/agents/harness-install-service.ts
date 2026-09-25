@@ -7,6 +7,7 @@ import type {
   HarnessUninstallHandoff,
   ProviderConnectionInfo
 } from '../../lib/types'
+import { canUninstallHarness } from '../../lib/harness-actions'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'
@@ -61,10 +62,13 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
 
 /** The install methods each harness officially documents per platform. */
 const INSTALL_METHODS: Record<string, Partial<Record<Platform, HarnessInstallMethod[]>>> = {
+  // OpenCode V2 is the current release and installs under the same `opencode`
+  // command; the app offers its documented channels (npm `@opencode/cli`, the
+  // `opencode-v2` brew tap, the `/v2/install` curl script).
   opencode: {
     darwin: ['npm', 'brew', 'native'],
     linux: ['npm', 'brew', 'native'],
-    win32: ['npm', 'native']
+    win32: ['npm']
   },
   codex: {
     darwin: ['npm', 'brew', 'native'],
@@ -110,8 +114,8 @@ const UNINSTALL_COMMANDS: Record<
   Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>
 > = {
   opencode: {
-    npm: { command: 'npm', args: ['uninstall', '-g', 'opencode-ai'] },
-    brew: { command: 'brew', args: ['uninstall', 'anomalyco/tap/opencode'] },
+    npm: { command: 'npm', args: ['uninstall', '-g', '@opencode/cli', 'opencode-ai'] },
+    brew: { command: 'brew', args: ['uninstall', 'anomalyco/tap/opencode-v2'] },
     native: { command: 'rm', args: ['-rf', '~/.opencode'] }
   },
   codex: {
@@ -155,24 +159,23 @@ const UNINSTALL_COMMANDS: Record<
  */
 const INSTALL_COMMANDS: Record<
   string,
-  Partial<Record<Platform, Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>>>
+  Partial<
+    Record<Platform, Partial<Record<HarnessInstallMethod, { command: string; args: string[] }>>>
+  >
 > = {
   opencode: {
     darwin: {
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] },
-      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode'] },
-      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/install | bash'] }
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] },
+      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode-v2'] },
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
     },
     linux: {
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] },
-      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/install | bash'] }
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] },
+      brew: { command: 'brew', args: ['install', 'anomalyco/tap/opencode-v2'] },
+      native: { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
     },
     win32: {
-      native: {
-        command: 'powershell',
-        args: ['-NoProfile', '-Command', 'irm https://opencode.ai/install.ps1 | iex']
-      },
-      npm: { command: 'npm', args: ['install', '-g', 'opencode-ai'] }
+      npm: { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
     }
   },
   codex: {
@@ -326,7 +329,8 @@ export class HarnessInstallService {
       throw new Error(`${definition.name} is bundled with CodeInOven and needs no install.`)
     }
 
-    const wslTarget = provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
+    const wslTarget =
+      provider?.executionTarget?.kind === 'wsl' ? provider.executionTarget : undefined
     const platform: Platform = wslTarget ? 'linux' : process.platform
     const platformCommands = INSTALL_COMMANDS[harnessId]?.[platform]
     const method = (METHOD_PREFERENCE[platform] ?? ['npm']).find(
@@ -411,16 +415,26 @@ export class HarnessInstallService {
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
 
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
-    if (!provider || provider.status !== 'available') {
+    if (!provider) {
       throw new Error(`${definition.name} is not installed   nothing to uninstall.`)
     }
     if (provider.executionTarget?.kind === 'bundled') {
       throw new Error(
-        `${definition.name} is bundled with CodeInOven and cannot be uninstalled separately.`
+        `${definition.name} is bundled with CodeInOven   it cannot be uninstalled separately.`
+      )
+    }
+    // A broken install is still an install: `error` means the binary resolved
+    // but its version probe died, which is precisely when the user needs the
+    // harness's own removal command. Only a genuinely absent harness is refused.
+    if (!canUninstallHarness(provider)) {
+      throw new Error(
+        provider.status === 'not_found'
+          ? `${definition.name} is not installed   nothing to uninstall.`
+          : `${definition.name} has not been probed yet   check it in Settings, Harnesses, then uninstall.`
       )
     }
 
-    const method = detectMethod(harnessId, provider.resolvedPath)
+    const method = detectMethod(harnessId, provider.resolvedPath, provider.executionTarget)
     const command = UNINSTALL_COMMANDS[harnessId]?.[method]
     if (!command) {
       throw new Error(

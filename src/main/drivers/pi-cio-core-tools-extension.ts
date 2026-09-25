@@ -51,6 +51,9 @@ export interface CioCoreToolsExtensionOptions {
    *  and skips the permission gate entirely, so the model request carries
    *  only pi's own built-ins plus the status/usage/compaction plumbing. */
   oneShot?: boolean
+  /** App-configured maximum questions one cio_ask_user call may carry
+   *  (General settings, Threads section). */
+  questionCap: number
   /** Absolute path of the per-session utility-gateway handoff file. */
   gatewayHandoffPath: string
   /** Absolute path of the per-session system-prompt handoff file. */
@@ -58,17 +61,31 @@ export interface CioCoreToolsExtensionOptions {
   /** Absolute path of the per-session allowed-tools handoff file. Empty array
    *  (the seed) means every pi built-in tool is available. */
   allowedToolsPath: string
-  /** CodeInOven driver session id the extension is materialized for. Embedded
-   *  so the utility gateway tools can self-heal across an app restart by
-   *  discovering the live instance that owns this session. */
-  sessionId: string
-  /** Absolute path of the shell-callable mcpHost resolver. Empty when the
-   *  resolver has not been materialized yet; the gateway tools then skip
-   *  host-level recovery. */
-  retrieveScriptPath: string
   /** Absolute path of the per-session oversized-request recovery arm/disarm
    *  flag file the driver rewrites during oversized-body error recovery. */
   oversizedFlagPath: string
+  /** Absolute path of the per-session stop-flag file the driver writes when the
+   *  user stops the thread (or one worker). Pi's own abort RPC only reaches the
+   *  root run, so this file is the extension's only channel for stopping the
+   *  nested worker sessions and for disarming the wake-up paths that would
+   *  otherwise start a fresh turn right after the stop. */
+  stopFlagPath: string
+  /** Absolute path of the per-session sub-agent watch file. The driver writes
+   *  the child session ids the app is displaying right now; the extension
+   *  forwards token deltas for those children only, so a worker nobody is
+   *  looking at does not re-serialize a stream only a view would consume. */
+  subagentWatchPath: string
+  /** Absolute path of the per-session plan/progress snapshot the engine
+   *  republishes each turn. The compaction extension reads it, and re-reads the
+   *  files the snapshot points at, to rebuild a checkpoint when the transcript
+   *  cannot be summarized. */
+  compactionContextPath: string
+  /** Distilled project-and-app behavior contract injected into every spawned
+   *  worker's prompt. A worker is a nested session with its own resource
+   *  loader, so the extension's `before_agent_start` hook never runs for it and
+   *  the primary agent's system prompt (work ethics, working scope, preferences)
+   *  never reaches the worker   the worker contract is the only channel. */
+  workerContractPrompt: string
 }
 
 /** Split a generated extension module into its import statements and body. */
@@ -155,7 +172,10 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
-    { factory: '__cioCoreToolsExtension', source: piCoreToolsExtension() },
+    {
+      factory: '__cioCoreToolsExtension',
+      source: piCoreToolsExtension({ questionCap: options.questionCap })
+    },
     { factory: '__cioCompactionExtension', source: piCompactionExtension() }
   ]
   const parsed = sources.map((entry) => {
@@ -166,7 +186,8 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
   const factories = parsed
     .map((entry) => scopedExtensionFactory(entry.factory, entry.body))
     .join('\n')
-  return `${header}
+  return (
+    `${header}
 
 ${factories}
 export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void {
@@ -188,23 +209,33 @@ __CIO_STRIP_BUILTINS__  })
   __cioCompactionExtension()(pi)
 }
 `
-    .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
-    .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
-    .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
-    .replace('__CIO_SESSION_ID__', JSON.stringify(options.sessionId).slice(1, -1))
-    .replace('__CIO_RETRIEVE_SCRIPT__', JSON.stringify(options.retrieveScriptPath).slice(1, -1))
-    .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(options.oversizedFlagPath).slice(1, -1))
-    // One-shot sessions strip the interactive tool factories at generation
-    // time (not runtime), so the materialized module never even imports them.
-    .replaceAll(
-      '__CIO_INTERACTIVE_TOOLS__',
-      options.oneShot === true ? '// ' : ''
-    )
-    // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
-    // setActiveTools([]) is documented to cover built-in tools, so the model
-    // request carries no tool schemas at all   only the prompt.
-    .replaceAll(
-      '__CIO_STRIP_BUILTINS__',
-      options.oneShot === true ? '' : '// '
-    )
+      .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
+      .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
+      .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
+      .replace(
+        '__CIO_OVERSIZED_FLAG_PATH__',
+        JSON.stringify(options.oversizedFlagPath).slice(1, -1)
+      )
+      .replace('__CIO_STOP_FLAG_PATH__', JSON.stringify(options.stopFlagPath).slice(1, -1))
+      .replace(
+        '__CIO_COMPACTION_CONTEXT_PATH__',
+        JSON.stringify(options.compactionContextPath).slice(1, -1)
+      )
+      .replace(
+        '__CIO_SUBAGENT_WATCH_PATH__',
+        JSON.stringify(options.subagentWatchPath).slice(1, -1)
+      )
+      // Inserted as a complete JSON string literal (its own quotes included),
+      // so no character in the contract can terminate the generated source.
+      .replace('__CIO_WORKER_CONTRACT_LITERAL__', () =>
+        JSON.stringify(options.workerContractPrompt)
+      )
+      // One-shot sessions strip the interactive tool factories at generation
+      // time (not runtime), so the materialized module never even imports them.
+      .replaceAll('__CIO_INTERACTIVE_TOOLS__', options.oneShot === true ? '// ' : '')
+      // One-shot sessions also drop pi's own built-in tools (read, bash, ...):
+      // setActiveTools([]) is documented to cover built-in tools, so the model
+      // request carries no tool schemas at all   only the prompt.
+      .replaceAll('__CIO_STRIP_BUILTINS__', options.oneShot === true ? '' : '// ')
+  )
 }

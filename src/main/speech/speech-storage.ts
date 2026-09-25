@@ -2,9 +2,15 @@ import { randomUUID } from 'node:crypto'
 import { open, mkdir, readFile, readdir, rename, rm, stat, statfs } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { SpeechHistoryPage, SpeechRecordingAttempt, SpeechScope } from '../../lib/speech/types'
+import type {
+  SpeechHistoryPage,
+  SpeechRecordingAttempt,
+  SpeechPlaybackAudio,
+  SpeechScope
+} from '../../lib/speech/types'
 import { DEFAULT_SPEECH_HISTORY_LIMIT, MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import { atomicWrite, getConfigRoot } from '../../lib/utils'
+import { RecordingPlaybackAudio } from './playback-audio'
 
 interface SpeechStorageIndex {
   version: 1
@@ -37,6 +43,7 @@ export class SpeechStorage {
   private readonly stagingDir: string
   private readonly modelsDir: string
   private readonly indexPath: string
+  private readonly playback: RecordingPlaybackAudio
   private index: SpeechStorageIndex = { version: 1, attempts: [] }
   private readonly sessions = new Map<string, CaptureSession>()
   private writeChain: Promise<void> = Promise.resolve()
@@ -47,6 +54,9 @@ export class SpeechStorage {
     this.stagingDir = join(root, 'staging')
     this.modelsDir = join(root, 'models')
     this.indexPath = join(root, 'history.json')
+    // Prepared playback copies live outside `recordings/` so that directory
+    // only ever holds exactly one file per recording.
+    this.playback = new RecordingPlaybackAudio(join(root, 'playback'))
   }
 
   async initialize(): Promise<void> {
@@ -63,6 +73,13 @@ export class SpeechStorage {
       if (code !== 'ENOENT') throw cause
     }
     await this.recoverInterruptedCaptures()
+    await this.playback.prune(
+      new Set(
+        this.index.attempts
+          .map((attempt) => attempt.audioId)
+          .filter((audioId): audioId is string => Boolean(audioId))
+      )
+    )
   }
 
   async beginCapture(scope: SpeechScope, mimeType: string): Promise<SpeechCaptureStart> {
@@ -113,7 +130,9 @@ export class SpeechStorage {
       scope,
       audioAvailable: false,
       byteSize: 0,
-      mimeType: 'audio/wav',
+      // The native worker writes Core Audio Format LPCM (AVFoundation falls
+      // back to CAF for the extension-less staging path), not WAV.
+      mimeType: 'audio/x-caf',
       retries: [],
       errors: []
     }
@@ -284,29 +303,21 @@ export class SpeechStorage {
     const evictedIds = new Set(evicted.map((attempt) => attempt.id))
     this.index.attempts = this.index.attempts.filter((attempt) => !evictedIds.has(attempt.id))
     await this.persistIndex()
-    await Promise.all(
-      evicted.map((attempt) =>
-        attempt.audioId ? rm(this.audioPath(attempt.audioId), { force: true }) : Promise.resolve()
-      )
-    )
+    await Promise.all(evicted.map((attempt) => this.removeRecordedAudio(attempt.audioId)))
   }
 
   async deleteAttempt(attemptId: string, deleteAudio: boolean): Promise<void> {
     const attempt = this.requireAttempt(attemptId)
     this.index.attempts = this.index.attempts.filter((item) => item.id !== attemptId)
     await this.persistIndex()
-    if (deleteAudio && attempt.audioId) await rm(this.audioPath(attempt.audioId), { force: true })
+    if (deleteAudio) await this.removeRecordedAudio(attempt.audioId)
   }
 
   async deleteAllAttempts(): Promise<void> {
     const attempts = this.index.attempts
     this.index.attempts = []
     await this.persistIndex()
-    await Promise.all(
-      attempts.map((attempt) =>
-        attempt.audioId ? rm(this.audioPath(attempt.audioId), { force: true }) : Promise.resolve()
-      )
-    )
+    await Promise.all(attempts.map((attempt) => this.removeRecordedAudio(attempt.audioId)))
   }
 
   async readAudio(attemptId: string): Promise<Uint8Array<ArrayBuffer>> {
@@ -314,7 +325,39 @@ export class SpeechStorage {
     return new Uint8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
   }
 
+  /**
+   * Read a recording as something the renderer can actually play, together
+   * with its true media type and extension: a container Chromium demuxes
+   * natively is served as stored, anything else (the macOS CAF recordings) is
+   * converted once through the bundled ffmpeg.
+   */
+  async readPlaybackAudio(attemptId: string): Promise<SpeechPlaybackAudio> {
+    const attempt = this.requireAttempt(attemptId)
+    if (!attempt.audioAvailable || !attempt.audioId) {
+      throw new Error('Recording audio is unavailable.')
+    }
+    const resolved = await this.playback.resolve(this.audioPath(attempt.audioId), attempt.audioId)
+    const bytes = await readFile(resolved.path)
+    return {
+      bytes: new Uint8Array(
+        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      ),
+      mimeType: resolved.mimeType,
+      extension: resolved.extension
+    }
+  }
+
+  /** Removes a recording's own bytes and any prepared playback copy of them. */
+  private async removeRecordedAudio(audioId: string | undefined): Promise<void> {
+    if (!audioId) return
+    await Promise.all([
+      rm(this.audioPath(audioId), { force: true }).catch(() => undefined),
+      this.playback.remove(audioId)
+    ])
+  }
+
   async dispose(): Promise<void> {
+    this.playback.dispose()
     const sessions = [...this.sessions.values()]
     this.sessions.clear()
     for (const session of sessions) {

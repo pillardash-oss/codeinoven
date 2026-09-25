@@ -13,6 +13,7 @@ import type {
   ResolvedUtility,
   UtilityKind
 } from '../../lib/types'
+import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
@@ -128,6 +129,13 @@ export interface UtilityRuntimePreparationRequest {
   /** Selected provider for this turn, when the harness exposes provider selection. */
   providerId?: string
   resolvedUtilities: ResolvedUtility[]
+  /**
+   * How long the harness transport must wait for one app-owned gateway call.
+   * A transport with its own request timeout (OpenCode's MCP client defaults to
+   * 60 seconds) must raise it to this, or a human-paced call such as
+   * `cio_ask_secret` is abandoned while its card is still on screen.
+   */
+  gatewayRequestTimeoutMs?: number
 }
 
 /** One ephemeral configuration file requested by a harness adapter. */
@@ -166,6 +174,20 @@ export interface PreparedUtilityRuntime {
   allowedTools: string[]
   /** Safe to call repeatedly, including after partial external teardown. */
   cleanup(): Promise<void>
+}
+
+/**
+ * The plan and progress the owning thread is executing, published per turn so a
+ * driver-owned compaction checkpoint can rebuild context from them when a
+ * transcript can no longer be summarized. `planPath` and `progressPath` are
+ * absolute when the artifacts were located, so a checkpoint can re-read the
+ * newest version instead of the one captured at turn start.
+ */
+export interface CompactionFallbackContext {
+  plan: string | null
+  progress: string | null
+  planPath: string | null
+  progressPath: string | null
 }
 
 /** Authentication operations a harness exposes without implied account switching. */
@@ -222,6 +244,8 @@ export interface HarnessLoginHandoff {
   command: string
   args: string[]
   environment?: Record<string, string>
+  /** Account whose credential home the login writes into, when main bound one. */
+  accountId?: string
   title: string
   mutatesGlobalCredentials: boolean
 }
@@ -256,8 +280,30 @@ export interface SendPromptOptions {
   userMessageId?: string
 }
 
+/**
+ * One explicit auxiliary candidate: the provider and model a disposable
+ * auxiliary completion must use. Structurally identical to the drivers' own
+ * `TitleModelCandidate`, so callers can pass either shape.
+ */
+export interface AuxiliaryModelCandidate {
+  providerId: string
+  modelId: string
+}
+
+/**
+ * Explicit candidates that replace a driver's own auxiliary model discovery.
+ * The shared one-shot runner still appends the settings' own provider/model as
+ * the last-resort candidate and de-duplicates it, so a caller that pins the
+ * same model in `settings` gets exactly one attempt. Passing this is how a
+ * user-configured auxiliary model overrides every harness's built-in
+ * cheap-model preference (`AppConfig.auxiliaryAgents`).
+ */
+export interface AuxiliaryCandidateOverride {
+  candidates?: AuxiliaryModelCandidate[]
+}
+
 /** Input for one disposable, provider-owned thread-title completion. */
-export interface GenerateTitleOptions {
+export interface GenerateTitleOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   message: string
   /** Parent turn whose authenticated transport permits a safe auxiliary title process. */
@@ -265,7 +311,7 @@ export interface GenerateTitleOptions {
 }
 
 /** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
-export interface GradeTurnOptions {
+export interface GradeTurnOptions extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** The initiating visible user message of the closed conversation window. */
   userMessage: string
@@ -282,7 +328,7 @@ export interface GradeTurnOptions {
  * available model, shared by every disposable cheap-model scenario (title
  * generation, turn grading, speech lessons, memory proposals, …).
  */
-export interface CheapModelRequest {
+export interface CheapModelRequest extends AuxiliaryCandidateOverride {
   settings: ThreadSettings
   /** Short scenario label used as the disposable session title. */
   purpose: string
@@ -368,6 +414,32 @@ export interface HarnessDriver {
    * point every cheap-model scenario must go through.
    */
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
+
+  /**
+   * The candidate list this driver's own auxiliary one-shot runs would try when
+   * the caller pins no candidates   its discovered cheap models   or null until
+   * it has discovered one.
+   *
+   * A caller that also appends the settings' own provider/model can therefore
+   * name a run's complete route. Null is the honest answer for a route that is
+   * not known, and callers must treat it as "do not know", never as "closed":
+   * a route wrongly reported closed postpones work that could run.
+   */
+  auxiliaryRouteCandidates?(): readonly AuxiliaryModelCandidate[] | null
+
+  /**
+   * Until when every given candidate sits inside a provider usage window the
+   * provider itself reported, or null while at least one of them is free (or
+   * when nothing is known about them).
+   *
+   * The caller names the complete route: for an auxiliary assignment that is
+   * the single pinned model, and for a harness's own route it is
+   * `auxiliaryRouteCandidates()` plus the settings' provider/model. Background
+   * work consults this before it spends a harness process, so an account whose
+   * provider already said "try again at <time>" is not probed once per queued
+   * job. Drivers without auxiliary one-shot work omit both methods.
+   */
+  auxiliaryWindowUntil?(candidates: readonly AuxiliaryModelCandidate[]): number | null
 
   /**
    * Send a single disposable "ping" completion pinned to the exact model in
@@ -479,6 +551,21 @@ export interface HarnessDriver {
   abort(projectPath: string, sessionId: string): Promise<void>
 
   /**
+   * Stop one delegated child (sub-agent) session without touching its parent.
+   *
+   * Harnesses that expose a child as an addressable session can just abort it.
+   * Harnesses that keep children inside their own process (pi runs sub-agents
+   * as nested in-process sessions) must implement this to reach them at all:
+   * their `abort` only knows the root session, so calling `abort` with a child
+   * id is a no-op and a stopped worker would keep running and editing files.
+   */
+  abortSubagent?(
+    projectPath: string,
+    parentSessionId: string,
+    childSessionId: string
+  ): Promise<void>
+
+  /**
    * Forcefully stop the harness process backing a session (SIGTERM). Called when
    * the user explicitly confirms a forced close so a still-streaming local
    * project stops immediately instead of lingering after the app exits. Drivers
@@ -495,6 +582,26 @@ export interface HarnessDriver {
    */
   restartAfterAuthentication?(projectPath: string): Promise<void> | void
 
+  /**
+   * Tear down every resident transport this driver keeps so the next turn
+   * spawns the harness binary currently on disk.
+   *
+   * CodeInOven holds long-lived harness processes (OpenCode's `serve`, Codex's
+   * app-server daemon, Pi's per-session RPC client). A harness self-update
+   * replaces the CLI on disk but not those processes, so without a restart the
+   * app keeps talking to the build it started from   and the version probe, which
+   * re-runs against the new binary, reports the update as applied while
+   * sessions still run the old one. One-process-per-turn harnesses keep nothing
+   * resident, so they implement this as "stop any in-flight turn process";
+   * their next turn already spawns the new binary.
+   *
+   * Sessions persist in the harness's own store and are resumed after the
+   * restart, so this is not a session reset. A turn that is mid-flight when a
+   * forced restart runs loses its transport. Best-effort: the caller isolates
+   * per-driver failures.
+   */
+  restartRuntime?(): Promise<void> | void
+
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
@@ -506,6 +613,16 @@ export interface HarnessDriver {
    * driver cannot determine one reliably (the cache then keeps its normal TTL).
    */
   providerCatalogFingerprint?(): Promise<string | null>
+
+  /**
+   * Force the harness to re-fetch its own model catalog from upstream, so the
+   * discovery that follows sees catalogs that are fresh at the source rather
+   * than whatever the harness has cached locally. Called only for an explicit
+   * user-triggered catalog refresh   never by a background or TTL-driven sweep  
+   because it costs a network round trip per provider. Drivers that keep no
+   * upstream catalog omit it.
+   */
+  refreshModelCatalog?(): Promise<void>
 
   /** List slash commands the harness exposes. */
   listCommands(projectPath: string): Promise<HarnessCommand[]>
@@ -536,7 +653,19 @@ export interface HarnessDriver {
   publishUtilityGatewayEndpoint?(
     projectPath: string,
     sessionId: string,
-    endpoint: { url: string; token: string } | null
+    endpoint: UtilityGatewayEndpoint | null
+  ): Promise<void>
+
+  /**
+   * Publish the owning thread's plan and progress for checkpoint rebuilds.
+   * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
+   * session-keyed file; every other harness ignores the call. `null` clears it,
+   * so a thread with no plan can never inject a stale one into a rebuild.
+   */
+  publishCompactionContext?(
+    projectPath: string,
+    sessionId: string,
+    context: CompactionFallbackContext | null
   ): Promise<void>
 
   /**

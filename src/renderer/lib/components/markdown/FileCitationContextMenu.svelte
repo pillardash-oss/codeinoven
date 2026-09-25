@@ -13,7 +13,9 @@
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { revealCitationFile } from '$lib/reveal-file'
+  import { osFileManagerLabel, revealInOsFileManager } from '$lib/os-file-manager'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { EditorId, EditorInfo, ProjectFileInfo } from '$shared/types'
@@ -133,7 +135,7 @@
       await copyTextToClipboard(text)
       toast.success(successMessage)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Copy failed.')
+      reportError(error, 'Copy failed.')
     }
   }
 
@@ -158,7 +160,7 @@
         workspaceState.activeScopeBucketIdFor(resolved.projectId)
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not open the file.')
+      reportError(error, 'Could not open the file.')
     }
   }
 
@@ -173,7 +175,7 @@
         workspaceState.activeScopeBucketIdFor(resolved.projectId)
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not open the file.')
+      reportError(error, 'Could not open the file.')
     }
   }
 
@@ -187,7 +189,7 @@
       )
       if (savedPath) toast.success('File saved.')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not save the file.')
+      reportError(error, 'Could not save the file.')
     }
   }
 
@@ -212,7 +214,7 @@
 
   async function revealInFileManager(): Promise<void> {
     if (!resolved) return
-    await invoke('shell:revealPath', resolved.absolutePath)
+    await revealInOsFileManager(resolved.absolutePath)
   }
 
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'Editor')
@@ -311,9 +313,7 @@
           onSelect={revealInFileManager}
         >
           <FolderOpen size={13} />
-          {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-            ? 'Reveal in File Manager'
-            : 'Show in Explorer'}
+          {osFileManagerLabel()}
         </ContextMenu.Item>
       {/if}
     </ContextMenu.Content>

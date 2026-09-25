@@ -9,20 +9,35 @@ import type {
   GitRepositoryIdentity,
   GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
+  PrAuthorAssociation,
+  PrCommentKind,
   PrDraft,
+  PrListSort,
+  PrReactionActor,
+  PrReactionGroup,
+  PrReactionMap,
   PullRequestComment,
   PullRequestCommit,
   PullRequestCheck,
   PullRequestChecks,
+  PullRequestChecksRollup,
   PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
+  PullRequestLabel,
+  PullRequestMilestone,
   PullRequestReview,
   PullRequestReviewComment,
+  PullRequestReviewThread,
   PullRequestPage,
   PullRequestReference,
-  PullRequestSummary
+  PullRequestSummary,
+  RepositoryMentionUser,
+  SetPrReactionInput,
+  WorkflowRerunMode
 } from '../../lib/types'
+import { capJobLogText } from '../../lib/github-job-log'
+import { isReactionContent } from '../../lib/github-reactions'
 import type {
   CreatePrCommentInput,
   CreatePrReviewInput,
@@ -30,7 +45,12 @@ import type {
   ListPullRequestPageInput,
   ListPullRequestsInput,
   MergePullRequestInput,
-  PullRequestTarget
+  MinimizePrCommentInput,
+  PrCommentTarget,
+  PullRequestTarget,
+  ReplyPrReviewCommentInput,
+  ResolvePrReviewThreadInput,
+  UpdatePrCommentInput
 } from '../git/git-provider.interface'
 import { Logger } from '../system/logger'
 
@@ -43,12 +63,56 @@ export const PROVIDER_API_BASE_URL_ENV = 'CODEINOVEN_GIT_PROVIDER_API_BASE_URL'
 /** Network timeout so a slow provider never hangs the UI. */
 const PROVIDER_FETCH_TIMEOUT_MS = 15_000
 
-/** Cap on the raw job log text streamed into the app (roughly 200 KB). */
+/**
+ * Cap on the raw job log text streamed into the app (roughly 200 KB). An oversized
+ * log loses its middle, never its end: that is where the failing step is.
+ */
 const MAX_JOB_LOG_BYTES = 200_000
 
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const USER_AGENT = 'CodeInOven'
+
+/**
+ * How many subjects one batched reaction read addresses.
+ *
+ * `nodes(ids:)` accepts at most 100, and a conversation longer than that is
+ * read in consecutive requests rather than by dropping the tail.
+ */
+const REACTION_BATCH_SIZE = 100
+
+/**
+ * How many reactors one reaction group carries.
+ *
+ * The count is the number the chip draws; this list is only what a hover can
+ * name, so it is capped rather than paid for in full on a popular comment.
+ */
+const REACTION_ACTOR_LIMIT = 10
+
+/**
+ * The reaction fields, selected identically everywhere a subject is read.
+ *
+ * `reactors.nodes` is a union (`User`, `Bot`, `Mannequin`, `Organization`), so
+ * each member is asked for the two fields the app draws. A Mannequin has no
+ * picture, which is why the picture is read as nullable rather than assumed.
+ */
+const REACTION_GROUP_SELECTION = `reactionGroups {
+        content
+        viewerHasReacted
+        reactors(first: ${String(REACTION_ACTOR_LIMIT)}) {
+          totalCount
+          nodes {
+            __typename
+            ... on User { login avatarUrl }
+            ... on Bot { login avatarUrl }
+            ... on Mannequin { login avatarUrl }
+            ... on Organization { login avatarUrl }
+          }
+        }
+      }`
+
+/** The batched reaction read: every subject's groups, addressed by node id. */
+const REACTION_GROUPS_QUERY = `query ReactionGroups($ids: [ID!]!) { nodes(ids: $ids) { id ... on Reactable { ${REACTION_GROUP_SELECTION} } } }`
 
 /** Sanitized provider failure that preserves the HTTP status for IPC handling. */
 export class ProviderHttpError extends Error {
@@ -59,6 +123,120 @@ export class ProviderHttpError extends Error {
     super(`Provider returned HTTP ${status}${message ? `: ${message}` : ''}`)
     this.name = 'ProviderHttpError'
   }
+}
+
+/**
+ * Sanitized GraphQL failure that keeps GitHub's own error `type`.
+ *
+ * GraphQL answers HTTP 200 even when it rejects a request, so the transport has
+ * to raise its own error. The `type` (FORBIDDEN, NOT_FOUND, …) is what lets a
+ * caller tell a permanent access failure from a transient one without parsing
+ * the message.
+ */
+export class ProviderGraphqlError extends Error {
+  constructor(
+    message: string,
+    readonly type: string | null
+  ) {
+    super(message)
+    this.name = 'ProviderGraphqlError'
+  }
+}
+
+/**
+ * One GraphQL search for a page of pull requests.
+ *
+ * Search rather than the repository's `pullRequests` connection because
+ * `author:@me` and `review-requested:@me` are questions only the search index can
+ * answer, and because one response then carries the labels, comment count and
+ * check rollup the sidebar list draws without a follow-up request per row.
+ */
+const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!, $after: String) {
+  search(query: $q, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      __typename
+      ... on PullRequest {
+        number
+        title
+        url
+        state
+        isDraft
+        createdAt
+        updatedAt
+        mergeable
+        mergeStateStatus
+        headRefName
+        baseRefName
+        author {
+          login
+          avatarUrl
+        }
+        labels(first: 20) {
+          nodes {
+            name
+            color
+          }
+        }
+        assignees(first: 10) {
+          nodes {
+            login
+            name
+            avatarUrl
+          }
+        }
+        milestone {
+          number
+          title
+          state
+          description
+          dueOn
+        }
+        totalCommentsCount
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  totalCount
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      conclusion
+                      status
+                    }
+                    ... on StatusContext {
+                      state
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+/**
+ * The `sort:` qualifier for each ordering the listing offers.
+ *
+ * A record keyed by the union rather than a chain of comparisons, so adding an
+ * ordering to `PrListSort` without giving it a qualifier here fails to compile
+ * instead of silently listing by something else.
+ */
+const PULL_REQUEST_LIST_SORTS: Record<PrListSort, string> = {
+  updated: 'sort:updated-desc',
+  created: 'sort:created-desc',
+  'comments-desc': 'sort:comments-desc',
+  'updated-asc': 'sort:updated-asc',
+  'created-asc': 'sort:created-asc',
+  'comments-asc': 'sort:comments-asc'
 }
 
 /**
@@ -126,28 +304,11 @@ export class GitHubProvider implements GitProvider {
       throw new Error(`Pull request #${input.pullNumber} has no provider node ID`)
     }
 
-    const response = await this.request('/graphql', {
-      method: 'POST',
-      body: JSON.stringify({
-        query:
-          'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
-        variables: { pullRequestId }
-      })
-    })
-    const responseRecord = Array.isArray(response) ? {} : response
-    const errors = responseRecord['errors']
-    if (Array.isArray(errors)) {
-      const first = errors.find(
-        (entry): entry is Record<string, unknown> =>
-          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-      )
-      const message = first ? this.readString(first, 'message') : null
-      throw new Error(
-        message?.slice(0, 500) ?? 'Provider could not mark this pull request ready for review'
-      )
-    }
-    const data = this.readRecord(responseRecord, 'data')
-    const mutation = data ? this.readRecord(data, 'markPullRequestReadyForReview') : null
+    const response = await this.runGraphql(
+      'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
+      { pullRequestId }
+    )
+    const mutation = this.readRecord(response, 'markPullRequestReadyForReview')
     const pullRequest = mutation ? this.readRecord(mutation, 'pullRequest') : null
     if (!pullRequest) {
       throw new Error(`Pull request #${input.pullNumber} was not marked ready for review`)
@@ -259,19 +420,52 @@ export class GitHubProvider implements GitProvider {
 
   async listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage> {
     const state = input.state ?? 'open'
-    // Ask for one extra item so `hasMore` needs no extra round trip.
+    const qualifiers = ['is:pr', `repo:${input.owner}/${input.repo}`]
+    if (state === 'open') qualifiers.push('is:open')
+    else if (state === 'closed') qualifiers.push('is:closed')
+    if (input.filter === 'authored') qualifiers.push('author:@me')
+    else if (input.filter === 'assigned') qualifiers.push('assignee:@me')
+    else if (input.filter === 'review-requested') qualifiers.push('review-requested:@me')
+    else if (input.filter === 'involves') qualifiers.push('involves:@me')
+    qualifiers.push(PULL_REQUEST_LIST_SORTS[input.sort])
+
+    // Ask for exactly the page size. An over-fetch of one extra would move
+    // `endCursor` past the first row of the next page, because the cursor is the
+    // last node the search returned.
     const perPage = Math.min(Math.max(input.perPage, 1), 50)
-    const query = `?state=${encodeURIComponent(state)}&per_page=${perPage + 1}&page=${input.page}&sort=updated&direction=desc`
-    const response = await this.request(`${this.repoPath(input)}/pulls${query}`, { method: 'GET' })
-    const items = Array.isArray(response) ? response : []
-    const summaries = items.flatMap((item) => {
-      const summary = this.toSummary(item, input.owner, input.repo)
-      return summary ? [summary] : []
-    })
-    return {
-      items: summaries.slice(0, perPage),
-      page: input.page,
-      hasMore: summaries.length > perPage
+    try {
+      const data = await this.runGraphql(PULL_REQUEST_LIST_QUERY, {
+        q: qualifiers.join(' '),
+        first: perPage,
+        after: input.cursor
+      })
+      const search = this.readRecord(data, 'search')
+      const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+      const items = nodes.flatMap((node) => {
+        const summary = this.toGraphqlSummary(node, input.owner, input.repo)
+        return summary ? [summary] : []
+      })
+      const pageInfo = search ? this.readRecord(search, 'pageInfo') : null
+      const hasMore = pageInfo?.['hasNextPage'] === true
+      return {
+        items,
+        page: input.page,
+        hasMore,
+        // Only a finished page reports no cursor. GitHub returns the last node's
+        // cursor on the final page too, where following it returns an empty set,
+        // and a caller that walks from page one has no other way to tell that the
+        // page it is about to ask for does not exist.
+        nextCursor: hasMore && pageInfo ? this.readString(pageInfo, 'endCursor') : null
+      }
+    } catch (failure) {
+      // The IPC handler tells a repository the App cannot see apart from a
+      // transient outage by HTTP status, so a GraphQL access failure has to
+      // arrive as the same `ProviderHttpError` the REST calls raise.
+      if (failure instanceof ProviderGraphqlError) {
+        if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
+        if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)
+      }
+      throw failure
     }
   }
 
@@ -283,7 +477,9 @@ export class GitHubProvider implements GitProvider {
     const mergeableRaw = record['mergeable']
     return {
       ...summary,
+      authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
+      nodeId: this.readString(record, 'node_id'),
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       merged: record['merged'] === true,
       additions: this.readNumber(record, 'additions'),
@@ -340,6 +536,94 @@ export class GitHubProvider implements GitProvider {
     return comment
   }
 
+  /**
+   * Where GitHub files a comment of this kind.
+   *
+   * Both collections are repository-scoped   the pull number appears in neither
+   * path   which is why the target still carries one: it keeps every comment
+   * input the same shape as the one that creates them.
+   */
+  private commentCollectionPath(kind: PrCommentKind): string {
+    return kind === 'review' ? '/pulls/comments' : '/issues/comments'
+  }
+
+  async updatePullRequestComment(input: UpdatePrCommentInput): Promise<PullRequestComment> {
+    const response = await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath(input.kind)}/${input.commentId}`,
+      { method: 'PATCH', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toComment(response)
+    if (!comment) throw new Error('The comment was saved but could not be read back')
+    return comment
+  }
+
+  async deletePullRequestComment(input: PrCommentTarget): Promise<void> {
+    await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath(input.kind)}/${input.commentId}`,
+      { method: 'DELETE' }
+    )
+  }
+
+  async updatePullRequestReviewComment(
+    input: UpdatePrCommentInput
+  ): Promise<PullRequestReviewComment> {
+    const response = await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath('review')}/${input.commentId}`,
+      { method: 'PATCH', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toReviewComment(response, {
+      owner: input.owner,
+      repo: input.repo,
+      pullNumber: input.pullNumber
+    })
+    if (!comment) throw new Error('The comment was saved but could not be read back')
+    return comment
+  }
+
+  async deletePullRequestReviewComment(input: PrCommentTarget): Promise<void> {
+    await this.request(
+      `${this.repoPath(input)}${this.commentCollectionPath('review')}/${input.commentId}`,
+      { method: 'DELETE' }
+    )
+  }
+
+  /**
+   * Answer an inline comment inside its thread.
+   *
+   * The reply endpoint hangs off the comment being answered, not the pull
+   * request, which is what puts the answer in that comment's thread rather than
+   * starting a new one.
+   */
+  async replyToPullRequestReviewComment(
+    input: ReplyPrReviewCommentInput
+  ): Promise<PullRequestReviewComment> {
+    const response = await this.request(
+      `${this.pullPath(input)}/comments/${String(input.commentId)}/replies`,
+      { method: 'POST', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toReviewComment(response, input)
+    if (!comment) throw new Error('The reply was posted but could not be read back')
+    return comment
+  }
+
+  /**
+   * Hide a comment behind GitHub's "minimised" treatment.
+   *
+   * GitHub exposes no REST endpoint for this, only the GraphQL mutation, and the
+   * mutation addresses the comment by its global node id rather than its number.
+   */
+  async minimizePullRequestComment(input: MinimizePrCommentInput): Promise<void> {
+    const data = await this.runGraphql(
+      'mutation MinimizeComment($subjectId: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $subjectId, classifier: $classifier }) { minimizedComment { isMinimized } } }',
+      { subjectId: input.nodeId, classifier: input.reason }
+    )
+    const mutation = this.readRecord(data, 'minimizeComment')
+    const comment = mutation ? this.readRecord(mutation, 'minimizedComment') : null
+    if (!comment || comment['isMinimized'] !== true) {
+      throw new Error('The provider did not hide the comment')
+    }
+  }
+
   async createPullRequestReview(input: CreatePrReviewInput): Promise<void> {
     await this.request(`${this.pullPath(input)}/reviews`, {
       method: 'POST',
@@ -369,14 +653,16 @@ export class GitHubProvider implements GitProvider {
       const state = this.readString(record, 'state') ?? ''
       // A "PENDING" review has not been submitted and is invisible to others.
       if (id <= 0 || state === 'PENDING') return []
-      const user = this.readRecord(record, 'user')
       return [
         {
           id,
-          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+          ...this.toAuthor(this.readRecord(record, 'user')),
+          authorAssociation: this.toAuthorAssociation(record),
           state,
           body: this.readString(record, 'body') ?? '',
-          submittedAt: this.readString(record, 'submitted_at') ?? ''
+          submittedAt: this.readString(record, 'submitted_at') ?? '',
+          url: `${this.pullPermalink(input)}#pullrequestreview-${String(id)}`,
+          nodeId: this.readString(record, 'node_id')
         }
       ]
     })
@@ -390,23 +676,206 @@ export class GitHubProvider implements GitProvider {
     })
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestReviewComment[] => {
-      if (typeof item !== 'object' || item === null) return []
-      const record = item as Record<string, unknown>
-      const id = this.readNumber(record, 'id')
-      if (id <= 0) return []
-      const user = this.readRecord(record, 'user')
-      const line = this.readNumber(record, 'line')
+      const comment = this.toReviewComment(item, input)
+      return comment ? [comment] : []
+    })
+  }
+
+  /**
+   * Resolution state for each inline thread.
+   *
+   * The comments themselves are REST, but GitHub keeps whether a thread is
+   * settled on the GraphQL thread node, so this reads through the pull
+   * request's `reviewThreads` connection instead. A failure here must not cost
+   * the reader the comments they can still see, which is why the caller treats
+   * it as optional.
+   */
+  async listPullRequestReviewThreads(input: PullRequestTarget): Promise<PullRequestReviewThread[]> {
+    const data = await this.runGraphql(
+      'query ReviewThreads($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { id isResolved isOutdated comments(first: 100) { nodes { databaseId } } } } } } }',
+      { owner: input.owner, name: input.repo, number: input.pullNumber }
+    )
+    const repository = this.readRecord(data, 'repository')
+    const pullRequest = repository ? this.readRecord(repository, 'pullRequest') : null
+    const connection = pullRequest ? this.readRecord(pullRequest, 'reviewThreads') : null
+    const nodes = connection ? connection['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): PullRequestReviewThread[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const record = node as Record<string, unknown>
+      const nodeId = this.readString(record, 'id')
+      if (!nodeId) return []
       return [
         {
-          id,
-          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
-          body: this.readString(record, 'body') ?? '',
-          path: this.readString(record, 'path') ?? '',
-          line: line > 0 ? line : null,
-          createdAt: this.readString(record, 'created_at') ?? ''
+          nodeId,
+          isResolved: record['isResolved'] === true,
+          isOutdated: record['isOutdated'] === true,
+          commentIds: this.readDatabaseIds(record)
         }
       ]
     })
+  }
+
+  /** Settle or reopen one thread through the mutation GraphQL keeps it behind. */
+  async setPullRequestReviewThreadResolved(input: ResolvePrReviewThreadInput): Promise<void> {
+    await this.runGraphql(
+      input.resolved
+        ? 'mutation ResolveReviewThread($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }'
+        : 'mutation UnresolveReviewThread($threadId: ID!) { unresolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }',
+      { threadId: input.nodeId }
+    )
+  }
+
+  /**
+   * Read the reactions on many comments at once.
+   *
+   * Reactions hang off the subject rather than off a comment list, and GitHub
+   * answers `nodes(ids:)` for up to a hundred subjects per request, so a whole
+   * conversation is one round trip instead of one per comment. The answer is
+   * keyed by node id rather than positional: a subject that could not be
+   * resolved comes back as a null entry, and the id it was asked under is what
+   * keeps the rest of the batch placeable.
+   */
+  async listPullRequestReactions(subjectNodeIds: string[]): Promise<PrReactionMap> {
+    const unique = [...new Set(subjectNodeIds.filter((id) => id.length > 0))]
+    if (unique.length === 0) return {}
+    const batches: string[][] = []
+    for (let index = 0; index < unique.length; index += REACTION_BATCH_SIZE) {
+      batches.push(unique.slice(index, index + REACTION_BATCH_SIZE))
+    }
+    const answers = await Promise.all(
+      batches.map((ids) => this.runGraphql(REACTION_GROUPS_QUERY, { ids }))
+    )
+    const reactions: PrReactionMap = {}
+    for (const data of answers) {
+      const nodes = data['nodes']
+      if (!Array.isArray(nodes)) continue
+      for (const node of nodes) {
+        if (typeof node !== 'object' || node === null) continue
+        const record = node as Record<string, unknown>
+        const nodeId = this.readString(record, 'id')
+        const groups = this.toReactionGroups(record)
+        // A subject nobody has reacted to is left out rather than carried as an
+        // empty list: GitHub answers all eight groups for every subject, and
+        // seven of them saying nothing is noise the reader would filter anyway.
+        if (!nodeId || groups.length === 0) continue
+        reactions[nodeId] = groups
+      }
+    }
+    return reactions
+  }
+
+  /**
+   * Add or take back the signed-in account's reaction on one subject.
+   *
+   * GitHub has one mutation per direction and both answer with the subject, so
+   * the write and the read are the same round trip: the caller corrects the
+   * comment it is showing from the server's answer instead of refetching a
+   * conversation that is already on screen.
+   */
+  async setPullRequestReaction(input: SetPrReactionInput): Promise<PrReactionGroup[]> {
+    const field = input.add ? 'addReaction' : 'removeReaction'
+    const data = await this.runGraphql(
+      `mutation SetReaction($subjectId: ID!, $content: ReactionContent!) { ${field}(input: { subjectId: $subjectId, content: $content }) { subject { ... on Reactable { ${REACTION_GROUP_SELECTION} } } } }`,
+      { subjectId: input.nodeId, content: input.content }
+    )
+    const mutation = this.readRecord(data, field)
+    const subject = mutation ? this.readRecord(mutation, 'subject') : null
+    if (!subject) {
+      throw new Error('The provider did not answer with the comment that was reacted to')
+    }
+    return this.toReactionGroups(subject)
+  }
+
+  /**
+   * The reaction groups on one subject that actually carry a reaction.
+   *
+   * `count` is GitHub's own total, which is authoritative: the actor list is
+   * capped by the query, so a popular reaction names its first few reactors and
+   * still reports every one of them.
+   */
+  private toReactionGroups(record: Record<string, unknown>): PrReactionGroup[] {
+    const groups = record['reactionGroups']
+    if (!Array.isArray(groups)) return []
+    return groups.flatMap((entry): PrReactionGroup[] => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const group = entry as Record<string, unknown>
+      const content = this.readString(group, 'content')
+      if (!content || !isReactionContent(content)) return []
+      const reactors = this.readRecord(group, 'reactors')
+      const count = reactors ? this.readNumber(reactors, 'totalCount') : 0
+      if (count <= 0) return []
+      return [
+        {
+          content,
+          viewerHasReacted: group['viewerHasReacted'] === true,
+          count,
+          actors: this.toReactionActors(reactors)
+        }
+      ]
+    })
+  }
+
+  /** The reactors a reaction group carries, skipping any without a login. */
+  private toReactionActors(reactors: Record<string, unknown> | null): PrReactionActor[] {
+    const nodes = reactors ? reactors['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): PrReactionActor[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const record = node as Record<string, unknown>
+      const login = this.readString(record, 'login')
+      if (!login) return []
+      return [{ login, avatarUrl: this.readString(record, 'avatarUrl') }]
+    })
+  }
+
+  /** The numeric comment ids a GraphQL thread node holds, in thread order. */
+  private readDatabaseIds(thread: Record<string, unknown>): number[] {
+    const comments = this.readRecord(thread, 'comments')
+    const nodes = comments ? comments['nodes'] : null
+    if (!Array.isArray(nodes)) return []
+    return nodes.flatMap((node): number[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const id = this.readNumber(node as Record<string, unknown>, 'databaseId')
+      return id > 0 ? [id] : []
+    })
+  }
+
+  /** Build the permalink GitHub's own site uses for a pull request conversation. */
+  private pullPermalink(input: PullRequestTarget): string {
+    return `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pullNumber)}`
+  }
+
+  /** Map an inline diff comment. GitHub's site links these with `#discussion_r<id>`. */
+  private toReviewComment(
+    payload: unknown,
+    input: PullRequestTarget
+  ): PullRequestReviewComment | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const line = this.readNumber(record, 'line')
+    const reviewId = this.readNumber(record, 'pull_request_review_id')
+    const inReplyToId = this.readNumber(record, 'in_reply_to_id')
+    const side = this.readString(record, 'side')
+    return {
+      id,
+      ...this.toAuthor(this.readRecord(record, 'user')),
+      authorAssociation: this.toAuthorAssociation(record),
+      body: this.readString(record, 'body') ?? '',
+      path: this.readString(record, 'path') ?? '',
+      line: line > 0 ? line : null,
+      // GitHub spells these `LEFT`/`RIGHT`; the app names the file they number.
+      side: side === 'LEFT' ? 'left' : side === 'RIGHT' ? 'right' : null,
+      reviewId: reviewId > 0 ? reviewId : null,
+      inReplyToId: inReplyToId > 0 ? inReplyToId : null,
+      diffHunk: this.readString(record, 'diff_hunk'),
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at'),
+      nodeId: this.readString(record, 'node_id'),
+      url: `${this.pullPermalink(input)}#discussion_r${String(id)}`
+    }
   }
 
   /**
@@ -444,7 +913,8 @@ export class GitHubProvider implements GitProvider {
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
           url: htmlUrl ?? detailsUrl,
-          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl),
+          jobId: this.jobIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -463,7 +933,8 @@ export class GitHubProvider implements GitProvider {
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
           url: targetUrl,
-          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl),
+          jobId: this.jobIdFromUrls(targetUrl)
         })
       }
     }
@@ -484,6 +955,109 @@ export class GitHubProvider implements GitProvider {
     )
     const record = Array.isArray(response) ? {} : response
     return this.toFiles(record['files'])
+  }
+
+  /**
+   * Assignable repository accounts, for @-mention autocomplete in PR conversations.
+   *
+   * `/assignees` is deliberate: `/collaborators` requires push access and 403s for
+   * a read-only contributor, while `/assignees` is readable with a read token and
+   * is the same list GitHub's own assignee picker uses.
+   */
+  async listRepositoryMentionUsers(input: {
+    owner: string
+    repo: string
+  }): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/assignees?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    const seen = new Set<string>()
+    return items.flatMap((item): RepositoryMentionUser[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const login = this.readString(record, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(record, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(record, 'avatar_url'),
+          bot: this.readString(record, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
+    })
+  }
+
+  /** Replace the labels a pull request carries, answering with the labels it now has. */
+  async setPullRequestLabels(
+    input: PullRequestTarget & { labels: string[] }
+  ): Promise<PullRequestLabel[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/issues/${input.pullNumber}/labels`,
+      { method: 'PUT', body: JSON.stringify({ labels: input.labels }) }
+    )
+    return this.toLabels(response)
+  }
+
+  /**
+   * Replace a pull request's assignees.
+   *
+   * The issues endpoint rather than the pulls one: assignees are an issue field,
+   * and it is also the only shape that answers with the resulting accounts, so the
+   * caller never has to reconstruct what the provider decided.
+   */
+  async setPullRequestAssignees(
+    input: PullRequestTarget & { logins: string[] }
+  ): Promise<RepositoryMentionUser[]> {
+    const response = await this.request(`${this.repoPath(input)}/issues/${input.pullNumber}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ assignees: input.logins })
+    })
+    const record = Array.isArray(response) ? {} : response
+    return this.toAssignees(record)
+  }
+
+  /** Attach or clear a pull request's milestone. An explicit null detaches it. */
+  async setPullRequestMilestone(
+    input: PullRequestTarget & { milestone: number | null }
+  ): Promise<PullRequestMilestone | null> {
+    const response = await this.request(`${this.repoPath(input)}/issues/${input.pullNumber}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ milestone: input.milestone })
+    })
+    const record = Array.isArray(response) ? {} : response
+    return this.toMilestone(record['milestone'])
+  }
+
+  /** The repository's own label catalog, which a label picker draws its chips from. */
+  async listRepositoryLabels(input: { owner: string; repo: string }): Promise<PullRequestLabel[]> {
+    const response = await this.request(`${this.repoPath(input)}/labels?per_page=100`, {
+      method: 'GET'
+    })
+    return this.toLabels(response)
+  }
+
+  /** The repository's open milestones. Closed ones are history, not a choice. */
+  async listRepositoryMilestones(input: {
+    owner: string
+    repo: string
+  }): Promise<PullRequestMilestone[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/milestones?state=open&per_page=100`,
+      {
+        method: 'GET'
+      }
+    )
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestMilestone[] => {
+      const milestone = this.toMilestone(item)
+      return milestone ? [milestone] : []
+    })
   }
 
   async getDeploymentOverview(input: {
@@ -598,7 +1172,7 @@ export class GitHubProvider implements GitProvider {
     return { run, jobs, fetchedAt: Date.now() }
   }
 
-  /** Capped raw log text for one workflow run job, rendered in-app. */
+  /** Raw log text for one workflow run job, capped and sectioned by the renderer. */
   async getDeploymentJobLog(input: {
     owner: string
     repo: string
@@ -606,12 +1180,28 @@ export class GitHubProvider implements GitProvider {
   }): Promise<GitHubDeploymentJobLog> {
     const path = `${this.repoPath(input)}/actions/jobs/${input.jobId}/logs`
     const text = await this.requestText(path)
-    const truncated = text.length > MAX_JOB_LOG_BYTES
+    const capped = capJobLogText(text, MAX_JOB_LOG_BYTES)
     return {
       jobId: input.jobId,
-      log: truncated ? text.slice(0, MAX_JOB_LOG_BYTES) : text,
-      truncated
+      log: capped.log,
+      truncated: capped.truncated
     }
+  }
+
+  /**
+   * Replay a workflow run. GitHub spells the two modes as separate endpoints and
+   * answers both with 201 and no body.
+   */
+  async rerunWorkflowRun(input: {
+    owner: string
+    repo: string
+    runId: number
+    mode: WorkflowRerunMode
+  }): Promise<void> {
+    const suffix = input.mode === 'failed' ? '/rerun-failed-jobs' : '/rerun'
+    await this.request(`${this.repoPath(input)}/actions/runs/${input.runId}${suffix}`, {
+      method: 'POST'
+    })
   }
 
   /** Resolve the Actions run behind a deployment: from a status URL first, then by head sha. */
@@ -658,6 +1248,22 @@ export class GitHubProvider implements GitProvider {
     for (const url of urls) {
       if (!url) continue
       const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
+  }
+
+  /**
+   * Extract the Actions job id a check points at. Actions puts
+   * `/actions/runs/{runId}/job/{jobId}` in `details_url`, which is the only place
+   * that identifies the individual matrix leg the check represents.
+   */
+  private jobIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/job\/(\d+)/u.exec(url)
       if (!match) continue
       const id = Number.parseInt(match[1] ?? '', 10)
       if (Number.isSafeInteger(id) && id > 0) return id
@@ -776,7 +1382,11 @@ export class GitHubProvider implements GitProvider {
         throw new ProviderHttpError(response.status, message)
       }
       if (response.status === 204) return {}
-      return (await response.json()) as Record<string, unknown> | unknown[]
+      // A re-run answers 201 with an empty body, which `json()` cannot parse; a
+      // body-less success is a value-less success, not a malformed response.
+      const text = await response.text()
+      if (!text.trim()) return {}
+      return JSON.parse(text) as Record<string, unknown> | unknown[]
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
         throw new Error('Provider request timed out', { cause: failure })
@@ -1002,6 +1612,275 @@ export class GitHubProvider implements GitProvider {
     return `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`
   }
 
+  /**
+   * Run one GraphQL query or mutation and return its `data` record.
+   *
+   * Some GitHub operations exist only on GraphQL, so the transport and its error
+   * unwrapping live here once rather than in each caller. The unwrapping matters:
+   * GraphQL answers HTTP 200 with an `errors` array when a request is rejected,
+   * so without this a failure would read as success.
+   */
+  private async runGraphql(
+    query: string,
+    variables: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const response = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({ query, variables })
+    })
+    const responseRecord = Array.isArray(response) ? {} : response
+    const errors = responseRecord['errors']
+    if (Array.isArray(errors)) {
+      const first = errors.find(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      )
+      const message = first ? this.readString(first, 'message') : null
+      const type = first ? this.readString(first, 'type') : null
+      throw new ProviderGraphqlError(
+        message?.slice(0, 500) ?? 'The provider rejected the request',
+        type
+      )
+    }
+    return this.readRecord(responseRecord, 'data') ?? {}
+  }
+
+  /**
+   * Map one GraphQL search node to the renderer-safe summary, or null when it is
+   * not a pull request (an issue search returns both kinds of node) or has no
+   * usable number.
+   */
+  private toGraphqlSummary(
+    payload: unknown,
+    owner: string,
+    repo: string
+  ): PullRequestSummary | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    if (this.readString(record, '__typename') !== 'PullRequest') return null
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    const author = this.readRecord(record, 'author')
+    const login = author ? (this.readString(author, 'login') ?? 'unknown') : 'unknown'
+    const rawState = this.readString(record, 'state')
+    const state: PullRequestSummary['state'] =
+      rawState === 'MERGED' ? 'merged' : rawState === 'CLOSED' ? 'closed' : 'open'
+    const checks = this.readChecksRollup(record)
+    const mergeStateStatus = this.readString(record, 'mergeStateStatus')
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Pull request #${number}`,
+      url: this.readString(record, 'url') ?? `https://github.com/${owner}/${repo}/pull/${number}`,
+      state,
+      draft: record['isDraft'] === true,
+      authorLogin: login,
+      authorAvatarUrl: author ? this.readString(author, 'avatarUrl') : null,
+      authorIsBot: login.endsWith('[bot]'),
+      headRef: this.readString(record, 'headRefName') ?? '',
+      baseRef: this.readString(record, 'baseRefName') ?? '',
+      createdAt: this.readString(record, 'createdAt') ?? '',
+      updatedAt: this.readString(record, 'updatedAt') ?? '',
+      comments: this.readNumber(record, 'totalCommentsCount'),
+      labels: this.readLabels(record),
+      assignees: this.readGraphqlAssignees(record),
+      milestone: this.readGraphqlMilestone(record),
+      ...(checks ? { checks } : {}),
+      mergeable: this.readMergeable(record),
+      mergeableState: mergeStateStatus ? mergeStateStatus.toLowerCase() : null
+    }
+  }
+
+  /**
+   * Assigned accounts from the GraphQL listing.
+   *
+   * The listing's `assignees` connection is typed as users, so the app-account
+   * signal is the `[bot]` login suffix here rather than the user `type` REST
+   * exposes.
+   */
+  private readGraphqlAssignees(record: Record<string, unknown>): RepositoryMentionUser[] {
+    const connection = this.readRecord(record, 'assignees')
+    const nodes: unknown[] =
+      connection && Array.isArray(connection['nodes']) ? connection['nodes'] : []
+    return nodes.flatMap((node): RepositoryMentionUser[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const entry = node as Record<string, unknown>
+      const login = this.readString(entry, 'login')?.trim()
+      if (!login) return []
+      return [
+        {
+          login,
+          name: this.readString(entry, 'name'),
+          avatarUrl: this.readString(entry, 'avatarUrl'),
+          bot: login.endsWith('[bot]')
+        }
+      ]
+    })
+  }
+
+  /** The milestone a GraphQL listing node reports, or null when it has none. */
+  private readGraphqlMilestone(record: Record<string, unknown>): PullRequestMilestone | null {
+    const milestone = this.readRecord(record, 'milestone')
+    if (!milestone) return null
+    const number = this.readNumber(milestone, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      title: this.readString(milestone, 'title') ?? `Milestone ${number}`,
+      state: this.readString(milestone, 'state') === 'CLOSED' ? 'closed' : 'open',
+      description: this.readString(milestone, 'description'),
+      dueOn: this.readString(milestone, 'dueOn')
+    }
+  }
+
+  /** GitHub's tri-state mergeability as a listing reports it; UNKNOWN stays null. */
+  private readMergeable(record: Record<string, unknown>): boolean | null {
+    const value = this.readString(record, 'mergeable')
+    if (value === 'MERGEABLE') return true
+    if (value === 'CONFLICTING') return false
+    return null
+  }
+
+  /** Labels in GitHub's own order, dropping entries a chip cannot draw. */
+  private readLabels(record: Record<string, unknown>): PullRequestLabel[] {
+    const labels = this.readRecord(record, 'labels')
+    const nodes: unknown[] = labels && Array.isArray(labels['nodes']) ? labels['nodes'] : []
+    return nodes.flatMap((node): PullRequestLabel[] => {
+      if (typeof node !== 'object' || node === null) return []
+      const entry = node as Record<string, unknown>
+      const name = this.readString(entry, 'name')
+      if (!name) return []
+      return [{ name, color: this.readString(entry, 'color') ?? '' }]
+    })
+  }
+
+  /**
+   * Map a label list from either REST shape.
+   *
+   * The label endpoints answer with label objects while older payloads answer
+   * with the bare names, so both are read here and a name that is not a usable
+   * chip is dropped rather than drawn as an empty one.
+   */
+  private toLabels(payload: unknown): PullRequestLabel[] {
+    if (!Array.isArray(payload)) return []
+    const seen = new Set<string>()
+    const labels: PullRequestLabel[] = []
+    for (const entry of payload) {
+      const label = this.toLabel(entry)
+      if (!label) continue
+      const key = label.name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      labels.push(label)
+    }
+    return labels
+  }
+
+  /** One label from either REST shape, or null when it carries no usable name. */
+  private toLabel(entry: unknown): PullRequestLabel | null {
+    if (typeof entry === 'string') {
+      const name = entry.trim()
+      return name ? { name, color: '', description: null } : null
+    }
+    if (typeof entry !== 'object' || entry === null) return null
+    const record = entry as Record<string, unknown>
+    const name = this.readString(record, 'name')?.trim()
+    if (!name) return null
+    return {
+      name,
+      color: this.readString(record, 'color') ?? '',
+      description: this.readString(record, 'description')
+    }
+  }
+
+  /** Map one milestone payload, or null when it is not a usable milestone. */
+  private toMilestone(payload: unknown): PullRequestMilestone | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Milestone ${number}`,
+      state: this.readString(record, 'state') === 'closed' ? 'closed' : 'open',
+      description: this.readString(record, 'description'),
+      dueOn: this.readString(record, 'due_on')
+    }
+  }
+
+  /** Assigned accounts from an issue payload, deduplicated by login. */
+  private toAssignees(record: Record<string, unknown>): RepositoryMentionUser[] {
+    const raw: unknown[] = Array.isArray(record['assignees'])
+      ? (record['assignees'] as unknown[])
+      : []
+    const seen = new Set<string>()
+    return raw.flatMap((entry): RepositoryMentionUser[] => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const user = entry as Record<string, unknown>
+      const login = this.readString(user, 'login')?.trim()
+      if (!login) return []
+      const key = login.toLowerCase()
+      if (seen.has(key)) return []
+      seen.add(key)
+      const name = this.readString(user, 'name')?.trim()
+      return [
+        {
+          login,
+          name: name ? name : null,
+          avatarUrl: this.readString(user, 'avatar_url'),
+          bot: this.readString(user, 'type') === 'Bot' || login.endsWith('[bot]')
+        }
+      ]
+    })
+  }
+
+  /**
+   * Roll up the head commit's checks, or undefined when the commit carries no
+   * status rollup at all.
+   *
+   * Undefined rather than a `none` state on purpose: the list draws no check
+   * signal for a repository that never ran anything, while `none` means the
+   * rollup exists and is empty.
+   */
+  private readChecksRollup(record: Record<string, unknown>): PullRequestChecksRollup | undefined {
+    const commits = this.readRecord(record, 'commits')
+    const commitNodes: unknown[] =
+      commits && Array.isArray(commits['nodes']) ? commits['nodes'] : []
+    const headNode = commitNodes[0]
+    if (typeof headNode !== 'object' || headNode === null) return undefined
+    const commit = this.readRecord(headNode as Record<string, unknown>, 'commit')
+    const rollup = commit ? this.readRecord(commit, 'statusCheckRollup') : null
+    if (!rollup) return undefined
+    const rawState = this.readString(rollup, 'state')
+    const state: PullRequestChecksRollup['state'] =
+      rawState === 'SUCCESS'
+        ? 'success'
+        : rawState === 'FAILURE' || rawState === 'ERROR'
+          ? 'failure'
+          : rawState === 'PENDING' || rawState === 'EXPECTED'
+            ? 'pending'
+            : 'none'
+    const contexts = this.readRecord(rollup, 'contexts')
+    const contextNodes: unknown[] =
+      contexts && Array.isArray(contexts['nodes']) ? contexts['nodes'] : []
+    let passed = 0
+    for (const context of contextNodes) {
+      if (typeof context !== 'object' || context === null) continue
+      const entry = context as Record<string, unknown>
+      const typename = this.readString(entry, '__typename')
+      const succeeded =
+        (typename === 'CheckRun' &&
+          this.readString(entry, 'status') === 'COMPLETED' &&
+          this.readString(entry, 'conclusion') === 'SUCCESS') ||
+        (typename === 'StatusContext' && this.readString(entry, 'state') === 'SUCCESS')
+      if (succeeded) passed += 1
+    }
+    return {
+      state,
+      passed,
+      total: contexts ? this.readNumber(contexts, 'totalCount') : 0
+    }
+  }
+
   private pullPath(input: PullRequestTarget): string {
     return `${this.repoPath(input)}/pulls/${input.pullNumber}`
   }
@@ -1027,12 +1906,15 @@ export class GitHubProvider implements GitProvider {
         this.readString(record, 'html_url') ?? `https://github.com/${owner}/${repo}/pull/${number}`,
       state,
       draft: record['draft'] === true,
-      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      ...this.toAuthor(user),
       headRef: head ? (this.readString(head, 'ref') ?? '') : '',
       baseRef: base ? (this.readString(base, 'ref') ?? '') : '',
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at') ?? '',
       comments: this.readNumber(record, 'comments'),
+      labels: this.toLabels(record['labels']),
+      assignees: this.toAssignees(record),
+      milestone: this.toMilestone(record['milestone']),
       mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
       mergeableState: mergeableStateRaw || null
     }
@@ -1043,13 +1925,64 @@ export class GitHubProvider implements GitProvider {
     const record = payload as Record<string, unknown>
     const id = this.readNumber(record, 'id')
     if (id <= 0) return null
-    const user = this.readRecord(record, 'user')
     return {
       id,
-      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      ...this.toAuthor(this.readRecord(record, 'user')),
+      authorAssociation: this.toAuthorAssociation(record),
       body: this.readString(record, 'body') ?? '',
       createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at'),
+      nodeId: this.readString(record, 'node_id'),
       url: this.readString(record, 'html_url') ?? ''
+    }
+  }
+
+  /**
+   * What the commenter is to the repository.
+   *
+   * GitHub reports this on every REST comment payload as `author_association`,
+   * and the conversation labels the commenter with it. A value GitHub has not
+   * documented is dropped rather than passed through: the row draws the word,
+   * and a word the reader cannot place is worse than no label at all.
+   */
+  private toAuthorAssociation(record: Record<string, unknown>): PrAuthorAssociation | null {
+    const raw = this.readString(record, 'author_association')
+    switch (raw) {
+      case 'OWNER':
+      case 'MEMBER':
+      case 'COLLABORATOR':
+      case 'CONTRIBUTOR':
+      case 'FIRST_TIMER':
+      case 'FIRST_TIME_CONTRIBUTOR':
+      case 'MANNEQUIN':
+      case 'NONE':
+        return raw
+      default:
+        return null
+    }
+  }
+
+  /**
+   * The author fields every conversation row renders.
+   *
+   * The declared `avatar_url` is what makes an app account's picture correct.
+   * Asking the avatar CDN for a login alone answers with GitHub's meaningless
+   * generated identicon for a `[bot]` account, while this URL is the picture the
+   * app itself published   the one github.com shows next to the same comment.
+   */
+  private toAuthor(user: Record<string, unknown> | null): {
+    authorLogin: string
+    authorAvatarUrl: string | null
+    authorIsBot: boolean
+  } {
+    if (!user) return { authorLogin: 'unknown', authorAvatarUrl: null, authorIsBot: false }
+    const login = this.readString(user, 'login') ?? 'unknown'
+    return {
+      authorLogin: login,
+      authorAvatarUrl: this.readString(user, 'avatar_url'),
+      // `type` is the authoritative signal; the `[bot]` suffix is a fallback for
+      // payloads that omit the user object's type.
+      authorIsBot: this.readString(user, 'type') === 'Bot' || login.endsWith('[bot]')
     }
   }
 

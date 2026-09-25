@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Clock, StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -7,7 +7,9 @@
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket, type Thread } from '$shared/types'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { formatDateTime } from '$shared/date-time-format'
+  import type { Thread } from '$shared/types'
 
   interface Props {
     thread: Thread
@@ -17,6 +19,14 @@
     stageLabel?: string
     /** Whether the provider is waiting for an automatic retry. */
     isRetryPaused?: boolean
+    /** Whether this thread's in-flight turn belongs to another CodeInOven
+     *  instance, which is where its live output and stop control are. */
+    isForeignRun?: boolean
+    /**
+     * Force-hide the Project/Repository rows. Assistant tasks live in the
+     * hidden assistant container, so its internal project is noise here.
+     */
+    hideProject?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
       | 'unread'
@@ -36,6 +46,8 @@
     thread,
     isWorking = false,
     isRetryPaused = false,
+    isForeignRun = false,
+    hideProject = false,
     stageLabel = '',
     threadState = 'read'
   }: Props = $props()
@@ -46,16 +58,12 @@
   )
 
   /** While the sidebar is scoped to one project, Project/Repository are redundant. */
-  let hideProjectInfo = $derived(Boolean(scopeState.sidebarContext))
+  let showProjectInfo = $derived(!hideProject && !scopeState.sidebarContext)
 
   /** Git remote origin URL for the thread's project, resolved lazily on hover. */
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
 
-  let scopeBucket = $derived.by((): ScopeBucket | null => {
-    const bucketId = scopeState.bucketForThread(thread)
-    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return null
-    return scopeState.bucketFor(thread.projectId, bucketId)
-  })
+  let scopeBucket = $derived(threadScopeBucket(thread))
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -73,17 +81,16 @@
       void projectRemotes.ensure(project.id, project.path)
     }
   })
-
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    })
-  }
 </script>
 
 <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
 <dl class="space-y-1.5 text-[0.6875rem]">
+  <div class="flex gap-2">
+    <dt class="w-16 shrink-0 text-dimmed">ID</dt>
+    <dd class="min-w-0 select-all break-all font-mono text-muted" title={thread.id}>
+      {thread.id}
+    </dd>
+  </div>
   {#if scopeBucket}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
@@ -100,13 +107,13 @@
       </dd>
     </div>
   {/if}
-  {#if project && !hideProjectInfo}
+  {#if project && showProjectInfo}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Project</dt>
       <dd class="min-w-0 break-words text-muted">{project.name}</dd>
     </div>
     <div class="flex gap-2">
-      <dt class="w-16 shrink-0 text-dimmed">Repository</dt>
+      <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
       <dd class="min-w-0 break-words text-muted" title={remoteOriginUrl ?? project.path}>
         {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : ' '}
       </dd>
@@ -114,13 +121,27 @@
   {/if}
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Created</dt>
-    <dd class="text-muted">{formatDate(thread.createdAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.createdAt)}</dd>
   </div>
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
-    <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
+    <dd class="text-muted">{formatDateTime(thread.updatedAt)}</dd>
   </div>
-  {#if isWorking}
+  {#if isForeignRun}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-muted">
+        <StatusBadge
+          stage="working"
+          variant="icon"
+          icon={AppWindow}
+          size="sm"
+          title="Running in another instance"
+        />
+        Running in another instance
+      </dd>
+    </div>
+  {:else if isWorking}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-muted">

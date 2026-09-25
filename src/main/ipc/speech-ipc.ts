@@ -372,7 +372,7 @@ export function registerSpeechIpc(
     )
   )
   ipcMain.handle('speech:readAudio', (_event, rawAttemptId: unknown) =>
-    speechResult(() => service.readAudio(entityId(rawAttemptId, 'Attempt id')))
+    speechResult(() => service.readPlaybackAudio(entityId(rawAttemptId, 'Attempt id')))
   )
   ipcMain.handle(
     'speech:retryTranscription',

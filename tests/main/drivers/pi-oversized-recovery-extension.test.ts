@@ -13,6 +13,7 @@ afterEach(async () => {
 interface ContextMessage {
   role: string
   content: unknown
+  toolCallId?: string
 }
 
 /** Load the generated extension with a stub ExtensionAPI and flag file. */
@@ -27,17 +28,36 @@ async function loadExtension(armed: boolean): Promise<{
   roots.push(root)
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'flag.json'), JSON.stringify({ armed }))
-  // Pi injects its extension API module. Load only the two real helpers here:
-  // importing the package root outside Pi also loads its optional server SDK.
+  // Pi injects its extension API module. Load only the real helpers the
+  // extension imports here: importing the package root outside Pi also loads
+  // its optional server SDK.
   const sdk = join(process.cwd(), 'node_modules/@earendil-works/pi-coding-agent/dist/core')
+  const sdkFileFor = (binding: string): string => {
+    if (binding === 'serializeConversation') return 'compaction/utils.js'
+    if (binding === 'findCutPoint') return 'compaction/compaction.js'
+    return 'messages.js'
+  }
   const source = piCompactionExtension()
     // JSON-escape like the production composer does: a raw Windows path
     // contains backslash sequences (\t, \b) that corrupt the generated
     // string literal and silently disarm the extension.
     .replace('__CIO_OVERSIZED_FLAG_PATH__', JSON.stringify(join(root, 'flag.json')).slice(1, -1))
     .replace(
-      "import { convertToLlm, serializeConversation } from '@earendil-works/pi-coding-agent'",
-      `import { convertToLlm } from '${pathToFileURL(join(sdk, 'messages.js')).href}'\nimport { serializeConversation } from '${pathToFileURL(join(sdk, 'compaction/utils.js')).href}'`
+      '__CIO_COMPACTION_CONTEXT_PATH__',
+      JSON.stringify(join(root, 'compaction-context.json')).slice(1, -1)
+    )
+    .replace(
+      /^import \{ ([^}]+) \} from '@earendil-works\/pi-coding-agent'$/mu,
+      (_line: string, bindings: string) =>
+        bindings
+          .split(',')
+          .map((binding) => binding.trim())
+          .filter((binding) => binding.length > 0)
+          .map(
+            (binding) =>
+              `import { ${binding} } from '${pathToFileURL(join(sdk, sdkFileFor(binding))).href}'`
+          )
+          .join('\n')
     )
   await writeFile(join(root, 'ext.ts'), source)
   type ContextHook = (
@@ -60,7 +80,12 @@ describe('piCompactionExtension', () => {
   const messages: ContextMessage[] = [
     { role: 'user', content: [{ type: 'text', text: 'hi' }] },
     {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call_1', name: 'read', arguments: {} }]
+    },
+    {
       role: 'toolResult',
+      toolCallId: 'call_1',
       content: [
         { type: 'text', text: 'ok' },
         { type: 'image', data: 'QUFBQQ==', mimeType: 'image/png' }
@@ -72,11 +97,11 @@ describe('piCompactionExtension', () => {
     const { context } = await loadExtension(true)
     const result = await context({ messages: structuredClone(messages) })
     expect(result).toBeDefined()
-    const tool = result?.messages[1]?.content as Array<{ type: string; text?: string }>
+    const tool = result?.messages[2]?.content as Array<{ type: string; text?: string }>
     expect(tool.some((part) => part.type === 'image')).toBe(false)
     expect(tool[1]?.text).toContain('image removed from the provider request')
     // The caller's messages are untouched (non-destructive).
-    const original = messages[1]?.content as Array<{ type: string }>
+    const original = messages[2]?.content as Array<{ type: string }>
     expect(original.some((part) => part.type === 'image')).toBe(true)
   })
 

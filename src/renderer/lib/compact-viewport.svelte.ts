@@ -1,13 +1,13 @@
 /**
- * Reactive "are we on a phone-sized viewport" flag.
+ * Reactive "is the viewport narrower than the md breakpoint" flag.
  *
  * Tailwind's `max-md:` variants cover everything the stylesheet can express,
  * but a few places position elements with inline `style:` directives — and an
  * inline style always beats a class. Those call sites need the breakpoint as a
  * value, not as CSS, so they can skip the desktop positioning entirely.
  *
- * The desktop window has a 1024px minimum width, so this is only ever true on
- * the remote PWA.
+ * The primary window has a 1024px minimum width, so this is only ever true on
+ * a deliberately narrow window.
  */
 
 /** Matches Tailwind's `md` breakpoint (48rem). */

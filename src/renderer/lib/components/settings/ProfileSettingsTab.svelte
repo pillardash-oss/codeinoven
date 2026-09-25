@@ -1,124 +1,94 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { SvelteDate, SvelteMap } from 'svelte/reactivity'
-  import { Brain, Check, ChevronDown, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu, Popover } from 'bits-ui'
+  import { SvelteDate } from 'svelte/reactivity'
+  import { Brain, Check, ChevronDown, Loader2, RefreshCw, Sparkles, Trash2 } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import type {
-    AccountAuthProvider,
-    AccountProfileState,
-    AccountUsageBreakdown,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
     LocalProfileModelRanking,
     LocalProfileProjectBreakdown,
-    LocalProfileRankingModeStats,
-    LocalProfileUsageBreakdown,
     LocalProfileUsageHour,
+    LocalRankingGradeScope,
+    LocalRankingQueueStatus,
     ThinkingLevel
   } from '$shared/types'
-  import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import {
+    activityClass,
+    analyticsRange,
+    dateInputValue,
+    DEFAULT_RANGE,
+    EMPTY_USAGE,
+    formatCost,
+    formatDate,
+    formatDateRange,
+    formatDuration,
+    formatHour,
+    formatIdentifier,
+    formatNumber,
+    formatUsageDate,
+    localDateFromInput,
+    MODEL_RANK_METRICS,
+    RANGE_PRESETS,
+    rankingAggregateLabel,
+    rankingDurationLabel,
+    rankingSamplesLabel,
+    rankingScoreLabel,
+    rankingTotalSamplesLabel,
+    thinkingLevelLabel,
+    usageHeight,
+    usageWidth,
+    utilityLabel,
+    type ModelRankMetric,
+    type RangePreset,
+    type RankingSortKey,
+    type ShotFilter,
+    type ThinkingFilter
+  } from './profile-settings-format'
+  import {
+    buildCalendarWeeks,
+    buildHourlyTimeline,
+    compareRankings,
+    groupTopModels
+  } from './profile-settings-analytics'
+  import {
+    clearedRecordsSummary,
+    usageClearConfirmation,
+    usageClearInfo,
+    usageClearRecordCount,
+    USAGE_RECORD_STORES,
+    usageRecordSummary,
+    type UsageClearCopyPart,
+    type UsageClearTarget
+  } from './profile-settings-records'
+  import {
+    rankingGradeConfirmation,
+    rankingGradeNotice,
+    rankingGradeProgressLabel
+  } from './profile-settings-grading'
+  import RankingJudgePicker from './RankingJudgePicker.svelte'
 
-  type ThinkingFilter = 'all' | ThinkingLevel
-  type ShotFilter = 'all' | 'one_shot' | 'multi_shot'
-  type RankingSortKey = 'aggregate' | 'one_shot' | 'multi_shot'
-  type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
-  type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
-
-  interface CalendarDay {
-    date: string
-    count: number
-    outsideRange: boolean
-    selected: boolean
-  }
-
-  interface CalendarWeek {
-    days: CalendarDay[]
-    monthLabel: string
-    selected: boolean
-    rangeStart: boolean
-    rangeEnd: boolean
-  }
-
-  const RANGE_PRESETS: ReadonlyArray<{
-    id: Exclude<RangePreset, 'custom'>
-    label: string
-    days: number
-    endOffsetDays?: number
-  }> = [
-    { id: 'today', label: 'Today', days: 1 },
-    { id: 'yesterday', label: 'Yesterday', days: 1, endOffsetDays: 0 },
-    { id: '7d', label: '7 days', days: 7 },
-    { id: '30d', label: '30 days', days: 30 },
-    { id: 'year', label: '12 months', days: 365 }
-  ]
-  const MODEL_RANK_METRICS: readonly ModelRankMetric[] = ['cost', 'tokens', 'runtime']
-
-  function analyticsRange(days: number, endOffsetDays = 1): LocalProfileAnalyticsRange {
-    const end = new SvelteDate()
-    end.setHours(0, 0, 0, 0)
-    end.setDate(end.getDate() + endOffsetDays)
-    const start = new SvelteDate(end)
-    start.setDate(end.getDate() - days)
-    return { startAt: start.getTime(), endAt: end.getTime() }
-  }
-
-  function dateInputValue(value: number): string {
-    return localDateKey(new SvelteDate(value))
-  }
-
-  function localDateFromInput(value: string): SvelteDate | null {
-    const parts = value.split('-').map(Number)
-    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null
-    const [year, month, day] = parts
-    if (year === undefined || month === undefined || day === undefined) return null
-    const date = new SvelteDate(year, month - 1, day)
-    date.setHours(0, 0, 0, 0)
-    return localDateKey(date) === value ? date : null
-  }
-
-  const DEFAULT_RANGE = analyticsRange(365)
-
-  const EMPTY_USAGE: LocalProfileAnalytics = {
-    range: DEFAULT_RANGE,
-    activityRange: analyticsRange(365),
-    messageCount: 0,
-    costUsd: 0,
-    tokens: 0,
-    durationMs: 0,
-    topHarnessId: null,
-    topProviderId: null,
-    topModelId: null,
-    harnesses: [],
-    providers: [],
-    models: [],
-    thinkingLevels: [],
-    utilities: [],
-    projects: [],
-    activityDays: [],
-    dailyUsage: [],
-    hourlyUsage: [],
-    modelRankings: [],
-    responseDurationMs: 0,
-    gradingSpend: {
-      costUsd: 0
-    },
-    generatedAt: 0
+  /**
+   * The queue shown until the real one arrives, so the grading dialog always
+   * has copy to render and never flashes an empty sentence.
+   */
+  const EMPTY_QUEUE: LocalRankingQueueStatus = {
+    awaiting: 0,
+    due: 0,
+    failed: 0,
+    judge: { kind: 'automatic', label: 'Automatic' },
+    run: null
   }
 
   let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE) // responseDurationMs added below
-  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')
-  let signInOpen = $state(false)
-  let signOutOpen = $state(false)
-  let accountBusy = $state(false)
-  let activeProvider = $state<AccountAuthProvider | null>(null)
-  let signInError = $state('')
   let selectedRange = $state<LocalProfileAnalyticsRange>(DEFAULT_RANGE)
   let rangePreset = $state<RangePreset>('year')
   let customStartDate = $state(dateInputValue(DEFAULT_RANGE.startAt))
@@ -127,27 +97,12 @@
   let usageRequestGeneration = 0
   let modelRankMetric = $state<ModelRankMetric>('tokens')
 
-  const accountProfile = $derived(accountState.profile)
-  const syncedDevices = $derived(
-    accountProfile
-      ? Object.values(accountProfile.usageByDevice).sort((a, b) => b.durationMs - a.durationMs)
-      : []
-  )
   const rangeLabel = $derived(formatDateRange(usage.range))
   const rangePresetLabel = $derived(
     rangePreset === 'custom'
       ? 'Custom range'
       : (RANGE_PRESETS.find((preset) => preset.id === rangePreset)?.label ?? 'Select range')
   )
-  const accountInitials = $derived.by(() => {
-    const source = accountProfile?.displayName || accountProfile?.email || ''
-    return source
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  })
 
   const activityByDate = $derived(
     new Map(usage.activityDays.map((day) => [day.date, day.messageCount]))
@@ -155,57 +110,7 @@
   const maxActivity = $derived(
     usage.activityDays.reduce((maximum, day) => Math.max(maximum, day.messageCount), 0)
   )
-  const calendarWeeks = $derived.by(() => {
-    const rangeStart = new SvelteDate(usage.activityRange.startAt)
-    const rangeEndDay = new SvelteDate(usage.activityRange.endAt - 1)
-    const start = new SvelteDate(rangeStart)
-    start.setDate(rangeStart.getDate() - rangeStart.getDay())
-    start.setHours(12, 0, 0, 0)
-    const end = new SvelteDate(rangeEndDay)
-    end.setDate(rangeEndDay.getDate() + (6 - rangeEndDay.getDay()))
-    end.setHours(12, 0, 0, 0)
-
-    const weeks: CalendarWeek[] = []
-    let previousMonth = -1
-    for (let weekIndex = 0; weekIndex < 54; weekIndex += 1) {
-      const days: CalendarDay[] = []
-      const firstDay = new SvelteDate(start)
-      firstDay.setDate(start.getDate() + weekIndex * 7)
-      if (firstDay.getTime() > end.getTime()) break
-      const month = firstDay.getMonth()
-      const monthLabel =
-        month !== previousMonth ? firstDay.toLocaleDateString(undefined, { month: 'short' }) : ''
-      previousMonth = month
-
-      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
-        const date = new SvelteDate(firstDay)
-        date.setDate(firstDay.getDate() + dayIndex)
-        const key = localDateKey(date)
-        days.push({
-          date: key,
-          count: activityByDate.get(key) ?? 0,
-          outsideRange:
-            date.getTime() < usage.activityRange.startAt ||
-            date.getTime() >= usage.activityRange.endAt,
-          selected: date.getTime() >= usage.range.startAt && date.getTime() < usage.range.endAt
-        })
-      }
-      weeks.push({
-        days,
-        monthLabel,
-        selected: days.some((day) => day.selected),
-        rangeStart: false,
-        rangeEnd: false
-      })
-    }
-    const firstSelectedWeek = weeks.findIndex((week) => week.selected)
-    const lastSelectedWeek = weeks.findLastIndex((week) => week.selected)
-    const rangeStartWeek = weeks[firstSelectedWeek]
-    const rangeEndWeek = weeks[lastSelectedWeek]
-    if (rangeStartWeek) rangeStartWeek.rangeStart = true
-    if (rangeEndWeek) rangeEndWeek.rangeEnd = true
-    return weeks
-  })
+  const calendarWeeks = $derived(buildCalendarWeeks(usage, activityByDate))
   const calendarResponseCount = $derived(
     calendarWeeks.reduce(
       (total, week) =>
@@ -235,21 +140,7 @@
   const maxDailyTokens = $derived(
     usage.dailyUsage.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
-  const hourlyTimeline = $derived.by(() => {
-    const byHour = new Map(usage.hourlyUsage.map((item) => [item.hour, item]))
-    return Array.from({ length: 24 }, (_, hour): LocalProfileUsageHour => {
-      return (
-        byHour.get(hour) ?? {
-          id: String(hour),
-          hour,
-          messageCount: 0,
-          costUsd: 0,
-          tokens: 0,
-          durationMs: 0
-        }
-      )
-    })
-  })
+  const hourlyTimeline = $derived(buildHourlyTimeline(usage.hourlyUsage))
   const maxHourlyTokens = $derived(
     hourlyTimeline.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
@@ -268,51 +159,45 @@
 
   let thinkingFilter = $state<ThinkingFilter>('all')
   let shotFilter = $state<ShotFilter>('all')
+  /** Clear action awaiting confirmation; null while the dialog is closed. */
+  let pendingClear = $state<UsageClearTarget | null>(null)
+  let clearBusy = $state(false)
+  let clearNotice = $state('')
+  /** Ranking queue and its judge, read on mount and after every run. */
+  let queue = $state<LocalRankingQueueStatus | null>(null)
+  /** True while the grade request this window started is still running. */
+  let gradeBusy = $state(false)
+  let gradeNotice = $state('')
+  /** True while the grade confirmation is open. */
+  let gradeConfirmOpen = $state(false)
 
-  /** Sample-weighted average across both shot categories; null when nothing is ranked yet. */
-  function rankingAggregate(entry: LocalProfileModelRanking): number | null {
-    const oneShotScore = entry.oneShot.averageScore
-    const multiShotScore = entry.multiShot.averageScore
-    const samples = entry.oneShot.samples + entry.multiShot.samples
-    if (samples === 0) return null
-    const weighted =
-      (oneShotScore === null ? 0 : oneShotScore * entry.oneShot.samples) +
-      (multiShotScore === null ? 0 : multiShotScore * entry.multiShot.samples)
-    const scoredSamples =
-      (oneShotScore === null ? 0 : entry.oneShot.samples) +
-      (multiShotScore === null ? 0 : entry.multiShot.samples)
-    return scoredSamples === 0 ? null : weighted / scoredSamples
-  }
+  const gradeRun = $derived(queue?.run ?? null)
+  /**
+   * Conversations still awaiting a grade, taken from the live queue while a run
+   * is in flight so the record row counts down with the run instead of sitting
+   * on the total it had when the page loaded.
+   */
+  const awaitingGrades = $derived(
+    gradeRun ? gradeRun.remaining : (queue?.awaiting ?? usage.records.pendingGrades)
+  )
+  const liveRecords = $derived({ ...usage.records, pendingGrades: awaitingGrades })
+  const gradeConfirmation = $derived(rankingGradeConfirmation(queue ?? EMPTY_QUEUE))
+  /** True when the two scopes differ, so offering both is not a choice between equals. */
+  const gradeOffersBothScopes = $derived(
+    gradeConfirmation.dueLabel !== null && (queue?.due ?? 0) < (queue?.awaiting ?? 0)
+  )
+  /** Scope the confirmation's primary action runs. */
+  const gradePrimaryScope = $derived<LocalRankingGradeScope>(
+    gradeConfirmation.dueLabel === null ? 'all' : 'due'
+  )
 
-  function rankingSortValue(entry: LocalProfileModelRanking, key: RankingSortKey): number | null {
-    if (key === 'aggregate') return rankingAggregate(entry)
-    const stats = key === 'one_shot' ? entry.oneShot : entry.multiShot
-    return stats.samples === 0 ? null : stats.averageScore
-  }
-
-  function compareRankings(
-    left: LocalProfileModelRanking,
-    right: LocalProfileModelRanking,
-    key: RankingSortKey,
-    direction: 1 | -1
-  ): number {
-    const leftValue = rankingSortValue(left, key)
-    const rightValue = rankingSortValue(right, key)
-    // Unranked configurations (null) always sink below scored ones.
-    if (leftValue === null || rightValue === null) {
-      if (leftValue === rightValue) return right.updatedAt - left.updatedAt
-      return leftValue === null ? 1 : -1
-    }
-    const difference = (leftValue - rightValue) * direction
-    if (difference !== 0) return difference
-    const sampleDifference =
-      left.oneShot.samples +
-      left.multiShot.samples -
-      (right.oneShot.samples + right.multiShot.samples)
-    if (sampleDifference !== 0) return sampleDifference * -1
-    return right.updatedAt - left.updatedAt
-  }
-
+  // Always resolved: the dialog stays mounted so the shared modal owns initial
+  // focus on every open. While closed the copy belongs to the 'all' target and
+  // is never rendered.
+  const clearConfirmation = $derived(
+    usageClearConfirmation(pendingClear ?? 'all', liveRecords, usage.range)
+  )
+  const totalRecords = $derived(usageClearRecordCount('all', liveRecords))
   const filteredRankings = $derived(
     shotFilter === 'all'
       ? usage.modelRankings
@@ -356,40 +241,7 @@
     { value: 'multi_shot', label: 'Multi-shot' }
   ]
 
-  const topModels = $derived.by(() => {
-    const grouped = new SvelteMap<string, LocalProfileUsageBreakdown>()
-    for (const model of usage.models) {
-      const key = `${model.harnessId ?? ''}:${model.providerId ?? ''}:${model.id}`
-      const existing = grouped.get(key)
-      if (existing) {
-        existing.messageCount += model.messageCount
-        existing.costUsd += model.costUsd
-        existing.tokens += model.tokens
-        existing.durationMs += model.durationMs
-        continue
-      }
-      grouped.set(key, {
-        id: model.id,
-        ...(model.harnessId ? { harnessId: model.harnessId } : {}),
-        ...(model.providerId ? { providerId: model.providerId } : {}),
-        messageCount: model.messageCount,
-        costUsd: model.costUsd,
-        tokens: model.tokens,
-        durationMs: model.durationMs
-      })
-    }
-    return [...grouped.values()]
-      .sort((left, right) => {
-        const difference =
-          modelRankMetric === 'cost'
-            ? right.costUsd - left.costUsd
-            : modelRankMetric === 'runtime'
-              ? right.durationMs - left.durationMs
-              : right.tokens - left.tokens
-        return difference || right.tokens - left.tokens || right.messageCount - left.messageCount
-      })
-      .slice(0, 3)
-  })
+  const topModels = $derived(groupTopModels(usage.models, modelRankMetric))
   const modelRankMetricLabel = $derived(
     modelRankMetric === 'cost' ? 'cost' : modelRankMetric === 'runtime' ? 'runtime' : 'tokens'
   )
@@ -404,161 +256,6 @@
       thinkingFilter === 'all' ? true : model.thinkingLevel === thinkingFilter
     )
   )
-
-  function thinkingLevelLabel(level: ThinkingLevel): string {
-    return (
-      STANDARD_THINKING_PRESETS.find((preset) => preset.id === level)?.label ??
-      level.charAt(0).toUpperCase() + level.slice(1)
-    )
-  }
-
-  function rankingScoreLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageScore === null) return ' '
-    return `${stats.averageScore.toFixed(1)}/10`
-  }
-
-  function rankingSamplesLabel(stats: LocalProfileRankingModeStats): string {
-    return stats.samples === 1 ? '1 conversation' : `${stats.samples} conversations`
-  }
-
-  function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
-    if (stats.samples === 0 || stats.averageDurationMs === null) return ' '
-    return formatDuration(stats.averageDurationMs)
-  }
-
-  function rankingAggregateLabel(entry: LocalProfileModelRanking): string {
-    const aggregate = rankingAggregate(entry)
-    return aggregate === null ? ' ' : `${aggregate.toFixed(1)}/10`
-  }
-
-  function rankingTotalSamplesLabel(entry: LocalProfileModelRanking): string {
-    const total = entry.oneShot.samples + entry.multiShot.samples
-    return total === 1 ? '1 conversation' : `${total} conversations`
-  }
-
-  function localDateKey(date: Date): string {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
-  }
-
-  function formatNumber(value: number): string {
-    return new Intl.NumberFormat(undefined, {
-      notation: 'compact',
-      maximumFractionDigits: 1
-    }).format(value)
-  }
-
-  function formatCost(value: number): string {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: value < 1 ? 2 : 0,
-      maximumFractionDigits: value < 1 ? 4 : 2
-    }).format(value)
-  }
-
-  function formatDuration(value: number): string {
-    if (value > 0 && value < 60_000) return '<1m'
-    const totalMinutes = Math.round(value / 60_000)
-    if (totalMinutes < 60) return `${totalMinutes}m`
-    const hours = Math.floor(totalMinutes / 60)
-    const minutes = totalMinutes % 60
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
-  }
-
-  function utilityLabel(id: string): string {
-    switch (id) {
-      case 'image_descriptor':
-        return 'Image descriptor'
-      case 'memory':
-        return 'Memory'
-      case 'title':
-        return 'Title generation'
-      default:
-        return id
-    }
-  }
-
-  function platformLabel(platform: string): string {
-    switch (platform) {
-      case 'darwin':
-        return 'macOS'
-      case 'win32':
-        return 'Windows'
-      case 'linux':
-        return 'Linux'
-      default:
-        return platform
-    }
-  }
-
-  function formatDateRange(range: LocalProfileAnalyticsRange): string {
-    const format = new Intl.DateTimeFormat(undefined, {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    })
-    return `${format.format(range.startAt)} – ${format.format(range.endAt - 1)}`
-  }
-
-  function formatDate(value: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    }).format(value)
-  }
-
-  function formatUsageDate(value: string): string {
-    const date = localDateFromInput(value)
-    if (!date) return value
-    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
-  }
-
-  function formatHour(hour: number): string {
-    const date = new SvelteDate(2000, 0, 1, hour)
-    return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(date)
-  }
-
-  function formatDateTime(value: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(value)
-  }
-
-  function formatIdentifier(value: string): string {
-    return value
-      .split(/[-_]/u)
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ')
-  }
-
-  function activityClass(day: CalendarDay): string {
-    if (day.outsideRange) return 'bg-transparent'
-    if (day.count <= 0 || maxActivity <= 0) return 'bg-raised'
-    const ratio = day.count / maxActivity
-    if (ratio <= 0.25) return 'bg-primary/25'
-    if (ratio <= 0.5) return 'bg-primary/50'
-    if (ratio <= 0.75) return 'bg-primary/75'
-    return 'bg-primary'
-  }
-
-  function usageWidth(item: AccountUsageBreakdown, maximum: number): string {
-    if (maximum <= 0) return '0%'
-    return `${Math.max(4, (item.tokens / maximum) * 100)}%`
-  }
-
-  function usageHeight(item: AccountUsageBreakdown, maximum: number): string {
-    if (maximum <= 0 || item.tokens <= 0) return '2px'
-    return `${Math.max(8, (item.tokens / maximum) * 100)}%`
-  }
 
   async function loadProjectIconUrls(projects: LocalProfileProjectBreakdown[]): Promise<void> {
     const pairs = await Promise.all(
@@ -600,6 +297,7 @@
     endOffsetDays?: number
   ): void {
     rangePreset = preset
+    clearNotice = ''
     selectedRange = analyticsRange(days, endOffsetDays)
     customStartDate = dateInputValue(selectedRange.startAt)
     customEndDate = dateInputValue(selectedRange.endAt - 1)
@@ -626,86 +324,120 @@
       return
     }
     selectedRange = { startAt: start.getTime(), endAt: end.getTime() }
+    clearNotice = ''
     void loadUsage(selectedRange)
   }
 
-  async function refreshAccount(showError = false): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    if (showError) signInError = ''
+  /** Range changes and manual refreshes retire the previous notices. */
+  function refresh(): void {
+    clearNotice = ''
+    gradeNotice = ''
+    void loadUsage()
+    void loadQueue()
+  }
+
+  /**
+   * Read the ranking queue and its judge without touching the analytics: the
+   * queue moves independently of the range the page is showing.
+   */
+  async function loadQueue(): Promise<void> {
     try {
-      const state = await invoke('account:getProfile')
-      accountState = state
-      if (state.status === 'signed-in') {
-        signInOpen = false
-        accountState = await invoke('account:syncProfile')
-      } else if (showError && state.status === 'pending') {
-        signInError = 'Sign-in is not finished yet. Complete it in your browser, then check again.'
-      }
+      queue = await invoke('account:getRankingQueue')
     } catch {
-      if (showError)
-        signInError = 'The account service could not be reached. Try again in a moment.'
-    } finally {
-      accountBusy = false
+      // The record row falls back to the analytics' own count, so a queue read
+      // that fails costs the grading actions, not the page.
+      queue = null
     }
   }
 
-  async function beginSignIn(provider: AccountAuthProvider): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    activeProvider = provider
-    signInError = ''
+  /**
+   * Grade the queue, then reload both the queue and the analytics the run feeds.
+   *
+   * Progress arrives on `account:rankingGradeProgress` while this call is in
+   * flight, so the row counts down live; the call itself answers with the run's
+   * own result, which is what the notice describes.
+   */
+  async function gradeQueue(scope: LocalRankingGradeScope): Promise<void> {
+    if (gradeBusy) return
+    gradeConfirmOpen = false
+    gradeBusy = true
+    gradeNotice = ''
+    let failure = ''
     try {
-      const signIn = await invoke('account:beginSignIn', provider)
-      accountState = { status: 'pending', profile: null }
-      await invoke('shell:openExternal', signIn.url)
+      const progress = await invoke('account:gradeRankingQueue', scope)
+      gradeNotice = rankingGradeNotice(progress, scope)
     } catch {
-      accountState = { status: 'signed-out', profile: null }
-      signInError = 'Sign-in could not be started. Check your connection and try again.'
+      failure = 'Those conversations could not be graded. The queue is unchanged.'
     } finally {
-      accountBusy = false
-      activeProvider = null
+      gradeBusy = false
+      await loadQueue()
+      await loadUsage(usage.range)
     }
+    if (failure) errorMessage = failure
   }
 
-  async function signOut(): Promise<void> {
-    if (accountBusy) return
-    accountBusy = true
-    signInError = ''
+  /**
+   * Stop the run at the end of the pass in flight. The counters keep arriving
+   * until then, so the row stays live rather than looking stalled.
+   */
+  async function cancelGrade(): Promise<void> {
     try {
-      await invoke('account:signOut')
-      accountState = { status: 'signed-out', profile: null }
-      signInOpen = false
-      signOutOpen = false
+      await invoke('account:cancelRankingGrade')
     } catch {
-      signOutOpen = false
-      signInError = 'Sign-out could not be completed. Try again in a moment.'
-    } finally {
-      accountBusy = false
+      errorMessage = 'The grading run could not be stopped.'
     }
-  }
-
-  function handleWindowFocus(): void {
-    if (accountState.status === 'pending') void refreshAccount()
   }
 
   onMount(() => {
     void loadUsage()
-    void refreshAccount()
-    return subscribe('account:profileChanged', (state) => {
-      accountState = state
-      if (state.status === 'signed-in') {
-        signInOpen = false
-        signInError = ''
-      } else if (state.status === 'error') {
-        signInOpen = true
-        signInError = state.message
-      }
+    void loadQueue()
+    return subscribe('account:rankingGradeProgress', (progress) => {
+      queue = queue ? { ...queue, run: progress } : queue
     })
   })
-</script>
 
-<svelte:window onfocus={handleWindowFocus} />
+  function openClear(target: UsageClearTarget): void {
+    clearNotice = ''
+    errorMessage = ''
+    pendingClear = target
+  }
+
+  function closeClear(): void {
+    if (clearBusy) return
+    pendingClear = null
+  }
+
+  /**
+   * Run the confirmed clear, then reload the analytics.
+   *
+   * The reload happens on both paths: a purge that partially ran must be
+   * reflected on screen rather than described from the counts we hoped for.
+   */
+  async function confirmClear(): Promise<void> {
+    const target = pendingClear
+    if (!target) return
+    clearBusy = true
+    let failure = ''
+    try {
+      const cleared = await invoke('account:clearLocalUsage', {
+        store: target,
+        range: usage.range
+      })
+      clearNotice =
+        usageClearRecordCount(target, cleared) === 0
+          ? 'No matching usage records were left to clear.'
+          : `Cleared ${clearedRecordsSummary(target, cleared)}.`
+    } catch {
+      failure = 'Those usage records could not be cleared. Others are unchanged.'
+    } finally {
+      pendingClear = null
+      await loadUsage(usage.range)
+      clearBusy = false
+    }
+    // Set after the reload, which owns the error line while it runs.
+    if (failure) errorMessage = failure
+  }
+</script>
 
 <div class="w-full p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
@@ -718,141 +450,28 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
+        class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+        title={totalRecords > 0
+          ? 'Clear every usage record this page reads'
+          : 'No usage records to clear'}
+        aria-label="Clear all usage records"
+        disabled={loading || clearBusy || totalRecords === 0}
+        onclick={() => openClear('all')}
+      >
+        <Trash2 size={14} />
+        Clear all records
+      </button>
+      <button
+        type="button"
         class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold hover:bg-elevated disabled:opacity-50"
         title="Refresh usage analytics"
         aria-label="Refresh usage analytics"
         disabled={loading}
-        onclick={() => void loadUsage()}
+        onclick={refresh}
       >
         <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
         Refresh
       </button>
-
-      <Popover.Root open={signInOpen} onOpenChange={(open) => (signInOpen = open)}>
-        <Popover.Trigger
-          class="flex h-9 items-center gap-2 rounded-lg px-3 text-xs font-semibold {accountProfile
-            ? 'border hover:bg-elevated'
-            : 'bg-primary text-on-primary hover:bg-primary-hover'}"
-          title={accountProfile ? `Signed in as ${accountProfile.email}` : 'Sign in to CodeInOven'}
-          aria-label={accountProfile
-            ? `Signed in as ${accountProfile.displayName || accountProfile.email}`
-            : 'Sign in to CodeInOven'}
-        >
-          {#if accountProfile}
-            {#if accountProfile.image}
-              <img class="h-5 w-5 rounded-full object-cover" src={accountProfile.image} alt="" />
-            {:else}
-              <span
-                class="grid h-5 w-5 place-items-center rounded-full bg-primary text-[0.5625rem] font-bold text-on-primary"
-                aria-hidden="true">{accountInitials}</span
-              >
-            {/if}
-            <span class="max-w-32 truncate">{accountProfile.displayName}</span>
-          {:else if accountState.status === 'pending'}
-            <RefreshCw size={14} class="animate-spin" /> Sign-in pending
-          {:else}
-            <LogIn size={14} /> Sign in
-          {/if}
-        </Popover.Trigger>
-
-        <Popover.Portal>
-          <Popover.Content
-            side="bottom"
-            align="end"
-            sideOffset={8}
-            collisionPadding={16}
-            class="z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl outline-none"
-          >
-            {#if accountProfile}
-              <div class="flex items-center gap-3">
-                <span
-                  class="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-primary text-xs font-bold text-on-primary"
-                >
-                  {#if accountProfile.image}
-                    <img class="h-full w-full object-cover" src={accountProfile.image} alt="" />
-                  {:else}
-                    {accountInitials}
-                  {/if}
-                </span>
-                <div class="min-w-0">
-                  <p class="truncate text-sm font-semibold">{accountProfile.displayName}</p>
-                  <p class="truncate text-xs text-muted">{accountProfile.email}</p>
-                </div>
-                <Check size={16} class="ml-auto shrink-0 text-primary" aria-hidden="true" />
-              </div>
-              <p class="mt-3 text-xs leading-relaxed text-muted">
-                Your account is connected. Local analytics remain available on this device.
-              </p>
-              {#if signInError}
-                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-                  {signInError}
-                </p>
-              {/if}
-              <button
-                type="button"
-                class="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg border text-xs font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
-                title="Sign out of CodeInOven"
-                disabled={accountBusy}
-                onclick={() => (signOutOpen = true)}
-              >
-                <LogOut size={14} />
-                Sign out
-              </button>
-            {:else if accountState.status === 'pending'}
-              <p class="text-sm font-semibold">Finish signing in</p>
-              <p class="mt-1 text-xs leading-relaxed text-muted">
-                Complete Google or Apple sign-in in your browser. CodeInOven will detect the secure
-                callback automatically.
-              </p>
-              {#if signInError}
-                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-                  {signInError}
-                </p>
-              {/if}
-              <button
-                type="button"
-                class="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                disabled={accountBusy}
-                onclick={() => void refreshAccount(true)}
-              >
-                <RefreshCw size={14} class={accountBusy ? 'animate-spin' : ''} />
-                Check sign-in status
-              </button>
-            {:else}
-              <p class="text-sm font-semibold">Sign in to CodeInOven</p>
-              <p class="mt-1 text-xs leading-relaxed text-muted">
-                Continue with Google or Apple. If your account does not exist, it is created
-                automatically.
-              </p>
-              {#if signInError}
-                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-                  {signInError}
-                </p>
-              {/if}
-              <div class="mt-4 space-y-2">
-                <button
-                  type="button"
-                  class="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  disabled={accountBusy}
-                  onclick={() => void beginSignIn('google')}
-                >
-                  <VendorIcon name="Google" size={16} />
-                  {activeProvider === 'google' ? 'Opening Google…' : 'Continue with Google'}
-                </button>
-                <button
-                  type="button"
-                  class="flex h-10 w-full items-center justify-center gap-2 rounded-lg border px-3 text-xs font-semibold hover:bg-elevated disabled:opacity-50"
-                  disabled={accountBusy}
-                  onclick={() => void beginSignIn('apple')}
-                >
-                  <VendorIcon name="Apple" size={16} />
-                  {activeProvider === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
-                </button>
-              </div>
-            {/if}
-          </Popover.Content>
-        </Popover.Portal>
-      </Popover.Root>
     </div>
   </div>
 
@@ -862,6 +481,24 @@
       role="alert"
     >
       {errorMessage}
+    </p>
+  {/if}
+
+  {#if clearNotice}
+    <p
+      class="mb-4 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+      role="status"
+    >
+      {clearNotice}
+    </p>
+  {/if}
+
+  {#if gradeNotice}
+    <p
+      class="mb-4 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+      role="status"
+    >
+      {gradeNotice}
     </p>
   {/if}
 
@@ -1016,7 +653,10 @@
                 {/if}
                 {#each week.days as day (day.date)}
                   <span
-                    class="aspect-square w-full min-w-2 rounded-sm {activityClass(day)}"
+                    class="aspect-square w-full min-w-2 rounded-sm {activityClass(
+                      day,
+                      maxActivity
+                    )}"
                     title={`${day.date}: ${day.count} agent responses${day.selected ? ' · selected range' : ''}`}
                     aria-label={`${day.date}: ${day.count} agent responses${day.selected ? ', selected range' : ''}`}
                   ></span>
@@ -1040,84 +680,6 @@
       </div>
     </div>
   </section>
-
-  {#if accountProfile}
-    <section class="mt-4 rounded-xl border" aria-labelledby="devices-heading">
-      <div class="border-b px-4 py-3">
-        <h2 id="devices-heading" class="text-sm font-semibold">Devices</h2>
-        <p class="mt-0.5 text-xs text-muted">
-          Synced usage from every device signed in to this account.
-        </p>
-      </div>
-      {#if syncedDevices.length > 0}
-        <div class="grid gap-4 p-4 lg:grid-cols-2">
-          {#each syncedDevices as device (device.deviceId)}
-            <article class="rounded-xl border p-4">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="truncate text-sm font-semibold">{device.deviceLabel}</p>
-                  <p class="mt-0.5 text-[0.6875rem] text-dimmed">
-                    {platformLabel(device.platform)} · last synced {formatDateTime(
-                      device.updatedAt
-                    )}
-                  </p>
-                </div>
-                <span
-                  class="shrink-0 rounded-md bg-raised px-2 py-1 text-[0.625rem] font-medium tabular-nums text-muted"
-                  title="Total agent runtime"
-                >
-                  {formatDuration(device.durationMs)}
-                </span>
-              </div>
-              <dl class="mt-4 grid grid-cols-4 gap-2 text-xs">
-                <div>
-                  <dt class="text-dimmed">Sessions</dt>
-                  <dd class="mt-0.5 font-semibold tabular-nums">
-                    {formatNumber(device.messageCount)}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-dimmed">Tokens</dt>
-                  <dd class="mt-0.5 font-semibold tabular-nums">{formatNumber(device.tokens)}</dd>
-                </div>
-                <div>
-                  <dt class="text-dimmed">Cost</dt>
-                  <dd class="mt-0.5 font-semibold tabular-nums">{formatCost(device.costUsd)}</dd>
-                </div>
-                <div>
-                  <dt class="text-dimmed">Active days</dt>
-                  <dd class="mt-0.5 font-semibold tabular-nums">{device.activeDays}</dd>
-                </div>
-              </dl>
-              {#if device.projects.length > 0}
-                <div class="mt-4 border-t pt-3">
-                  <p class="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">
-                    Top projects
-                  </p>
-                  <ul class="mt-2 space-y-1.5">
-                    {#each device.projects.slice(0, 4) as project (project.id)}
-                      <li class="flex items-center justify-between gap-3 text-xs">
-                        <span class="min-w-0 truncate font-medium">{project.name}</span>
-                        <span class="shrink-0 tabular-nums text-muted">
-                          {formatNumber(project.messageCount)} sessions · {formatDuration(
-                            project.durationMs
-                          )}
-                        </span>
-                      </li>
-                    {/each}
-                  </ul>
-                </div>
-              {/if}
-            </article>
-          {/each}
-        </div>
-      {:else}
-        <p class="px-4 py-8 text-center text-xs text-muted">
-          No device usage has been synced yet. It appears after your first signed-in agent session.
-        </p>
-      {/if}
-    </section>
-  {/if}
 
   {#if topModels.length > 0}
     <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
@@ -1694,37 +1256,129 @@
       {/each}
     </div>
   </section>
+
+  <section class="mt-4 rounded-xl border" aria-labelledby="usage-records-heading">
+    <div class="border-b px-4 py-3">
+      <h2 id="usage-records-heading" class="text-sm font-semibold">Usage records</h2>
+      <p class="mt-0.5 text-xs text-muted">
+        The local records this page reads. Clearing one starts its section from a clean slate on
+        this device; grading scores the conversations still waiting in the ranking queue.
+      </p>
+    </div>
+    <div class="divide-y">
+      {#each USAGE_RECORD_STORES as store (store)}
+        {@const info = usageClearInfo(store)}
+        {@const storeRecords = usageClearRecordCount(store, liveRecords)}
+        {@const storeLabel = info.label.toLowerCase()}
+        <div class="px-4 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-xs font-semibold">{info.label}</p>
+              <p class="mt-0.5 text-[0.6875rem] text-muted">{info.description}</p>
+              <p class="mt-1 text-[0.6875rem] tabular-nums text-dimmed">
+                {usageRecordSummary(store, liveRecords, usage.range)}
+              </p>
+            </div>
+            <div class="flex shrink-0 flex-wrap items-center gap-2">
+              {#if store === 'modelRankings' && gradeRun}
+                <span
+                  class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-[0.6875rem] font-semibold tabular-nums"
+                  role="status"
+                >
+                  <Loader2 size={13} class="animate-spin" />
+                  {rankingGradeProgressLabel(gradeRun)}
+                </span>
+                <button
+                  type="button"
+                  class="flex h-8 items-center rounded-lg border px-2.5 text-[0.6875rem] font-semibold hover:bg-elevated"
+                  title="Stop grading queued conversations"
+                  aria-label="Stop grading queued conversations"
+                  onclick={() => void cancelGrade()}
+                >
+                  Stop
+                </button>
+              {:else if store === 'modelRankings' && awaitingGrades > 0}
+                <button
+                  type="button"
+                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold hover:bg-elevated disabled:opacity-50"
+                  title={`Grade ${formatNumber(awaitingGrades)} queued conversations`}
+                  aria-label="Grade queued conversations"
+                  disabled={loading || gradeBusy}
+                  onclick={() => (gradeConfirmOpen = true)}
+                >
+                  <Sparkles size={13} />
+                  Grade now
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+                title={storeRecords > 0
+                  ? `Clear ${storeLabel} records`
+                  : `No ${storeLabel} records to clear`}
+                aria-label={`Clear ${storeLabel} records`}
+                disabled={loading || clearBusy || storeRecords === 0}
+                onclick={() => openClear(store)}
+              >
+                <Trash2 size={13} />
+                Clear
+              </button>
+            </div>
+          </div>
+          {#if store === 'modelRankings'}
+            <div class="mt-3 border-t pt-3">
+              <RankingJudgePicker
+                judge={queue?.judge ?? EMPTY_QUEUE.judge}
+                disabled={gradeBusy || gradeRun !== null}
+                onSaved={(saved) => {
+                  queue = queue ? { ...queue, judge: saved } : queue
+                }}
+              />
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  </section>
 </div>
 
-<AlertDialog.Root open={signOutOpen} onOpenChange={(open) => (signOutOpen = open)}>
-  <AlertDialog.Portal>
-    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
-    <AlertDialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-    >
-      <AlertDialog.Title class="text-sm font-semibold text-foreground">
-        Sign out of CodeInOven?
-      </AlertDialog.Title>
-      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-        Your saved profile will be removed from this device and you will be signed out. You can sign
-        in again anytime.
-      </AlertDialog.Description>
-      <div class="mt-5 flex justify-end gap-2">
-        <AlertDialog.Cancel
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-        >
-          Cancel
-        </AlertDialog.Cancel>
-        <AlertDialog.Action
-          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-          onclick={() => void signOut()}
-        >
-          Sign out
-        </AlertDialog.Action>
-      </div>
-    </AlertDialog.Content>
-  </AlertDialog.Portal>
-</AlertDialog.Root>
+{#snippet clearCopy(parts: UsageClearCopyPart[])}
+  {#each parts as part, index (index)}{#if part.emphasis}<strong
+        class="font-semibold text-foreground">{part.text}</strong
+      >{:else}{part.text}{/if}{/each}
+{/snippet}
+
+<ConfirmDialog
+  open={pendingClear !== null}
+  title={clearConfirmation.title}
+  confirmLabel={clearConfirmation.confirmLabel}
+  note={clearConfirmation.note}
+  busy={clearBusy}
+  onCancel={closeClear}
+  onConfirm={confirmClear}
+>
+  <p>{@render clearCopy(clearConfirmation.scope)}</p>
+  <p class="mt-2">{@render clearCopy(clearConfirmation.removal)}</p>
+  <p class="mt-2 font-medium text-foreground">Are you sure you want to continue?</p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={gradeConfirmOpen}
+  title={gradeConfirmation.title}
+  confirmLabel={gradeConfirmation.dueLabel ?? gradeConfirmation.allLabel}
+  note={gradeConfirmation.note}
+  variant="primary"
+  busy={gradeBusy}
+  disabled={queue === null || queue.awaiting === 0}
+  secondaryAction={gradeOffersBothScopes
+    ? { label: gradeConfirmation.allLabel, onSelect: () => void gradeQueue('all') }
+    : undefined}
+  onCancel={() => (gradeConfirmOpen = false)}
+  onConfirm={() => void gradeQueue(gradePrimaryScope)}
+>
+  <p>{@render clearCopy(gradeConfirmation.scope)}</p>
+  <p class="mt-2">{@render clearCopy(gradeConfirmation.outcome)}</p>
+</ConfirmDialog>
 
 <style>
   .hourly-columns {

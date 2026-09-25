@@ -27,6 +27,12 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   registerRendererLogIpcHandler()
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
+  // Create the hidden assistant container before the renderer's first
+  // `project:list`, exactly like the inbox. Assistant View reads this project
+  // record during its first hydration pass, so ensuring it here keeps that pass
+  // off the post-paint feature graph instead of serializing the whole first
+  // usable frame behind it. Idempotent: it upserts only when the row is absent.
+  void projectManager.ensureAssistantSpace()
   const threadManager = new ThreadManager(database)
   const noteRepo = new NoteRepo(database)
   const branchDeps: ThreadBranchDeps = {
@@ -39,6 +45,10 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
   ipcMain.handle('project:list', () => projectManager.listProjects())
   ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
+  // Same channel `registerAssistantHandlers` would register after first paint;
+  // registering it on the hydration surface lets the renderer resolve it without
+  // waiting for the feature graph, and that handler skips its own registration.
+  ipcMain.handle('routine:ensureSpace', () => projectManager.ensureAssistantSpace())
   ipcMain.handle('project:getIcon', (_, projectId: string) =>
     projectManager.getIconDataUrl(projectId)
   )

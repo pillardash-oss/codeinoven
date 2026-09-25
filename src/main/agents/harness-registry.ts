@@ -1,10 +1,11 @@
 import type { ProviderConnectionInfo } from '../../lib/types'
+import { OPENCODE_COMMAND_ALIASES } from '../../lib/opencode-version'
 
 /** The schema version of `HarnessManifest`. Bump when behaviors are added or renamed. */
 export const HARNESS_MANIFEST_SCHEMA_VERSION = 1
 
 /** Stable behavior keys every harness manifest can declare. Extend to grow. */
-export type HarnessManifestBehavior = 'loadsAgentsMd' | 'manualCompaction'
+export type HarnessManifestBehavior = 'loadsAgentsMd' | 'manualCompaction' | 'multipleAccounts'
 
 /**
  * Declarative, versioned behavior manifest for one harness. This is the
@@ -29,6 +30,13 @@ export interface HarnessDescriptor {
   id: string
   name: string
   command: string
+  /**
+   * Alternate command names that satisfy the SAME harness, probed alongside
+   * `command`. Used where one product ships under more than one binary name
+   * (OpenCode's `opencode` and its `opencode2` alias): the newest version that
+   * answers wins, so a v2 install always supersedes a v1 one.
+   */
+  commandAliases?: readonly string[]
   versionArgs: string[]
   integration: ProviderConnectionInfo['integration']
   /** Whether this harness driver can inject custom base-URL providers. */
@@ -61,7 +69,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
     // behavior prompt remains available for Engineering implementation turns.
     // Manual compaction: `compact` RPC, idle-safe.
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
   },
   {
     id: 'codex',
@@ -70,7 +78,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
   },
   {
     id: 'claude-code',
@@ -82,16 +90,28 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
     // CodeInOven's application prompt layer rather than project AGENTS.md.
     // Manual compaction: `claude -p /compact --resume <id>` (verified live).
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
   },
   {
+    // One OpenCode harness. V1 and V2 both install as `opencode` and are no
+    // longer installed side by side by default (the V2 installer replaces the
+    // V1 binary); a package-managed V2 install may also add the `opencode2`
+    // alias. The app probes both, keeps the newest, and drives the matching
+    // transport (see `opencode-installation.ts` and `opencode-harness-driver.ts`).
+    // The user never picks a version.
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
+    commandAliases: OPENCODE_COMMAND_ALIASES,
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
+    // Both lines read AGENTS.md and implement an explicit manual compaction
+    // (V1 `opencode` session command; V2 `POST /api/session/{id}/compact`).
+    // Native multi-account: the credential store holds several accounts per
+    // integration, and the CLI can switch which one is active
+    // (`opencode auth switch <integration> <credential>`, V2 only).
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: true })
   },
   {
     id: 'cline',
@@ -103,7 +123,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     // Cline 3.x has no non-interactive compaction entry (`/compact` as a
     // positional prompt is rejected; `--compaction` only tunes automatic
     // compaction).
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false, multipleAccounts: false })
   },
   {
     id: 'antigravity',
@@ -114,7 +134,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Antigravity reads AGENTS.md and GEMINI.md rule files natively.
     // `/compact` in print mode is treated as ordinary prompt text (verified live).
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false, multipleAccounts: false })
   },
   {
     id: 'muse',
@@ -124,7 +144,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     integration: 'ready',
     supportsCustomProviders: false,
     // Muse compacts via a local summary checkpoint for its stateless transport.
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
   }
 ]
 
@@ -163,4 +183,15 @@ export function harnessLoadsAgentsMd(id: string): boolean {
  */
 export function harnessSupportsManualCompaction(id: string): boolean {
   return harnessManifestFor(id)?.behaviors['manualCompaction'] ?? false
+}
+
+/**
+ * Declared (manifest) value of whether the harness keeps several accounts for
+ * one provider in its own credential store and can switch which is active.
+ * OpenCode declares this (V2's `auth switch`); the other harnesses get their
+ * multiple accounts from CodeInOven's per-account credential containers
+ * instead, which is a different mechanism and stays declared `false` here.
+ */
+export function harnessSupportsMultipleAccounts(id: string): boolean {
+  return harnessManifestFor(id)?.behaviors['multipleAccounts'] ?? false
 }

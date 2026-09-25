@@ -27,17 +27,15 @@
  * handoff is picked up by the long-lived process, and a cleared handoff makes
  * stale tokens unusable after the turn ends.
  *
- * Self-healing: when a call fails, the extension re-reads the handoff once
- * (the driver may have rotated credentials between the read and the request)
- * and, when the gateway host itself is unreachable, discovers the live
- * instance's `mcpHost` through the same shell resolver the prose fallback
- * used   the session id and resolver path are embedded at materialization
- * time. A recognized-but-rejected token (404) is NOT recoverable client-side:
- * the turn credentials were cleaned up, so the tool says so plainly instead of
- * letting the model guess.
+ * Self-healing: when a call fails, the extension re-reads the handoff once and
+ * retries against the freshly read credentials, since the driver may have
+ * rotated them between the read and the request. A recognized-but-rejected
+ * token (404) is NOT recoverable client-side: the turn credentials were cleaned
+ * up, so the tool says so plainly instead of letting the model guess.
  */
 
 import {
+  ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
@@ -54,6 +52,7 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
+  ASK_SECRET_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME
 ] as const
@@ -68,12 +67,12 @@ const searchTool = gatewayTool(UTILITY_SEARCH_TOOL_NAME)
 const activateTool = gatewayTool(UTILITY_ACTIVATE_TOOL_NAME)
 const invokeTool = gatewayTool(UTILITY_INVOKE_TOOL_NAME)
 const docsTool = gatewayTool(UTILITY_DOCS_TOOL_NAME)
+const askSecretTool = gatewayTool(ASK_SECRET_TOOL_NAME)
 const manageTool = gatewayTool(UTILITY_MANAGE_TOOL_NAME)
 const diagnosticsTool = gatewayTool(UTILITY_DIAGNOSTICS_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
-  return `import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+  return `import { readFile } from 'node:fs/promises'
 import { request as httpRequest } from 'node:http'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
@@ -81,11 +80,17 @@ import { Type } from 'typebox'
 interface GatewayHandoff {
   url: string
   token: string
+  /** How long the app wants a gateway call to be allowed to take. Published per
+   *  turn from the app's own human-decision deadline, so a card that is still on
+   *  screen is never abandoned by a shorter client default. */
+  timeoutMs?: number
 }
 
+/** Floor for a call whose reply is paced by a human, used when a handoff
+ *  predates the published timeout. */
+const HUMAN_PACED_TIMEOUT_MS = 600000
+
 const HANDOFF_PATH = '__HANDOFF_PATH__'
-const SESSION_ID = '__CIO_SESSION_ID__'
-const RETRIEVE_SCRIPT = '__CIO_RETRIEVE_SCRIPT__'
 
 interface GatewayFailure extends Error {
   gatewayInactive?: boolean
@@ -98,9 +103,24 @@ function fail(message: string, marker: 'gatewayInactive'): GatewayFailure {
 }
 
 async function loadHandoff(): Promise<GatewayHandoff> {
-  const handoff = JSON.parse(await readFile(HANDOFF_PATH, 'utf8')) as GatewayHandoff
+  let raw: string
+  try {
+    raw = await readFile(HANDOFF_PATH, 'utf8')
+  } catch (error) {
+    // The file is gone when the app already tore this turn's gateway down (turn
+    // finalization, a mid-turn revoke, a transient session restart), and the
+    // extension cannot re-arm itself: the turn's token lives in the app. Never
+    // let the raw ENOENT reach the model: it reads as a broken file, not a
+    // broken transport, and costs a turn of pointless retries.
+    const reason = error instanceof Error ? error.message : String(error)
+    throw fail(
+      'The CodeInOven utility gateway is not active for this turn: its handoff file is unavailable (' + reason + '). The application must refresh the utility transport before continuing utility work; retrying this tool will not help.',
+      'gatewayInactive'
+    )
+  }
+  const handoff = JSON.parse(raw) as GatewayHandoff
   // An empty handoff is the seed written before the first real endpoint publish,
-  // and a missing file means the previous turn's cleanup already ran   both are
+  // and a missing file means the previous turn's cleanup already ran. Both are
   // the "gateway not active this turn" case, never an opaque crash.
   if (!handoff.url || !handoff.token) {
     throw fail(
@@ -111,7 +131,7 @@ async function loadHandoff(): Promise<GatewayHandoff> {
   return handoff
 }
 
-function postJson(base: string, token: string, route: string, body: Record<string, unknown>): Promise<unknown> {
+function postJson(base: string, token: string, route: string, body: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   const url = new URL(route, base)
   const payload = JSON.stringify(body)
   return new Promise((resolve, reject) => {
@@ -159,43 +179,18 @@ function postJson(base: string, token: string, route: string, body: Record<strin
       }
     )
     req.on('error', reject)
-    req.setTimeout(60_000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy(new Error('Utility gateway request timed out'))
     })
     req.end(payload)
   })
 }
 
-/** Discover the live instance's loopback gateway host through the shell
- *  resolver the prose fallback used. Returns null when unavailable. */
-function discoverGatewayHost(): Promise<string | null> {
-  if (!RETRIEVE_SCRIPT || !SESSION_ID) return Promise.resolve(null)
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [RETRIEVE_SCRIPT, SESSION_ID],
-      { timeout: 4000 },
-      (error, stdout) => {
-        if (error) {
-          resolve(null)
-          return
-        }
-        try {
-          const parsed = JSON.parse(stdout)
-          const host = parsed?.mcpHost
-          resolve(typeof host === 'string' && host.startsWith('http://127.0.0.1') ? host : null)
-        } catch {
-          resolve(null)
-        }
-      }
-    )
-  })
-}
-
-async function callGateway(route: string, body: Record<string, unknown>): Promise<unknown> {
+async function callGateway(route: string, body: Record<string, unknown>, minimumTimeoutMs?: number): Promise<unknown> {
   const first = await loadHandoff()
+  const timeoutMs = Math.max(first.timeoutMs ?? 60_000, minimumTimeoutMs ?? 0)
   try {
-    return await postJson(first.url, first.token, route, body)
+    return await postJson(first.url, first.token, route, body, timeoutMs)
   } catch (error) {
     // Re-read even after a rejected token: the next turn may have published
     // fresh credentials before the rejection arrived.
@@ -209,31 +204,59 @@ async function callGateway(route: string, body: Record<string, unknown>): Promis
     }
     if (fresh.url !== first.url || fresh.token !== first.token) {
       try {
-        return await postJson(fresh.url, fresh.token, route, body)
+        return await postJson(fresh.url, fresh.token, route, body, timeoutMs)
       } catch (retryError) {
         if (retryError && retryError.gatewayInactive) throw retryError
         throw retryError
       }
     }
+
     if (error && error.gatewayInactive) throw error
-    // Host-level recovery: the app may have restarted and moved the loopback
-    // port while this long-lived session kept the old handoff.
-    const host = await discoverGatewayHost()
-    if (host && host !== fresh.url) {
-      try {
-        return await postJson(host, fresh.token, route, body)
-      } catch (recoveredError) {
-        if (recoveredError && recoveredError.gatewayInactive) throw recoveredError
-      }
-    }
     throw error
   }
 }
 
+/**
+ * Whether a gateway response already carries the content parts the harness should
+ * render. A result holding an image comes back this way so the picture travels as
+ * an image part rather than as inline base64, which a provider bills as text.
+ */
+function isGatewayContent(value) {
+  if (!Array.isArray(value) || value.length === 0) return false
+  return value.every(
+    (part) =>
+      part &&
+      typeof part === 'object' &&
+      ((part.type === 'text' && typeof part.text === 'string') ||
+        (part.type === 'image' && typeof part.data === 'string' && typeof part.mimeType === 'string'))
+  )
+}
+
 function textResult(value) {
+  if (value && typeof value === 'object' && isGatewayContent(value.content)) {
+    return { content: value.content }
+  }
   return {
     content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
   }
+}
+
+/**
+ * Hand a collected secret's values to this session without ever showing them to
+ * the model: they are applied to the pi process environment here and dropped
+ * from the tool result the model reads.
+ */
+function applySecretEnvironment(result) {
+  if (!result || typeof result !== 'object') return result
+  const environment = result.environment
+  const { environment: _ignored, ...safe } = result
+  if (!environment || typeof environment !== 'object') return safe
+  for (const [name, value] of Object.entries(environment)) {
+    if (typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      process.env[name] = value
+    }
+  }
+  return safe
 }
 
 export default function codeInOvenUtilityGatewayExtension(pi) {
@@ -313,6 +336,56 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
+  // Secret collection: the app owns the card, the vault and the utility
+  // credential, so the tool result carries only the names the model
+  // interpolates. It is announced on every turn because a task can need a
+  // credential at any point, not only during setup.
+  pi.registerTool({
+    name: ${JSON.stringify(askSecretTool.name)},
+    label: 'Collect a secret from the user',
+    description: ${JSON.stringify(askSecretTool.description)},
+    promptSnippet: 'Ask the user for a secret value (API key, token, password) without ever seeing it',
+    promptGuidelines: [
+      'Never ask the user to paste a secret into chat. When you need a value you do not have (an API key, token, or password), call ${JSON.stringify(askSecretTool.name)} with one entry per secret and a short title.',
+      'Pass environment_variable when the target expects a specific name (an MCP server variable, a CLI flag); otherwise you receive a derived CIO_ name.',
+      'Pass utility_id to bind the value to an installed capability as its credential, exactly as the Utilities page stores it; do this right after installing a capability that needs one.',
+      'The result names the environment variable and, for a plain value, a 0600 secret_path: reference them at the target as $ENVIRONMENT_VARIABLE or "$(cat secret_path)". Never print, echo, log, or read the value, and never paste it into chat.'
+    ],
+    parameters: Type.Object({
+      secrets: Type.Array(
+        Type.Object({
+          title: Type.String({ description: 'Short human label, e.g. "Authorization Key".' }),
+          description: Type.Optional(
+            Type.String({ description: 'One line on what the value is and where to obtain it.' })
+          ),
+          environment_variable: Type.Optional(
+            Type.String({
+              description:
+                'Environment variable name the target expects. Omit to receive a derived CIO_ name.'
+            })
+          ),
+          utility_id: Type.Optional(
+            Type.String({
+              description: 'Installed utility id to bind this secret to as its credential.'
+            })
+          )
+        }),
+        { description: 'Secrets to collect, in order.', minItems: 1, maxItems: 5 }
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(askSecretTool.route)},
+        { secrets: params.secrets, apply_environment: true },
+        // The card is human-paced, so this call waits for the deadline the app
+        // published with the turn, and never less than ten minutes if that
+        // handoff predates the published timeout.
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(applySecretEnvironment(result))
+    }
+  })
+
   // Setup/diagnostics tools: registered without a promptSnippet so they stay
   // out of the always-on system prompt, but remain callable whenever an
   // explicit @cio-utility turn names them in prose. The gateway server still
@@ -323,9 +396,60 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     description: ${JSON.stringify(manageTool.description)},
     parameters: Type.Object({
       action: Type.Literal('install_bundle'),
-      bundle: Type.Record(Type.String(), Type.Unknown(), {
-        description: 'A UtilityBundleInstallRequest-shaped object with name and one or more secret-free definition entries.'
-      })
+      // Deliberately permissive: the nested shape documents the contract for the
+      // model, while optional fields and additionalProperties keep a flat or
+      // aliased entry from being rejected by schema validation before the
+      // gateway's own tolerant parser can normalise it.
+      bundle: Type.Object(
+        {
+          name: Type.Optional(Type.String({ description: 'Human-readable bundle name.' })),
+          utilities: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  definition: Type.Optional(
+                    Type.Object(
+                      {
+                        kind: Type.Optional(Type.Union([Type.Literal('skill'), Type.Literal('mcp')])),
+                        name: Type.Optional(Type.String({ description: 'Utility name.' })),
+                        description: Type.Optional(Type.String()),
+                        enabled: Type.Optional(Type.Boolean()),
+                        activation: Type.Optional(
+                          Type.Union([Type.Literal('on_demand'), Type.Literal('always')])
+                        ),
+                        config: Type.Optional(
+                          Type.Object(
+                            {},
+                            {
+                              additionalProperties: true,
+                              description:
+                                'MCP: {"transport":"http"|"sse","url":"https://..."} or {"transport":"stdio","command":"...","args":[...]}.'
+                            }
+                          )
+                        )
+                      },
+                      {
+                        additionalProperties: true,
+                        description: 'The utility itself: "kind" must be "skill" or "mcp".'
+                      }
+                    )
+                  )
+                },
+                {
+                  additionalProperties: true,
+                  description: 'A single entry: {"definition":{"kind":"skill"|"mcp",...}}.'
+                }
+              ),
+              { minItems: 1, maxItems: 20, description: 'One entry per utility.' }
+            )
+          )
+        },
+        {
+          additionalProperties: true,
+          description:
+            'The bundle to install: a name plus one entry per utility, each {"definition":{...}}.'
+        }
+      )
     }),
     async execute(_toolCallId, params) {
       const result = await callGateway(${JSON.stringify(manageTool.route)}, {

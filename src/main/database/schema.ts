@@ -13,6 +13,11 @@
  *   db_meta           Internal database metadata
  */
 
+import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
+
+/** Quoted feature list for the usage ledger's CHECK constraint. */
+const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${feature}'`).join(',')
+
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS db_meta (
@@ -115,6 +120,15 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   independent_audit    INTEGER NOT NULL DEFAULT 0,
   independent_audit_initialized INTEGER NOT NULL DEFAULT 0,
+  routine_id           TEXT,
+  assistant_icon_type  TEXT,
+  assistant_icon       TEXT,
+  schedule_override    TEXT,
+  last_run_at          INTEGER,
+  last_dispatched_at   INTEGER,
+  last_success_at      INTEGER,
+  assistant_getting_started INTEGER NOT NULL DEFAULT 0,
+  assistant_task_id    TEXT,
   drafting             INTEGER NOT NULL DEFAULT 0,
   draft_json           TEXT,
   created_at           INTEGER NOT NULL,
@@ -140,7 +154,26 @@ export const THREADS_SQL = `
 -- ─── Threads ────────────────────────────────────────────────────────────
 ${threadsTableSql('threads')}
 
-${THREAD_INDEXES_SQL}`
+${THREAD_INDEXES_SQL}
+
+-- A delegated child (an Assignment worker or an auditor) shares its recency
+-- with the Sr. Engineer row that owns it: any activity on the child advances
+-- the coordinator's last_activity, so the coordinator bubbles up the status
+-- list the moment one of its workers is touched, a plain prompt included. The
+-- ">" guard makes the newest update win, so a stale write can never roll the
+-- coordinator backwards. The coordinator row itself has a NULL
+-- coordinator_thread_id, so this never fires on its own writes.
+CREATE TRIGGER IF NOT EXISTS threads_coordinator_activity
+AFTER UPDATE OF last_activity ON threads
+WHEN new.coordinator_thread_id IS NOT NULL
+  AND new.last_activity > COALESCE(
+        (SELECT last_activity FROM threads WHERE id = new.coordinator_thread_id), 0)
+BEGIN
+  UPDATE threads
+     SET last_activity = new.last_activity,
+         updated_at = MAX(updated_at, new.last_activity)
+   WHERE id = new.coordinator_thread_id;
+END;`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
@@ -208,6 +241,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  normalized_usage_json TEXT,
   tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
@@ -312,6 +346,13 @@ CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
  * transient grading queue. At most one open snapshot per conversation window
  * (first user message + response, upgraded by one substantive follow-up).
  *
+ * One snapshot records one shot, not one provider turn: `anchor_message_id`
+ * names the visible user message the window currently answers, so the later
+ * turns that re-answer that same message   an invisible continuation (search
+ * nudge, Mermaid repair, incomplete-turn recovery, specification
+ * continuation) or a resumed retry   refresh the window in place instead of
+ * registering as a follow-up.
+ *
  * thread_id deliberately does NOT cascade-delete: thread deletion is the close
  * signal, and the raw prompt/response payload must survive deletion long
  * enough for the judge to score it. Once scored, the row is hard-deleted and
@@ -336,6 +377,7 @@ export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
   user_message_text     TEXT NOT NULL DEFAULT '',
   assistant_output_text TEXT NOT NULL DEFAULT '',
   follow_up_text        TEXT,
+  anchor_message_id     TEXT,
   cost_usd       REAL,
   cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
   attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
@@ -387,104 +429,7 @@ WHEN new.search_text != old.search_text BEGIN
   INSERT INTO agent_messages_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
 END;`
 
-/**
- * Remote device identity tables (A-04), applied idempotently alongside the
- * misc tables by `Database.init()` via `MISC_TABLES_SQL`. Kept as a named
- * export so the focused tests can create them without importing the full
- * database module.
- */
-export const REMOTE_DEVICE_SQL = `
--- ─── Remote device identity (A-04) ──────────────────────────────────────
--- Per-enrolled-device scoped credentials. Only public keys and fingerprints
--- are stored   never a device private key, a bearer secret, or the raw
--- shared pairing value. Revocation writes a tombstone so a copied offline
--- credential can never reconnect.
-CREATE TABLE IF NOT EXISTS remote_devices (
-  device_id                TEXT PRIMARY KEY NOT NULL,
-  name                     TEXT NOT NULL DEFAULT 'Phone',
-  signing_public_jwk       TEXT NOT NULL,
-  agreement_public_jwk     TEXT NOT NULL,
-  public_key_fingerprint   TEXT NOT NULL,
-  scopes                   TEXT NOT NULL,
-  all_projects             INTEGER NOT NULL DEFAULT 1,
-  project_ids              TEXT NOT NULL DEFAULT '[]',
-  auth_version             INTEGER NOT NULL DEFAULT 1,
-  credential_issued_at     INTEGER NOT NULL,
-  credential_expires_at    INTEGER NOT NULL,
-  created_at               INTEGER NOT NULL,
-  last_used_at             INTEGER,
-  expires_at               INTEGER NOT NULL,
-  rotated_at               INTEGER,
-  revoked_at               INTEGER,
-  revoked_reason           TEXT,
-  last_transport           TEXT NOT NULL DEFAULT 'lan'
-);
-
-CREATE INDEX IF NOT EXISTS idx_remote_devices_revoked ON remote_devices(revoked_at);
-
--- Immutable revocation tombstones retained for at least the longer of one year
--- or the revoked credential's original expiry plus seven days.
-CREATE TABLE IF NOT EXISTS remote_device_tombstones (
-  device_id                TEXT PRIMARY KEY NOT NULL,
-  public_key_fingerprint   TEXT NOT NULL,
-  last_auth_version        INTEGER NOT NULL,
-  revoked_at               INTEGER NOT NULL
-);
-
--- Bounded, append-only security audit log. Never contains secrets, raw
--- request arguments, prompt/file contents, or key material.
-CREATE TABLE IF NOT EXISTS remote_audit_events (
-  id                       TEXT PRIMARY KEY NOT NULL,
-  timestamp                INTEGER NOT NULL,
-  device_id                TEXT,
-  device_name              TEXT,
-  fingerprint_prefix       TEXT,
-  transport                TEXT,
-  session_id               TEXT,
-  request_id               TEXT,
-  channel                  TEXT,
-  project_id               TEXT,
-  resource_id              TEXT,
-  required_scope           TEXT,
-  decision                 TEXT NOT NULL,
-  reason_code              TEXT,
-  step_up_approval_id      TEXT,
-  auth_version             INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_remote_audit_timestamp ON remote_audit_events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_remote_audit_device ON remote_audit_events(device_id);
-
--- Short-lived single-use pairing bootstraps. Only a SHA-256 hash of the raw
--- value is stored; the raw value lives in the QR URL fragment and is erased
--- on consume/rotation.
-CREATE TABLE IF NOT EXISTS remote_pairing_bootstraps (
-  bootstrap_id             TEXT PRIMARY KEY NOT NULL,
-  hash                     TEXT NOT NULL,
-  issued_at                INTEGER NOT NULL,
-  expires_at               INTEGER NOT NULL,
-  state                    TEXT NOT NULL DEFAULT 'pending'
-);
-
-CREATE INDEX IF NOT EXISTS idx_remote_bootstraps_state ON remote_pairing_bootstraps(state);`
-
-/**
- * Desktop account profile cache. Mirrors the last validated remote account
- * profile (id, avatar, name, email, usage, global memories) so an app restart
- * or an offline window never loses the signed-in identity. The row is replaced
- * only when a fresh profile is fetched and removed only when the user
- * explicitly signs out.
- */
-export const ACCOUNT_PROFILE_SQL = `
--- ─── Account profile cache (desktop) ────────────────────────────────────
-CREATE TABLE IF NOT EXISTS account_profile (
-  id           TEXT PRIMARY KEY NOT NULL,
-  profile_json TEXT NOT NULL,
-  cached_at    INTEGER NOT NULL
-);`
-
-export const MISC_TABLES_SQL =
-  `
+export const MISC_TABLES_SQL = `
 -- ─── Brainstorm Workflow ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS brainstorm_workflow (
   project_id                   TEXT NOT NULL,
@@ -645,11 +590,32 @@ CREATE TABLE IF NOT EXISTS turn_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_thread ON turn_checkpoints(project_id, thread_id);
 
 -- ─── Active Turns ────────────────────────────────────────────────────
+-- owner_pid records the CodeInOven process running the turn, so a second
+-- instance sharing this config root can tell an orphaned turn from a turn a
+-- sibling is still working on. NULL only for rows written before that column
+-- existed.
 CREATE TABLE IF NOT EXISTS active_turns (
   project_id TEXT NOT NULL,
   thread_id  TEXT NOT NULL,
   turn_id    TEXT,
+  owner_pid  INTEGER,
   PRIMARY KEY (project_id, thread_id)
+);
+
+-- ─── Workflow Owners ─────────────────────────────────────────────────
+-- A coordinated workflow   the Sr. Engineer coordinator and its worker and
+-- auditor children   is one unit of instance ownership, not a set of
+-- independent threads: one process drives it and the whole group moves
+-- together. owner_pid names that process, keyed by the coordinator thread
+-- exactly as assignment_workflow is, so a sibling instance can tell a
+-- workflow a live peer is running from one a departed process left behind.
+-- No row means nobody owns it, which every instance may then claim.
+CREATE TABLE IF NOT EXISTS workflow_owners (
+  project_id            TEXT NOT NULL,
+  coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  owner_pid             INTEGER,
+  updated_at            INTEGER NOT NULL,
+  PRIMARY KEY (project_id, coordinator_thread_id)
 );
 
 -- ─── Assignment Plans ───────────────────────────────────────────────
@@ -658,8 +624,9 @@ CREATE TABLE IF NOT EXISTS assignment_versions (
   version              INTEGER NOT NULL,
   project_id           TEXT NOT NULL,
   coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  spec_id              TEXT NOT NULL,
-  spec_version         INTEGER NOT NULL,
+  -- NULL when the Assignment was decomposed from the conversation instead of a specification.
+  spec_id              TEXT,
+  spec_version         INTEGER,
   status               TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
   data                 TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
@@ -716,9 +683,7 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_assignment
   ON assignment_api_capabilities(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_thread
-  ON assignment_api_capabilities(thread_id);` +
-  REMOTE_DEVICE_SQL +
-  ACCOUNT_PROFILE_SQL
+  ON assignment_api_capabilities(thread_id);`
 
 export const PERSISTENCE_SQL = `
 -- ─── Provider sync cursors ────────────────────────────────────────────────
@@ -750,7 +715,7 @@ export const USAGE_EVENTS_COLUMNS_SQL = `
   project_name          TEXT,
   feature_call_id       TEXT NOT NULL,
   attempt               INTEGER NOT NULL CHECK(attempt >= 1),
-  feature               TEXT NOT NULL CHECK(feature IN ('main','title','turn_grade','memory','image_descriptor','search_nudge','computer_use','web','audit','assignment')),
+  feature               TEXT NOT NULL CHECK(feature IN (${USAGE_EVENT_FEATURE_LIST_SQL})),
   harness_id            TEXT,
   account_id            TEXT,
   provider_id           TEXT,
@@ -898,6 +863,38 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
+/**
+ * Assistant routines: the top-level grouping for assistant tasks. A routine
+ * owns the agent-authored how-to, a default schedule, and its connection picks;
+ * tasks are threads in the assistant space that reference `routines.id`.
+ */
+export const ROUTINES_SQL = `
+-- ─── Assistant routines ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS routines (
+  id                  TEXT PRIMARY KEY NOT NULL,
+  name                TEXT NOT NULL,
+  description         TEXT,
+  color               TEXT,
+  icon                TEXT,
+  icon_type           TEXT,
+  schedule            TEXT,
+  schedule_updated_at INTEGER,
+  how_to              TEXT NOT NULL DEFAULT '',
+  how_to_updated_at   INTEGER,
+  connections         TEXT NOT NULL DEFAULT '[]',
+  delivery            TEXT,
+  priority            TEXT,
+  agents              TEXT,
+  paused              INTEGER NOT NULL DEFAULT 0,
+  pinned              INTEGER NOT NULL DEFAULT 0,
+  pinned_at           INTEGER,
+  sort_order          INTEGER,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -912,5 +909,6 @@ export const DATABASE_SCHEMA_SQL = [
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
-  THREAD_NOTES_SQL
+  THREAD_NOTES_SQL,
+  ROUTINES_SQL
 ].join('\n')

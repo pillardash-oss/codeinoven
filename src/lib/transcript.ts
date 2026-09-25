@@ -38,6 +38,8 @@ function toolStateLabel(status: string): string {
       return 'running'
     case 'error':
       return 'error'
+    case 'aborted':
+      return 'stopped'
     default:
       return 'pending'
   }

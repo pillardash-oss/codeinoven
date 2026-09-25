@@ -14,7 +14,6 @@
   import { createSubscriber } from 'svelte/reactivity'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
-    AgentProviderIssueKind,
     AgentSessionStatus,
     ProviderAccountLoginHandoff,
     ProviderCatalog,
@@ -23,7 +22,11 @@
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
+  import { presentProviderError, providerIssueTitle } from '$shared/provider-issue'
+  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
@@ -86,6 +89,9 @@
   let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
   let loginError = $state('')
   let loginTerminalId = $state('')
+  /** Account main bound this sign-in to, for the post-login confirmation read. */
+  let loginAccountId = $state('')
+  let verifyingSignIn = $state(false)
   const subscribeToClock = createSubscriber((update) => {
     const timer = window.setInterval(update, 1_000)
     return () => window.clearInterval(timer)
@@ -108,6 +114,16 @@
     issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
   )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
+  /**
+   * The card body is display copy, never diagnostic detail. A harness that
+   * crashes inside its own runtime reports its exception text (stack trace
+   * included) as an ordinary error string, so reduce whatever a driver handed
+   * over to that trace's header line. Every provider card in the app renders
+   * through this component, which makes it the one place that guarantees a
+   * trace can never reach the body; the full text stays in `rawError` above,
+   * which the Raw Error view shows.
+   */
+  const displayMessage = $derived(presentProviderError(issue.message).message)
 
   async function copyRawError(): Promise<void> {
     try {
@@ -152,23 +168,11 @@
     return parts
   }
 
-  function issueTitle(kind: AgentProviderIssueKind): string {
-    switch (kind) {
-      case 'rate_limit':
-      case 'quota':
-        return 'Usage limit reached'
-      case 'authentication':
-        return 'Provider sign-in required'
-      case 'billing':
-        return 'Provider billing issue'
-      case 'provider_unavailable':
-        return 'Provider temporarily unavailable'
-      case 'network':
-        return 'Provider connection interrupted'
-      default:
-        return waiting ? 'Provider retry scheduled' : 'Agent output error'
-    }
-  }
+  /**
+   * The card heading. Shared with every other surface that renders one of these
+   * issues, so the same failure is never named two different things.
+   */
+  const title = $derived(providerIssueTitle(issue.kind, waiting))
 
   function relativeRetryTime(retryAt: number): string {
     const remainingSeconds = Math.max(0, Math.ceil((retryAt - now) / 1_000))
@@ -183,25 +187,26 @@
     return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`
   }
 
-  function absoluteRetryTime(retryAt: number): string {
-    return new Date(retryAt).toLocaleString([], {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    })
-  }
-
   async function beginSignIn(): Promise<void> {
     loginError = ''
     loginHandoff = null
+    loginAccountId = ''
+    verifyingSignIn = false
     loginTerminalId = `provider-login-${crypto.randomUUID()}`
     loginOpen = true
     try {
-      loginHandoff = await invoke('providerAccounts:beginLogin', issue.harnessId, {
-        mode: 'default'
+      // The account binding is explicit: this card is about the account the
+      // thread is running on, so the login must write into that account's
+      // credential home. An unbound login writes the harness's shared store,
+      // where the fresh credential is mirrored onto another account row while
+      // the expired account stays signed out.
+      const handoff = await invoke('providerAccounts:beginLogin', issue.harnessId, {
+        mode: 'default',
+        ...(settings?.accountId ? { accountId: settings.accountId } : {}),
+        ...(settings?.providerId ? { providerId: settings.providerId } : {})
       })
+      loginHandoff = handoff
+      loginAccountId = handoff.accountId ?? ''
     } catch (error) {
       loginError = error instanceof Error ? error.message : 'Sign-in could not be started.'
     }
@@ -211,6 +216,8 @@
     loginOpen = false
     loginHandoff = null
     loginError = ''
+    loginAccountId = ''
+    verifyingSignIn = false
   }
 
   /** Commit a new thread model from the shared picker, mirroring the pattern used
@@ -243,12 +250,51 @@
     onModelChange({ ...settings, thinkingLevel: level })
   }
 
-  function finishSignIn(exitCode: number): void {
+  /**
+   * The sign-in completion step. The account's own credential home is read back
+   * before the card clears and the thread retries, so a login that never
+   * completed is reported here instead of silently leaving the thread on the
+   * account it failed to re-authenticate. Only an explicit "not signed in"
+   * blocks: a probe that could not answer (unknown/error) is not proof of a
+   * failed sign-in, and the retried turn still reports the truth.
+   */
+  async function signInLanded(accountId: string): Promise<boolean> {
+    const status = await invoke(
+      'providerAccounts:getAuthStatus',
+      issue.harnessId,
+      undefined,
+      accountId
+    )
+    return status.state !== 'unauthenticated'
+  }
+
+  async function finishSignIn(exitCode: number): Promise<void> {
     if (exitCode !== 0) {
       loginError = `Sign-in exited with code ${exitCode}.`
       return
     }
+    // The process is gone; drop the terminal before the confirmation pass so the
+    // modal never shows a dead session while it verifies.
+    loginHandoff = null
+    if (loginAccountId) {
+      verifyingSignIn = true
+      try {
+        if (!(await signInLanded(loginAccountId))) {
+          loginError = `${providerName} did not report a completed sign-in for this account.`
+          return
+        }
+      } catch (error) {
+        loginError = error instanceof Error ? error.message : 'The sign-in could not be verified.'
+        return
+      } finally {
+        verifyingSignIn = false
+      }
+    }
     closeSignIn()
+    // The credential changed, so the account list and every catalog discovered
+    // through it are stale for this harness.
+    harnessAccountCache.invalidate(issue.harnessId)
+    providerCatalog.invalidateAll()
     ;(onSignedIn ?? onRetry)?.()
   }
 </script>
@@ -271,7 +317,7 @@
     <div class="min-w-0 flex-1">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
         <p class="text-sm font-semibold text-foreground">
-          {sourceLabel ? 'Worker output error' : issueTitle(issue.kind)}
+          {sourceLabel ? 'Worker output error' : title}
         </p>
         <span class="rounded-full bg-raised px-2 py-0.5 text-[0.625rem] font-semibold text-muted">
           {providerName}
@@ -290,7 +336,7 @@
       {/if}
 
       <p class="mt-1 text-sm leading-relaxed text-muted select-text">
-        {#each messageParts(issue.message) as part, index (index)}
+        {#each messageParts(displayMessage) as part, index (index)}
           {#if part.isLink}
             <a
               href={part.text}
@@ -308,7 +354,9 @@
       {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
-            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
+              issue.retryAt
+            )}
           </span>
           {#if issue.attempt}
             · attempt {issue.attempt}
@@ -316,21 +364,23 @@
         </p>
       {:else if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {absoluteRetryTime(issue.retryAt)}
+          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
         </p>
       {:else if autoResume && issue.retryAt && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           {#if autoRetryEnabled}
-            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+            Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
+              issue.retryAt
+            )}
           {:else}
-            Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(
+            Available again {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(
               issue.retryAt
             )}
           {/if}
         </p>
       {:else if issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Will retry {absoluteRetryTime(issue.retryAt)}
+          Will retry {formatDateTimeWithWeekday(issue.retryAt)}
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">
@@ -461,13 +511,19 @@
 
 <Modal open={loginOpen} title={`Sign in to ${providerName}`} onClose={closeSignIn}>
   <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
-    {#if loginHandoff}
+    {#if loginHandoff && !verifyingSignIn}
       <ProviderLoginTerminal
         terminalId={loginTerminalId}
         command={loginHandoff.command}
         args={loginHandoff.args}
-        onExit={finishSignIn}
+        environment={loginHandoff.environment}
+        onExit={(exitCode) => void finishSignIn(exitCode)}
       />
+    {:else if verifyingSignIn}
+      <div class="flex h-full items-center justify-center gap-2 text-sm text-muted">
+        <Loader2 size={14} class="animate-spin" />
+        Confirming sign-in for this account…
+      </div>
     {:else if loginError}
       <div class="flex h-full items-center justify-center p-6">
         <p class="max-w-md text-center text-sm text-danger">{loginError}</p>

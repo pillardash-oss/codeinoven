@@ -1,48 +1,11 @@
 import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'path'
-import type { Plugin, PluginOption, PreviewServer, ViteDevServer } from 'vite'
+import { createHash } from 'node:crypto'
+import { realpathSync, statSync } from 'node:fs'
+import { join, resolve } from 'path'
+import type { Plugin, PluginOption } from 'vite'
 import packageJson from './package.json'
-
-const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
-const pwaManifest = JSON.parse(readFileSync(pwaManifestPath, 'utf8')) as Record<string, unknown>
-const versionedPwaManifest = `${JSON.stringify(
-  { ...pwaManifest, version: packageJson.version },
-  null,
-  2
-)}\n`
-
-function serveVersionedPwaManifest(server: PreviewServer | ViteDevServer): void {
-  server.middlewares.use((request, response, next) => {
-    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
-    if (pathname !== '/manifest.webmanifest') {
-      next()
-      return
-    }
-    response.statusCode = 200
-    response.setHeader('Content-Type', 'application/manifest+json; charset=utf-8')
-    response.setHeader('Cache-Control', 'no-store')
-    response.end(versionedPwaManifest)
-  })
-}
-
-/** Keep every served PWA manifest on the same version source as the desktop and remote UI. */
-function pwaManifestVersionPlugin(): Plugin {
-  return {
-    name: 'codeinoven-pwa-manifest-version',
-    configureServer: serveVersionedPwaManifest,
-    configurePreviewServer: serveVersionedPwaManifest,
-    generateBundle() {
-      this.emitFile({
-        type: 'asset',
-        fileName: 'manifest.webmanifest',
-        source: versionedPwaManifest
-      })
-    }
-  }
-}
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
 // packaging and passes it here so the splash/about surfaces show the exact
@@ -50,9 +13,63 @@ function pwaManifestVersionPlugin(): Plugin {
 // otherwise fall back to.
 const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
 
-/** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
- *  standalone Vite dev server for the phone PWA stays in sync with the real
- *  electron-vite renderer config instead of drifting out of a duplicate. */
+/** Renderer dev port of the primary checkout. */
+const DEFAULT_RENDERER_PORT = 5173
+/** Deterministic port pool reserved for linked Git worktrees. */
+const WORKTREE_PORT_BASE = 5200
+const WORKTREE_PORT_POOL = 800
+
+/**
+ * Is this config loaded from a linked Git worktree (`git worktree add`)?
+ * A linked worktree stores a `.git` *file* holding its `gitdir:` pointer, while
+ * a regular checkout has a `.git` *directory*.
+ */
+function isLinkedWorktree(root: string): boolean {
+  try {
+    return statSync(join(root, '.git')).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the renderer dev-server port.
+ *
+ * The port is part of the renderer origin, and the renderer persists its
+ * recovery snapshot, thread visits, and UI preferences in origin-keyed
+ * localStorage   so the primary checkout keeps the stable 5173 it has always
+ * had. A linked worktree instead gets a port of its own, derived from its own
+ * path, so any number of worktrees can run `bun dev` side by side while each
+ * one still keeps the exact same origin (and therefore the same persisted
+ * state) across every restart. `CODEINOVEN_RENDERER_PORT` overrides the choice
+ * outright; `strictPort` stays on so a taken port fails loudly instead of
+ * silently moving the origin and losing that state.
+ */
+function resolveRendererPort(root: string): number {
+  const override = process.env['CODEINOVEN_RENDERER_PORT']?.trim()
+  if (override) {
+    const parsed = Number(override)
+    if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) {
+      throw new Error(
+        `CODEINOVEN_RENDERER_PORT must be an integer between 1024 and 65535 (received "${override}")`
+      )
+    }
+    return parsed
+  }
+  if (!isLinkedWorktree(root)) return DEFAULT_RENDERER_PORT
+  let stableRoot = root
+  try {
+    stableRoot = realpathSync.native(root)
+  } catch {
+    // Fall back to the unresolved path; the port stays stable for this checkout.
+  }
+  const digest = createHash('sha256').update(stableRoot).digest()
+  return WORKTREE_PORT_BASE + (digest.readUInt32BE(0) % WORKTREE_PORT_POOL)
+}
+
+/** Renderer root/aliases/plugins, shared by the builders so any additional
+ *  renderer bundle stays in sync with the real electron-vite renderer config
+ *  instead of drifting out of a duplicate. */
 export const rendererDefine = {
   __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion)
 }
@@ -74,12 +91,41 @@ export const rendererDedupe = [
   '@lezer/common',
   '@lezer/lr'
 ]
+/**
+ * Refuse to emit an empty chunk in a bundle Electron boots.
+ *
+ * rolldown (Vite 8) can render a chunk that still owns its modules as an empty
+ * file: the entry keeps the `import()` that names it, the app boots, and the
+ * graph behind that import is silently missing at runtime. A packaged macOS
+ * build shipped without any feature IPC exactly that way, and nothing before
+ * the packaged startup smoke test noticed, because a chunk that lost its code
+ * is not a build error. The main and preload bundles are held to the one
+ * invariant that makes them usable: a chunk with modules has code. The
+ * renderer is left out on purpose   it already carries one pre-existing empty
+ * chunk from a dependency's browser-external shim, and widening this guard to
+ * it would fail the build on that instead of on this app's own code.
+ */
+function refuseEmptyChunks(environment: 'main' | 'preload'): Plugin {
+  return {
+    name: `codeinoven:refuse-empty-chunks:${environment}`,
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (output.type !== 'chunk') continue
+        if (output.moduleIds.length === 0) continue
+        if (output.code.trim() !== '') continue
+        this.error(
+          `${environment} chunk ${fileName} owns ${output.moduleIds.length} modules but the bundler ` +
+            'rendered no code for it, so nothing it exports can load at runtime. Re-run the build; ' +
+            'if it persists, move the heavy part of that graph behind its own nested dynamic import ' +
+            'rather than shipping this bundle.'
+        )
+      }
+    }
+  }
+}
+
 export function rendererPlugins(): PluginOption[] {
-  return [
-    pwaManifestVersionPlugin(),
-    svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-    tailwindcss()
-  ]
+  return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
 }
 
 export default defineConfig(({ mode }) => {
@@ -90,15 +136,9 @@ export default defineConfig(({ mode }) => {
     'RENDERER_VITE_',
     'CODEINOVEN_'
   ])
-  // Only a production build talks to the hosted mobile gateway by default.
-  // Every other mode falls back to the local `services/remote-control` dev
-  // server (see services/remote-control/runtime-config.ts), so `bun dev`
-  // never reaches production unless MAIN_VITE_REMOTE_API_ORIGIN /
-  // MAIN_VITE_ACCOUNT_AUTH_ORIGIN are set explicitly.
-  const defaultRemoteOrigin =
-    mode === 'production' ? 'https://mobile.codeinoven.com' : 'http://localhost:8877'
   return {
     main: {
+      plugins: [refuseEmptyChunks('main')],
       define: {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).
@@ -107,19 +147,6 @@ export default defineConfig(({ mode }) => {
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
         __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''),
-        // Development keeps persisted Remote mode off unless the developer
-        // explicitly opts into the LAN listeners for a phone test.
-        __CODEINOVEN_DEV_REMOTE_MODE__: JSON.stringify(env.CODEINOVEN_DEV_REMOTE_MODE === '1'),
-        // Public endpoint baked into packaged desktops. Release CI maps the
-        // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
-        __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_REMOTE_API_ORIGIN ?? defaultRemoteOrigin
-        ),
-        // Keep interactive account authentication on the stable mobile gateway
-        // in production; every other mode targets the local dev server above.
-        __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? defaultRemoteOrigin
-        ),
         // Public, isolated origin for generated Engineering prototype previews.
         // There is deliberately no production default.
         __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: JSON.stringify(
@@ -134,13 +161,7 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          external: [
-            'electron',
-            'node-pty',
-            'better-sqlite3',
-            'electron-updater',
-            'werift'
-          ],
+          external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
           input: {
             index: resolve(__dirname, 'src/main/index.ts')
           }
@@ -148,6 +169,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     preload: {
+      plugins: [refuseEmptyChunks('preload')],
       build: {
         outDir: 'out/preload',
         rollupOptions: {
@@ -193,19 +215,19 @@ export default defineConfig(({ mode }) => {
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
       // thread visits, UI preferences) lives in localStorage keyed by origin,
       // so a port that drifts when 5173 is busy silently loses every restart
-      // restore — the app would boot with empty persisted state.
+      // restore   the app would boot with empty persisted state. Each linked
+      // worktree therefore owns a stable port of its own (see
+      // `resolveRendererPort`) instead of fighting the primary checkout for
+      // 5173.
       server: {
-        port: 5173,
+        port: resolveRendererPort(__dirname),
         strictPort: true
       },
       build: {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {
           input: {
-            index: resolve(__dirname, 'src/renderer/index.html'),
-            // Installable phone client (PWA): served by the LAN gateway in
-            // production, or by the Vite dev server in development.
-            remote: resolve(__dirname, 'src/renderer/remote.html')
+            index: resolve(__dirname, 'src/renderer/index.html')
           }
         }
       }

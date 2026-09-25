@@ -2,6 +2,7 @@
   import type { Snippet } from 'svelte'
   import FileDiffView from './FileDiffView.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
 
   interface Props {
@@ -111,7 +112,7 @@
   }
 
   function closeOnKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') open = false
+    if (keymapState.matches('files-hover-diff-close', event)) open = false
   }
 
   $effect(() => {

@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     applyCodeFenceOnEnter,
     applyEmptyPairCodeRule,
     applyMarkdownInputRule,
+    exitEmptyListItemOnEnter,
     formatRichSelection,
     insertMarkdownLineBreak,
     insertPlainText,
@@ -16,6 +18,20 @@
     unlistListItem
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
+  import {
+    captureVisibleSelection,
+    demoteSmartPunctuation,
+    flattenWithNewlines,
+    hasRealAdjacentContent,
+    inlineElementAtBoundary,
+    isCursorAtBoundary,
+    moveCaretOutOfInlineElement,
+    nodeLength,
+    pointAtOffset,
+    pointOffset,
+    type SelectionBookmark
+  } from './rich-markdown-editor-dom'
+  import { RichMarkdownEditorHistory } from './rich-markdown-editor-history.svelte'
   import type {
     SpeechEditorApplyResult,
     SpeechEditorSnapshot,
@@ -76,114 +92,22 @@
   let empty = $state(!value.trim())
   let editorValue = value
   let editorBadgeSignature = ''
-  const HISTORY_LIMIT = 100
-  const HISTORY_MERGE_MS = 300
-
-  interface SelectionBookmark {
-    anchor: number
-    focus: number
-  }
-
-  interface HistoryEntry {
-    markdown: string
-    html: string
-    selection: SelectionBookmark | null
-  }
-
-  let undoHistory: HistoryEntry[] = []
-  let redoHistory: HistoryEntry[] = []
-  let pendingHistory: HistoryEntry | null = null
-  let lastHistoryInputType: string | null = null
-  let lastHistoryAt = 0
-
-  /** Length a non-editable inline token occupies in serialized markdown   inline
-   *  badges keep their stored value, footnote superscripts their `[^label]`. */
-  function inlineTokenLength(node: HTMLElement): number | null {
-    if (node.dataset.editorInlineBadge === 'true') return node.dataset.editorValue?.length ?? 0
-    const footnote = node.dataset.editorFootnoteRef
-    if (footnote !== undefined) return footnote.length + 3
-    return null
-  }
-
-  function nodeLength(node: Node): number {
-    if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0
-    if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement) {
-      const tokenLength = inlineTokenLength(node)
-      if (tokenLength !== null) return tokenLength
-    }
-    return Array.from(node.childNodes).reduce((total, child) => total + nodeLength(child), 0)
-  }
-
-  function pointOffset(root: Node, target: Node, targetOffset: number): number | null {
-    let offset = 0
-
-    function visit(node: Node): boolean {
-      if (node === target) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          offset += Math.min(targetOffset, node.textContent?.length ?? 0)
-        } else {
-          const children = Array.from(node.childNodes).slice(0, targetOffset)
-          offset += children.reduce((total, child) => total + nodeLength(child), 0)
-        }
-        return true
-      }
-      if (node.nodeType === Node.TEXT_NODE) {
-        offset += node.textContent?.length ?? 0
-        return false
-      }
-      if (node instanceof HTMLBRElement) {
-        offset += 1
-        return false
-      }
-      for (const child of Array.from(node.childNodes)) {
-        if (visit(child)) return true
-      }
-      return false
-    }
-
-    return visit(root) ? offset : null
-  }
-
-  function pointAtOffset(root: Node, requestedOffset: number): { node: Node; offset: number } {
-    let remaining = Math.max(0, requestedOffset)
-
-    function visit(node: Node): { node: Node; offset: number } | null {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const length = node.textContent?.length ?? 0
-        if (remaining <= length) return { node, offset: remaining }
-        remaining -= length
-        return null
-      }
-      if (node instanceof HTMLBRElement) {
-        if (remaining === 0 && node.parentNode) {
-          return {
-            node: node.parentNode,
-            offset: Array.from(node.parentNode.childNodes).indexOf(node)
-          }
-        }
-        remaining = Math.max(0, remaining - 1)
-        return null
-      }
-      if (node instanceof HTMLElement && inlineTokenLength(node) !== null) {
-        const parent = node.parentNode
-        const index = parent ? Array.from(parent.childNodes).indexOf(node) : -1
-        const length = inlineTokenLength(node) ?? 0
-        if (parent && index >= 0 && remaining <= length) {
-          return { node: parent, offset: index + (remaining === 0 ? 0 : 1) }
-        }
-        remaining = Math.max(0, remaining - length)
-        return null
-      }
-      for (const child of Array.from(node.childNodes)) {
-        const point = visit(child)
-        if (point) return point
-      }
-      return null
-    }
-
-    return visit(root) ?? { node: root, offset: root.childNodes.length }
-  }
+  const history = new RichMarkdownEditorHistory({
+    getEditor: () => editor,
+    serialize: (node) => serializeRichMarkdown(node),
+    captureSelection,
+    applyEntry: (entry) => {
+      replaceEditorContent(entry.markdown, entry.html)
+      restoreSelection(entry.selection)
+      publishCaretText()
+    },
+    getValue: () => value,
+    setValue: (next) => {
+      value = next
+    },
+    onValueChange: (next) => onValueChange?.(next),
+    publishState: (canUndo, canRedo) => onHistoryStateChange?.({ canUndo, canRedo })
+  })
 
   /** Most recent caret position seen inside this editor. Tracked on every
    *  selection change (including while focus sits elsewhere, e.g. a menu or a
@@ -274,11 +198,11 @@
     const start = Math.min(snapshot.selection.anchor, snapshot.selection.focus)
     const end = Math.max(snapshot.selection.anchor, snapshot.selection.focus)
     if (start < 0 || end > nodeLength(editor)) return { ok: false, reason: 'invalid-selection' }
-    const historyEntry = captureHistoryEntry()
+    const historyEntry = history.captureEntry()
     restoreSelection(snapshot.selection)
     insertPlainText(editor, transcript)
     emitEditorValue(true)
-    commitHistory(historyEntry)
+    history.commit(historyEntry)
     publishCaretText()
     editor.focus()
     const after = serializeRichMarkdown(editor)
@@ -299,161 +223,6 @@
       capture: () => dictationSnapshot(targetId),
       apply: (snapshot, transcript) => applyDictation(targetId, snapshot, transcript)
     }
-  }
-
-  /** Visible characters in a text node   zero-width caret anchors are stripped by
-   *  serialization, so they must never shift a bookmark across a serialize → re-render
-   *  round trip (which always drops them from the DOM). */
-  function visibleTextLength(text: string | null | undefined): number {
-    return (text ?? '').replace(/\u200b/g, '').length
-  }
-
-  /** Characters of a node up to an offset, ignoring zero-width anchors. */
-  function visibleCharsBefore(text: string, offset: number): number {
-    let count = 0
-    const length = Math.min(offset, text.length)
-    for (let index = 0; index < length; index += 1) {
-      if (text.charCodeAt(index) !== 0x200b) count += 1
-    }
-    return count
-  }
-
-  function nodeVisibleLength(node: Node): number {
-    if (node.nodeType === Node.TEXT_NODE) return visibleTextLength(node.textContent)
-    if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement) {
-      const tokenLength = inlineTokenLength(node)
-      if (tokenLength !== null) return tokenLength
-    }
-    return Array.from(node.childNodes).reduce((total, child) => total + nodeVisibleLength(child), 0)
-  }
-
-  /** Caret position measured in the same coordinates a freshly re-rendered editor
-   *  will use (zero-width anchors are absent there), so a bookmark taken on the old
-   *  DOM lands exactly where the caret belongs after `replaceEditorContent`. */
-  function pointVisibleOffset(root: Node, target: Node, targetOffset: number): number | null {
-    let offset = 0
-
-    function visit(node: Node): boolean {
-      if (node === target) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          offset += visibleCharsBefore(node.textContent ?? '', targetOffset)
-        } else {
-          const children = Array.from(node.childNodes).slice(0, targetOffset)
-          offset += children.reduce((total, child) => total + nodeVisibleLength(child), 0)
-        }
-        return true
-      }
-      if (node.nodeType === Node.TEXT_NODE) {
-        offset += visibleTextLength(node.textContent)
-        return false
-      }
-      if (node instanceof HTMLBRElement) {
-        offset += 1
-        return false
-      }
-      for (const child of Array.from(node.childNodes)) {
-        if (visit(child)) return true
-      }
-      return false
-    }
-
-    return visit(root) ? offset : null
-  }
-
-  /** Bookmarks the current caret in visible coordinates so it survives a full
-   *  re-render of the editor content. */
-  function captureVisibleSelection(): SelectionBookmark | null {
-    if (!editor) return null
-    const selection = window.getSelection()
-    if (
-      !selection?.anchorNode ||
-      !selection.focusNode ||
-      !editor.contains(selection.anchorNode) ||
-      !editor.contains(selection.focusNode)
-    ) {
-      return null
-    }
-    const anchor = pointVisibleOffset(editor, selection.anchorNode, selection.anchorOffset)
-    const focus = pointVisibleOffset(editor, selection.focusNode, selection.focusOffset)
-    return anchor === null || focus === null ? null : { anchor, focus }
-  }
-
-  function captureHistoryEntry(): HistoryEntry | null {
-    if (!editor) return null
-    return {
-      markdown: serializeRichMarkdown(editor),
-      html: editor.innerHTML,
-      selection: captureSelection()
-    }
-  }
-
-  function resetHistoryGroup(): void {
-    lastHistoryInputType = null
-    lastHistoryAt = 0
-  }
-
-  function publishHistoryState(): void {
-    onHistoryStateChange?.({
-      canUndo: undoHistory.length > 0,
-      canRedo: redoHistory.length > 0
-    })
-  }
-
-  function commitHistory(entry: HistoryEntry | null, inputType?: string): void {
-    if (!editor || !entry) return
-    const markdown = serializeRichMarkdown(editor)
-    if (markdown === entry.markdown && editor.innerHTML === entry.html) return
-
-    const now = Date.now()
-    const mergeable =
-      inputType === 'insertText' ||
-      inputType === 'deleteContentBackward' ||
-      inputType === 'deleteContentForward'
-    const merge =
-      mergeable &&
-      inputType === lastHistoryInputType &&
-      now - lastHistoryAt <= HISTORY_MERGE_MS &&
-      undoHistory.length > 0
-
-    if (!merge) {
-      undoHistory.push(entry)
-      if (undoHistory.length > HISTORY_LIMIT) undoHistory.shift()
-    }
-    redoHistory = []
-    lastHistoryInputType = mergeable ? inputType : null
-    lastHistoryAt = mergeable ? now : 0
-    publishHistoryState()
-  }
-
-  function publishHistoryEntry(entry: HistoryEntry): void {
-    replaceEditorContent(entry.markdown, entry.html)
-    restoreSelection(entry.selection)
-    publishCaretText()
-    if (entry.markdown === value) return
-    value = entry.markdown
-    onValueChange?.(entry.markdown)
-  }
-
-  function undo(): void {
-    const entry = undoHistory.pop()
-    const current = captureHistoryEntry()
-    if (!entry || !current) return
-    redoHistory.push(current)
-    resetHistoryGroup()
-    publishHistoryEntry(entry)
-    publishHistoryState()
-  }
-
-  function redo(): void {
-    const entry = redoHistory.pop()
-    const current = captureHistoryEntry()
-    if (!entry || !current) return
-    undoHistory.push(current)
-    if (undoHistory.length > HISTORY_LIMIT) undoHistory.shift()
-    resetHistoryGroup()
-    publishHistoryEntry(entry)
-    publishHistoryState()
   }
 
   function handleSelectionChange(): void {
@@ -498,35 +267,6 @@
     onValueChange?.(markdown)
   }
 
-  const BLOCK_BOUNDARY_SELECTOR =
-    'p, div, li, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, pre, table, tr'
-
-  /**
-   * Flattens editor content up to the caret, inserting '\n' at block
-   * boundaries and `<br>`s. `Range.toString()` only concatenates text nodes,
-   * so without this the first line gets glued to the second and the
-   * `(^|\s)`-anchored slash/mention patterns stop matching off the first line.
-   */
-  function flattenWithNewlines(node: Node): string {
-    if (node instanceof Text) return node.data
-    if (node instanceof Element && node.tagName === 'BR') return '\n'
-    let text = ''
-    for (const child of node.childNodes) {
-      const childText = flattenWithNewlines(child)
-      if (
-        childText !== '' &&
-        text !== '' &&
-        !text.endsWith('\n') &&
-        child instanceof Element &&
-        child.matches(BLOCK_BOUNDARY_SELECTOR)
-      ) {
-        text += '\n'
-      }
-      text += childText
-    }
-    return text
-  }
-
   function publishCaretText(): void {
     if (!editor || !onCaretTextChange) return
     const selection = window.getSelection()
@@ -566,13 +306,13 @@
       return false
     }
 
-    const historyEntry = captureHistoryEntry()
+    const historyEntry = history.captureEntry()
     const insertedText = replacement(...match)
     textNode.replaceData(match.index, match[0].length, insertedText)
     const nextOffset = match.index + insertedText.length
     selection.setBaseAndExtent(textNode, nextOffset, textNode, nextOffset)
     emitEditorValue()
-    commitHistory(historyEntry)
+    history.commit(historyEntry)
     publishCaretText()
     return true
   }
@@ -583,29 +323,16 @@
     applyMarkdownInputRule(editor)
     syncCodeBlockLanguages(editor)
     emitEditorValue(inputEvent.inputType.startsWith('delete'))
-    commitHistory(pendingHistory, inputEvent.inputType)
-    pendingHistory = null
+    history.commit(history.consumePending(), inputEvent.inputType)
     publishCaretText()
-  }
-
-  /** Rewrites macOS smart-punctuation substitutions back to the literal
-   *  ASCII characters the user typed. A dev workspace needs real characters,
-   *  not typographic ones. */
-  function demoteSmartPunctuation(text: string): string {
-    return text
-      .replaceAll('…', '...')
-      .replaceAll(/[\u2018\u2019\u201b]/gu, "'")
-      .replaceAll(/[\u201c\u201d\u201f]/gu, '"')
-      .replaceAll('\u2013', '-')
-      .replaceAll('\u2014', '--')
   }
 
   function handleBeforeInput(event: Event): void {
     const inputEvent = event as InputEvent
     if (inputEvent.inputType === 'historyUndo' || inputEvent.inputType === 'historyRedo') {
       inputEvent.preventDefault()
-      if (inputEvent.inputType === 'historyUndo') undo()
-      else redo()
+      if (inputEvent.inputType === 'historyUndo') history.undo()
+      else history.redo()
       return
     }
     // macOS smart substitution rewrites what the user typed before it reaches
@@ -627,13 +354,13 @@
         return
       }
     }
-    pendingHistory = captureHistoryEntry()
+    history.setPending(history.captureEntry())
   }
 
   /** Inserts `text` verbatim at the caret (replacing any selection), recording
    *  it in undo history. Used to override smart substitution. */
   function insertRawAtSelection(text: string): void {
-    const historyEntry = captureHistoryEntry()
+    const historyEntry = history.captureEntry()
     const selection = window.getSelection()
     if (selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0)
@@ -646,103 +373,20 @@
       selection.addRange(range)
     }
     emitEditorValue()
-    commitHistory(historyEntry, 'insertText')
-  }
-
-  const INLINE_BOUNDARY_TAGS = new Set(['CODE', 'STRONG', 'B', 'EM', 'I', 'DEL', 'S', 'STRIKE'])
-
-  function nodeHasVisibleContent(node: Node): boolean {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return (node.textContent ?? '').replace(/[\u200b\u00a0]/g, '').trim().length > 0
-    }
-    if (node instanceof HTMLBRElement) return false
-    return true
-  }
-
-  /** The inline element whose very start (left) or very end (right) the collapsed
-   *  caret is sitting at, or null when the caret is not on such a boundary. */
-  function inlineElementAtBoundary(left: boolean): HTMLElement | null {
-    if (!editor) return null
-    const selection = window.getSelection()
-    if (!selection?.isCollapsed || !selection.anchorNode) return null
-    const anchor = selection.anchorNode
-    let element: HTMLElement | null
-    if (anchor instanceof Text) {
-      element = anchor.parentElement
-    } else if (anchor instanceof HTMLElement) {
-      // Caret collapsed directly inside an inline element that has no text child at the
-      // caret, e.g. an empty <code></code>. The element itself is the anchor node.
-      element = anchor
-    } else {
-      return null
-    }
-    if (!(element instanceof HTMLElement) || !editor.contains(element)) return null
-    if (!INLINE_BOUNDARY_TAGS.has(element.tagName)) return null
-    // Ignore <code> inside <pre>   code-block content has its own boundary rules.
-    if (element.parentElement?.tagName === 'PRE') return null
-    const offset = selection.anchorOffset
-    // A boundary is the position where no text remains before (left) or after (right)
-    // the caret inside the element   even if the element ends in a <br> or is empty.
-    const boundary = left
-      ? !hasTextBefore(element, anchor, offset)
-      : !hasTextAfter(element, anchor, offset)
-    if (!boundary) return null
-    return element
-  }
-
-  function hasRealAdjacentContent(element: HTMLElement, left: boolean): boolean {
-    let sibling = left ? element.previousSibling : element.nextSibling
-    while (sibling) {
-      if (nodeHasVisibleContent(sibling)) return true
-      sibling = left ? sibling.previousSibling : sibling.nextSibling
-    }
-    return false
-  }
-
-  function moveCaretOutOfInlineElement(left: boolean, element: HTMLElement): void {
-    if (!editor) return
-    let anchor: Text | null
-    if (left) {
-      const prev = element.previousSibling
-      if (prev instanceof Text && /^[\u200b]+$/u.test(prev.data)) {
-        anchor = prev
-      } else {
-        element.before(document.createTextNode('\u200b'))
-        anchor = element.previousSibling instanceof Text ? element.previousSibling : null
-      }
-    } else {
-      const next = element.nextSibling
-      if (next instanceof Text && /^[\u200b]+$/u.test(next.data)) {
-        anchor = next
-      } else {
-        element.after(document.createTextNode('\u200b'))
-        anchor = element.nextSibling instanceof Text ? element.nextSibling : null
-      }
-    }
-    if (!anchor) return
-    const selection = window.getSelection()
-    if (!selection) return
-    const range = document.createRange()
-    range.setStart(anchor, left ? 0 : 1)
-    range.collapse(true)
-    selection.removeAllRanges()
-    selection.addRange(range)
+    history.commit(historyEntry, 'insertText')
   }
 
   function handleKeydown(event: KeyboardEvent): void {
     if (!editor) return
-    const modifier = event.metaKey || event.ctrlKey
-    const key = event.key.toLowerCase()
 
-    if (modifier && key === 'z') {
+    if (keymapState.matches('editor-redo', event)) {
       event.preventDefault()
-      if (event.shiftKey) redo()
-      else undo()
+      history.redo()
       return
     }
-    if (event.ctrlKey && !event.metaKey && key === 'y') {
+    if (keymapState.matches('editor-undo', event)) {
       event.preventDefault()
-      redo()
+      history.undo()
       return
     }
 
@@ -750,7 +394,7 @@
     // moves after the span instead of the backtick nesting inside the code.
     // Only for a collapsed caret sitting at the span's very end   mid-span and
     // multi-selection typing stays literal.
-    if (event.key === '`') {
+    if (keymapState.matches('editor-inline-code-close', event)) {
       const selection = window.getSelection()
       const codeEl = selection?.anchorNode?.parentElement?.closest?.('code')
       if (
@@ -767,13 +411,19 @@
       }
     }
 
-    if (modifier && (key === 'b' || key === 'i' || key === 'e')) {
-      const tag = key === 'b' ? 'strong' : key === 'i' ? 'em' : 'code'
-      const historyEntry = captureHistoryEntry()
-      if (formatRichSelection(editor, tag)) {
+    const formatTag = keymapState.matches('editor-bold', event)
+      ? 'strong'
+      : keymapState.matches('editor-italic', event)
+        ? 'em'
+        : keymapState.matches('editor-code', event)
+          ? 'code'
+          : null
+    if (formatTag) {
+      const historyEntry = history.captureEntry()
+      if (formatRichSelection(editor, formatTag)) {
         event.preventDefault()
         emitEditorValue()
-        commitHistory(historyEntry)
+        history.commit(historyEntry)
       }
       return
     }
@@ -785,7 +435,7 @@
     // that renders as one of those structures.
     if (!event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       const left = event.key === 'ArrowLeft'
-      const inlineElement = inlineElementAtBoundary(left)
+      const inlineElement = inlineElementAtBoundary(editor, left)
       if (inlineElement && !hasRealAdjacentContent(inlineElement, left)) {
         event.preventDefault()
         moveCaretOutOfInlineElement(left, inlineElement)
@@ -837,7 +487,7 @@
       }
     }
 
-    if (event.key === 'Backspace') {
+    if (keymapState.matches('editor-unlist', event)) {
       const selection = window.getSelection()
       if (!selection?.isCollapsed || !selection.anchorNode) return
       const node = selection.anchorNode
@@ -851,11 +501,11 @@
         return
       }
       if (paragraph.tagName === 'LI' && isCursorAtBoundary(paragraph, true)) {
-        const historyEntry = captureHistoryEntry()
+        const historyEntry = history.captureEntry()
         if (unlistListItem(editor, paragraph)) {
           event.preventDefault()
           emitEditorValue()
-          commitHistory(historyEntry)
+          history.commit(historyEntry)
           publishCaretText()
         }
       }
@@ -867,7 +517,7 @@
         '[data-editor-codeblock]'
       ) as HTMLElement | null
 
-      if (codeBlock) {
+      if (codeBlock && keymapState.matches('editor-codeblock-newline', event)) {
         event.preventDefault()
 
         const langSpan = selection?.anchorNode?.parentElement?.closest?.('.code-lang-indicator')
@@ -880,7 +530,7 @@
           return
         }
 
-        const historyEntry = captureHistoryEntry()
+        const historyEntry = history.captureEntry()
         if (selection?.rangeCount) {
           const range = selection.getRangeAt(0)
           range.deleteContents()
@@ -892,7 +542,7 @@
           selection.addRange(range)
         }
         emitEditorValue()
-        commitHistory(historyEntry)
+        history.commit(historyEntry)
         return
       }
 
@@ -900,35 +550,49 @@
       // message into the live turn mid-turn. Checked before the Shift+Enter
       // soft-break branch so the modifier combos always submit instead of
       // inserting a newline. A bare Enter never submits.
-      if (modifier && onSubmit) {
+      if (
+        onSubmit &&
+        (keymapState.matches('chat-send', event) || keymapState.matches('chat-steer', event))
+      ) {
         event.preventDefault()
-        onSubmit(event.shiftKey)
+        onSubmit(keymapState.matches('chat-steer', event))
         return
       }
 
-      // ``` fences materialize on Enter, not while typing: a block whose text is
-      // ```lang, ```content``` or ```lang\ncontent``` becomes a code block here.
-      if (!event.shiftKey) {
-        const historyEntry = captureHistoryEntry()
-        if (applyCodeFenceOnEnter(editor)) {
-          event.preventDefault()
-          emitEditorValue(true)
-          commitHistory(historyEntry)
-          publishCaretText()
-          return
-        }
+      // Two Enter-time block rewrites that must not fight the browser's default
+      // insert: ``` fences materialize here rather than while typing (a block
+      // whose text is ```lang, ```content``` or ```lang\ncontent``` becomes a
+      // code block), and Enter on an empty list item leaves the list instead of
+      // appending another empty item.
+      const historyEntry = history.captureEntry()
+      if (keymapState.matches('editor-code-fence', event) && applyCodeFenceOnEnter(editor)) {
+        event.preventDefault()
+        emitEditorValue(true)
+        history.commit(historyEntry)
+        publishCaretText()
+        return
+      }
+      if (
+        keymapState.matches('editor-exit-empty-list', event) &&
+        exitEmptyListItemOnEnter(editor)
+      ) {
+        event.preventDefault()
+        emitEditorValue()
+        history.commit(historyEntry)
+        publishCaretText()
+        return
       }
 
       const blockTag = selectedBlockTag(editor)
 
       // Shift+Enter always inserts a soft line break (never a new list item,
       // never a submit)   regardless of whether this editor can submit.
-      if (event.shiftKey) {
-        const historyEntry = captureHistoryEntry()
+      if (keymapState.matches('chat-soft-break', event)) {
+        const historyEntry = history.captureEntry()
         if (insertMarkdownLineBreak(editor)) {
           event.preventDefault()
           emitEditorValue()
-          commitHistory(historyEntry)
+          history.commit(historyEntry)
           publishCaretText()
         }
         return
@@ -941,67 +605,18 @@
     }
   }
 
-  function nodeHasText(node: Node): boolean {
-    if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? '').length > 0
-    if (node instanceof HTMLElement) return Array.from(node.childNodes).some(nodeHasText)
-    return false
-  }
-
-  function childIndexOf(parent: Node, child: Node): number {
-    return Array.from(parent.childNodes).findIndex((node) => node === child)
-  }
-
-  function hasTextBefore(root: HTMLElement, container: Node, offset: number): boolean {
-    if (container.nodeType === Node.TEXT_NODE) {
-      if (offset > 0) return true
-      const parent = container.parentNode
-      return parent ? hasTextBefore(root, parent, childIndexOf(parent, container)) : false
-    }
-    const children = Array.from(container.childNodes)
-    for (let index = offset - 1; index >= 0; index -= 1) {
-      if (nodeHasText(children[index])) return true
-    }
-    if (container === root) return false
-    const parent = container.parentNode
-    return parent ? hasTextBefore(root, parent, childIndexOf(parent, container)) : false
-  }
-
-  function hasTextAfter(root: HTMLElement, container: Node, offset: number): boolean {
-    if (container.nodeType === Node.TEXT_NODE) {
-      if (offset < (container.textContent?.length ?? 0)) return true
-      const parent = container.parentNode
-      return parent ? hasTextAfter(root, parent, childIndexOf(parent, container) + 1) : false
-    }
-    const children = Array.from(container.childNodes)
-    for (let index = offset; index < children.length; index += 1) {
-      if (nodeHasText(children[index])) return true
-    }
-    if (container === root) return false
-    const parent = container.parentNode
-    return parent ? hasTextAfter(root, parent, childIndexOf(parent, container) + 1) : false
-  }
-
-  function isCursorAtBoundary(element: HTMLElement, start: boolean): boolean {
-    const selection = window.getSelection()
-    if (!selection?.rangeCount || !element.contains(selection.anchorNode)) return false
-    const range = selection.getRangeAt(0)
-    return start
-      ? !hasTextBefore(element, range.startContainer, range.startOffset)
-      : !hasTextAfter(element, range.endContainer, range.endOffset)
-  }
-
   function deleteCodeBlock(codeBlock: HTMLElement): void {
     if (!editor) return
     const previous = codeBlock.previousElementSibling as HTMLElement | null
     const next = codeBlock.nextElementSibling as HTMLElement | null
-    const historyEntry = captureHistoryEntry()
+    const historyEntry = history.captureEntry()
     codeBlock.remove()
     if (!editor.firstElementChild) {
       // eslint-disable-next-line svelte/no-dom-manipulating
       editor.innerHTML = renderRichMarkdown('')
     }
     emitEditorValue(true)
-    commitHistory(historyEntry)
+    history.commit(historyEntry)
     editor.focus()
     const target = previous ?? next
     if (target) placeCaretInside(target)
@@ -1051,7 +666,7 @@
     if (event.defaultPrevented || !editor) return
     const text = event.clipboardData?.getData('text/plain')
     if (text === undefined) return
-    const historyEntry = captureHistoryEntry()
+    const historyEntry = history.captureEntry()
     const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
@@ -1067,7 +682,7 @@
       // full serialize → re-render → caret-at-end round trip would eject the caret
       // out of the block. Keep the caret put and just publish the new value.
       emitEditorValue()
-      commitHistory(historyEntry)
+      history.commit(historyEntry)
       publishCaretText()
       return
     }
@@ -1075,7 +690,7 @@
     // `insertPlainText` leaves the caret right after the pasted text. Re-rendering
     // the whole editor would otherwise drop that caret to the end of the document,
     // so bookmark it first and restore it onto the freshly rendered content.
-    const bookmark = captureVisibleSelection()
+    const bookmark = captureVisibleSelection(editor)
     replaceEditorContent(markdown)
     // A paste whose tail renders as a fenced code block must never park the caret
     // inside or against the non-editable wrapper   typing, the slash menu and the
@@ -1104,14 +719,14 @@
       value = markdown
       onValueChange?.(markdown)
     }
-    commitHistory(historyEntry)
+    history.commit(historyEntry)
     publishCaretText()
   }
 
   onMount(() => {
     replaceEditorContent(value)
-    onHistoryControllerChange?.({ undo, redo })
-    publishHistoryState()
+    onHistoryControllerChange?.({ undo: () => history.undo(), redo: () => history.redo() })
+    history.publishState()
     if (autofocus && editor) {
       editor.focus()
       placeCaretAtEnd(editor)
@@ -1142,11 +757,7 @@
     restoreSelection(selection)
     publishCaretText()
     if (!valueChanged) return
-    undoHistory = []
-    redoHistory = []
-    pendingHistory = null
-    resetHistoryGroup()
-    publishHistoryState()
+    history.clear()
   })
 </script>
 

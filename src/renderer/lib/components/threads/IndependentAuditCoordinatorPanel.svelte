@@ -1,43 +1,15 @@
 <script lang="ts">
-  import { ArrowUpRight, FileSearch, RotateCcw, ShieldCheck } from '@lucide/svelte'
+  import { ArrowLeft, ArrowUpRight, FileSearch, RotateCcw, ShieldCheck } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
-
-  interface Props {
-    /** True while an independent audit run is in flight. */
-    running?: boolean
-    auditThread?: Thread
-    reportAvailable?: boolean
-    selectedThreadId: string
-    auditorSettings: ThreadSettings
-    providers: ProviderCatalog[]
-    projectId?: string | null
-    favoriteModels?: string[]
-    recentModels?: string[]
-    onOpenAudit?: () => void
-    onViewReport?: () => void
-    /** Delete the current auditor thread and start a fresh audit session. */
-    onNewAudit?: () => void | Promise<void>
-    /** Remove the auditor thread from its row menu, without starting an audit. */
-    onDeleteThread?: (thread: Thread) => Promise<void>
-    onOpenThread: (thread: Thread) => void
-    onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
-    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
-    onRemoveRecent?: (modelKey: string) => void
-    onReorderFavorite?: (
-      draggedKey: string,
-      targetKey: string,
-      position: 'before' | 'after'
-    ) => void
-  }
+  import type { IndependentAuditCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
 
   let {
     running = false,
     auditThread,
     reportAvailable = false,
+    partialReport = false,
     selectedThreadId,
     auditorSettings,
     providers,
@@ -52,8 +24,9 @@
     onModelChange,
     onToggleFavorite,
     onRemoveRecent,
-    onReorderFavorite
-  }: Props = $props()
+    onReorderFavorite,
+    onBackToCoordinator
+  }: IndependentAuditCoordinatorPanelProps = $props()
 
   let selectedAuditor = $derived.by(() => {
     const provider =
@@ -86,6 +59,14 @@
           auditThread?.lastError?.split('\n', 1)[0]?.trim() ||
           'The auditor stopped before delivering a report. Resume to continue from where it stopped.',
         tone: 'text-danger'
+      }
+    }
+    if (reportAvailable && partialReport) {
+      return {
+        label: 'Report ready, evidence incomplete',
+        description:
+          'The auditor generated a report, but some verification facts could not be matched to executed commands in its transcript. View it, ask the auditor to validate its facts, or change the model.',
+        tone: 'text-warning'
       }
     }
     if (reportAvailable) {
@@ -152,12 +133,18 @@
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-          title={auditFailed
-            ? 'Continue the audit from where the auditor stopped, without restarting from scratch'
-            : 'Start an independent audit of the current thread work'}
+          title={partialReport && reportAvailable
+            ? 'Ask the auditor to re-run the unvalidated verification facts and update the report'
+            : auditFailed
+              ? 'Continue the audit from where the auditor stopped, without restarting from scratch'
+              : 'Start an independent audit of the current thread work'}
           onclick={onOpenAudit}
         >
-          {auditFailed ? 'Resume audit' : 'Run audit'}
+          {partialReport && reportAvailable
+            ? 'Validate facts'
+            : auditFailed
+              ? 'Resume audit'
+              : 'Run audit'}
           <ShieldCheck size={13} />
         </button>
       {/if}
@@ -231,6 +218,7 @@
           {recentModels}
           {onRemoveRecent}
           side="bottom"
+          fullWidth
           disabled={running}
           label="Change model"
           variant="action"
@@ -270,6 +258,21 @@
       {/if}
     </section>
   </div>
+
+  {#if onBackToCoordinator}
+    <footer class="shrink-0 border-t border-border p-3">
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+        title="Back to the thread that owns this audit"
+        aria-label="Back to the thread that owns this audit"
+        onclick={onBackToCoordinator}
+      >
+        <ArrowLeft size={13} aria-hidden="true" />
+        Back to Sr. Engineer
+      </button>
+    </footer>
+  {/if}
 </div>
 
 <Modal open={newAuditOpen} title="Start a new audit" onClose={() => (newAuditOpen = false)}>

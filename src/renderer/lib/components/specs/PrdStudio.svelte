@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Check, ChevronDown, MessageSquarePlus } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
   import type { StudioShellSection } from './StudioShell.svelte'
@@ -160,12 +161,7 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    const saveShortcut =
-      event.key.toLowerCase() === 's' &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      !event.shiftKey
-    if (!saveShortcut || event.repeat || event.isComposing) return
+    if (!keymapState.matches('studio-save', event) || event.repeat || event.isComposing) return
     event.preventDefault()
     save()
   }

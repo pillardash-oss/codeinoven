@@ -6,7 +6,7 @@ Website: [codeinoven.com](https://codeinoven.com) · [Support](SECURITY.md) · [
 
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
 [![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
-[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-orange.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/pillardash-oss/codeinoven?label=version)](https://github.com/pillardash-oss/codeinoven/releases/latest)
 
 ---
@@ -43,7 +43,8 @@ It is designed as a starting point for software work, not a demo app.
 
 ## Quick start
 
-1. Download the app from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases) and install for macOS, Windows, or Linux.
+1. Download the app from [codeinoven.com](https://codeinoven.com), where installers are served from our own mirror at `dl.codeinoven.com` under versionless links (`stable/codeinoven-arm64.dmg`, `stable/codeinoven-setup.exe`), or from [GitHub Releases](https://github.com/pillardash-oss/codeinoven/releases) for an older version, and install for macOS, Windows, or Linux.
+   Machine-readable download metadata for scripts and the website: [`https://dl.codeinoven.com/stable/RELEASE.json`](https://dl.codeinoven.com/stable/RELEASE.json).
 2. Open a repository in **Projects**.
 3. Start a new thread, choose your preferred coding harness, and describe your goal.
 4. Review and approve the generated spec, then run implementation.
@@ -183,7 +184,6 @@ Release builds are available for:
 - If a harness is not detected, verify the CLI is on `PATH` and authenticated.
 - Use exported diagnostics when reporting issues.
 - Thread recovery handles interrupted work on restart.
-- Remote phone support is available through the built-in LAN pairing flow (QR) and optional relay mode.
 
 ### Packaging and release notes
 
@@ -194,6 +194,4 @@ Release builds are available for:
 
 ## License
 
-CodeInOven is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license.
-
-You are free to use, modify, and redistribute CodeInOven for **personal, educational, and non-commercial** purposes. Commercial use   including use by companies or organizations in the course of business   requires a separate commercial license from [Pillardash Solutions Limited](mailto:sales@pillardash.com).
+CodeInOven is open-source software licensed under the [MIT License](LICENSE).

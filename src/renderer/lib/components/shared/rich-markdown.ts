@@ -11,6 +11,8 @@ const INLINE_BADGE_CLASS =
 const INLINE_BADGE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0'
 const INLINE_BADGE_LABEL_CLASS = 'min-w-0 truncate'
 const LIST_CLASS = 'my-1 pl-5'
+const LIST_ITEM_CLASS = 'my-0.5'
+const PARAGRAPH_CLASS = 'mb-1 last:mb-0'
 const CODE_BLOCK_CLASS = 'group overflow-hidden rounded-lg border border-border bg-elevated'
 const CODE_HEADER_CLASS = 'flex h-7 items-center justify-between border-b border-border px-3'
 const CODE_LANG_CLASS =
@@ -293,7 +295,9 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*[-+*]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
+        items.push(
+          `<li class="${LIST_ITEM_CLASS}">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`
+        )
         index += 1
       }
       blocks.push(`<ul class="${LIST_CLASS} list-disc">${items.join('')}</ul>`)
@@ -306,7 +310,9 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*\d+[.)]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
+        items.push(
+          `<li class="${LIST_ITEM_CLASS}">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`
+        )
         index += 1
       }
       blocks.push(`<ol class="${LIST_CLASS} list-decimal">${items.join('')}</ol>`)
@@ -331,7 +337,7 @@ export function renderRichMarkdown(
     }
     let quotePrefix = ''
     blocks.push(
-      `<p class="mb-1 last:mb-0">${paragraph
+      `<p class="${PARAGRAPH_CLASS}">${paragraph
         .map((line, lineIndex) => {
           // Carry double-quote state across the paragraph's lines so a quote
           // opened on an earlier line keeps later lines badge-free too.
@@ -551,6 +557,86 @@ function liftNestedLists(item: HTMLElement): HTMLElement[] {
   return lists
 }
 
+/** A paragraph block styled exactly like a rendered one, so a block shaped by
+ *  hand is indistinguishable from the rest of the document. */
+function createParagraph(...nodes: Node[]): HTMLParagraphElement {
+  const paragraph = document.createElement('p')
+  paragraph.className = PARAGRAPH_CLASS
+  if (nodes.length === 0) paragraph.append(document.createElement('br'))
+  else paragraph.append(...nodes)
+  return paragraph
+}
+
+/** Elements that render something on their own even when they hold no text   an
+ *  inline badge, a footnote marker, an image, media, a table. Anything else is a
+ *  wrapper whose own children decide whether the item counts as empty. */
+const VISIBLE_CONTENT_SELECTOR =
+  'img, video, audio, svg, table, hr, [data-editor-inline-badge], [data-editor-footnote-ref], [data-editor-special], [data-editor-codeblock]'
+
+function nodeHasVisibleContent(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? '').replace(/[\u200b\u00a0\s]/g, '').length > 0
+  }
+  if (node instanceof HTMLBRElement) return false
+  if (!(node instanceof HTMLElement)) return true
+  if (node.tagName === 'UL' || node.tagName === 'OL') return false
+  if (node.matches(VISIBLE_CONTENT_SELECTOR)) return true
+  return Array.from(node.childNodes).some(nodeHasVisibleContent)
+}
+
+/** True when a list item still holds something the user can see: text, an inline
+ *  badge, an image. Soft breaks, empty wrappers and nested sub-lists alone do not
+ *  count, so an item the user emptied out reads as empty even though it still has
+ *  DOM. */
+function listItemHasContent(listItem: HTMLElement): boolean {
+  return Array.from(listItem.childNodes).some(nodeHasVisibleContent)
+}
+
+/** The list item the caret currently sits in, or null when the caret is outside
+ *  every list. */
+function listItemAtCaret(root: HTMLElement, node: Node): HTMLElement | null {
+  const element = node instanceof HTMLElement ? node : node.parentElement
+  const listItem = element?.closest('li')
+  return listItem instanceof HTMLElement && root.contains(listItem) ? listItem : null
+}
+
+/** Wrappers a browser can put between a list and the item it is nested under.
+ *  Any other element ends the walk, so the item is never moved across a
+ *  container the caret did not belong to (a blockquote, an app list item that
+ *  happens to sit above the editor root). */
+const TRANSPARENT_LIST_WRAPPERS = new Set(['DIV', 'SPAN', 'P'])
+
+/** The list item a sub-list is nested under, or null when the list is not nested
+ *  under an item inside this editor. `closest('li')` alone would happily cross
+ *  the editor boundary, so the walk stops at the root and at any element that is
+ *  not a plain wrapper. */
+function nestedListOwner(root: HTMLElement, list: HTMLElement): HTMLElement | null {
+  let element = list.parentElement
+  while (element && element !== root && TRANSPARENT_LIST_WRAPPERS.has(element.tagName)) {
+    element = element.parentElement
+  }
+  return element?.tagName === 'LI' && root.contains(element) ? element : null
+}
+
+/** Steps a nested list item out of its sub-list, right after the item it was
+ *  nested under, so it keeps its own marker and sub-items at the parent level.
+ *  Returns false when the item's list is not nested (nothing to step out of). */
+function liftListItemOneLevel(
+  root: HTMLElement,
+  list: HTMLElement,
+  listItem: HTMLElement
+): boolean {
+  const parentListItem = nestedListOwner(root, list)
+  if (!parentListItem) return false
+  const parentList = parentListItem.parentElement
+  if (!parentList) return false
+  listItem.remove()
+  parentList.insertBefore(listItem, parentListItem.nextSibling)
+  if (!list.firstElementChild) list.remove()
+  placeCaretAtStart(listItem)
+  return true
+}
+
 /** Reverts a list item that the caret sits at the very start of: an item nested
  *  inside another item is lifted up a level, and the first item of a top-level
  *  list becomes a plain paragraph in front of the list. Mid-list items fall back
@@ -560,21 +646,10 @@ export function unlistListItem(root: HTMLElement, listItem: HTMLElement): boolea
   if (!list || (list.tagName !== 'UL' && list.tagName !== 'OL')) return false
   if (!root.contains(listItem) || listItem.previousElementSibling !== null) return false
 
-  const parentListItem = list.parentElement?.closest('li')
-  if (parentListItem) {
-    const parentList = parentListItem.parentElement
-    if (!parentList) return false
-    listItem.remove()
-    parentList.insertBefore(listItem, parentListItem.nextSibling)
-    if (!list.firstElementChild) list.remove()
-    placeCaretAtStart(listItem)
-    return true
-  }
+  if (liftListItemOneLevel(root, list, listItem)) return true
 
   const nestedLists = liftNestedLists(listItem)
-  const paragraph = document.createElement('p')
-  paragraph.append(...Array.from(listItem.childNodes))
-  if (paragraph.childNodes.length === 0) paragraph.append(document.createElement('br'))
+  const paragraph = createParagraph(...Array.from(listItem.childNodes))
   listItem.remove()
   list.before(paragraph)
   let cursor: ChildNode = paragraph
@@ -587,6 +662,52 @@ export function unlistListItem(root: HTMLElement, listItem: HTMLElement): boolea
     if (!root.firstElementChild) {
       root.innerHTML = renderRichMarkdown('')
     }
+  }
+  placeCaretAtStart(paragraph)
+  return true
+}
+
+/** Enter on an empty list item leaves the list, the way every markdown editor
+ *  behaves: a nested item steps out one level, and a top-level item becomes a
+ *  paragraph, splitting the list in two when items follow it. The browser's own
+ *  Enter only ever appends another empty item, so this has to be explicit. */
+export function exitEmptyListItemOnEnter(root: HTMLElement): boolean {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !selection.anchorNode) return false
+  const listItem = listItemAtCaret(root, selection.anchorNode)
+  if (!listItem) return false
+  const list = listItem.parentElement
+  if (!list || (list.tagName !== 'UL' && list.tagName !== 'OL')) return false
+  if (listItemHasContent(listItem)) return false
+
+  // Nested: step out one level and keep the marker, so a second Enter on the
+  // now top-level item finishes the exit as a paragraph.
+  if (liftListItemOneLevel(root, list, listItem)) return true
+  // First item of a top-level list: the shared unlist path turns it into a
+  // paragraph in front of the list.
+  if (listItem.previousElementSibling === null) return unlistListItem(root, listItem)
+
+  // Anywhere else in the list: the empty item becomes a paragraph in its own
+  // place, and the items after it continue as a list below.
+  const nestedLists = liftNestedLists(listItem)
+  const following: HTMLElement[] = []
+  for (let node = listItem.nextElementSibling; node !== null; node = node.nextElementSibling) {
+    if (node instanceof HTMLElement && node.tagName === 'LI') following.push(node)
+  }
+  const paragraph = createParagraph(...Array.from(listItem.childNodes))
+  listItem.remove()
+  list.after(paragraph)
+  if (!list.firstElementChild) list.remove()
+  let cursor: HTMLElement = paragraph
+  for (const nested of nestedLists) {
+    cursor.after(nested)
+    cursor = nested
+  }
+  if (following.length > 0) {
+    const tail = document.createElement(list.tagName === 'OL' ? 'ol' : 'ul')
+    tail.className = list.className
+    tail.append(...following)
+    cursor.after(tail)
   }
   placeCaretAtStart(paragraph)
   return true
@@ -659,6 +780,132 @@ function replaceInlineMatch(
   const selection = window.getSelection()
   if (!selection) return
   range.setStart(caretAnchor, 1)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+interface InlineCodeScan {
+  /** The last matched pair, or null while every single backtick is unpaired. */
+  pair: { start: number; end: number; content: string } | null
+  /** Index of the single backtick still waiting for an end, or -1. */
+  opener: number
+}
+
+/** Scan single backticks left to right the way the renderer pairs them: each
+ *  backtick closes the nearest one still waiting for a partner. Runs of two or
+ *  more backticks (fences, empty pairs, prose) never partner a single backtick,
+ *  and a pair only counts when it has real content between its delimiters. */
+function scanInlineCode(prefix: string): InlineCodeScan {
+  let opener = -1
+  let pair: { start: number; end: number; content: string } | null = null
+  let index = 0
+  while (index < prefix.length) {
+    if (prefix[index] !== '`') {
+      index += 1
+      continue
+    }
+    let runEnd = index
+    while (prefix[runEnd] === '`') runEnd += 1
+    if (runEnd - index > 1) {
+      opener = -1
+      index = runEnd
+      continue
+    }
+    if (opener === -1) {
+      opener = index
+    } else {
+      const content = prefix.slice(opener + 1, index)
+      if (content.length > 0 && !content.includes('`') && !content.includes('\n')) {
+        pair = { start: opener, end: runEnd, content }
+        opener = -1
+      } else {
+        // An empty span (``) or one split by another run: the earlier backtick is
+        // plain text, so the one just seen opens the next candidate.
+        opener = index
+      }
+    }
+    index = runEnd
+  }
+  return { pair, opener }
+}
+
+/**
+ * Typing between the two backticks of a fresh pair opens the inline code span
+ * around what was typed   the mirror of `applyEmptyPairCodeRule`, which only
+ * sees content typed *after* the pair. Going back inside a pair and typing used
+ * to leave the backticks literal, so the run never read as a span and a later
+ * backtick could re-pair with one of its backticks and swallow the sentence.
+ */
+function applyInsidePairCodeRule(root: HTMLElement): boolean {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+
+  const textNode = selection.anchorNode
+  const endOffset = selection.anchorOffset
+  const prefix = textNode.data.slice(0, endOffset)
+  const suffix = textNode.data.slice(endOffset)
+  // The span's closing backtick sits right after the caret, and it is a single
+  // backtick (``` and `` are delimiters of their own).
+  if (suffix[0] !== '`' || suffix[1] === '`') return false
+
+  const { opener } = scanInlineCode(prefix)
+  if (opener === -1 || (opener > 0 && prefix[opener - 1] === '`')) return false
+  const content = prefix.slice(opener + 1)
+  if (!content || content.includes('`') || content.includes('\n')) return false
+
+  const range = document.createRange()
+  range.setStart(textNode, opener)
+  range.setEnd(textNode, endOffset + 1)
+  const selectionRanges = window.getSelection()
+  if (selectionRanges) {
+    selectionRanges.removeAllRanges()
+    selectionRanges.addRange(range)
+  }
+  // The caret belongs inside the span: this is the run the user is writing.
+  insertInlineCode(root, content, true)
+  return true
+}
+
+/** Wrap a matched backtick pair in an inline code element and leave the caret
+ *  where the user's typing put it. Converting the pair consumes its two
+ *  delimiters, so a caret sitting past the span slides back by that much. */
+function replaceInlineCodePair(
+  root: HTMLElement,
+  textNode: Text,
+  pair: { start: number; end: number; content: string },
+  caretOffset: number
+): void {
+  const range = document.createRange()
+  range.setStart(textNode, pair.start)
+  range.setEnd(textNode, pair.end)
+  range.deleteContents()
+
+  const element = document.createElement('code')
+  element.className = INLINE_CODE_CLASS
+  element.textContent = pair.content
+  range.insertNode(element)
+
+  // A zero-width anchor before the element keeps the caret from getting trapped
+  // when it becomes the first content of its block   without one, browsers refuse
+  // to move the caret left out of the element.
+  const block = currentBlock(root, element)
+  if (block && isFirstContentInBlock(block, element)) {
+    element.before(document.createTextNode('\u200b'))
+  }
+  const caretAnchor = document.createTextNode('\u200b')
+  element.after(caretAnchor)
+
+  const selection = window.getSelection()
+  if (!selection) return
+  const trailingOffset = caretOffset - pair.end
+  const trailing = caretAnchor.nextSibling
+  if (trailingOffset > 0 && trailing instanceof Text) {
+    range.setStart(trailing, Math.min(trailingOffset, trailing.data.length))
+  } else {
+    range.setStart(caretAnchor, 1)
+  }
   range.collapse(true)
   selection.removeAllRanges()
   selection.addRange(range)
@@ -760,6 +1007,7 @@ function applyInlineRule(root: HTMLElement): boolean {
   // fence. Skipped while a fence is being built: a trailing triple after the
   // caret means the closing ``` of the tag-end-then-open flow, not content.
   if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
+  if (applyInsidePairCodeRule(root)) return true
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
@@ -784,13 +1032,12 @@ function applyInlineRule(root: HTMLElement): boolean {
     return true
   }
 
-  const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
+  const rules: Array<[RegExp, 'strong' | 'em' | 'del']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
     [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
     [/~~([^~\n]+)~~$/, 'del'],
     [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em'],
-    [/`([^`\n]+)`$/, 'code']
+    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em']
   ]
 
   for (const [pattern, tag] of rules) {
@@ -798,6 +1045,21 @@ function applyInlineRule(root: HTMLElement): boolean {
     if (!match) continue
     replaceInlineMatch(root, textNode, endOffset, match, tag)
     return true
+  }
+
+  // Inline code pairs single backticks left to right, exactly like the renderer:
+  // the backtick the user just typed closes the nearest backtick still waiting
+  // for a partner, and a pair left literal earlier in the run is recognized at
+  // the same time. Matching the run before the caret with one greedy regex used
+  // to let a backtick typed for the *next* word re-pair with the backtick that
+  // had already closed an earlier span, which swallowed the whole sentence into
+  // one inline code span and left the earlier pair unread as a pair.
+  if (prefix.endsWith('`')) {
+    const pair = scanInlineCode(prefix).pair
+    if (pair) {
+      replaceInlineCodePair(root, textNode, pair, endOffset)
+      return true
+    }
   }
   return false
 }
@@ -814,7 +1076,7 @@ function replaceBlockWithList(block: HTMLElement, ordered: boolean, content: str
   const list = document.createElement(ordered ? 'ol' : 'ul')
   list.className = `${LIST_CLASS} ${ordered ? 'list-decimal' : 'list-disc'}`
   const item = document.createElement('li')
-  item.className = 'my-0.5'
+  item.className = LIST_ITEM_CLASS
   item.append(content ? document.createTextNode(content) : document.createElement('br'))
   list.append(item)
   block.replaceWith(list)

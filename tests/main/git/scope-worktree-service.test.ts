@@ -552,7 +552,8 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
         moveThreadsOutOfScope: async () => {
           calls.push('move')
           return { moved: 0, evicted: 0 }
-        }
+        },
+        moveThreadIntoScope: async () => undefined
       }
       f.service.attachThreadLifecycle(scopeThreads)
 
@@ -591,7 +592,8 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
         moveThreadsOutOfScope: async () => {
           calls.push('move')
           return { moved: 3, evicted: 1 }
-        }
+        },
+        moveThreadIntoScope: async () => undefined
       }
       f.service.attachThreadLifecycle(scopeThreads)
       const preflight = await f.service.mergePreflight(

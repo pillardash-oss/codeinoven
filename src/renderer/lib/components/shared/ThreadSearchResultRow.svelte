@@ -4,6 +4,12 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    threadHoverPopoverStyle,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS
+  } from '$lib/components/shared/thread-hover-popover-layout'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -108,43 +114,21 @@
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
 
-  const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 290
-  const POPOVER_GAP = 8
-  const VIEWPORT_MARGIN = 8
-
-  function calculatePopoverPosition(
-    anchor: DOMRect,
-    width: number,
-    height: number
-  ): { x: number; y: number } {
-    const availableRight = window.innerWidth - anchor.right - VIEWPORT_MARGIN
-    const availableLeft = anchor.left - VIEWPORT_MARGIN
-    const placeRight = availableRight >= width || availableRight >= availableLeft
-    const preferredX = placeRight ? anchor.right + POPOVER_GAP : anchor.left - POPOVER_GAP - width
-    const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
-    const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN)
-
-    return {
-      x: Math.max(VIEWPORT_MARGIN, Math.min(preferredX, maxX)),
-      y: Math.max(VIEWPORT_MARGIN, Math.min(anchor.top, maxY))
-    }
-  }
-
   async function revealPopover(): Promise<void> {
     if (!rowEl) return
 
-    popoverPos = calculatePopoverPosition(
+    const size = resolveThreadHoverPopoverSize()
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
-      POPOVER_WIDTH,
-      POPOVER_ESTIMATED_HEIGHT
+      size.width,
+      size.height
     )
     showPopover = true
     await tick()
 
     if (!rowEl || !popoverEl) return
     const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculatePopoverPosition(
+    popoverPos = calculateThreadHoverPopoverPosition(
       rowEl.getBoundingClientRect(),
       popoverRect.width,
       popoverRect.height
@@ -234,8 +218,8 @@
   <Portal>
     <div
       {@attach capturePopoverElement}
-      class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
-      style="left: {popoverPos.x}px; top: {popoverPos.y}px"
+      class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
+      style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
     >
       <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
     </div>

@@ -11,6 +11,13 @@ export interface OwnedRoot {
   pid: number
   command: string
   cwd: string
+  /**
+   * True for a process the app did not spawn but adopted as its own (a daemon a
+   * harness re-parented to launchd, such as an `adb` fork-server). Adopted
+   * entries are only reaped at launch, never by the running orphan sweep: the
+   * app may be talking to that daemon right now.
+   */
+  adopted?: boolean
 }
 
 interface OwnedRootStore {
@@ -26,26 +33,55 @@ interface OwnedRootStore {
  * roots (and the dev servers they started) survive as orphans and hold ports.
  * The persisted journal lets a later launch reap exactly those processes without
  * ever touching a harness the user runs outside the app.
+ *
+ * The file lives in the shared userData/config root, so several running
+ * instances write the same journal. Persistence is therefore always a
+ * read-merge-write of the file on disk: a root another instance registered is
+ * never erased by our write, and a root we explicitly dropped is never
+ * resurrected by theirs. Writing our in-memory map wholesale would let one
+ * instance's flush silently delete a sibling's root, and a root with no journal
+ * entry can never be reaped   its harness process leaks as an orphan for good.
  */
 export class OwnedProcessJournal {
   private readonly roots = new Map<number, OwnedRoot>()
+  /** Pids this journal instance registered itself. */
+  private readonly ownPids = new Set<number>()
+  /** Pids this instance removed; a merge must not bring their entries back. */
+  private readonly droppedPids = new Set<number>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private writeChain: Promise<void> = Promise.resolve()
-  private loaded = false
 
   constructor(private readonly filePath: string) {}
 
   /** Register a root process the app has spawned. */
   register(pid: number, command: string, cwd: string): void {
+    this.setRoot(pid, { pid, command, cwd })
+  }
+
+  /**
+   * Register a process the app adopted rather than spawned. See
+   * {@link OwnedRoot.adopted}: the flag keeps a repeated orphan sweep from
+   * SIGTERM'ing a daemon a harness re-parented and the app may still be using.
+   */
+  registerAdopted(pid: number, command: string): void {
+    this.setRoot(pid, { pid, command, cwd: '', adopted: true })
+  }
+
+  private setRoot(pid: number, root: OwnedRoot): void {
     if (pid <= 0) return
-    this.roots.set(pid, { pid, command, cwd })
+    this.roots.set(pid, root)
+    this.ownPids.add(pid)
+    this.droppedPids.delete(pid)
     if (this.roots.size > MAX_ROOTS) this.pruneOldest()
     this.scheduleFlush()
   }
 
   /** Drop a root that has exited or was cleanly killed. */
   unregister(pid: number): void {
-    if (this.roots.delete(pid)) this.scheduleFlush()
+    this.roots.delete(pid)
+    this.ownPids.delete(pid)
+    this.rememberDropped(pid)
+    this.scheduleFlush()
   }
 
   /** Snapshot of the currently recorded roots. */
@@ -53,23 +89,32 @@ export class OwnedProcessJournal {
     return [...this.roots.values()]
   }
 
-  /** Remove every entry (used after a clean killAll). */
+  /**
+   * Remove this instance's own entries (used after a clean killAll). Roots a
+   * sibling instance registered stay journaled: they are still live elsewhere,
+   * and dropping them would leave that instance's processes unreapable if it
+   * later dies without a clean shutdown.
+   */
   clear(): void {
-    this.roots.clear()
+    for (const pid of this.ownPids) {
+      this.roots.delete(pid)
+      this.rememberDropped(pid)
+    }
+    this.ownPids.clear()
     this.scheduleFlush()
   }
 
-  /** Load persisted roots (idempotent; called once before the first reap). */
+  /**
+   * Read the persisted roots, merging them with the in-memory set. Re-read on
+   * every call so a long-lived instance still sees roots registered by a
+   * sibling that started later (the journal is the cross-instance handoff).
+   */
   async load(): Promise<OwnedRoot[]> {
-    if (this.loaded) return this.list()
-    this.loaded = true
-    try {
-      const raw = await readFile(this.filePath, 'utf8')
-      const parsed = parseStore(raw)
-      for (const root of parsed) this.roots.set(root.pid, root)
-    } catch {
-      // Missing or malformed journal is not an error   there is simply nothing to reap.
+    for (const root of await this.readStored()) {
+      if (this.droppedPids.has(root.pid) || this.roots.has(root.pid)) continue
+      this.roots.set(root.pid, root)
     }
+    if (this.roots.size > MAX_ROOTS) this.pruneOldest()
     return this.list()
   }
 
@@ -91,14 +136,79 @@ export class OwnedProcessJournal {
   }
 
   private persist(): Promise<void> {
-    const payload: OwnedRootStore = { version: STORE_VERSION, roots: this.list() }
-    this.writeChain = this.writeChain.then(() => atomicWrite(this.filePath, payload))
+    this.writeChain = this.writeChain.then(() => this.writeMerged())
     return this.writeChain
+  }
+
+  /**
+   * Read-merge-write: keep every entry on disk we did not drop, overlay the
+   * roots this instance registered (they hold the freshest command/cwd), then
+   * replace the file. Entries only ever `load()`ed belong to another instance
+   * and are never rewritten from memory   the file on disk is their truth, so a
+   * sibling's own unregister can never be undone by our stale copy.
+   */
+  private async writeMerged(): Promise<void> {
+    const stored = await this.readStored()
+    const merged = new Map<number, OwnedRoot>()
+    for (const root of stored) {
+      if (this.droppedPids.has(root.pid)) continue
+      merged.set(root.pid, root)
+    }
+    for (const root of this.roots.values()) {
+      if (!this.ownPids.has(root.pid) || this.droppedPids.has(root.pid)) continue
+      merged.set(root.pid, root)
+    }
+    const roots = [...merged.values()].sort((left, right) => left.pid - right.pid).slice(-MAX_ROOTS)
+    const payload: OwnedRootStore = { version: STORE_VERSION, roots }
+    await atomicWrite(this.filePath, payload)
+    this.forgetPersistedDrops(stored)
+  }
+
+  /**
+   * A drop only has to outlive the write that removes the entry. Once the pid is
+   * gone from disk, a later re-appearance is a newer registration (the OS
+   * recycled the pid for a live root), so the drop must stop erasing it.
+   */
+  private forgetPersistedDrops(stored: readonly OwnedRoot[]): void {
+    if (this.droppedPids.size === 0) return
+    const onDisk = new Set(stored.map((root) => root.pid))
+    for (const pid of [...this.droppedPids]) {
+      if (!onDisk.has(pid)) this.droppedPids.delete(pid)
+    }
   }
 
   private pruneOldest(): void {
     const sorted = [...this.roots.values()].sort((a, b) => a.pid - b.pid)
-    for (const root of sorted.slice(0, this.roots.size - MAX_ROOTS)) this.roots.delete(root.pid)
+    for (const root of sorted.slice(0, this.roots.size - MAX_ROOTS)) {
+      this.roots.delete(root.pid)
+      this.ownPids.delete(root.pid)
+    }
+  }
+
+  /**
+   * Remember a pid this instance dropped so a later merge cannot restore it.
+   * Bounded like the root set: Set keeps insertion order, so the oldest drop is
+   * forgotten first (a pid recycled that late is no longer our concern).
+   */
+  private rememberDropped(pid: number): void {
+    this.droppedPids.delete(pid)
+    this.droppedPids.add(pid)
+    while (this.droppedPids.size > MAX_ROOTS) {
+      const oldest = this.droppedPids.values().next()
+      if (oldest.done) break
+      this.droppedPids.delete(oldest.value)
+    }
+  }
+
+  /** Entries currently persisted by any instance, newest file content wins. */
+  private async readStored(): Promise<OwnedRoot[]> {
+    try {
+      const raw = await readFile(this.filePath, 'utf8')
+      return parseStore(raw)
+    } catch {
+      // Missing or malformed journal is not an error   there is simply nothing to reap.
+      return []
+    }
   }
 }
 
@@ -115,12 +225,18 @@ function parseStore(raw: string): OwnedRoot[] {
   const parsed: OwnedRoot[] = []
   for (const entry of roots) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-    const { pid, command, cwd } = entry as { pid?: unknown; command?: unknown; cwd?: unknown }
+    const { pid, command, cwd, adopted } = entry as {
+      pid?: unknown
+      command?: unknown
+      cwd?: unknown
+      adopted?: unknown
+    }
     if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) continue
     parsed.push({
       pid,
       command: typeof command === 'string' ? command : '',
-      cwd: typeof cwd === 'string' ? cwd : ''
+      cwd: typeof cwd === 'string' ? cwd : '',
+      ...(adopted === true ? { adopted: true } : {})
     })
   }
   return parsed

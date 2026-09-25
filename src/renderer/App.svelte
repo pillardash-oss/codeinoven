@@ -1,41 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { Component } from 'svelte'
-  import {
-    Bell,
-    Blocks,
-    BookOpen,
-    Brain,
-    FileSearch,
-    FolderOpen,
-    FolderPlus,
-    GitBranch,
-    GraduationCap,
-    Info,
-    Keyboard,
-    LayoutDashboard,
-    ListTree,
-    MessageSquarePlus,
-    MessagesSquare,
-    Server,
-    SlidersHorizontal,
-    SquarePen,
-    Terminal,
-    ChartColumn,
-    Users,
-    Wrench
-  } from '@lucide/svelte'
+  import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
+  import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import { captureError, errorHeadline, showToastError } from '$lib/stores/app-errors.svelte'
-  import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import {
     rendererRecovery,
     flushAllDraftCommits,
@@ -43,40 +19,46 @@
     isSettingsView,
     settingsSectionForView,
     settingsViewForSection,
-    type MainView,
-    type SettingsSection
+    type MainView
   } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
+  import {
+    contentThreadFamily,
+    decideContentViewThread,
+    type ContentThreadFamily
+  } from '$lib/content-view-threads'
   import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { schemeState } from '$lib/stores/scheme.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
+  import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { clearDraftLabelCookie } from '$lib/stores/draft-label'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+  import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
-  import { APP_NAME } from '$shared/brand'
-  import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
-  import {
-    getInlineFileTypeIconDataUri,
-    getInlineFolderTypeIconDataUri
-  } from '$lib/components/files/file-type-icons'
+  import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
     captureElementSelection,
@@ -85,60 +67,33 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
     isThreadWorking,
+    threadTracksReadStatus,
     type AppConfig,
     type AppConfigPatch,
     type Project,
     type ThemePreference,
-    type Thread,
-    type ThreadSearchResult
+    type Thread
   } from '$shared/types'
-  import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
-  import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
-  import type {
-    AgentNotificationPayload,
-    CloseConfirmationPayload,
-    CloseConfirmationProject,
-    ThreadClickedPayload
-  } from '$shared/ipc-contract'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
   import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
-  import { statusBadgeForThread } from '$lib/thread-status-badge'
+  import {
+    actionId,
+    buildPaletteContextActions,
+    navigationActions,
+    settingsActions,
+    settingsTabs
+  } from './app-palette-actions'
+  import { defaultConfig } from './app-defaults'
+  import { FileSearchPaletteController } from './app-file-search.svelte'
+  import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
+  import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
+  import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
 
   type View = MainView
-
-  const defaultConfig: AppConfig = {
-    theme: 'system',
-    fontFamily: 'jetbrains-mono',
-    appFontSize: 15,
-    fontWeight: 200,
-    zoomLevel: 1,
-    onboardingCompleted: false,
-    threadLimit: 70,
-    questionTimeoutMs: 300_000,
-    keybindings: {},
-    slashCommandMode: 'app',
-    preferredEditor: 'system',
-    memory: { enabled: true, chatEnabled: true, entries: [] },
-    agentDefaults: { syncFromThreadChanges: false },
-    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
-    autoDownloadUpdates: true,
-    autoInstallUpdates: true,
-    updateChannel: 'stable',
-    keepAwakeWhileWorking: false,
-    keepAwakeWhileRemoteConnected: true,
-    imageDescriptorAskAgain: false,
-    autoRetryAfterReset: true,
-    resumeWorkOnRestart: true,
-    defaultMergeMethod: 'squash',
-    defaultPullStrategy: 'ask',
-    maxDiffLines: 100,
-    openLocalhostInCioBrowser: true,
-    sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
-  }
 
   let config = $state<AppConfig>(defaultConfig)
   let settingsReady = $state(false)
@@ -147,22 +102,19 @@
   let activeView = $state<View>(rendererRecovery.activeView)
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
-  let fileSearchPaletteOpen = $state(false)
-  let fileSearchActions = $state<ActionDefinition[]>([])
-  let fileSearchLoading = $state(false)
-  let fileSearchTimer: number | null = null
-  let fileSearchRequest = 0
-  /** Scoped project ids for the footer picker; empty = all projects. */
-  let fileSearchProjectIds = $state<string[]>([])
-  let lastFileSearchQuery = ''
-  let threadSearchPaletteOpen = $state(false)
-  let threadSearchActions = $state<ActionDefinition[]>([])
-  let threadSearchLoading = $state(false)
-  let threadSearchTimer: number | null = null
-  let threadSearchRequest = 0
-  /** Scoped project ids for the footer picker; empty = all projects. */
-  let threadSearchProjectIds = $state<string[]>([])
-  let lastThreadSearchQuery = ''
+  const fileSearch = new FileSearchPaletteController()
+  const threadSearch = new ThreadSearchPaletteController({
+    openThread: (thread) => void openThreadFromSearch(thread)
+  })
+  const projectSwitch = new ProjectSwitchPaletteController({
+    focusProject: (project) => focusProjectFromSpotlight(project)
+  })
+
+  const osHandoffDeps: OsHandoffDeps = {
+    navigate: (view) => navigate(view),
+    onProjectCreated: (project) => handleProjectCreated(project)
+  }
+
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
@@ -170,304 +122,16 @@
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
-  interface FileSearchTarget {
-    projectId: string
-    path: string
-    kind: 'file' | 'directory'
-  }
-
-  interface ThreadSearchTarget {
-    thread: Thread
-  }
-
-  const fileSearchTargets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
-  const threadSearchTargets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
-
-  const applicationSource = {
-    id: 'application',
-    label: APP_NAME,
-    kind: 'app'
-  } satisfies ActionSource
-
-  const navigationActions = [
-    {
-      id: 'app:projects',
-      title: 'Open projects',
-      description: 'Browse projects and engineering threads',
-      category: 'navigation',
-      source: applicationSource,
-      icon: FolderOpen,
-      keywords: ['workspace', 'threads']
-    },
-    {
-      id: 'app:chats',
-      title: 'Open chats',
-      description: 'Browse standalone conversations',
-      category: 'navigation',
-      source: applicationSource,
-      icon: MessagesSquare,
-      keywords: ['conversations', 'messages']
-    },
-    {
-      id: 'app:scope',
-      title: 'Open scope',
-      description: 'Review work across projects',
-      category: 'navigation',
-      source: applicationSource,
-      icon: LayoutDashboard,
-      keywords: ['board', 'overview']
-    },
-    {
-      id: 'app:threads',
-      title: 'Open threads',
-      description: 'Browse threads across all projects',
-      category: 'navigation',
-      source: applicationSource,
-      icon: ListTree,
-      keywords: ['timeline', 'all']
-    }
-  ] satisfies ActionDefinition[]
-
-  const settingsTabs: Array<{
-    id: SettingsSection
-    label: string
-    keywords: string[]
-    icon: Component
-  }> = [
-    {
-      id: 'general',
-      label: 'General',
-      keywords: ['appearance', 'theme', 'preferences'],
-      icon: SlidersHorizontal
-    },
-    {
-      id: 'memory',
-      label: 'Memory',
-      keywords: ['instructions', 'knowledge'],
-      icon: Brain
-    },
-    {
-      id: 'audits',
-      label: 'Agents',
-      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
-      icon: Users
-    },
-    {
-      id: 'harnesses',
-      label: 'Harnesses',
-      keywords: ['models', 'providers', 'harnesses'],
-      icon: Blocks
-    },
-    {
-      id: 'utilities',
-      label: 'Utilities',
-      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
-      icon: Wrench
-    },
-    {
-      id: 'keymap',
-      label: 'Keymap',
-      keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
-      icon: Keyboard
-    },
-    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
-    {
-      id: 'profile',
-      label: 'Usage',
-      keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
-      icon: ChartColumn
-    },
-    {
-      id: 'about',
-      label: 'About',
-      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
-      icon: Info
-    }
-  ]
-
-  function actionId(value: string): ActionDefinition['id'] {
-    return value as ActionDefinition['id']
-  }
-
-  const settingsActions = settingsTabs.map((tab): ActionDefinition => ({
-    id: actionId(`settings:${tab.id}`),
-    title: `Settings: ${tab.label}`,
-    description: `Open the ${tab.label} settings tab`,
-    category: 'navigation',
-    source: applicationSource,
-    icon: tab.icon,
-    keywords: ['settings', 'preferences', ...tab.keywords],
-    ...(tab.id === 'general' ? { shortcut: ['Ctrl', ','] } : {})
-  }))
-
-  let paletteContextActions = $derived.by((): ActionDefinition[] => {
-    const workspaceVisible =
-      activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
-    const hasLocalProjects = scopeState.projectRecords.some(
-      (project) => !project.hidden && project.source === 'local' && project.path
-    )
-    const actions: ActionDefinition[] = [
-      {
-        id: 'app:new-project',
-        title: 'Create new project',
-        description: 'Choose how to add a project   local folder or SSH',
-        category: 'command',
-        source: applicationSource,
-        icon: FolderPlus,
-        shortcut: ['Ctrl', 'Shift', 'N'],
-        keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
-      },
-      {
-        id: 'app:notifications',
-        title: 'Toggle notifications',
-        description: 'Open or close the notifications sidebar',
-        category: 'navigation',
-        source: applicationSource,
-        icon: Bell,
-        keywords: ['alerts', 'completed', 'attention']
-      },
-      {
-        id: 'app:getting-started',
-        title: 'Open getting started guide',
-        description: 'Tour the workspace and set up a project and coding agent',
-        category: 'navigation',
-        source: applicationSource,
-        icon: GraduationCap,
-        keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
-      }
-    ]
-
-    if (hasLocalProjects) {
-      actions.push({
-        id: 'app:file-search',
-        title: 'Search files across projects',
-        description: 'Find and open a file from any local project',
-        category: 'file',
-        source: applicationSource,
-        icon: FileSearch,
-        keywords: ['quick open', 'find', 'workspace']
-      })
-    }
-
-    if (activeView === 'chats') {
-      actions.unshift({
-        id: 'app:new-chat',
-        title: 'New chat',
-        description: 'Start a standalone conversation',
-        category: 'command',
-        source: applicationSource,
-        icon: MessageSquarePlus,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['conversation', 'message']
-      })
-    } else if (activeView === 'scope' && scopeState.activeProjectId) {
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === scopeState.activeProjectId
-      )
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project']
-      })
-    } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === scopeState.sidebarContext?.projectId
-      )
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project', 'scope']
-      })
-    } else if (
-      (activeView === 'projects' || activeView === 'threads') &&
-      workspaceState.activeProject &&
-      workspaceState.activeProject.id !== INBOX_PROJECT_ID
-    ) {
-      actions.unshift({
-        id: 'app:new-thread',
-        title: 'New thread',
-        description: `Create a thread in ${workspaceState.activeProject.name}`,
-        category: 'command',
-        source: applicationSource,
-        icon: SquarePen,
-        shortcut: ['Ctrl', 'N'],
-        keywords: ['task', 'conversation', 'project']
-      })
-    }
-
-    const thread = workspaceVisible ? workspaceState.selectedThread : null
-    if (thread) {
-      const threadProject = scopeState.projectRecords.find(
-        (candidate) => candidate.id === thread.projectId
-      )
-      actions.push(
-        {
-          id: 'app:terminal',
-          title: 'Open terminal',
-          description: 'Open a terminal for this thread',
-          category: 'navigation',
-          source: applicationSource,
-          icon: Terminal,
-          keywords: ['shell', 'console', 'command line', 'run']
-        },
-        {
-          id: 'app:git',
-          title: 'Open git panel',
-          description: 'View changes, commits and branches for this project',
-          category: 'navigation',
-          source: applicationSource,
-          icon: GitBranch,
-          keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
-          ...(threadProject?.changeTrackingMode !== 'git'
-            ? { disabledReason: 'This project does not use Git tracking' }
-            : {})
-        },
-        {
-          id: 'app:memory',
-          title: 'Toggle memory sidebar',
-          description: 'View the memory context available to this thread',
-          category: 'navigation',
-          source: applicationSource,
-          icon: Brain,
-          keywords: ['prompt', 'instructions', 'context']
-        },
-        {
-          id: 'app:sources',
-          title: 'Toggle sources sidebar',
-          description: 'View sources attached to this conversation',
-          category: 'navigation',
-          source: applicationSource,
-          icon: BookOpen,
-          keywords: ['citations', 'references', 'attachments']
-        }
-      )
-    }
-
-    if (hasLocalProjects) {
-      // Unshifted last so it always lands first in the palette.
-      actions.unshift({
-        id: 'app:thread-search',
-        title: 'Search threads across projects',
-        description: 'Find a conversation by title or message content in any project',
-        category: 'thread',
-        source: applicationSource,
-        icon: MessagesSquare,
-        keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
-      })
-    }
-
-    return actions
-  })
+  let paletteContextActions = $derived(
+    buildPaletteContextActions({
+      activeView,
+      projectRecords: scopeState.projectRecords,
+      activeProjectId: scopeState.activeProjectId,
+      sidebarContext: scopeState.sidebarContext,
+      activeProject: workspaceState.activeProject,
+      selectedThread: workspaceState.selectedThread
+    })
+  )
 
   let paletteActions = $derived([
     ...paletteContextActions,
@@ -477,6 +141,108 @@
     // menus   the global Cmd+K surface keeps app-level and cross-harness actions.
     ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
+
+  /** The spotlight is one surface, not four. `actions` is its home screen; the
+   *  other three open from it and only ever show inside the same shell. */
+  type SpotlightScreenId = 'actions' | 'files' | 'threads' | 'projects'
+
+  /** The screen on top. A nested screen outranks the actions list, because
+   *  picking one closes the actions list in the same flush. */
+  function resolveSpotlightScreen(): SpotlightScreenId | null {
+    if (fileSearch.paletteOpen) return 'files'
+    if (threadSearch.paletteOpen) return 'threads'
+    if (projectSwitch.paletteOpen) return 'projects'
+    if (commandPaletteOpen) return 'actions'
+    return null
+  }
+
+  let spotlightScreenId = $derived(resolveSpotlightScreen())
+
+  /**
+   * The props for the single mounted palette, for whichever screen is on top.
+   *
+   * Swapping the screen must not tear the shell down: unmounting one palette and
+   * mounting the next threw the scrim, the panel, the scroll lock and the focus
+   * away and built them again, which is what made the surface flash on every hop
+   * between the home screen and a nested one. One instance with `screenKey`
+   * swapped instead keeps the panel and leaves the query input focused.
+   */
+  let spotlightPalette = $derived.by((): CommandPaletteProps => {
+    /** What every spotlight screen shares; each screen adds its own list. */
+    const shell: Omit<CommandPaletteProps, 'actions' | 'onSelect'> = {
+      open: true,
+      screenKey: spotlightScreenId ?? 'actions',
+      onClose: closeSpotlight,
+      onRestoreFocus: restorePaletteFocus
+    }
+
+    switch (spotlightScreenId) {
+      case 'files':
+        return {
+          ...shell,
+          actions: fileSearch.actions,
+          title: 'Search files across projects',
+          placeholder: 'Type at least two characters…',
+          emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
+          headerIcon: FileSearch,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: fileSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => fileSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => fileSearch.handleQuery(query),
+          onSelect: (selection) => fileSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'threads':
+        return {
+          ...shell,
+          actions: threadSearch.actions,
+          title: 'Search threads across projects',
+          placeholder: 'Search thread titles and messages across all projects…',
+          emptyLabel: threadSearch.loading
+            ? 'Searching threads…'
+            : 'Type at least two characters to search all projects',
+          headerIcon: MessagesSquare,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: threadSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => threadSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => threadSearch.handleQuery(query),
+          onSelect: (selection) => threadSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'projects':
+        return {
+          ...shell,
+          actions: projectSwitch.actions,
+          title: 'Switch project',
+          placeholder: 'Search projects…',
+          emptyLabel: 'No matching projects',
+          headerIcon: FolderKanban,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
+          onBack: backToSpotlightHome,
+          onSelect: (selection) => projectSwitch.select(selection),
+          closeOnSelect: false
+        }
+      default:
+        return {
+          ...shell,
+          actions: paletteActions,
+          title: 'Search actions',
+          placeholder: 'Search actions, threads, and files…',
+          emptyLabel: 'No matching actions',
+          onSelect: handlePaletteSelection,
+          shortcutLabel: 'Ctrl K'
+        }
+    }
+  })
 
   /** Content view to return to when leaving Settings or Scope   persisted in the
    *  recovery snapshot so a restart made while on a Settings page or the Scope
@@ -492,6 +258,7 @@
 
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
+    schemeState.sync(effectiveTheme)
   }
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
@@ -578,19 +345,20 @@
       scopeState.stashSidebarContext()
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
+    } else if (view === 'assistant') {
+      scopeState.clearSidebarContext()
     } else if (view === 'projects') {
       // Leaving the registered scoped view (or any scoped state) for the plain
       // projects view: the sidebar is what defines the scoped state, so close
       // it   the sidebar context itself is stashed for later restore.
       scopeState.clearSidebarContext()
     }
-    const previousContentView = rendererRecovery.lastContentView
     activeView = view
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
-    reconcileThreadForContentView(view, previousContentView)
+    reconcileThreadForContentView(view)
     observeNavigationLocation()
   }
 
@@ -598,61 +366,53 @@
     navigationHistoryState.observe(currentLocation())
   }
 
-  /** The most recently opened thread of the given kind that still exists. */
-  function lastThreadOfKind(isChat: boolean): Thread | null {
+  /** The most recently visited thread of one content-view family that still exists. */
+  function lastThreadOfFamily(family: ContentThreadFamily): Thread | null {
     for (const key of workspaceState.recentThreadVisits) {
       const thread = scopeState.allScopeThreads.find(
         (candidate) => threadVisitKey(candidate) === key
       )
       if (!thread || thread.archived) continue
-      if ((thread.projectId === INBOX_PROJECT_ID) === isChat) return thread
+      if (contentThreadFamily(thread) === family) return thread
     }
     return null
   }
 
+  /** The thread a content-view family was last showing, resolved against the live list. */
+  function rememberedThreadOfFamily(family: ContentThreadFamily): Thread | null {
+    const ref = workspaceState.contentViewThreadRef(family)
+    if (!ref) return null
+    const thread = scopeState.allScopeThreads.find(
+      (candidate) => candidate.id === ref.threadId && candidate.projectId === ref.projectId
+    )
+    return thread && !thread.archived ? thread : null
+  }
+
   /**
-   * Switching between Chats and the project views must never leave a thread of
-   * the wrong kind selected (a chat shown as a project thread, or vice versa).
-   * Restores the last opened thread of the target view, or falls back to the
-   * empty state when nothing of that kind exists. Covers every navigation path
-   * (nav buttons, command palette, programmatic navigation like "continue in a
-   * project"), not just the header buttons.
+   * Keep the open thread in step with the content view the shell switched to.
+   *
+   * Each content-view family (Projects, Chats, Assistant) remembers the thread
+   * it was last showing, so moving between them restores that family's own
+   * thread instead of one global selection that the last visited view wins.
+   * Covers every navigation path (nav buttons, command palette, programmatic
+   * navigation like "continue in a project", notifications), not just the
+   * header buttons.
    */
-  function reconcileThreadForContentView(
-    view: View,
-    previousContentView: 'projects' | 'chats' | 'threads'
-  ): void {
-    if (view !== 'chats' && view !== 'projects' && view !== 'threads') return
-    if (view === previousContentView) return
-    const goingToChats = view === 'chats'
-    const leavingChats = previousContentView === 'chats'
-    if (goingToChats === leavingChats) return
-
-    const thread = workspaceState.selectedThread
-    const threadIsChat = thread ? thread.projectId === INBOX_PROJECT_ID : false
-
-    if (goingToChats) {
-      // Entering chats: keep a chat selected, otherwise restore the last chat.
-      if (thread && threadIsChat) return
-      const lastChat = lastThreadOfKind(true)
-      if (!lastChat) return
-      const project =
-        scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ?? null
-      workspaceState.openThread(lastChat, project)
-      return
-    }
-
-    // Leaving chats for a project view: never keep the chat selected.
-    if (!thread || !threadIsChat) return
-    const lastProjectThread = lastThreadOfKind(false)
-    if (!lastProjectThread) {
+  function reconcileThreadForContentView(view: View): void {
+    const decision = decideContentViewThread(view, workspaceState.selectedThread, {
+      remembered: rememberedThreadOfFamily,
+      recentOfFamily: lastThreadOfFamily
+    })
+    if (decision.kind === 'keep') return
+    if (decision.kind === 'clear') {
       workspaceState.clearThread()
       return
     }
     const project =
-      scopeState.projectRecords.find((candidate) => candidate.id === lastProjectThread.projectId) ??
+      scopeState.projectRecords.find((candidate) => candidate.id === decision.thread.projectId) ??
       null
-    workspaceState.openThread(lastProjectThread, project)
+    workspaceState.openThread(decision.thread, project)
+    void scopeState.ensureBoardLoaded(decision.thread.projectId)
   }
 
   /** Re-open the thread captured in a history entry, if it still exists. */
@@ -717,6 +477,50 @@
     }
   }
 
+  /**
+   * Start the "new thread" flow for whatever the shell is showing. Shared by
+   * the Cmd/Ctrl+N chord and the palette's "New thread" action so both always
+   * agree.
+   *
+   * The scoped threads view is the state with the scope sidebar docked. The
+   * shell reports it either as its own `projects-scope` view or as `projects`
+   * with a live sidebar context, so both spellings are handled here   the same
+   * test the header switcher, the sidebar and the notification router use. It
+   * targets the docked scope's project and bucket directly, exactly like the
+   * sidebar's own new-thread button, which also makes it work from the empty
+   * state where no thread (and therefore no active project) is open.
+   */
+  function requestThreadForCurrentView(): void {
+    if (activeView === 'scope') {
+      if (!scopeState.activeProjectId) return
+      scopeState.requestCreateScopedThread(
+        scopeState.sidebarContext?.bucketId ?? scopeState.buckets[0]?.id ?? DEFAULT_SCOPE_BUCKET_ID
+      )
+      return
+    }
+
+    const scopedContext = scopeState.sidebarContext
+    if ((activeView === 'projects' || activeView === 'projects-scope') && scopedContext) {
+      // Docked scoped-threads sidebar: create in the docked scope's project and
+      // bucket, never in whatever thread happens to be open.
+      workspaceState.requestCreateThread(scopedContext.bucketId)
+      return
+    }
+
+    if (activeView === 'chats') {
+      workspaceState.requestNewChat()
+      return
+    }
+    if (activeView !== 'projects' && activeView !== 'threads') return
+    if (workspaceState.activeProject && workspaceState.activeProject.id !== INBOX_PROJECT_ID) {
+      // Same-scope inheritance: the new thread inherits the open thread's scope
+      // bucket (no stale sidebar bucket, no view switch).
+      workspaceState.requestCreateThread()
+      return
+    }
+    workspaceState.requestAddProject()
+  }
+
   async function handlePaletteSelection(selection: ActionSelection): Promise<void> {
     const settingsTab = settingsTabs.find(
       (tab) => actionId(`settings:${tab.id}`) === selection.action.id
@@ -730,32 +534,21 @@
       case 'app:new-project':
         openNewProjectSpotlight()
         return
+      case 'app:switch-project':
+        projectSwitch.openPalette()
+        return
       case 'app:new-chat':
         navigate('chats')
         workspaceState.requestNewChat()
         return
       case 'app:new-thread':
-        if (activeView === 'scope') {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        } else if (activeView === 'projects-scope' && scopeState.sidebarContext) {
-          // Docked scoped-threads sidebar: create in the docked scope.
-          workspaceState.requestCreateThread(scopeState.sidebarContext.bucketId)
-        } else {
-          // Create in the current thread's scope: Workspace inherits the
-          // active thread's scope bucket onto the new thread, exactly like
-          // settings inheritance  no view or sidebar change.
-          workspaceState.requestCreateThread()
-        }
+        requestThreadForCurrentView()
         return
       case 'app:file-search':
-        openFileSearchPalette()
+        fileSearch.openPalette()
         return
       case 'app:thread-search':
-        openThreadSearchPalette()
+        threadSearch.openPalette()
         return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
@@ -785,7 +578,7 @@
         ) {
           contextSidebarState.hide()
         } else {
-          contextSidebarState.openMemory(thread.projectId, thread.id)
+          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.routineId)
         }
         return
       }
@@ -805,12 +598,17 @@
       case 'app:projects':
         navigate('projects')
         return
-      case 'app:chats':
-        if (activeView !== 'chats' && workspaceState.selectedThread) {
-          scopeState.stashedProjectThreadId = workspaceState.selectedThread.id
+      case 'app:chats': {
+        // Only a project-family thread is a restorable project thread; an
+        // assistant task stashed here would later be restored into the scope
+        // sidebar as if it were one.
+        const selected = workspaceState.selectedThread
+        if (activeView !== 'chats' && selected && contentThreadFamily(selected) === 'projects') {
+          scopeState.stashedProjectThreadId = selected.id
         }
         navigate('chats')
         return
+      }
       case 'app:scope':
         navigate('scope')
         return
@@ -830,8 +628,7 @@
     if (
       !(active instanceof HTMLElement) ||
       !active.isContentEditable ||
-      !active.classList.contains('rich-markdown-editor') ||
-      !active.id.startsWith('chat-composer-')
+      !active.matches(COMPOSER_DRAFT_SELECTOR)
     ) {
       paletteFocusBookmark = null
       return
@@ -847,311 +644,31 @@
   }
 
   function toggleCommandPalette(): void {
-    if (fileSearchPaletteOpen) {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
+    // A nested screen steps back to the actions list; the actions list closes.
+    if (spotlightScreenId === 'actions') {
+      closeSpotlight()
+      return
     }
-    if (threadSearchPaletteOpen) {
-      threadSearchPaletteOpen = false
-      resetThreadSearch()
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    if (spotlightScreenId) {
+      backToSpotlightHome()
       return
     }
     capturePaletteFocus()
     commandPaletteOpen = true
   }
 
-  function resetFileSearch(): void {
-    if (fileSearchTimer !== null) {
-      window.clearTimeout(fileSearchTimer)
-      fileSearchTimer = null
-    }
-    fileSearchRequest++
-    fileSearchLoading = false
-    fileSearchActions = []
-    fileSearchTargets.clear()
-    fileSearchProjectIds = []
-    lastFileSearchQuery = ''
+  /** Close the whole spotlight, whichever screen is on top. */
+  function closeSpotlight(): void {
+    commandPaletteOpen = false
+    if (fileSearch.paletteOpen) fileSearch.close()
+    if (threadSearch.paletteOpen) threadSearch.close()
+    if (projectSwitch.paletteOpen) projectSwitch.close()
   }
 
-  function openFileSearchPalette(): void {
-    resetFileSearch()
-    fileSearchPaletteOpen = true
-  }
-
-  async function searchFilesAcrossProjects(query: string, request: number): Promise<void> {
-    const selectedIds = new Set(fileSearchProjectIds)
-    const projects = scopeState.projectRecords.filter(
-      (project) =>
-        !project.hidden &&
-        project.source === 'local' &&
-        project.path &&
-        (selectedIds.size === 0 || selectedIds.has(project.id))
-    )
-    const projectResults = await Promise.all(
-      projects.map(async (project) => {
-        try {
-          const entries = await invoke(
-            'projectFiles:search',
-            project.id,
-            query,
-            'all',
-            workspaceState.activeScopeBucketIdFor(project.id)
-          )
-          return { project, entries: entries.slice(0, 12) }
-        } catch {
-          return { project, entries: [] }
-        }
-      })
-    )
-    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
-
-    const resolved = await Promise.all(
-      projectResults.flatMap(({ project, entries }) =>
-        entries.map(async (entry) => ({
-          project,
-          entry,
-          iconUri:
-            entry.kind === 'directory'
-              ? await getInlineFolderTypeIconDataUri(entry.name)
-              : await getInlineFileTypeIconDataUri(entry.path)
-        }))
-      )
-    )
-    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
-
-    const targets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
-    const actions: ActionDefinition[] = []
-    for (const { project, entry, iconUri } of resolved) {
-      const id = actionId(`file:${project.id}:${entry.path}`)
-      targets.set(id, { projectId: project.id, path: entry.path, kind: entry.kind })
-      actions.push({
-        id,
-        title: entry.name,
-        description: `${project.name} · ${entry.path}`,
-        category: 'file',
-        source: {
-          id: `project:${project.id}`,
-          label: project.name,
-          kind: 'app',
-          ...(project.color ? { color: project.color } : {})
-        },
-        iconUri,
-        keywords: [project.name, entry.path, entry.name]
-      })
-    }
-    fileSearchTargets.clear()
-    for (const [id, target] of targets) fileSearchTargets.set(id, target)
-    fileSearchActions = actions.slice(0, 60)
-    fileSearchLoading = false
-  }
-
-  /** Re-run the in-flight file search immediately when the project scope changes. */
-  function setFileSearchScope(projectIds: string[]): void {
-    fileSearchProjectIds = projectIds
-    if (!fileSearchPaletteOpen || lastFileSearchQuery.trim().length < 2) return
-    if (fileSearchTimer !== null) {
-      window.clearTimeout(fileSearchTimer)
-      fileSearchTimer = null
-    }
-    const request = ++fileSearchRequest
-    fileSearchLoading = true
-    void searchFilesAcrossProjects(lastFileSearchQuery.trim(), request)
-  }
-
-  function handleFileSearchQuery(query: string): void {
-    lastFileSearchQuery = query
-    if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer)
-    const request = ++fileSearchRequest
-    const normalized = query.trim()
-    if (normalized.length < 2) {
-      fileSearchLoading = false
-      fileSearchActions = []
-      fileSearchTargets.clear()
-      return
-    }
-
-    fileSearchLoading = true
-    fileSearchTimer = window.setTimeout(() => {
-      fileSearchTimer = null
-      void searchFilesAcrossProjects(normalized, request)
-    }, 160)
-  }
-
-  function handleFileSearchSelection(selection: ActionSelection): void {
-    const target = fileSearchTargets.get(selection.action.id)
-    if (!target) return
-    fileSearchPaletteOpen = false
-    resetFileSearch()
-    workspaceState.requestProjectFileOpen(target.projectId, target.path, target.kind)
-  }
-
-  function backToCommandPaletteFromFileSearch(): void {
-    fileSearchPaletteOpen = false
-    resetFileSearch()
+  /** Step back to the actions list from a nested spotlight screen. */
+  function backToSpotlightHome(): void {
+    closeSpotlight()
     commandPaletteOpen = true
-  }
-
-  function resetThreadSearch(): void {
-    if (threadSearchTimer !== null) {
-      window.clearTimeout(threadSearchTimer)
-      threadSearchTimer = null
-    }
-    threadSearchRequest++
-    threadSearchLoading = false
-    threadSearchActions = []
-    threadSearchTargets.clear()
-    threadSearchProjectIds = []
-    lastThreadSearchQuery = ''
-  }
-
-  function openThreadSearchPalette(): void {
-    resetThreadSearch()
-    threadSearchPaletteOpen = true
-  }
-
-  function relativeThreadTime(timestamp: number): string {
-    const minutes = Math.floor((Date.now() - timestamp) / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    const months = Math.floor(days / 30)
-    if (months < 12) return `${months}mo`
-    return `${Math.floor(days / 365)}y`
-  }
-
-  async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
-    let results: ThreadSearchResult[]
-    try {
-      // Scoped search: fan out per selected project so the manager can use its
-      // per-project index; empty selection searches all projects in one call.
-      results =
-        threadSearchProjectIds.length > 0
-          ? (
-              await Promise.all(
-                threadSearchProjectIds.map((projectId) =>
-                  invoke('threads:search', query, { projectId, limit: 50 }).catch(
-                    (): ThreadSearchResult[] => []
-                  )
-                )
-              )
-            ).flat()
-          : await invoke('threads:search', query, { limit: 50 })
-    } catch {
-      results = []
-    }
-    if (request !== threadSearchRequest || !threadSearchPaletteOpen) return
-
-    const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
-    const actions: ActionDefinition[] = []
-    for (const result of results) {
-      const thread = result.thread
-      if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const project = scopeState.projectRecords.find(
-        (candidate) => candidate.id === thread.projectId
-      )
-      const id = actionId(`thread:${thread.projectId}:${thread.id}`)
-      targets.set(id, { thread })
-      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
-      // Threads carry their project's icon and color, not a generic thread icon.
-      // Resolve the icon from the scope state so it stays in sync with whatever
-      // hydration owns the project/icon cache (Workspace on startup, App when a
-      // new project is created). App's own projectIconUrls was never populated on
-      // startup, so it always fell back to the generic monochrome thread icon.
-      const projectIconUri = scopeState.projects.find(
-        (candidate) => candidate.id === thread.projectId
-      )?.iconUrl
-      const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
-        ? agentRuns.isBusy(thread.projectId, thread.id)
-        : Boolean(thread.sessionId) && isThreadWorking(thread)
-      const status = statusBadgeForThread(thread, isLiveWorking)
-      // Model/harness metadata for the result row: while the thread is working
-      // the current provider + model is shown, otherwise the thread's harnesses
-      // and provider appear as icons   mirroring the sidebar thread row.
-      const harnessIds = Array.from(
-        new Set([
-          ...(thread.usedHarnessIds ?? []),
-          ...(thread.settings?.harnessId ? [thread.settings.harnessId] : [])
-        ])
-      )
-      const providerId = thread.settings?.providerId ?? thread.providerId
-      const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-      const providerName = providerId
-        ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
-        : null
-      const projectLabel = project?.name ?? thread.projectId
-      // Thread rows always surface the thread's last-activity time, never its
-      // creation time, so freshly worked-on threads read as "1h" etc.
-      const activityLabel = relativeThreadTime(thread.lastActivity)
-      actions.push({
-        id,
-        title: thread.title,
-        description: snippet
-          ? `${projectLabel} · ${activityLabel} · ${snippet}`
-          : `${projectLabel} · ${activityLabel}`,
-        category: 'thread',
-        source: {
-          id: `project:${thread.projectId}`,
-          label: projectLabel,
-          kind: 'app',
-          ...(project?.color ? { color: project.color } : {})
-        },
-        showSourceBadge: false,
-        ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
-        ...(status ? { status } : {}),
-        threadMeta: {
-          working: isLiveWorking,
-          harnessIds,
-          providerName,
-          providerId,
-          modelId: thread.settings?.modelId ?? null
-        },
-        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
-      })
-    }
-    threadSearchTargets.clear()
-    for (const [id, target] of targets) threadSearchTargets.set(id, target)
-    threadSearchActions = actions.slice(0, 60)
-    threadSearchLoading = false
-  }
-
-  /** Re-run the in-flight thread search immediately when the project scope changes. */
-  function setThreadSearchScope(projectIds: string[]): void {
-    threadSearchProjectIds = projectIds
-    if (!threadSearchPaletteOpen || lastThreadSearchQuery.trim().length < 2) return
-    if (threadSearchTimer !== null) {
-      window.clearTimeout(threadSearchTimer)
-      threadSearchTimer = null
-    }
-    const request = ++threadSearchRequest
-    threadSearchLoading = true
-    void searchThreadsAcrossProjects(lastThreadSearchQuery.trim(), request)
-  }
-
-  function handleThreadSearchQuery(query: string): void {
-    lastThreadSearchQuery = query
-    if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
-    const request = ++threadSearchRequest
-    const normalized = query.trim()
-    if (normalized.length < 2) {
-      threadSearchLoading = false
-      threadSearchActions = []
-      threadSearchTargets.clear()
-      return
-    }
-
-    threadSearchLoading = true
-    threadSearchTimer = window.setTimeout(() => {
-      threadSearchTimer = null
-      void searchThreadsAcrossProjects(normalized, request)
-    }, 160)
   }
 
   /** Preserve the current content view / project sidebar state when opening a
@@ -1161,20 +678,6 @@
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
     await openThreadFromNotification(thread, project)
-  }
-
-  function handleThreadSearchSelection(selection: ActionSelection): void {
-    const target = threadSearchTargets.get(selection.action.id)
-    if (!target) return
-    threadSearchPaletteOpen = false
-    resetThreadSearch()
-    void openThreadFromSearch(target.thread)
-  }
-
-  function backToCommandPaletteFromThreadSearch(): void {
-    threadSearchPaletteOpen = false
-    resetThreadSearch()
-    commandPaletteOpen = true
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -1272,6 +775,61 @@
     }
   }
 
+  /**
+   * Focus a project picked from the Switch project spotlight.
+   *
+   * The scoped threads view keeps its docked sidebar: the picked project becomes
+   * the docked scope and the conversation is cleared, so the sidebar shows the
+   * new project's scoped threads. Every other view lands on the Projects view
+   * with the project's most recent thread open, matching how focusing a project
+   * already works elsewhere (OS hand-off, existing-project spotlight, header tabs).
+   */
+  function focusProjectFromSpotlight(project: Project): void {
+    const scopedThreadsActive =
+      (activeView === 'projects' || activeView === 'projects-scope') &&
+      scopeState.sidebarContext !== null
+    const iconUrl =
+      scopeState.projects.find((candidate) => candidate.id === project.id)?.iconUrl ?? null
+
+    if (scopedThreadsActive) {
+      void scopeState.activateProject(project.id)
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
+      scopeState.showSidebarForProject(project.id)
+      return
+    }
+
+    // Navigate before selecting the thread so the shell's content-view reconcile
+    // never paints the Projects family's remembered thread for a frame.
+    const wasOnProjectsView = activeView === 'projects' || activeView === 'projects-scope'
+    if (!wasOnProjectsView) navigate('projects')
+    void scopeState.activateProject(project.id)
+
+    // Picking the project that is already focused keeps the conversation the user
+    // is reading instead of jumping to its latest thread.
+    if (wasOnProjectsView && workspaceState.selectedThread?.projectId === project.id) return
+
+    const thread =
+      scopeState.allScopeThreads
+        .filter(
+          (candidate) =>
+            candidate.projectId === project.id &&
+            !candidate.archived &&
+            !isOrchestrationChildThread(candidate)
+        )
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    if (thread) {
+      workspaceState.openThread(thread, project, iconUrl)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
+    }
+  }
+
   function updateOnboardingStep(step: number): void {
     if (step === 4) navigate('chats')
     onboardingStep = step
@@ -1303,26 +861,34 @@
   }
 
   /**
-   * Open a thread from a notification while preserving the current view:
+   * Open a thread from a notification while preserving the current view.
+   *
+   * The target view follows the thread's own family, so a deep link can never
+   * select a thread in a content view that does not own it:
+   * - Chat thread → switch to the chats view.
+   * - Assistant task → switch to the assistant view.
    * - Regular project view → stay there (no scope sidebar).
    * - Scope state / scope view → stay there and reveal the thread in the sidebar.
-   * - Threads view → stay there (no scope sidebar).
-   * - Chat notification → switch to the chats view.
+   * - Threads view → stay there (no scope sidebar), the project family's own timeline.
+   * - Settings or any other view → return to Projects for the thread.
    */
   async function openThreadFromNotification(
     thread: Thread,
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
-    const isChat = thread.projectId === INBOX_PROJECT_ID
+    const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
       activeView === 'projects-scope' ||
       (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
-    if (isChat) {
-      // Chat notifications always land in the chats view.
+    if (family === 'chats') {
+      // A chat is only ever shown by the chats view.
       navigate('chats')
+    } else if (family === 'assistant') {
+      // An assistant task is only ever shown by the assistant view.
+      navigate('assistant')
     } else if (inScopeState) {
       // Stay in the scope state: reveal the thread in the scope sidebar.
       if (activeView !== 'projects') navigate('projects')
@@ -1332,18 +898,19 @@
       // Stay in the threads view without entering the scope state.
       scopeState.clearSidebarContext()
     } else {
-      // Regular project view or a non-content view (chats or a settings page):
-      // stay or return to the last content view, never entering the scope state.
-      const target =
-        activeView === 'projects' || lastContentView === 'chats' ? 'projects' : lastContentView
-      if (target !== activeView) navigate(target)
+      // A project thread belongs in Projects, so return to it from Settings, the
+      // chats view, the assistant view, or any other out-of-family view rather
+      // than leaving it selected somewhere that cannot own it.
+      if (activeView !== 'projects') navigate('projects')
       scopeState.clearSidebarContext()
     }
 
     workspaceState.openThread(thread, project)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
+    if (threadTracksReadStatus(thread)) {
+      const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+      scopeState.updateThread(updated)
+      workspaceState.updateThread(updated)
+    }
 
     if (temporaryChatId) {
       // A temporary (side) chat notification: opening the parent thread alone
@@ -1353,80 +920,6 @@
       if (!contextSidebarState.focusTemporaryChat(thread.projectId, thread.id, temporaryChatId)) {
         temporaryChatUnread.clear(thread.projectId, thread.id, temporaryChatId)
       }
-    }
-  }
-
-  async function openNotificationThread(payload: ThreadClickedPayload): Promise<void> {
-    const { projectId, threadId } = payload
-    notificationPanelState.dismissForThread(projectId, threadId)
-    try {
-      const [project, thread] = await Promise.all([
-        invoke('project:get', projectId),
-        invoke('thread:get', projectId, threadId)
-      ])
-      if (!project || !thread) return
-      await openThreadFromNotification(thread, project, payload.temporaryChatId)
-    } catch {
-      // The project or thread may have been deleted before the notification was clicked.
-    }
-  }
-
-  function showAgentNotification(payload: AgentNotificationPayload): void {
-    const onSelectedThread =
-      workspaceState.selectedThread?.id === payload.threadId &&
-      workspaceState.selectedThread?.projectId === payload.projectId
-    if (
-      !onSelectedThread &&
-      payload.source === 'temporary-chat' &&
-      payload.kind === 'chat-completed' &&
-      payload.temporaryChatId
-    ) {
-      // The side chat finished while the user is away from its thread: flag
-      // the parent thread's row so the response is discoverable from the
-      // thread list. Cleared when the side-chat panel is focused.
-      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
-    }
-    if (onSelectedThread) {
-      return
-    }
-    notificationPanelState.add(payload)
-    const id = payload.id
-    const options = {
-      id,
-      description: payload.body,
-      duration: 8_000,
-      onDismiss: () => notificationPanelState.dismiss(id),
-      action: {
-        label: 'Open thread',
-        onClick: (): void => {
-          void openNotificationThread(payload)
-        }
-      }
-    }
-
-    const chatResponseToastStyle =
-      '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
-      ' --success-border: var(--color-chat-success);' +
-      ' --success-text: var(--color-chat-success);'
-
-    if (payload.kind === 'completed') {
-      toast.success(payload.title, options)
-    } else if (payload.kind === 'chat-completed') {
-      toast.success(payload.title, { ...options, style: chatResponseToastStyle })
-    } else if (payload.kind === 'attention') {
-      toast.warning(payload.title, options)
-    } else if (payload.kind === 'spec') {
-      toast.info(payload.title, options)
-    } else {
-      // Record the real failure (message plus raw detail/stack) for the app
-      // errors panel, then toast the generic title directly so the wrapper does
-      // not re-capture a details-less duplicate entry.
-      const detail = payload.errorDetail?.trim()
-      captureError(detail ? errorHeadline(detail) : payload.title, {
-        ...(detail ? { details: detail } : {}),
-        thread: { projectId: payload.projectId, threadId: payload.threadId }
-      })
-      showToastError(payload.title, options)
     }
   }
 
@@ -1465,7 +958,11 @@
 
   /** Save every unsaved file, then close the app. Stays open if a save fails. */
   async function confirmForceCloseSaving(): Promise<void> {
-    if (await projectFilesWorkspace.saveAllUnsaved()) {
+    const savedProjectFiles = await projectFilesWorkspace.saveAllUnsaved()
+    // Standalone files are saved too: they are opened outside any project, so
+    // nothing else would ever write their drafts.
+    const savedStandaloneFiles = await standaloneFiles.saveAllUnsaved()
+    if (savedProjectFiles && savedStandaloneFiles) {
       await invoke('app:confirmClose')
     } else {
       toast.error('Some files could not be saved', {
@@ -1474,85 +971,18 @@
     }
   }
 
-  function installIpcSubscriptions(): () => void {
-    const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
-      void openNotificationThread(payload)
-    })
-    const unsubscribeShow = subscribe('notification:show', showAgentNotification)
-    const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
-      // The renderer owns the unsaved-file editor state, so it computes the
-      // pending files here. With nothing pending the close proceeds right away.
-      const files = projectFilesWorkspace.getUnsavedFiles()
-      if (payload.projects.length === 0 && files.length === 0) {
-        void confirmForceClose()
-        return
-      }
-      closeConfirmation = { projects: payload.projects, files }
-    })
-    const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
-      const thread = args[0] as Thread
-      // Once a real title exists the draft-derived label is no longer needed.
-      if (thread.title !== DEFAULT_THREAD_TITLE) {
-        clearDraftLabelCookie(thread.id)
-      }
-      scopeState.updateThread(thread)
-      if (workspaceState.selectedThread?.id === thread.id) {
-        workspaceState.updateThread(thread)
-      }
-      if (thread.read) {
-        notificationPanelState.dismissForThread(thread.projectId, thread.id)
-      }
-      settleCloseConfirmationThread(thread)
-    })
-    const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
-      scopeState.removeThread(threadId)
-      notificationPanelState.dismissForThread(projectId, threadId)
-      temporaryChatUnread.clearThread(projectId, threadId)
-      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
-    })
-    const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
-      handleCloseShortcut()
-    })
-    const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
-      handleNewTerminalShortcut()
-    })
-    const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
-      void goBack()
-    })
-    const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
-      void goForward()
-    })
-    updaterState.init()
-    // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
-    // initialise the store here so the overlay's dynamic import can be gated on
-    // `pipState.active` without ever missing a frame.
-    pipState.init()
-    // Load which threads carry a user note so sidebar rows and the right-dock
-    // indicator can react; the store keeps itself in sync via `note:changed`.
-    threadNotesState.init()
-    return () => {
-      unsubscribeClick()
-      unsubscribeShow()
-      unsubscribeConfirmClose()
-      unsubscribeThreadUpdated()
-      unsubscribeThreadDeleted()
-      unsubscribeCloseShortcut()
-      unsubscribeNewTerminalShortcut()
-      unsubscribeHistoryBack()
-      unsubscribeHistoryForward()
-      updaterState.destroy()
-    }
-  }
-
   /** Clean up renderer resources when the main process signals shutdown. */
   function installShutdownSubscription(): () => void {
     return subscribe('window:beforeQuit', () => {
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
-      // The component tree unmounts naturally as the window closes.
-      // Push any debounced DB draft commits now: the main process closes the
-      // database later in its shutdown pipeline, and these invokes must land
-      // while the grace period is still open.
+      // The window itself only closes at the end of that pipeline, so latch the
+      // quit signal here: repeating background reads check it and stop instead
+      // of polling into the already-closed database. One-shot user-intent work
+      // is not gated. Push any debounced DB draft commits now: the main process
+      // closes the database later in its shutdown pipeline, and these invokes
+      // must land while the grace period is still open.
+      appQuitState.markQuitting()
       flushAllDraftCommits()
     })
   }
@@ -1564,19 +994,10 @@
    * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
-    // App-managed palettes first   they float above every view.
-    if (fileSearchPaletteOpen) {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
-      return
-    }
-    if (threadSearchPaletteOpen) {
-      threadSearchPaletteOpen = false
-      resetThreadSearch()
-      return
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    // The spotlight is one surface: the close chord closes it whole, whichever
+    // screen is on top. Escape is the key that steps back between screens.
+    if (spotlightScreenId) {
+      closeSpotlight()
       return
     }
     // Reusable modals (Modal / DockableModal) register their close behavior.
@@ -1588,16 +1009,35 @@
       navigate(lastViewBeforeSettings)
       return
     }
-    // Focus inside the context sidebar: close its active tab (through Workspace's
-    // unsaved-changes confirmation) instead of clearing the thread.
+    // Focus inside the context sidebar: close the active tab of the surface that
+    // holds it (through Workspace's unsaved-changes confirmation) instead of
+    // clearing the thread. A terminal docked at the bottom is its own surface,
+    // so the placement of the focused region decides which tab the chord closes.
     const active = document.activeElement instanceof Element ? document.activeElement : null
-    if (active?.closest('[data-region="context-sidebar"]')) {
-      contextSidebarState.requestCloseActiveTab()
+    const sidebarRegion = active?.closest<HTMLElement>('[data-region="context-sidebar"]')
+    if (sidebarRegion) {
+      contextSidebarState.requestCloseActiveTab(
+        sidebarRegion.dataset.placement === 'bottom' ? 'dock' : 'sidebar'
+      )
+      return
+    }
+    // The context rail is the sidebar's own chrome: a rail icon opens or hides a
+    // panel but leaves the focus on the rail button, so the panel the user just
+    // revealed (a quick chat above all) must still be what the chord closes.
+    // With nothing on screen the rail owns no tab, and the chord falls through
+    // to the thread below instead of silently doing nothing.
+    if (
+      active?.closest('[data-region="context-dock"]') &&
+      contextSidebarState.requestCloseActiveTab(contextSidebarState.visible ? 'sidebar' : 'dock')
+    ) {
       return
     }
     // An open thread: deselect it back to the thread list.
     if (
-      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      (activeView === 'projects' ||
+        activeView === 'chats' ||
+        activeView === 'threads' ||
+        activeView === 'assistant') &&
       workspaceState.selectedThread
     ) {
       workspaceState.clearThread()
@@ -1661,7 +1101,10 @@
       return
     }
     if (
-      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      (activeView === 'projects' ||
+        activeView === 'chats' ||
+        activeView === 'threads' ||
+        activeView === 'assistant') &&
       document.querySelector('[data-region="conversation"]')
     ) {
       findNavState.openConversationFind()
@@ -1672,7 +1115,7 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (keymapState.matches('ui-modal-primary-action', e)) {
       // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
       // in focus; when no modal claims the chord, composers (chat send, git
@@ -1687,7 +1130,7 @@
         return
       }
     }
-    if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
+    if (keymapState.matches('nav-close-surface', e)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
       // the key still reaches the renderer (the main process preventDefaults
@@ -1701,34 +1144,57 @@
       handleCloseShortcut()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    if (keymapState.matches('nav-find', e)) {
       e.preventDefault()
       if (e.repeat) return
       handleFind()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-      // On the plain workspace (no studio, no dirty file tab) the Cmd/Ctrl+S
-      // save chord is otherwise unused, so it folds/unfolds the left sidebar.
-      // Anywhere a save binding owns the chord (a Spec/Assignment/Brainstorm
-      // studio, or a file tab with unsaved changes) it keeps priority: we return
-      // without preventDefault so that handler saves instead of toggling.
+    if (keymapState.matches('nav-toggle-right-sidebar', e)) {
+      // Cmd/Ctrl+Shift+S toggles the right sidebar. Which panel it shows is
+      // decided inside Workspace, which owns what the on-screen thread actually
+      // offers (file tree, git, terminal, sources...), so the chord only
+      // forwards the request. Only the workspace views own that sidebar.
+      const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
+      if (!rightSidebarViews.includes(activeView)) return
+      e.preventDefault()
       if (e.repeat) return
-      const leftSidebarViews = ['projects', 'chats', 'threads']
+      workspaceState.requestToggleContextSidebar()
+      return
+    }
+    if (keymapState.matches('nav-toggle-left-sidebar', e)) {
+      // On the plain workspace (no studio, no conflict being resolved, no dirty
+      // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
+      // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
+      // save binding owns the chord (a Spec/Assignment/Brainstorm studio, the
+      // conflict resolution editor, a project file tab with unsaved changes, or
+      // an edited standalone file) it keeps priority: we return without
+      // preventDefault so that handler saves instead of toggling.
+      // Shift is excluded so Cmd/Ctrl+Shift+S reaches the right-sidebar toggle
+      // above, which used to fall through to this branch and fold the left
+      // sidebar instead.
+      if (e.repeat) return
+      const leftSidebarViews = ['projects', 'chats', 'threads', 'assistant']
       const studioOpen = Boolean(document.querySelector('[data-region="spec-studio"]'))
+      // The conflict editor holds resolved progress that its Save draft owns, so
+      // the chord belongs to it even while no plain file tab is dirty.
+      const conflictOpen = Boolean(document.querySelector('[data-region="conflict-editor"]'))
       const dirtyFiles = projectFilesWorkspace.getUnsavedFiles().length > 0
-      if (!leftSidebarViews.includes(activeView) || studioOpen || dirtyFiles) return
+      if (!leftSidebarViews.includes(activeView) || studioOpen || conflictOpen || dirtyFiles) {
+        return
+      }
+      if (standaloneFiles.activeHasUnsavedChanges) return
       e.preventDefault()
       sidebarState.toggle()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', e)) {
       e.preventDefault()
       if (e.repeat) return
       toggleCommandPalette()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    if (keymapState.matches('nav-settings', e)) {
       e.preventDefault()
       navigate('settings')
     }
@@ -1738,24 +1204,33 @@
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
     if (
-      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+      keymapState.matches('nav-history-back', e) ||
+      keymapState.matches('nav-history-forward', e)
     ) {
       e.preventDefault()
       if (e.repeat) return
-      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      if (keymapState.matches('nav-history-back', e)) void goBack()
       else void goForward()
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+    if (
+      keymapState.matches('nav-new-project', e) ||
+      keymapState.matches('assistant-new-routine', e)
+    ) {
       e.preventDefault()
       if (e.repeat) return
+      // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
+      if (activeView === 'assistant') {
+        if (spotlightScreenId) closeSpotlight()
+        workspaceState.requestAssistantRoutine()
+        return
+      }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
       if (activeView === 'chats') return
-      if (commandPaletteOpen) commandPaletteOpen = false
+      if (spotlightScreenId) closeSpotlight()
       openNewProjectSpotlight()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+    if (keymapState.matches('nav-new-thread', e) || keymapState.matches('assistant-new-task', e)) {
       e.preventDefault()
       if (e.repeat) return
 
@@ -1764,39 +1239,14 @@
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
-      if (activeView === 'scope') {
-        if (scopeState.activeProjectId) {
-          const bucketId =
-            scopeState.sidebarContext?.bucketId ??
-            scopeState.buckets[0]?.id ??
-            DEFAULT_SCOPE_BUCKET_ID
-          scopeState.requestCreateScopedThread(bucketId)
-        }
+      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the routine
+      // the user is currently in when there is one, routine-less otherwise.
+      if (activeView === 'assistant') {
+        workspaceState.requestAssistantTask()
         return
       }
 
-      if (activeView === 'projects-scope') {
-        // Docked scoped-threads sidebar: create a thread in the docked scope's
-        // project and bucket, same as the sidebar's new-thread action. Works
-        // from the empty state too (no thread open, so no active project).
-        const context = scopeState.sidebarContext
-        if (context) workspaceState.requestCreateThread(context.bucketId)
-        return
-      }
-
-      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
-      if (activeView === 'chats') {
-        workspaceState.requestNewChat()
-      } else if (
-        workspaceState.activeProject &&
-        workspaceState.activeProject.id !== INBOX_PROJECT_ID
-      ) {
-        // Same-scope inheritance: the new thread inherits the open thread's
-        // scope bucket (no stale sidebar bucket, no view switch).
-        workspaceState.requestCreateThread()
-      } else {
-        workspaceState.requestAddProject()
-      }
+      requestThreadForCurrentView()
     }
   }
 
@@ -1834,9 +1284,20 @@
     window.addEventListener('mousedown', onMouseHistoryButton)
     window.addEventListener('auxclick', onMouseHistoryButton)
     const uninstallVoiceShortcut = initVoiceShortcutListener()
+    const uninstallComposerFocusShortcut = initComposerFocusShortcut()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
-    const unsubscribeIpc = installIpcSubscriptions()
+    const unsubscribeIpc = installAppIpcSubscriptions({
+      openThreadFromNotification,
+      setCloseConfirmation: (payload) => (closeConfirmation = payload),
+      confirmForceClose,
+      settleCloseConfirmationThread,
+      handleCloseShortcut,
+      handleNewTerminalShortcut,
+      goBack,
+      goForward,
+      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
+    })
     const unsubscribeShutdown = installShutdownSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
     const originalClearThread = workspaceState.clearThread.bind(workspaceState)
@@ -1864,6 +1325,7 @@
       window.removeEventListener('mousedown', onMouseHistoryButton)
       window.removeEventListener('auxclick', onMouseHistoryButton)
       uninstallVoiceShortcut()
+      uninstallComposerFocusShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()
@@ -1884,7 +1346,8 @@
       class={activeView === 'projects' ||
       activeView === 'projects-scope' ||
       activeView === 'chats' ||
-      activeView === 'threads'
+      activeView === 'threads' ||
+      activeView === 'assistant'
         ? 'h-full'
         : 'hidden'}
     >
@@ -1893,7 +1356,8 @@
         active={activeView === 'projects' ||
           activeView === 'projects-scope' ||
           activeView === 'chats' ||
-          activeView === 'threads'}
+          activeView === 'threads' ||
+          activeView === 'assistant'}
         scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
@@ -1920,79 +1384,15 @@
           onBack={() => navigate(lastViewBeforeSettings)}
         />
       {/await}
-    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
+    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
       <div class="flex h-full items-center justify-center">
         <p class="text-sm text-dimmed">Coming soon</p>
       </div>
     {/if}
   </main>
-  {#if commandPaletteOpen}
+  {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
-      <CommandPalette
-        open={commandPaletteOpen}
-        actions={paletteActions}
-        title="Search actions"
-        placeholder="Search actions, threads, and files…"
-        emptyLabel="No matching actions"
-        onSelect={handlePaletteSelection}
-        onClose={() => (commandPaletteOpen = false)}
-        onRestoreFocus={restorePaletteFocus}
-        shortcutLabel="Ctrl K"
-      />
-    {/await}
-  {/if}
-  {#if fileSearchPaletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
-      <FileSearchPalette
-        open={fileSearchPaletteOpen}
-        actions={fileSearchActions}
-        title="Search files across projects"
-        placeholder="Type at least two characters…"
-        emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
-        headerIcon={FileSearch}
-        headerIconBadge
-        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={fileSearchProjectIds}
-        onSelectedProjectsChange={setFileSearchScope}
-        onBack={backToCommandPaletteFromFileSearch}
-        onQueryChange={handleFileSearchQuery}
-        onSelect={handleFileSearchSelection}
-        closeOnSelect={false}
-        onClose={() => {
-          fileSearchPaletteOpen = false
-          resetFileSearch()
-        }}
-      />
-    {/await}
-  {/if}
-  {#if threadSearchPaletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
-      <ThreadSearchPalette
-        open={threadSearchPaletteOpen}
-        actions={threadSearchActions}
-        title="Search threads across projects"
-        placeholder="Search thread titles and messages across all projects…"
-        emptyLabel={threadSearchLoading
-          ? 'Searching threads…'
-          : 'Type at least two characters to search all projects'}
-        headerIcon={MessagesSquare}
-        headerIconBadge
-        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={threadSearchProjectIds}
-        onSelectedProjectsChange={setThreadSearchScope}
-        onBack={backToCommandPaletteFromThreadSearch}
-        onQueryChange={handleThreadSearchQuery}
-        onSelect={handleThreadSearchSelection}
-        closeOnSelect={false}
-        onClose={() => {
-          threadSearchPaletteOpen = false
-          resetThreadSearch()
-        }}
-      />
+      <CommandPalette {...spotlightPalette} />
     {/await}
   {/if}
   {#if newProjectSpotlightOpen}
@@ -2023,9 +1423,33 @@
   <Toaster />
   <TextSelectionContextMenu />
   <TooltipHost />
+  {#if scopeConfirmations.current}
+    <!-- An agent's destructive scope action is parked in main until this dialog
+         is answered, so it floats above every view until the user decides. -->
+    {#await import('$lib/components/scope/ScopeAgentConfirmDialog.svelte') then { default: ScopeAgentConfirmDialog }}
+      <ScopeAgentConfirmDialog />
+    {/await}
+  {/if}
   {#if pipState.active && pipState.frameDataUrl !== null}
     {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
       <PipOverlay />
+    {/await}
+  {/if}
+  {#if standaloneFiles.open}
+    <!-- Files opened through the operating system: editable text (saved straight
+         back to the file) and deliberately project-less (no file tree, no tree
+         operations, nothing indexed). -->
+    {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
+      <StandaloneFileViewer />
+    {/await}
+  {/if}
+
+  {#if providerConnectFlow.request}
+    <!-- The provider connect flow floats above every view: a surface with no AI
+         account connected (the first-run setup card, the empty model picker)
+         opens the harness's provider list without navigating away. -->
+    {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
+      <ProviderConnectHost />
     {/await}
   {/if}
 
@@ -2052,6 +1476,27 @@
     <!-- Floats above every view   survives thread/project/view and sidebar visibility. -->
     {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
       <PrDockHost />
+    {/await}
+  {/if}
+
+  {#if scopeJobs.jobs.length}
+    <!-- Floats above every view so a worktree run keeps reporting while the user works. -->
+    {#await import('$lib/components/scope/ScopeJobDockHost.svelte') then { default: ScopeJobDockHost }}
+      <ScopeJobDockHost />
+    {/await}
+  {/if}
+
+  {#if prBatchJobs.jobs.length}
+    <!-- Floats above every view so a confirmed batch keeps closing pull requests while the user works. -->
+    {#await import('$lib/components/git/PrBatchDockHost.svelte') then { default: PrBatchDockHost }}
+      <PrBatchDockHost />
+    {/await}
+  {/if}
+
+  {#if gitSyncJobs.jobs.length}
+    <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
+    {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
+      <GitSyncDockHost />
     {/await}
   {/if}
 

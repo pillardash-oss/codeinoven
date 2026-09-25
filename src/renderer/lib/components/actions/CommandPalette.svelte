@@ -1,21 +1,29 @@
 <script lang="ts">
-  import { Command, Dialog } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, X, Zap } from '@lucide/svelte'
+  import { Command } from 'bits-ui'
+  import { ArrowLeft, CornerDownLeft, FolderTree, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
 
   interface Props {
     open: boolean
+    /** Identifies the screen this palette is showing. A host that swaps the
+     *  content of one mounted palette (the app spotlight and its nested
+     *  screens) changes it so the new screen starts clean: empty query, no
+     *  selected row. A palette that only opens and closes has no screen to
+     *  identify and leaves it out. */
+    screenKey?: string
     actions: readonly ActionDefinition[]
     onSelect: (selection: ActionSelection) => void | Promise<void>
     onClose: () => void
@@ -46,8 +54,11 @@
     onSelectedProjectsChange?: (projectIds: string[]) => void
   }
 
+  export type CommandPaletteProps = Props
+
   let {
     open,
+    screenKey,
     actions,
     onSelect,
     onClose,
@@ -71,24 +82,16 @@
     onSelectedProjectsChange
   }: Props = $props()
 
-  // The dialog-mode palette draws a full-window backdrop (fixed inset-0), and
-  // the browser's native view floats above every DOM surface (see
-  // ContextSidebarState.setFullscreenSurfaceActive), so the view must be
-  // suppressed while the palette is open: the same treatment every Modal
-  // gets. Keyed per instance so stacked palettes don't clear each other's
-  // suppression. Inline mode stays inside the composer column and never
-  // overlaps the sidebar, so it does not suppress.
-  const suppressionKey = `command-palette-${Math.random().toString(36).slice(2)}`
-  $effect(() => {
-    contextSidebarState.setFullscreenSurfaceActive(suppressionKey, open && mode === 'dialog')
-    return () => contextSidebarState.setFullscreenSurfaceActive(suppressionKey, false)
-  })
+  // The dialog-mode palette is a `Modal`, which publishes the full-window
+  // suppression itself. Inline mode stays inside the composer column and never
+  // overlaps the sidebar, so it renders no Modal and suppresses nothing.
 
   let query = $state('')
   let selectedActionId = $state('')
   let inputElement = $state<HTMLInputElement | null>(null)
   let selectionMethod: ActionSelection['method'] = 'keyboard'
   let wasOpen = false
+  let wasScreenKey: string | undefined = undefined
 
   let visibleActions = $derived(
     serverFiltered
@@ -96,9 +99,16 @@
       : filterActions(actions, query, { limit: maxResults })
   )
 
+  /**
+   * A fresh open and a screen change both start clean: an empty query and no
+   * selected row. `screenKey` is what lets one mounted palette show a different
+   * screen than the one it opened with, without the shell being torn down.
+   */
   $effect(() => {
-    if (open && !wasOpen) {
+    const screen = screenKey
+    if (open && (!wasOpen || screen !== wasScreenKey)) {
       wasOpen = true
+      wasScreenKey = screen
       query = initialQuery
       selectedActionId = ''
       if (mode === 'inline') void tick().then(() => inputElement?.focus())
@@ -118,7 +128,10 @@
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (!open) return
-    if (mode === 'inline' && event.key === 'Escape') {
+    // Inline palettes draw no Modal, so they close on Escape here. A dialog
+    // palette's Escape is owned by its Modal, which routes a sub-screen back to
+    // the palette home through `onEscapeKeydown`.
+    if (mode === 'inline' && keymapState.matches('palette-close', event)) {
       event.preventDefault()
       event.stopPropagation()
       onClose()
@@ -130,17 +143,26 @@
     // query, so pressing it must not bounce the user back to the actions list.
     // Shift is excluded so Shift+Alt+ArrowLeft keeps its native text-selection behavior.
     // Cmd/Meta+ArrowLeft is intentionally ignored so word-jump remains native.
-    if (
-      onBack &&
-      event.key === 'ArrowLeft' &&
-      !event.shiftKey &&
-      event.altKey &&
-      event.code === 'AltLeft'
-    ) {
+    if (onBack && keymapState.matches('palette-back', event) && event.code === 'AltLeft') {
       event.preventDefault()
       event.stopPropagation()
       onBack()
     }
+  }
+
+  /**
+   * Escape on a sub-screen (file search, thread search, switch project) steps
+   * back to the palette home instead of dismissing the palette: the first
+   * Escape returns to the actions list, the next one closes everything. The
+   * home screen has no back target, so the shell still dismisses it. Claiming
+   * the event here   rather than listening for Escape on the window   keeps the
+   * step back tied to this panel's own escape layer, so a popover opened inside
+   * the panel (the footer project picker) still closes on its own first.
+   */
+  function handleEscapeKeydown(event: KeyboardEvent): void {
+    if (!onBack) return
+    event.preventDefault()
+    onBack()
   }
 
   function categoryLabel(action: ActionDefinition): string {
@@ -216,7 +238,9 @@
               {displayShortcutLabel(shortcutLabel)}
             </kbd>
           {/if}
-          <span class="text-[0.625rem] font-medium text-dimmed">ESC</span>
+          <span class="shrink-0 text-[0.625rem] font-medium text-dimmed">
+            {onBack ? 'ESC Back' : 'ESC'}
+          </span>
         </span>
       {/if}
     </header>
@@ -311,6 +335,22 @@
                     title={action.status.label}
                   />
                   <span class="truncate">{action.status.label}</span>
+                </span>
+              {/if}
+              {#if action.scope}
+                {@const scope = action.scope}
+                <span class="flex shrink-0 items-center gap-1">
+                  {#if scope.root.kind === 'worktree'}
+                    <span
+                      class="flex shrink-0 items-center"
+                      role="img"
+                      aria-label="Managed Git worktree scope on {scope.root.branch}"
+                      title="Managed Git worktree scope on {scope.root.branch}"
+                    >
+                      <FolderTree size={11} class="text-warning" />
+                    </span>
+                  {/if}
+                  <ScopeBadge bucket={scope} size="xs" />
                 </span>
               {/if}
             </span>
@@ -420,25 +460,20 @@
 {/snippet}
 
 {#if mode === 'dialog'}
-  <Dialog.Root
+  <Modal
     {open}
-    onOpenChange={(nextOpen) => {
-      if (!nextOpen) onClose()
+    {title}
+    {onClose}
+    placement="palette"
+    size="lg"
+    chrome={false}
+    onEscapeKeydown={handleEscapeKeydown}
+    onCloseAutoFocus={(event) => {
+      if (onRestoreFocus?.()) event.preventDefault()
     }}
   >
-    <Dialog.Portal>
-      <Dialog.Overlay class="fixed inset-0 z-40 bg-app/50" />
-      <Dialog.Content
-        class="fixed left-1/2 top-[18%] z-50 w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
-        onCloseAutoFocus={(event) => {
-          if (onRestoreFocus?.()) event.preventDefault()
-        }}
-      >
-        <Dialog.Title class="sr-only">{title}</Dialog.Title>
-        {@render paletteBody()}
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>
+    {@render paletteBody()}
+  </Modal>
 {:else if open}
   <section
     class="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"

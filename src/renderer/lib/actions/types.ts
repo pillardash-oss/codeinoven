@@ -1,4 +1,5 @@
 import type { Component } from 'svelte'
+import type { ScopeBucket } from '$shared/types'
 
 export type ActionId = `${string}:${string}`
 
@@ -13,6 +14,7 @@ export type ActionCategory =
   | 'target'
   | 'file'
   | 'thread'
+  | 'project'
   | 'other'
 
 export type ActionSourceKind = 'app' | 'harness' | 'plugin'
@@ -52,6 +54,10 @@ export interface ActionDefinition {
    *  description row: the currently working provider + model while the thread
    *  is working, otherwise the thread's harnesses and provider as icons. */
   threadMeta?: ActionThreadMeta
+  /** Optional scope the action belongs to (a thread's scope), rendered as the
+   *  canonical scope badge. Omitted for the project-rooted Default scope, so a
+   *  row only advertises a scope the user actually created. */
+  scope?: ScopeBucket
 }
 
 export interface ActionThreadMeta {
@@ -71,7 +77,7 @@ export interface ActionStatusBadge {
   /** Human-readable status text shown next to the colored dot. */
   label: string
   stage?: 'pinned' | 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done'
-  tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
+  tone?: import('$shared/thread-status-policy').ThreadStatusTone
   kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
   variant?: 'dot' | 'spinner'
   animated?: boolean

@@ -1,33 +1,26 @@
 <script lang="ts">
-  import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import {
+    ArrowLeft,
+    ArrowUpRight,
+    ClipboardCheck,
+    Loader2,
+    Network,
+    Play,
+    Rows3,
+    Square
+  } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
+  import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import {
     isThreadRetryPaused,
-    type AssignmentPlan,
+    workerReportsToCoordinator,
+    type AssignmentCoordinatorPanelProps,
     type AssignmentTask,
     type AssignmentTaskStatus,
     type Thread
   } from '$shared/types'
-
-  interface Props {
-    assignment: AssignmentPlan
-    threads: Thread[]
-    auditThread?: Thread
-    auditState?: Thread['auditState'] | 'failed'
-    finalComplete?: boolean
-    reportAvailable?: boolean
-    selectedThreadId: string
-    coordinatorWorking: boolean
-    onOpenAssignment: () => void
-    onOpenAuditWork?: () => void
-    onViewReport?: () => void
-    onOpenThread: (thread: Thread) => void
-    onOpenTask: (task: AssignmentTask) => void
-    onResume: () => void
-    onStop: () => Promise<void>
-    onResumeAssignment: () => Promise<void>
-  }
 
   let {
     assignment,
@@ -45,14 +38,18 @@
     onOpenTask,
     onResume,
     onStop,
-    onResumeAssignment
-  }: Props = $props()
+    onResumeAssignment,
+    onBackToCoordinator,
+    onReportToCoordinator
+  }: AssignmentCoordinatorPanelProps = $props()
 
   let showStopConfirmation = $state(false)
   let stopBusy = $state(false)
   let stopError = $state('')
   let resumeBusy = $state(false)
   let resumeError = $state('')
+  let reportBusy = $state(false)
+  let reportError = $state('')
 
   const completed = $derived(
     assignment.content.tasks.filter((task) => task.status === 'completed').length
@@ -125,7 +122,11 @@
     return undefined
   }
 
-  function taskTooltip(task: AssignmentTask, linkedWorker: Thread | undefined): string {
+  function taskTooltip(
+    task: AssignmentTask,
+    linkedWorker: Thread | undefined,
+    reportingOff: boolean
+  ): string {
     const worker = workerLabel(task)
     const destination =
       task.owner === 'senior'
@@ -133,7 +134,16 @@
         : task.threadId
           ? `Open ${linkedWorker?.title ?? worker}`
           : 'Open this task in Assignment Studio'
-    return `${task.title} · ${worker} · ${statusLabel(task.status)}. ${destination}`
+    // A non-reporting worker never hands its task back, so the Assignment
+    // lifecycle is frozen where the user switched reporting off. The row shows
+    // the worker thread's own live status instead, and the accessible name has
+    // to match what is on screen.
+    const liveStatus =
+      reportingOff && linkedWorker
+        ? statusBadgeForThread(linkedWorker, isThreadLiveWorking(linkedWorker))?.label
+        : undefined
+    const reporting = reportingOff ? ' · not reporting back' : ''
+    return `${task.title} · ${worker} · ${liveStatus ?? statusLabel(task.status)}${reporting}. ${destination}`
   }
 
   async function confirmStop(): Promise<void> {
@@ -160,6 +170,23 @@
       resumeError = error instanceof Error ? error.message : 'The Assignment could not be resumed.'
     } finally {
       resumeBusy = false
+    }
+  }
+
+  /** Ask the open not-reporting worker to hand its finished work back. Reporting
+   *  flips on in the main process, so the button unmounts once the action
+   *  resolves; the busy guard stops a second click while it runs. */
+  async function reportToCoordinator(): Promise<void> {
+    if (reportBusy || !onReportToCoordinator) return
+    reportBusy = true
+    reportError = ''
+    try {
+      await onReportToCoordinator()
+    } catch (error) {
+      reportError =
+        error instanceof Error ? error.message : 'The worker could not be asked to report.'
+    } finally {
+      reportBusy = false
     }
   }
 </script>
@@ -340,6 +367,8 @@
           {@const active = task.threadId === selectedThreadId}
           {@const reworkCycle = taskReworkCycle(task)}
           {@const taskNumber = taskIndex + 1}
+          {@const reportingOff =
+            linkedWorker !== undefined && !workerReportsToCoordinator(linkedWorker.settings)}
           <button
             type="button"
             class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
@@ -347,8 +376,8 @@
               : ['attention', 'failed', 'stopped'].includes(task.status)
                 ? 'border-danger bg-danger/5'
                 : 'border-transparent'}"
-            title={taskTooltip(task, linkedWorker)}
-            aria-label={taskTooltip(task, linkedWorker)}
+            title={taskTooltip(task, linkedWorker, reportingOff)}
+            aria-label={taskTooltip(task, linkedWorker, reportingOff)}
             aria-current={active ? 'true' : undefined}
             onclick={() => onOpenTask(task)}
           >
@@ -373,20 +402,75 @@
                 <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
                   {workerLabel(task)}
                 </span>
+                {#if reportingOff}
+                  <span
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-warning"
+                  >
+                    Not reporting
+                  </span>
+                {/if}
+                {#if reportingOff && linkedWorker}
+                  <!-- The Assignment lifecycle is frozen while reporting is off, so the
+                       worker thread's own live status is the only truthful one. -->
+                  <ThreadStatusChip thread={linkedWorker} size="md" />
+                {/if}
               </span>
             </span>
-            <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
-                task.status
-              )}"
-            >
-              {statusLabel(task.status)}
-            </span>
+            {#if !(reportingOff && linkedWorker)}
+              <span
+                class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium capitalize {statusClass(
+                  task.status
+                )}"
+              >
+                {statusLabel(task.status)}
+              </span>
+            {/if}
           </button>
         {/each}
       </div>
     </section>
   </div>
+
+  {#if onBackToCoordinator || onReportToCoordinator}
+    <footer class="shrink-0 space-y-2 border-t border-border p-3">
+      {#if onReportToCoordinator}
+        <!-- Shown only while the open worker has reporting off: the user is
+             asking it to hand its finished work back, so reporting is switched
+             on again and the worker submits its report. -->
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+          title="Switch reporting back on and ask this worker to report its finished work to the Sr. Engineer"
+          aria-label="Report this worker's finished work to the Sr. Engineer"
+          disabled={reportBusy}
+          onclick={() => void reportToCoordinator()}
+        >
+          {#if reportBusy}
+            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            Reporting…
+          {:else}
+            <ClipboardCheck size={13} aria-hidden="true" />
+            Report to Sr. Engineer
+          {/if}
+        </button>
+      {/if}
+      {#if onBackToCoordinator}
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+          title="Back to the Sr. Engineer thread that owns this Assignment"
+          aria-label="Back to the Sr. Engineer thread that owns this Assignment"
+          onclick={onBackToCoordinator}
+        >
+          <ArrowLeft size={13} aria-hidden="true" />
+          Back to Sr. Engineer
+        </button>
+      {/if}
+      {#if reportError}
+        <p class="text-xs text-danger" role="alert">{reportError}</p>
+      {/if}
+    </footer>
+  {/if}
 </div>
 
 <Modal

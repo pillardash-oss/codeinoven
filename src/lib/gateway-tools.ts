@@ -10,8 +10,12 @@ export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
 /** Post-compaction capability re-dump: re-lists one utility's full docs by id. */
 export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
-/** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
-export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
+/**
+ * Asks the user for secret values (API keys, tokens, passwords) and hands the
+ * agent only the names it interpolates them under. One app tool for every
+ * harness: the value goes to the encrypted vault, and the model never sees it.
+ */
+export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {
@@ -105,17 +109,115 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     sentWhen: "After compaction, when a known utility's capability docs are no longer in context"
   },
   {
+    name: ASK_SECRET_TOOL_NAME,
+    description:
+      'Ask the user for secret values you do not have   an API key, token, password, or any credential a task needs   without the value ever entering this conversation. Each value is stored in the encrypted device vault, and is then available to you in three ways: bind it to an installed capability by passing utility_id (the server receives it as environment_variable when it launches), read it in a shell command as $environment_variable, or interpolate its 0600 file as "$(cat secret_path)". The result contains names and paths only, never the value: never print, echo, log, or read a secret, and never paste one into chat. Use it the moment a task or a capability you just installed needs a credential, and ask for every secret you need in one call. A user may answer with an instruction instead of a value, for example a value they already supplied somewhere else: the app then reuses whatever it already holds for the names you asked for, reports the rest as unresolved, and passes their instruction back, so never ask again for a request the user has already answered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        secrets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 5,
+          description: 'Secrets to collect from the user, in the order they should be filled.',
+          items: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description: 'Short human label for the value, e.g. "Authorization Key".'
+              },
+              description: {
+                type: 'string',
+                description:
+                  'One line on what the value is and, when it exists, a link to where the user obtains it.'
+              },
+              environment_variable: {
+                type: 'string',
+                description:
+                  'Environment variable name the target expects (an MCP server variable, a CLI flag value). Omit to receive a derived CIO_ name.'
+              },
+              utility_id: {
+                type: 'string',
+                description:
+                  'Installed utility id to bind this value to as its credential, exactly as the Utilities page stores it.'
+              }
+            },
+            required: ['title'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['secrets'],
+      additionalProperties: false
+    },
+    route: '/ask-secret',
+    sentWhen:
+      'Whenever a task or a capability needs a secret you do not have; always when installing a capability that needs a credential'
+  },
+  {
     name: UTILITY_MANAGE_TOOL_NAME,
     description:
-      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden; tell the user to add them through Utilities after installation.',
+      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. The bundle is ' +
+      '{"name":"...","utilities":[{"definition":{"kind":"skill"|"mcp",...}}]}: every entry wraps its ' +
+      'utility in a "definition" object, and "kind" sits inside that definition, never on the entry. ' +
+      'When a capability needs an API key or token, never put the value in the bundle: collect it with ' +
+      ASK_SECRET_TOOL_NAME +
+      ' after installing, passing the installed id as utility_id and the variable the server expects as environment_variable, and the app stores it in the encrypted vault exactly as the Utilities page would. Reinstalling an existing capability updates that entry in place and reports it as "updated", removing extra copies of it, so never install a second copy to work around one that already exists. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden in the bundle itself; if ' +
+      ASK_SECRET_TOOL_NAME +
+      ' is unavailable, tell the user to add them through Utilities after installation.',
     inputSchema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['install_bundle'] },
+        // Deliberately descriptive rather than enforcing: the nested properties
+        // teach the caller the exact shape, while the missing `required` and the
+        // `additionalProperties` leave a near-miss (an entry named `entries`, or
+        // the utility fields flat on the entry) to the gateway's tolerant parser.
+        // A harness that validates strictly would otherwise reject the call with
+        // a generic error and hide the precise, shape-quoting message the gateway
+        // returns, which is what let an agent guess three times and give up.
         bundle: {
           type: 'object',
           description:
-            'A UtilityBundleInstallRequest-shaped object with name and one or more secret-free definition entries.',
+            'The bundle to install: a name plus one entry per utility. Each entry is ' +
+            '{"definition":{...}}; the definition carries "kind" plus the utility fields.',
+          properties: {
+            name: { type: 'string', description: 'Human-readable bundle name.' },
+            utilities: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 20,
+              description:
+                'One entry per utility. Each entry wraps its utility in a "definition" object.',
+              items: {
+                type: 'object',
+                description: 'A single entry: {"definition":{"kind":"skill"|"mcp",...}}.',
+                properties: {
+                  definition: {
+                    type: 'object',
+                    description:
+                      'The utility itself. "kind" must be "skill" or "mcp"; an MCP server also ' +
+                      'needs config.transport and config.url (or config.command for stdio).',
+                    properties: {
+                      kind: { type: 'string', enum: ['skill', 'mcp'] },
+                      name: { type: 'string', description: 'Utility name.' },
+                      description: { type: 'string' },
+                      enabled: { type: 'boolean' },
+                      activation: { type: 'string', enum: ['on_demand', 'always'] },
+                      scope: { type: 'object' },
+                      credentials: { type: 'array', maxItems: 0 },
+                      harnessBindings: { type: 'array' },
+                      config: { type: 'object' }
+                    },
+                    required: ['kind', 'name'],
+                    additionalProperties: true
+                  }
+                },
+                additionalProperties: true
+              }
+            }
+          },
           additionalProperties: true
         }
       },
@@ -128,7 +230,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -162,7 +264,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         file: {
           type: 'string',
           description:
-            'For read_log: one of logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.'
+            'For read_log: main.jsonl, error.log, or permission-events.jsonl for the current day, or a day-qualified path such as logs/2026-09-23/error.log. Logs are split into one folder per local day.'
         },
         table: {
           type: 'string',
@@ -188,8 +290,3 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     sentWhen: 'Only an explicit @cio-utility debugging turn'
   }
 ]
-
-/** Map every gateway tool route to its MCP tool name. */
-export const GATEWAY_ROUTES: ReadonlyMap<string, string> = new Map(
-  GATEWAY_TOOLS.map(({ route, name }) => [route, name])
-)

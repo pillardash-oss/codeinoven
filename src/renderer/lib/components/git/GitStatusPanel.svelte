@@ -1,26 +1,43 @@
 <script lang="ts">
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { pathToFileUrl } from '$lib/mime'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import {
+    invalidateRepositoryPreflight,
+    loadRepositoryPreflight
+  } from '$lib/repository-preflight-cache'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
-  import { DEFAULT_SCOPE_BUCKET_ID, type PromptAttachment } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
+  import {
+    assignAgentToPullRequest as assignAgentToPullRequestAction,
+    diagnoseDeployment,
+    diagnoseWorkflowJob,
+    openAgentThread as openAgentThreadAction,
+    preparePrConflictSession,
+    resolveCurrentConflictsWithAgent,
+    resolvePrConflictsWithAgent
+  } from './git-status-panel-agent-actions'
   import type {
     GitBranchInfo,
     GitCommitInfo,
+    GitConflictSide,
     GitDiff,
     GitFileChange,
     GitPullStrategy,
+    GitSyncDirection,
+    GitRebaseAction,
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
     GitHubUser,
     GitHubWorkflowRun,
     GitResetMode,
+    GitRemoteUpdate,
     GitRestoreTarget,
     GitStashEntry,
     ThreadStatus
@@ -30,58 +47,96 @@
     ArrowDownToLine,
     ArrowLeft,
     ArrowUpFromLine,
+    Bot,
     Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
+    CircleCheck,
     Download,
+    ExternalLink,
     FileDiff,
-    Folder,
-    FolderOpen,
-    FolderTree,
+    FileMinus,
+    FolderGit2,
     GitBranch,
     GitCommit,
-    GitFork,
+    GitCommitHorizontal,
+    GitGraph,
     GitMerge,
     GitPullRequest,
-    Rocket,
-    History,
+    Info,
     Loader2,
+    Maximize2,
     MoreHorizontal,
     NetworkIcon,
+    Play,
     Plus,
     RefreshCw,
+    Rocket,
     RotateCcwClock,
     Search,
+    SkipForward,
     Trash2,
-    Unplug
+    TriangleAlert
   } from '@lucide/svelte'
-  import { AlertDialog, ContextMenu, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
-  import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { toast } from 'svelte-sonner'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import BranchActionsMenu from './BranchActionsMenu.svelte'
-  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
-  import Modal from '../ui/Modal.svelte'
-  import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
   import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
-  import GitChangesTree from './GitChangesTree.svelte'
-  import GitFileRow from './GitFileRow.svelte'
-  import GitHubSignInModal from './GitHubSignInModal.svelte'
+  import GitStatusPanelBranchesView from './GitStatusPanelBranchesView.svelte'
+  import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
+  import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
+  import GitStatusPanelCommitComposer from './GitStatusPanelCommitComposer.svelte'
+  import GitStatusPanelCommitSearch from './GitStatusPanelCommitSearch.svelte'
+  import GitStatusPanelNotices from './GitStatusPanelNotices.svelte'
+  import GitStatusPanelRepoStates from './GitStatusPanelRepoStates.svelte'
+  import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
+  import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
+  import GitSyncButton from './GitSyncButton.svelte'
+  import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
-  import FindInBar from '../files/FindInBar.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import PrBatchDialog from './PrBatchDialog.svelte'
+  import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
+  import PrMetadataDialog from './PrMetadataDialog.svelte'
+  import { prSummaryChatContext, prSummaryExplainPrompt } from './git-status-panel-prompts'
+  import PrViewSwitcher from './PrViewSwitcher.svelte'
+  import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
+  import {
+    PR_DETAIL_VIEWS,
+    prViewCount,
+    type PrDetailTabId,
+    type PrListAction,
+    type PrMetadataMode
+  } from './pr-view'
+  import GitViewMenu from './GitViewMenu.svelte'
+  import PrIdentityRow from './PrIdentityRow.svelte'
+  import PrListOptionsMenu from './PrListOptionsMenu.svelte'
+  import PrStateFilter from './PrStateFilter.svelte'
+
+  import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
-  import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+  import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
-  import type { PullRequestSummary } from '$shared/types'
+  import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { githubDisplayLogin } from '$lib/format/github-login'
+  import type {
+    PrListFilter,
+    PrListSort,
+    PrMergeMethod,
+    PrState,
+    PullRequestSummary
+  } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -91,8 +146,15 @@
 
   let { projectId, threadId, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID }: Props = $props()
 
+  /**
+   * Health of the scope this panel is attached to. A managed checkout that is
+   * gone (or otherwise unhealthy) is why every Git operation here fails, so the
+   * panel offers the repair instead of the raw failure text.
+   */
+  let scopeHealth = $derived(scopeState.healthFor(scopeBucketId, projectId))
+  let scopeUnhealthy = $derived(scopeHealth !== undefined && scopeHealth.category !== 'healthy')
+
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
@@ -109,8 +171,7 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  /** Bumped after a PR is created so the open-PR list refetches. */
-  let prListRefresh = $state(0)
+
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
@@ -118,6 +179,21 @@
   /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
   let pullStrategyOpen = $state(false)
   let pullStrategyError = $state('')
+  /**
+   * Main-sync strategy chooser, opened by the `ask` preference, a failure, or
+   * always when sending commits out of this checkout (that mutates a branch the
+   * user is not looking at).
+   */
+  let syncMainOpen = $state(false)
+  /** Which direction the chooser and its actions apply to. */
+  let syncDirection = $state<GitSyncDirection>('from')
+  /**
+   * Peer chooser, opened from the Sync menu's branch entries. It owns the other
+   * end's selection and the sync itself, so the panel only says which direction
+   * the user started from.
+   */
+  let syncPeerOpen = $state(false)
+  let syncPeerDirection = $state<GitSyncDirection>('from')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -146,16 +222,22 @@
   let originReplaceConfirm = $state(false)
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
-  let activeTab = $state<TabId>(savedView.activeTab)
+  let activeTab = $state<GitPanelTabId>(savedView.activeTab)
   let changesView = $state<'list' | 'tree'>(savedView.changesView)
   let selectedPaths = $state<Record<string, boolean>>({})
   let discardConfirm = $state<string[] | null>(null)
   let restoreWorktreeConfirm = $state<{ source: string; path: string } | null>(null)
   let commitSelection = $state(false)
-  let commitTextarea = $state<HTMLTextAreaElement | null>(null)
-  let newBranchInput = $state<HTMLInputElement | null>(null)
-  let checkoutConfirmButton = $state<HTMLButtonElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
+  /**
+   * Where each batch of commits reached the upstream, newest first, read from
+   * the upstream ref's reflog. Empty when the branch has no remote-tracking
+   * upstream or git kept no reflog for it, in which case the graph falls back to
+   * its single unpushed boundary.
+   */
+  let remoteUpdates = $state.raw<GitRemoteUpdate[]>([])
+  /** Invalidates an in-flight reflog read whose drift has already moved on. */
+  let remoteUpdatesRequestId = 0
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
   let commitSearchQuery = $state('')
@@ -173,13 +255,125 @@
   let selectedCommit = $state<GitCommitInfo | null>(savedView.selectedCommit)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
+  /**
+   * The commit and paths waiting on the rewrite confirmation: taking a file's
+   * change out of a commit moves the branch, so it is asked for first.
+   */
+  let removeCommitChangesConfirm = $state<{ hash: string; paths: string[] } | null>(null)
+  /** Commit whose full record is open in the info dialog. */
+  let commitInfoTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
+  /**
+   * Which pull requests the PR view lists, and where its paging stands. Both are
+   * panel state rather than list state because the panel draws the filter in its
+   * own action row, beside Push and Pull.
+   */
+  let prListState = $state<PrState>(savedView.prListState)
+  let prListFilter = $state<PrListFilter>(savedView.prListFilter)
+  let prListSort = $state<PrListSort>(savedView.prListSort)
+  let prListPage = $state(1)
+  /**
+   * Which rows of the PR list are selected.
+   *
+   * Panel state, like the filter and the page, because the list is mounted twice
+   * (dock and full screen reader) and both mounts draw the same listing: a selection
+   * held inside the list would let the two disagree about what a batch acts on.
+   */
+  let prListSelection = $state<Record<number, boolean>>({})
+  /**
+   * The lifecycle batch waiting on its confirmation. It is only ever the pending
+   * question: the run itself leaves as a background job (`prBatchJobs`), so nothing
+   * here holds the window while twenty pull requests are written.
+   */
+  let prBatch = $state<{ mode: 'close' | 'reopen'; targets: PullRequestSummary[] } | null>(null)
+  /** The pull request a metadata picker is editing, or null when none is open. */
+  let prMetadata = $state<{ pr: PullRequestSummary; mode: PrMetadataMode } | null>(null)
+  /** The merge a row menu asked for, with the method the user chose. */
+  let prMerge = $state<{ pr: PullRequestSummary; method: PrMergeMethod } | null>(null)
+  let prMergeOpen = $state(false)
+  let prMergeTitle = $state('')
+  let prMergeMessage = $state('')
+  let prMergeBusy = $state(false)
+  /**
+   * The view the detail reader is showing, mirrored so the header's check pill
+   * can open Checks without reaching into the reader.
+   */
+  let prDetailTab = $state<PrDetailTabId>('conversation')
+
+  /**
+   * Full screen pull request reader. It mirrors the fullscreen terminal and
+   * browser: the reader owns its own tab list, opens from the pull request
+   * surfaces, and closes by clearing the active tab id. The list is a tab of
+   * its own, so the reader can both browse and read without leaving fullscreen.
+   */
+  const PR_READER_LIST_TAB = '__pullRequests__'
+  let fullscreenPullRequests = $state<PullRequestSummary[]>([])
+  let fullscreenPullRequestId = $state<string | null>(null)
+
+  const fullscreenPullRequestTabs = $derived([
+    { id: PR_READER_LIST_TAB, title: 'All pull requests' },
+    ...fullscreenPullRequests.map((pr) => ({
+      id: String(pr.number),
+      title: `#${pr.number} ${pr.title}`
+    }))
+  ])
+
+  const fullscreenActivePullRequest = $derived(
+    fullscreenPullRequestId && fullscreenPullRequestId !== PR_READER_LIST_TAB
+      ? (fullscreenPullRequests.find((pr) => String(pr.number) === fullscreenPullRequestId) ?? null)
+      : null
+  )
+
+  /** Opens the reader, adding the pull request as a tab when it is not one yet. */
+  function openPullRequestFullscreen(pr: PullRequestSummary | null): void {
+    if (!pr) {
+      fullscreenPullRequestId = PR_READER_LIST_TAB
+      return
+    }
+    if (!fullscreenPullRequests.some((open) => open.number === pr.number)) {
+      fullscreenPullRequests = [...fullscreenPullRequests, pr]
+    }
+    fullscreenPullRequestId = String(pr.number)
+  }
+
+  /**
+   * Closes one reader tab, falling back to the last tab still open. The list is
+   * the reader's home tab, so closing it closes the reader rather than leaving a
+   * close button that does nothing.
+   */
+  function closeFullscreenPullRequestTab(id: string): void {
+    if (id === PR_READER_LIST_TAB) {
+      fullscreenPullRequestId = null
+      return
+    }
+    const remaining = fullscreenPullRequests.filter((pr) => String(pr.number) !== id)
+    fullscreenPullRequests = remaining
+    if (fullscreenPullRequestId !== id) return
+    const fallback = remaining.at(-1)
+    fullscreenPullRequestId = fallback ? String(fallback.number) : PR_READER_LIST_TAB
+  }
+
+  // A full window DOM surface covers the workspace, so the browser's native view
+  // has to detach underneath it. This is the same contract the fullscreen
+  // terminal and the fullscreen file editor publish.
+  $effect(() =>
+    browserVisibility.hideWhile(
+      'git-pr-reader-fullscreen',
+      'fullscreen-surface',
+      fullscreenPullRequestId !== null
+    )
+  )
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
-  /** Whether the repo is known to have GitHub deployments   gates the Deployments tab. */
-  let hasDeployments = $state(false)
+  /**
+   * Whether the repo has GitHub deployments, which gates the Deployments view.
+   * Null means "not read yet": the cache and the project row are both read
+   * asynchronously, and treating that as "no deployments" threw a reader out of
+   * the Deployments view whenever the panel remounted on a cold cache.
+   */
+  let hasDeployments = $state<boolean | null>(null)
   /** One PR check-directed workflow run to reveal in the Deployments tab. */
   let requestedWorkflowRunId = $state<number | null>(null)
   /** Re-entrancy guard for the background deployment probe (not rendered). */
@@ -194,6 +388,13 @@
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
   let selectedStash = $state<GitStashEntry | null>(savedView.selectedStash)
+  /**
+   * The deployment or workflow run open in the Deploys view. The panel owns the
+   * selection, like every other view's, so its action row can name what is open
+   * and its external link can follow it.
+   */
+  let selectedDeployment = $state<GitHubDeployment | null>(null)
+  let selectedRun = $state<GitHubWorkflowRun | null>(null)
   let loadingStashDiff = $state(false)
   let stashDiffChanges = $state<GitFileChange[]>([])
   let stashDiffs = $state<Record<string, GitDiff>>({})
@@ -207,7 +408,10 @@
       changesView,
       selectedCommit,
       selectedPullRequest,
-      selectedStash
+      selectedStash,
+      prListState,
+      prListFilter,
+      prListSort
     })
   })
 
@@ -239,16 +443,80 @@
   )
   const untracked = $derived(changes.filter((change) => change.status === 'untracked'))
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
+  /**
+   * Selected paths in the order they were picked. Read by the batch actions and by
+   * the row's own flags, so it is declared with the other view deriveds rather
+   * than beside the actions that consume it.
+   */
+  const selectedPathList = $derived(Object.keys(selectedPaths))
   const commitTree = $derived(buildCommitTree(commitDiffChanges))
   /** Local commits not yet on the upstream remote, oldest-first-among-them   matches history order. */
   const unpushedCount = $derived(status?.upstream ? Math.max(0, status.ahead) : 0)
 
-  const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
+  const busy = $derived(
+    gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset', 'remove-commit-changes'])
+  )
   const commitBusy = $derived(gitState.isBusy(['commit', 'amend']))
   const batchBusy = $derived(
-    gitState.isBusy(['stage', 'unstage', 'commit', 'stash', 'ignore', 'discard'])
+    gitState.isBusy([
+      'stage',
+      'unstage',
+      'commit',
+      'stash',
+      'ignore',
+      'discard',
+      'remove-commit-changes'
+    ])
   )
   const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
+
+  /**
+   * The refresh button: git status, the History pages, and the view in focus.
+   *
+   * The view's reload goes through the store rather than through a signal the
+   * view watches. A view that watched a signal had to call a store method that
+   * reads the very record it writes, so a forced reload re-ran its own effect:
+   * the PR list and the deployments view refetched forever. The store is what
+   * every view renders from, so reloading it is enough.
+   */
+  async function refreshPanel(): Promise<void> {
+    // The button exists to make the panel trustworthy again, and the one thing a
+    // cache can be wrong about is whether the directory is still a repository at
+    // all, so this re-asks instead of trusting the stored answer.
+    await loadRepoState(true)
+    await refreshFocusedView()
+  }
+
+  /** Force a reload of whatever the active view shows, when the store has it. */
+  async function refreshFocusedView(): Promise<void> {
+    const identity = githubIdentity
+    if (!identity || !githubConnected) return
+    if (activeTab === 'pulls') {
+      if (selectedPullRequest) {
+        await gitState.ensurePullRequestBundle(
+          projectId,
+          identity.owner,
+          identity.repo,
+          selectedPullRequest.number,
+          true
+        )
+        return
+      }
+      await gitState.ensurePullRequestPage(
+        projectId,
+        identity.owner,
+        identity.repo,
+        prListState,
+        prListPage,
+        { filter: prListFilter, sort: prListSort },
+        true
+      )
+      return
+    }
+    if (activeTab === 'deployments') {
+      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, true)
+    }
+  }
 
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
@@ -259,27 +527,27 @@
     if (activeTab === 'history' || commitHistory.length > 0) await reloadHistory()
   }
 
-  async function loadRepoState(): Promise<void> {
-    repoState = 'loading'
+  async function loadRepoState(force = false): Promise<void> {
+    // Re-checking in place must not blank a panel that is already showing data:
+    // the "Checking repository" takeover belongs to the first answer, not to a
+    // refresh of one.
+    if (!force) repoState = 'loading'
     try {
-      const project = await invoke('project:get', projectId)
-      if (project?.hasDeployments !== undefined) {
+      // Cached per project, so re-opening the panel does not spawn git again to
+      // ask a question whose answer has not changed.
+      const snapshot = await loadRepositoryPreflight(projectId, force)
+      if (snapshot.hasDeployments !== undefined) {
         // Authoritative database value; reconcile the fast-render cache with it.
-        hasDeployments = project.hasDeployments
-        cacheHasDeployments(projectId, project.hasDeployments)
+        hasDeployments = snapshot.hasDeployments
+        cacheHasDeployments(projectId, snapshot.hasDeployments)
       }
-      if (!project?.path) {
+      if (!snapshot.path || snapshot.preflight.status === 'not_git') {
         repoState = 'not_git'
         return
       }
-      const preflight = await invoke('repository:preflight', project.path)
-      if (preflight.status === 'git_unavailable') {
+      if (snapshot.preflight.status === 'git_unavailable') {
         repoState = 'git_unavailable'
-        preflightDetail = preflight.detail ?? ''
-        return
-      }
-      if (preflight.status === 'not_git') {
-        repoState = 'not_git'
+        preflightDetail = snapshot.preflight.detail ?? ''
         return
       }
       repoState = 'git'
@@ -291,11 +559,10 @@
 
   async function initializeRepository(): Promise<void> {
     await gitState.initialize(projectId)
+    // The cached preflight still says "not a repository". Without this the panel
+    // would keep reporting that for the rest of the cache's life.
+    invalidateRepositoryPreflight(projectId)
     if (gitState.status) repoState = 'git'
-  }
-
-  function fileDiffKey(change: GitFileChange): string {
-    return `${change.staged ? 's:' : 'w:'}${change.path}`
   }
 
   async function toggleDiff(change: GitFileChange): Promise<void> {
@@ -322,20 +589,22 @@
   async function toggleStage(change: GitFileChange): Promise<void> {
     if (change.staged) {
       await gitState.unstage(projectId, [change.path])
-    } else {
-      await gitState.stage(projectId, [change.path])
+      return
     }
+    await gitState.stage(projectId, [change.path])
+    if (!gitState.error) requestCommitMessageFocus()
   }
 
   async function stageAll(): Promise<void> {
     // Only paths with a worktree-side change (unstaged, untracked, or conflicted
     // work) can be staged; already-staged entries, such as staged deletions,
     // are no-ops for git add.
-    const allPaths = [...new Set(changes.filter((change) => !change.staged).map((change) => change.path))].filter(
-      (path) => !(gitState.status?.conflicted ?? []).includes(path)
-    )
+    const allPaths = [
+      ...new Set(changes.filter((change) => !change.staged).map((change) => change.path))
+    ].filter((path) => !(gitState.status?.conflicted ?? []).includes(path))
     if (allPaths.length === 0) return
     await gitState.stage(projectId, allPaths)
+    if (!gitState.error) requestCommitMessageFocus()
   }
 
   async function unstageAll(): Promise<void> {
@@ -419,14 +688,6 @@
     await gitState.fetchBranch(projectId, remote, branch.name)
   }
 
-  async function submitNewBranch(): Promise<void> {
-    const name = newBranchName.trim()
-    if (!name) return
-    creatingBranch = false
-    newBranchName = ''
-    await createBranchAction(name)
-  }
-
   async function loadGitHubAuth(): Promise<void> {
     const status = await gitState.githubAuthStatus()
     githubConnected = status.connected
@@ -470,210 +731,39 @@
     activeTab = 'deployments'
   }
 
-  /** Open a new agent thread and return it, or null when unavailable. */
-  async function createDeploymentDiagnosisThread(title: string) {
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-    const thread = await invoke('thread:create', {
-      projectId,
-      providerId: 'pi',
-      title,
-      workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed }
-    }).catch(() => null)
-    if (!thread) return
-    return thread
-  }
-
-  /** Keep one failed job's evidence useful without overfilling the composer. */
-  function failedJobEvidence(
-    job: GitHubDeploymentJob,
-    log: GitHubDeploymentJobLog | null
-  ): string[] {
-    const failedSteps = job.steps
-      .filter(
-        (step) =>
-          step.status === 'completed' &&
-          step.conclusion !== 'success' &&
-          step.conclusion !== 'neutral' &&
-          step.conclusion !== 'skipped' &&
-          step.conclusion !== 'cancelled'
-      )
-      .map((step) => step.name)
-    const lines = [
-      `Failed job: ${job.name}`,
-      `Job ID: ${job.id}`,
-      `Job status: ${job.status}${job.conclusion ? ` / ${job.conclusion}` : ''}`,
-      `Failed steps: ${failedSteps.length > 0 ? failedSteps.join(', ') : '(not reported)'}`,
-      ...(job.url ? [`Job URL: ${job.url}`] : [])
-    ]
-    if (!log) {
-      return [
-        ...lines,
-        'Job log: unavailable; diagnose from the supplied metadata and local files.'
-      ]
-    }
-    const maxChars = 4_000
-    const excerpt =
-      log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
-    return [
-      ...lines,
-      '',
-      'Failed job log excerpt (the full log is attached as "Pasted text.txt"):',
-      '```text',
-      excerpt,
-      '```'
-    ]
-  }
-
-  /**
-   * Save the full job log through the composer's existing pasted-text
-   * pipeline (the same one used for long clipboard pastes), so large logs
-   * never flow through the prompt itself (which caps at 200k characters).
-   */
-  async function jobLogAttachment(
-    log: GitHubDeploymentJobLog,
-    threadId: string
-  ): Promise<PromptAttachment[]> {
-    try {
-      const path = await invoke(
-        'attachment:saveText',
-        { kind: 'chat', projectId, threadId },
-        log.log
-      )
-      return [{ mime: 'text/plain', url: pathToFileUrl(path), filename: 'Pasted text.txt' }]
-    } catch (error) {
-      reportError(error, 'Could not attach the job log.')
-      return []
-    }
-  }
-
+  /** Route a failed workflow run job to a fresh diagnosis thread. */
   function startWorkflowDiagnosis(
     run: GitHubWorkflowRun,
     job: GitHubDeploymentJob,
     log: GitHubDeploymentJobLog | null
   ): void {
-    const prompt = [
-      `Review and resolve the failed GitHub Actions job "${job.name}" only.`,
-      `Workflow: ${run.name} #${run.runNumber}`,
-      `Run ID: ${run.id}`,
-      `Status: ${run.status}${run.conclusion ? ` / ${run.conclusion}` : ''}`,
-      `Branch: ${run.branch || '(unknown)'}`,
-      `Commit: ${run.headSha || '(unknown)'}`,
-      ...(run.url ? [`Workflow URL: ${run.url}`] : []),
-      '',
-      ...failedJobEvidence(job, log),
-      '',
-      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
-      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
-      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
-      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
-      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
-      'Do not push, rerun workflows, or deploy.'
-    ].join('\n')
-    void (async () => {
-      const project = await invoke('project:get', projectId).catch(() => null)
-      if (!project) return
-      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
-      if (!thread) return
-      const attachments = log ? await jobLogAttachment(log, thread.id) : []
-      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
-      workspaceState.openThread(thread, project)
-    })()
+    diagnoseWorkflowJob(projectId, run, job, log)
   }
 
+  /** Route a failed deployment job to a fresh diagnosis thread. */
   function startDeploymentDiagnosis(
     deployment: GitHubDeployment,
     run: GitHubWorkflowRun | null,
     job: GitHubDeploymentJob,
     log: GitHubDeploymentJobLog | null
   ): void {
-    const deploymentUrl = `https://github.com/${encodeURIComponent(githubIdentity?.owner ?? '')}/${encodeURIComponent(githubIdentity?.repo ?? '')}/deployments/${deployment.id}`
-    const prompt = [
-      `Review and resolve the failed deployment job "${job.name}" only.`,
-      `Deployment ID: ${deployment.id}`,
-      `Status: ${deployment.latestStatus?.state ?? 'unknown'}`,
-      `Ref: ${deployment.ref || '(unknown)'}`,
-      `Commit: ${deployment.sha || '(unknown)'}`,
-      `Deployment URL: ${deploymentUrl}`,
-      ...(run ? [`Linked workflow run: ${run.name} #${run.runNumber} (ID ${run.id})`] : []),
-      '',
-      ...failedJobEvidence(job, log),
-      '',
-      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
-      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
-      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
-      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
-      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
-      'Do not push, rerun workflows, or deploy.'
-    ].join('\n')
-    void (async () => {
-      const project = await invoke('project:get', projectId).catch(() => null)
-      if (!project) return
-      const thread = await createDeploymentDiagnosisThread(`Review failed job: ${job.name}`)
-      if (!thread) return
-      const attachments = log ? await jobLogAttachment(log, thread.id) : []
-      rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
-      workspaceState.openThread(thread, project)
-    })()
-  }
-
-  /**
-   * Hand a pull request to an agent.
-   *
-   * The agent gets a fresh thread whose first message tells it to review the PR
-   * in a throwaway worktree and leave its report in `.cio/git/pr/<number>/`, so
-   * the working tree the user is sitting in never gets touched.
-   */
-  async function startAgentReview(pr: PullRequestSummary): Promise<void> {
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-    const reportDirectory = await gitState.createPrReviewWorkspace(projectId, pr.number)
-    if (!reportDirectory) return
-
-    const thread = await invoke('thread:create', {
+    diagnoseDeployment(
       projectId,
-      providerId: 'pi',
-      title: `Review PR #${pr.number}`,
-      workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed }
-    }).catch(() => null)
-    if (!thread) return
-
-    // Record the owning thread so the PR's Agent tab can jump back into it later.
-    await gitState.createPrReviewWorkspace(projectId, pr.number, thread.id)
-    await gitState.loadAgentReport(projectId, pr.number)
-    rendererRecovery.setDraft(projectId, thread.id, agentReviewPrompt(pr, reportDirectory), [], [])
-    workspaceState.openThread(thread, project)
+      githubIdentity?.owner ?? '',
+      githubIdentity?.repo ?? '',
+      deployment,
+      run,
+      job,
+      log
+    )
   }
 
-  /** Reopen the thread that owns a PR's agent review. */
-  async function openReviewThread(threadId: string): Promise<void> {
-    const [project, thread] = await Promise.all([
-      invoke('project:get', projectId).catch(() => null),
-      invoke('thread:get', projectId, threadId).catch(() => null)
-    ])
-    if (thread) workspaceState.openThread(thread, project)
+  function assignAgentToPullRequest(pr: PullRequestSummary): void {
+    void assignAgentToPullRequestAction(projectId, pr)
   }
 
-  /** The first message the review agent receives   explicit about isolation and output. */
-  function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
-    return [
-      `Review pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
-      `PR URL: ${pr.url}`,
-      '',
-      'Work in isolation so my current working tree is never modified:',
-      `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
-      `2. \`git worktree add ${reportDirectory}/worktree pr-${pr.number}\``,
-      `3. Review the diff against \`${pr.baseRef}\` inside that worktree   correctness, edge cases,`,
-      '   security, test coverage, and anything that would break existing behavior.',
-      '4. Run the project checks/tests that are relevant to the changed files.',
-      '',
-      `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
-      'ordered most severe first with file:line references and concrete failure scenarios.',
-      `When you are done, remove the worktree with \`git worktree remove ${reportDirectory}/worktree --force\``,
-      `and delete the local branch \`pr-${pr.number}\`. Do not push anything and do not merge the PR.`
-    ].join('\n')
+  function openAgentThread(threadId: string): void {
+    void openAgentThreadAction(projectId, threadId)
   }
 
   /**
@@ -682,16 +772,13 @@
    * conflict UI so the user can fix each file, commit, and push.
    */
   async function resolveConflictsLocally(pr: PullRequestSummary): Promise<void> {
-    const remote = primaryRemote?.name ?? 'origin'
-    const returnBranch = gitState.status?.branch ?? 'main'
-    await gitState.preparePrResolve(projectId, {
-      remote,
-      pullNumber: pr.number,
-      baseBranch: pr.baseRef,
-      headBranch: pr.headRef,
-      returnBranch
-    })
-    if (gitState.error) return
+    const prepared = await preparePrConflictSession(
+      projectId,
+      pr,
+      primaryRemote?.name ?? 'origin',
+      gitState.status?.branch ?? 'main'
+    )
+    if (!prepared) return
     selectedPullRequest = null
     activeTab = 'changes'
     void refreshStatus()
@@ -700,65 +787,35 @@
   /**
    * Resolve a PR's online conflicts with the agent's help: check out the PR head
    * and merge the base in (so conflicts land in the tree), then hand the agent a
-   * thread to resolve the conflict markers and commit. The agent never pushes  
-   * the user finishes with the app's authenticated push to update the PR.
+   * thread to resolve the conflict markers. The agent never pushes   the user
+   * finishes with Complete merge, which pushes the resolution to the PR and
+   * deletes the temporary branch.
    */
   async function startConflictResolution(pr: PullRequestSummary): Promise<void> {
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-    const remote = primaryRemote?.name ?? 'origin'
-    const returnBranch = gitState.status?.branch ?? 'main'
-    await gitState.preparePrResolve(projectId, {
-      remote,
-      pullNumber: pr.number,
-      baseBranch: pr.baseRef,
-      headBranch: pr.headRef,
-      returnBranch
-    })
-    if (gitState.error) return
-    const conflictedPaths = [...gitState.conflicted]
-
-    const thread = await invoke('thread:create', {
+    await resolvePrConflictsWithAgent(
       projectId,
-      providerId: 'pi',
-      title: `Resolve conflicts in PR #${pr.number}`,
-      workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed }
-    }).catch(() => null)
-    if (!thread) return
-
-    selectedPullRequest = null
-    activeTab = 'changes'
-    rendererRecovery.setDraft(
-      projectId,
-      thread.id,
-      conflictResolutionPrompt(pr, conflictedPaths),
-      [],
-      []
+      pr,
+      scopeBucketId,
+      primaryRemote?.name ?? 'origin',
+      gitState.status?.branch ?? 'main',
+      () => {
+        selectedPullRequest = null
+        activeTab = 'changes'
+      }
     )
-    workspaceState.openThread(thread, project)
   }
 
-  /** The first message the conflict-resolution agent receives. */
-  function conflictResolutionPrompt(pr: PullRequestSummary, conflictedPaths: string[]): string {
-    return [
-      `Resolve the merge conflicts in pull request #${pr.number}   "${pr.title}" (${pr.headRef} → ${pr.baseRef}).`,
-      `The head branch \`pr-${pr.number}\` is already checked out and \`${pr.baseRef}\` has been merged into it, so the conflicts are in the working tree.`,
-      '',
-      conflictedPaths.length > 0
-        ? `Conflicted files: ${conflictedPaths.map((path) => `\`${path}\``).join(', ')}`
-        : 'There are no conflicted files remaining in the working tree.',
-      '',
-      'For each conflicted file:',
-      '1. Read it and resolve the `<<<<<<<`, `=======`, and `>>>>>>>` conflict markers, keeping the correct merged content.',
-      '2. Run the relevant project checks/tests to make sure the resolution is sound.',
-      '',
-      'Then stage and commit the resolutions:',
-      '1. `git add -A`',
-      `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
-      '',
-      'Do NOT push   after committing, the user finishes in the Git panel with the Resolve merge button, which pushes the resolution to the pull request and cleans up the temporary branch.'
-    ].join('\n')
+  /**
+   * Resolve whatever integration is in progress with the agent's help. The
+   * conflicts are already in the working tree (a pull, a merge or a rebase), so
+   * this only has to hand the agent the brief   the same brief the PR path uses.
+   */
+  async function resolveConflictsWithAgent(): Promise<void> {
+    await resolveCurrentConflictsWithAgent(
+      projectId,
+      scopeBucketId,
+      status?.branch ?? 'this worktree'
+    )
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -809,11 +866,260 @@
     }
   }
 
+  /**
+   * Read the upstream ref's reflog: git stamps every movement of that ref, which
+   * is the only native record of when commits actually reached the remote.
+   * `remoteUpdatesRequestId` drops an answer whose drift has already moved on.
+   */
+  async function loadRemoteUpdates(): Promise<void> {
+    const request = ++remoteUpdatesRequestId
+    const updates = await gitState.getRemoteUpdates(projectId)
+    if (request !== remoteUpdatesRequestId) return
+    remoteUpdates = updates
+  }
+
+  /**
+   * The drift this panel has with its upstream, plus the worktree it belongs to.
+   * Pushing and fetching both move it, and both add a reflog entry, so it is the
+   * cheap signal that the batch boundaries in the graph are out of date. The
+   * scope bucket is part of the key so a worktree swap always re-reads, even
+   * when two checkouts happen to sit at the same drift.
+   */
+  const remoteUpdatesKey = $derived(
+    status?.upstream === null || status?.upstream === undefined
+      ? null
+      : [scopeBucketId ?? '', status.upstream, String(status.ahead), String(status.behind)].join(
+          '|'
+        )
+  )
+
   /** Infinite scroll for the History tab   the panel's tabs share one scroll container. */
   function handleContentScroll(event: Event): void {
     if (activeTab !== 'history') return
     const el = event.currentTarget as HTMLDivElement
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) void loadMoreHistory()
+  }
+
+  /** Switch the panel's view. History is the one view that pages its data in. */
+  function selectTab(id: GitPanelTabId): void {
+    activeTab = id
+    if (id === 'history') void loadHistory()
+  }
+
+  /**
+   * Take the branch trigger's status badge to the work it names: the Changes view
+   * with any commit that was open closed, so the click lands on the working tree
+   * instead of the commit sheet the view would otherwise still be showing. The
+   * click itself is left to bubble to the trigger, which closes a picker that
+   * was already open before the view beneath it changes.
+   */
+  function openWorkingChanges(): void {
+    clearSelectedCommit()
+    selectTab('changes')
+  }
+
+  /**
+   * Every state badge is a control, so Enter and Space do what a click does. Both
+   * keys are consumed here: the trigger toggles the picker from its own keydown,
+   * and a cancelled key is what keeps it out of that path.
+   */
+  function activateWorkingChangesFromKeyboard(event: KeyboardEvent): void {
+    if (!keymapState.matches('ui-activate', event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    openWorkingChanges()
+  }
+
+  /**
+   * Switch which pull requests the PR view lists. The filter is the panel's, so
+   * the page it belonged to goes with it: page 4 of the closed list has nothing
+   * to do with page 4 of the open one. The selection goes with it for the same
+   * reason: "close 5 selected" must never mean five rows the user can no longer see.
+   */
+  function selectPrListState(next: PrState): void {
+    if (next === prListState) return
+    prListState = next
+    prListPage = 1
+    prListSelection = {}
+  }
+
+  /**
+   * Switch which relationship the PR view keeps, or how it orders the result.
+   * Both are the panel's, so the page goes with them: page 4 of "everything" has
+   * nothing to do with page 4 of "authored by me".
+   */
+  function selectPrListFilter(next: PrListFilter): void {
+    if (next === prListFilter) return
+    prListFilter = next
+    prListPage = 1
+    prListSelection = {}
+  }
+
+  function selectPrListSort(next: PrListSort): void {
+    if (next === prListSort) return
+    prListSort = next
+    prListPage = 1
+    prListSelection = {}
+  }
+
+  /** A different page is a different set of rows, so the selection goes with it. */
+  function selectPrListPage(next: number): void {
+    if (next === prListPage) return
+    prListPage = next
+    prListSelection = {}
+  }
+
+  /**
+   * Where a pull request list action becomes something real.
+   *
+   * The list hands over one action plus the rows it applies to and knows nothing
+   * else, which is what keeps the two mounts of the list identical and keeps every
+   * confirmation, picker, and batch in the panel that owns the state behind them.
+   */
+  function handlePrListAction(action: PrListAction): void {
+    if (action.kind === 'open') {
+      const target = action.targets[0]
+      if (target) selectedPullRequest = target
+      return
+    }
+    if (action.kind === 'open-in-browser') {
+      const target = action.targets[0]
+      if (target) void openInBrowser(target.url)
+      return
+    }
+    if (action.kind === 'copy-links' || action.kind === 'copy-branches') {
+      const text = action.targets
+        .map((target) => (action.kind === 'copy-links' ? target.url : target.headRef))
+        .join('\n')
+      void copyText(text).catch(() => undefined)
+      return
+    }
+    if (action.kind === 'close' || action.kind === 'reopen') {
+      if (action.targets.length === 0) return
+      prBatch = { mode: action.kind, targets: action.targets }
+      return
+    }
+    const target = action.targets[0]
+    if (!target) return
+    if (action.kind === 'explain' || action.kind === 'quick-chat') {
+      openPrChat(target, action.kind === 'explain' ? 'explain' : 'quick')
+      return
+    }
+    if (action.kind === 'assign-agent') {
+      assignAgentToPullRequest(target)
+      return
+    }
+    if (action.kind === 'open-agent-thread') {
+      openAgentThread(action.threadId)
+      return
+    }
+    if (action.kind === 'mark-ready') {
+      void markPrReady(target)
+      return
+    }
+    if (action.kind === 'merge') {
+      openPrMerge(target, action.method)
+      return
+    }
+    prMetadata = { pr: target, mode: action.kind }
+  }
+
+  function confirmPrBatch(comment: string | null): void {
+    const pending = prBatch
+    if (!pending || !githubIdentity) return
+    prBatchJobs.start({
+      projectId,
+      owner: githubIdentity.owner,
+      repo: githubIdentity.repo,
+      mode: pending.mode,
+      targets: pending.targets,
+      comment
+    })
+    prBatch = null
+    // The selection has been acted on, so it goes with the batch rather than
+    // inviting a second close of the same rows.
+    prListSelection = {}
+  }
+
+  /**
+   * Anchor a read-only side chat on one pull request, the same panel the comment
+   * actions open.
+   *
+   * The visible row is the selection and the pull request's own facts are the
+   * pinned context, because a list row carries no transcript to ride and no diff to
+   * quote. That gap is named in the context rather than papered over, so the agent
+   * says what it cannot see instead of guessing.
+   */
+  function openPrChat(pr: PullRequestSummary, mode: 'explain' | 'quick'): void {
+    const identity = githubIdentity
+    if (!identity) return
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode === 'explain' ? 'elaborate' : 'quick',
+      [
+        `#${pr.number} ${pr.title}`,
+        `by ${githubDisplayLogin(pr.authorLogin)} · ${pr.headRef} → ${pr.baseRef}`,
+        pr.url
+      ].join('\n'),
+      prSummaryChatContext(pr, `${identity.owner}/${identity.repo}`),
+      threadSettings.lastUsed,
+      true,
+      mode === 'explain' ? prSummaryExplainPrompt(pr) : undefined
+    )
+  }
+
+  async function markPrReady(pr: PullRequestSummary): Promise<void> {
+    const identity = githubIdentity
+    if (!identity) return
+    await gitState.markPullRequestReadyForReview(
+      projectId,
+      identity.owner,
+      identity.repo,
+      pr.number
+    )
+  }
+
+  /**
+   * Open the merge confirmation with the method the row menu chose.
+   *
+   * The title is seeded the way GitHub seeds it and the message is left empty: the
+   * list never fetched the pull request body, and an empty message is what tells
+   * GitHub to keep its own. Both are then the user's to edit before merging.
+   */
+  function openPrMerge(pr: PullRequestSummary, method: PrMergeMethod): void {
+    prMergeTitle =
+      method === 'merge' ? `Merge pull request #${pr.number} from ${pr.headRef}` : pr.title
+    prMergeMessage = ''
+    prMerge = { pr, method }
+    prMergeOpen = true
+  }
+
+  async function confirmPrMerge(): Promise<void> {
+    const pending = prMerge
+    const identity = githubIdentity
+    if (!pending || !identity) return
+    prMergeBusy = true
+    try {
+      const merged = await gitState.mergePullRequest(
+        projectId,
+        identity.owner,
+        identity.repo,
+        pending.pr.number,
+        pending.method,
+        pending.method === 'rebase' ? undefined : prMergeTitle.trim() || undefined,
+        pending.method === 'rebase' ? undefined : prMergeMessage.trim() || undefined
+      )
+      if (merged) {
+        // The row has left every open listing, so the selection it may have been
+        // part of no longer describes anything on screen.
+        prListSelection = {}
+        prMerge = null
+      }
+    } finally {
+      prMergeBusy = false
+      prMergeOpen = false
+    }
   }
 
   function openCommitSearch(): void {
@@ -870,6 +1176,8 @@
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
     selectedCommit = commit
     activeTab = 'changes'
+    // The selection belongs to the commit that was open, never to the next one.
+    clearSelection()
     loadingCommitDiff = true
     commitDiffChanges = await gitState.getCommitDiff(projectId, commit.hash)
     commitDiffs = {}
@@ -878,42 +1186,6 @@
     commitDiffErrors = {}
     commitTreeCollapsedDirs = {}
     loadingCommitDiff = false
-  }
-
-  interface CommitTreeNode {
-    name: string
-    path: string
-    dirs: Map<string, CommitTreeNode>
-    files: GitFileChange[]
-  }
-
-  /** Groups a flat commit diff into a folder tree   read-only mirror of GitChangesTree's layout. */
-  function buildCommitTree(files: GitFileChange[]): CommitTreeNode {
-    const root: CommitTreeNode = { name: '', path: '', dirs: new Map(), files: [] }
-    for (const change of files) {
-      const segments = change.path.split('/')
-      let node = root
-      for (let i = 0; i < segments.length - 1; i++) {
-        const seg = segments[i] ?? ''
-        let child = node.dirs.get(seg)
-        if (!child) {
-          child = {
-            name: seg,
-            path: segments.slice(0, i + 1).join('/'),
-            dirs: new Map(),
-            files: []
-          }
-          node.dirs.set(seg, child)
-        }
-        node = child
-      }
-      node.files.push(change)
-    }
-    return root
-  }
-
-  function sortCommitDirs(dirs: Map<string, CommitTreeNode>): CommitTreeNode[] {
-    return [...dirs.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
   function toggleCommitDir(path: string): void {
@@ -945,6 +1217,7 @@
 
   function clearSelectedCommit(): void {
     selectedCommit = null
+    clearSelection()
     commitDiffChanges = []
     commitDiffs = {}
     commitExpanded = {}
@@ -1046,6 +1319,27 @@
     }
   }
 
+  /** Take files out of the commit the panel has open. Destructive, so asked first. */
+  function requestRemoveCommitChanges(paths: string[]): void {
+    const commit = selectedCommit
+    if (!commit || paths.length === 0) return
+    removeCommitChangesConfirm = { hash: commit.hash, paths }
+  }
+
+  async function confirmRemoveCommitChanges(): Promise<void> {
+    const pending = removeCommitChangesConfirm
+    if (!pending) return
+    removeCommitChangesConfirm = null
+    await gitState.removeCommitChanges(projectId, pending.hash, pending.paths)
+    if (gitState.error) return
+    // The commit that was open carries a new hash now, so its diff describes a
+    // commit that no longer exists: leave the rewritten history in History
+    // rather than an inspector pinned to a hash that is gone.
+    clearSelectedCommit()
+    void reloadHistory()
+    void refreshStatus()
+  }
+
   async function copyCommitHash(commit: GitCommitInfo): Promise<void> {
     try {
       await copyText(commit.hash)
@@ -1096,7 +1390,7 @@
   function onCommitMessageKeydown(event: KeyboardEvent): void {
     // Enter never commits by itself   only Cmd/Ctrl+Enter does, so writing a
     // multi-line message can never fire the commit early.
-    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    if (!keymapState.matches('git-commit', event)) return
     event.preventDefault()
     void commitInline()
   }
@@ -1117,6 +1411,8 @@
    */
   function resetForScopeSwap(): void {
     historyRequestId += 1
+    remoteUpdatesRequestId += 1
+    remoteUpdates = []
     closeCommitSearch()
     selectedCommit = null
     selectedStash = null
@@ -1156,37 +1452,13 @@
     pushRecoverMode = null
     pullStrategyOpen = false
     pullStrategyError = ''
+    syncMainOpen = false
     showIntegrateModal = false
     showStashModal = false
     stashMessage = ''
     stashPaths = null
     void refreshStatus()
     void reloadHistory()
-  }
-
-  /** Stable background colour for a branch's avatar, keyed off its name. */
-  const branchAvatarPalette = [
-    'bg-primary/20 text-primary',
-    'bg-success/20 text-success',
-    'bg-warning/20 text-warning',
-    'bg-danger/20 text-danger',
-    'bg-accent/20 text-accent'
-  ]
-  function branchAvatarClass(name: string): string {
-    let hash = 0
-    for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) | 0
-    return branchAvatarPalette[Math.abs(hash) % branchAvatarPalette.length]
-  }
-
-  function relativeTime(timestamp: number): string {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000)
-    if (seconds < 60) return 'just now'
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
   }
 
   $effect(() => {
@@ -1196,6 +1468,16 @@
     // worktree at a time, so switching threads must retarget it even though
     // this component stays mounted.
     gitState.activate(projectId, scopeBucketId)
+    // Attaching the panel to a scope is an interaction with it, so re-read the
+    // checkout's live state (throttled) for the banner below.
+    void scopeState.revalidateWorktreeHealth(projectId, scopeBucketId).catch(() => undefined)
+  })
+
+  // A Git failure in a scope-backed panel usually means the checkout is gone:
+  // re-read the scope's health so the repair banner replaces the bare error.
+  $effect(() => {
+    if (!gitState.error) return
+    void scopeState.revalidateWorktreeHealth(projectId, scopeBucketId, { force: true })
   })
 
   /** Project-scope bootstrap. Runs on mount and when the panel is aimed at a
@@ -1204,7 +1486,7 @@
    *  re-running it would flash the full-panel loading state on every scoped
    *  thread switch. */
   $effect(() => {
-    hasDeployments = cachedHasDeployments(projectId) ?? false
+    hasDeployments = cachedHasDeployments(projectId) ?? null
     void loadRepoState()
   })
 
@@ -1245,32 +1527,31 @@
   })
 
   $effect(() => {
+    // The graph's push boundaries lag behind the repository until this re-reads,
+    // and this effect is what re-reads: `remoteUpdatesKey` is the panel's drift
+    // with its upstream, which only a push or a fetch moves.
+    if (repoState !== 'git' || remoteUpdatesKey === null) return
+    void loadRemoteUpdates()
+  })
+
+  $effect(() => {
     void loadGitHubAuth()
   })
 
   $effect(() => {
     // When the user is signed in and the repo points at GitHub, probe for
-    // deployment activity in the background and surface the tab if found.
-    if (repoState === 'git' && githubConnected && !hasDeployments && githubIdentity) {
+    // deployment activity in the background and surface the view if found.
+    if (repoState === 'git' && githubConnected && hasDeployments !== true && githubIdentity) {
       void detectDeployments()
     }
   })
 
   $effect(() => {
-    // The Deployments tab only exists while the flag does   fall back to
-    // Changes when it goes (e.g. after switching to a project without them).
-    if (activeTab === 'deployments' && !hasDeployments) activeTab = 'changes'
-  })
-
-  $effect(() => {
-    if (commitSelection) {
-      commitTextarea?.focus()
-      commitSelection = false
-    }
-  })
-
-  $effect(() => {
-    if (creatingBranch) newBranchInput?.focus()
+    // The Deployments view only exists while the flag does   fall back to
+    // Changes when it is *known* to be gone (e.g. after switching to a project
+    // without them). While it is still unknown the view stays put: the project
+    // row has not answered yet, and that is not the same as "none".
+    if (activeTab === 'deployments' && hasDeployments === false) activeTab = 'changes'
   })
 
   onMount(() => {
@@ -1323,10 +1604,295 @@
     const repo = match?.[2] ?? ''
     return owner && repo ? { owner, repo } : null
   })
+  /**
+   * Remote-tracking ref names, used to recognise a commit the remote already
+   * has without asking git: a commit wearing one of these decorations is on the
+   * remote by definition.
+   */
+  const remoteTrackingRefs = $derived(
+    new Set(
+      gitState.branches.filter((branch) => branch.kind === 'remote').map((branch) => branch.ref)
+    )
+  )
+  /**
+   * Whether GitHub can show the commit open in the info dialog. History is
+   * `HEAD`'s log, so anything at or below the unpushed boundary the graph draws
+   * is already upstream; a commit outside the loaded page has to wear a
+   * remote-tracking ref to qualify.
+   */
+  const commitInfoOnRemote = $derived.by(() => {
+    const target = commitInfoTarget
+    if (!target) return false
+    if (target.refs.some((ref) => remoteTrackingRefs.has(ref.name))) return true
+    if (!status?.upstream) return false
+    return commitHistory.findIndex((commit) => commit.hash === target.hash) >= unpushedCount
+  })
+  const commitInfoUrl = $derived(
+    githubIdentity && commitInfoTarget
+      ? `https://github.com/${encodeURIComponent(githubIdentity.owner)}/${encodeURIComponent(githubIdentity.repo)}/commit/${commitInfoTarget.hash}`
+      : null
+  )
+  /**
+   * Whether the commit waiting to be rewritten is already upstream. Rewriting it
+   * moves the branch, so an upstream copy means the next push has to force, and
+   * the confirmation says so before the user commits to it.
+   */
+  const removeCommitOnRemote = $derived.by(() => {
+    const target = removeCommitChangesConfirm
+    if (!target) return false
+    const commit = commitHistory.find((entry) => entry.hash === target.hash)
+    if (!commit) return false
+    if (commit.refs.some((ref) => remoteTrackingRefs.has(ref.name))) return true
+    if (!status?.upstream) return false
+    return commitHistory.findIndex((entry) => entry.hash === target.hash) >= unpushedCount
+  })
+  /**
+   * The open deployment's state, read from the same store record the detail body
+   * renders, so the action row and the page below it cannot disagree.
+   */
+  const openDeploymentState = $derived.by(() => {
+    const deployment = selectedDeployment
+    const identity = githubIdentity
+    if (!deployment || !identity) return 'unknown'
+    const cached =
+      gitState.deploymentDetails[
+        GitState.deploymentDetailKey(identity.owner, identity.repo, deployment.id)
+      ]
+    return (
+      cached?.detail.deployment.latestStatus?.state ?? deployment.latestStatus?.state ?? 'unknown'
+    )
+  })
+  /** A run's state is its conclusion once it is done, its status until then. */
+  const openRunState = $derived.by(() => {
+    const run = selectedRun
+    if (!run) return 'unknown'
+    return run.status === 'completed' ? (run.conclusion ?? 'completed') : run.status
+  })
+  /**
+   * Where the Deploys view's external link points: the deployment page, the run,
+   * or the repository's Actions when neither is open. It replaces the per-view
+   * external buttons the detail pages used to carry.
+   */
+  const deploymentsExternal = $derived.by(() => {
+    const identity = githubIdentity
+    if (!identity) return null
+    const repository = `https://github.com/${identity.owner}/${identity.repo}`
+    if (selectedDeployment) {
+      return {
+        url: `${repository}/deployments/${String(selectedDeployment.id)}`,
+        title: 'Open this deployment on GitHub'
+      }
+    }
+    if (selectedRun?.url) {
+      return { url: selectedRun.url, title: 'Open this workflow run on GitHub' }
+    }
+    return { url: `${repository}/actions`, title: 'View these workflow runs on GitHub' }
+  })
+  /**
+   * The reader's views with their counts, for the switcher in the action row. The
+   * counts come from the same bundle the reader renders, so the switcher and the
+   * rail agree.
+   */
+  const prDetailViews = $derived(
+    PR_DETAIL_VIEWS.map((view) => ({
+      ...view,
+      count: prViewCount(
+        view.id,
+        pullRequestBundle,
+        selectedPullRequest
+          ? (gitState.prAgentReports[String(selectedPullRequest.number)]?.length ?? 0)
+          : 0
+      )
+    }))
+  )
+
+  /**
+   * The open pull request's fetched record. The reader reads the same bundle
+   * from the store, so the panel's identity row and its pills cannot show one
+   * thing while the reader shows another.
+   */
+  const pullRequestBundle = $derived(
+    githubIdentity && selectedPullRequest
+      ? gitState.prBundles[
+          GitState.bundleKey(githubIdentity.owner, githubIdentity.repo, selectedPullRequest.number)
+        ]
+      : undefined
+  )
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
-  const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
+  /**
+   * Whether the remote already carries a branch under this name, read from the
+   * last branch refresh. A branch without an upstream is not necessarily a
+   * branch the remote has never seen, and the confirmation has to name which
+   * of the two this push does: publish a new remote branch, or start tracking
+   * the one that is already there.
+   */
+  const remoteBranchExists = $derived(
+    gitState.branches.some(
+      (branch) =>
+        branch.kind === 'remote' &&
+        branch.name === status?.branch &&
+        branch.remote === primaryRemote?.name
+    )
+  )
+  /**
+   * Whether a fetch is in flight.
+   *
+   * Fetch has its own lane in main (`GitService.enqueueRemote`), so it holds up
+   * nothing local: staging, committing, stashing, checking a branch out and
+   * reading a diff all keep working while the network answers. It only gates
+   * what a fetch can actually make stale, which is Push.
+   */
+  const fetching = $derived(gitState.isBusy('fetch'))
+  /**
+   * The branch actions that publish or integrate. Each one reads what a fetch
+   * writes, so they stand aside while another is running. Fetch itself is not in
+   * this set; see `fetching`.
+   */
+  const branchSyncBusy = $derived(gitState.isBusy(['pull', 'push', 'sync']))
+  /**
+   * Push waits for an in-flight fetch. It decides from the remote-tracking refs
+   * whether it is a fast-forward and whether there is anything to send at all,
+   * and both answers change the moment the fetch lands.
+   */
+  const pushBlocked = $derived(branchSyncBusy || fetching)
+  /** Commits the remote does not have yet, according to the last fetch. */
+  const commitsAhead = $derived(status?.ahead ?? 0)
+  /**
+   * Whether the Push slot has anything to do. A branch whose upstream is simply
+   * missing has no `ahead` count to show   the push is what creates the tracking
+   * branch   so it qualifies as soon as the repository is known to have commits.
+   * Rendering the button on an empty repository would only offer a push that git
+   * must reject.
+   */
+  const hasWorkToPush = $derived(
+    commitsAhead > 0 || (needsUpstreamPush && commitHistory.length > 0)
+  )
+  /**
+   * Push copy: a count when there is one, otherwise what the push sets up. While
+   * a fetch is in flight it says why the button is unavailable, because Push is
+   * the one control a fetch blocks and an unexplained disabled button reads as a
+   * broken panel.
+   */
+  const pushTitle = $derived(
+    fetching
+      ? 'Push is waiting for the fetch in progress'
+      : commitsAhead > 0
+        ? `Push ${String(commitsAhead)} commit(s) to the remote`
+        : 'Push this branch and track it on the remote'
+  )
+
+  /**
+   * The active scope's bucket. Sync lives behind `showsSync`, so this is what
+   * tells the header whether the panel is looking at a managed worktree.
+   */
+  const activeScopeBucket = $derived(scopeState.bucketFor(projectId, scopeBucketId))
+  const worktreeScope = $derived(activeScopeBucket?.root.kind === 'worktree')
+
+  /** Commits waiting on the remote, according to the last fetch. */
+  const commitsBehind = $derived(status?.behind ?? 0)
+  const hasRemote = $derived(remotes.length > 0)
+  /**
+   * Which remote actions have work, and therefore whether the header's second row
+   * exists at all. The row and its buttons read the same three flags, so they can
+   * never disagree about whether there is anything to do.
+   */
+  const showsPull = $derived(repoState === 'git' && hasRemote && commitsBehind > 0)
+  const showsPush = $derived(repoState === 'git' && hasRemote && hasWorkToPush)
+  /**
+   * Only a managed worktree scope gets the Sync control. Sync exists to trade
+   * commits between two checkouts of the same repository, and a worktree is the
+   * only scope that has a second checkout to trade with; from the project root
+   * the worktree's own Git panel already offers the same move in the direction
+   * that lands here, so an entry point on `main` would be a second door onto one
+   * operation, with the receiver off screen.
+   */
+  const showsSync = $derived(repoState === 'git' && worktreeScope)
+  /**
+   * Pull and Push are the only remote actions that earn the second row: they act
+   * on the branch you are standing on, one each, and they fill the row between
+   * them. Sync main is a menu, so it sits with the other header tools.
+   *
+   * The Deploys view reads runs and deployments, not the branch you are standing
+   * on, so Pull and Push have nothing to say there and do not appear.
+   */
+  /**
+   * The row's remote actions apply to the branch you are standing on, which is
+   * what the Deploys view is not about.
+   */
+  const remoteActionsApply = $derived(activeTab !== 'deployments')
+  /**
+   * Unresolved conflicts hand the row to the controls that end them, so the
+   * remote buttons step out of the way and reappear in the git actions menu.
+   * Pushing or pulling a half-resolved integration is not a step forward.
+   */
+  const conflictsOpen = $derived(conflicted.length > 0)
+  /**
+   * A worktree checkout keeps Pull and Push in the git actions menu beside
+   * Fetch rather than handing them the row: the row is the panel's loudest
+   * position, and a managed scope already owns the sync-to-main and
+   * sync-from-main actions plus the pull request its branch exists for.
+   */
+  const remoteActionsInMenu = $derived(remoteActionsApply && (conflictsOpen || worktreeScope))
+  const showsRemoteActions = $derived(
+    remoteActionsApply && !conflictsOpen && !worktreeScope && (showsPull || showsPush)
+  )
+
+  /**
+   * The working tree's staging controls: whatever the changes view can do to the
+   * index right now. They used to sit in a bar of their own inside that view, and
+   * they share this row with Pull and Push instead.
+   */
+  const showsStageControls = $derived(
+    conflictsOpen ||
+      unstaged.length + untracked.length > 0 ||
+      staged.length > 0 ||
+      (changes.length > 0 && selectedPathList.length > 0)
+  )
+
+  /**
+   * The row under the header belongs to the view in focus: the commit or stash
+   * being read, the pull request's identity and views, the PR list's filter, the
+   * deployment being read, the staging controls, or the remote actions. It exists
+   * only while at least one of those has something to say, so the common case is
+   * still one line.
+   */
+  const showsViewContext = $derived(
+    (activeTab === 'changes' &&
+      (selectedCommit !== null || (status !== null && showsStageControls))) ||
+      (activeTab === 'pulls' && githubConnected && githubIdentity !== null) ||
+      (activeTab === 'deployments' && (selectedDeployment !== null || selectedRun !== null)) ||
+      (activeTab === 'stashes' && selectedStash !== null)
+  )
+  const showsActionRow = $derived(showsViewContext || showsRemoteActions)
+
+  /** The working tree's state as a badge names it, most urgent first. */
+  type WorktreeState = 'clean' | 'dirty' | 'conflicted'
+
+  /**
+   * Every state that names work waiting in the Changes view. The branch
+   * trigger's badge offers exactly these as controls; a clean tree has nothing
+   * behind it, so it stays a mark.
+   */
+  type WorktreeActionState = Exclude<WorktreeState, 'clean'>
+
+  /**
+   * Working-tree state as the branch picker's leading glyph, in the order the
+   * states ask for attention: conflicts first, then uncommitted changes, then
+   * clean. Null while there is no status to describe.
+   */
+  const worktreeState = $derived.by((): WorktreeState | null => {
+    if (!status) return null
+    if (conflicted.length > 0) return 'conflicted'
+    return status.clean ? 'clean' : 'dirty'
+  })
+
+  $effect(() => {
+    // The board may not be in memory yet when the panel mounts first (remote
+    // shell, deep link). Loading it is idempotent and never blocks rendering.
+    void scopeState.ensureBoardLoaded(projectId)
+  })
 
   function closePullStrategy(): void {
     if (gitState.isBusy('pull')) return
@@ -1377,6 +1943,65 @@
       return
     }
     await performPull(appConfigState.defaultPullStrategy)
+  }
+
+  /**
+   * Sync this worktree with the project's main worktree branch, in either
+   * direction. The strategy chooser follows the same `ask` preference as the
+   * Pull button; folding work into main always asks first, because it mutates a
+   * branch the user is not looking at and pushes nothing.
+   *
+   * The run itself leaves as a background job (`gitSyncJobs`): a refusal or a
+   * conflicted integration is answered in the docked panel, never in a modal the
+   * user has to dismiss, and a run they started still reports after they have
+   * navigated away.
+   */
+  function performSyncMain(direction: GitSyncDirection, strategy: GitPullStrategy): void {
+    syncMainOpen = false
+    // "Main" is the project root, so the peer is named rather than chosen.
+    gitSyncJobs.start({
+      projectId,
+      scopeBucketId,
+      direction,
+      strategy,
+      peer: { kind: 'root' },
+      peerLabel: 'the project root',
+      // A sync adds commits to this checkout's history, which the panel keeps
+      // rendered client-side, so the list is re-read when the run settles.
+      onSettled: () => void refreshStatus()
+    })
+  }
+
+  function openSyncMain(direction: GitSyncDirection): void {
+    syncDirection = direction
+    syncMainOpen = true
+  }
+
+  function syncMainAction(direction: GitSyncDirection): void {
+    if (direction === 'to' || appConfigState.defaultPullStrategy === 'ask') {
+      openSyncMain(direction)
+      return
+    }
+    performSyncMain(direction, appConfigState.defaultPullStrategy)
+  }
+
+  function closeSyncMain(): void {
+    syncMainOpen = false
+  }
+
+  /** The peer chooser has to be opened: the other end is the whole choice. */
+  function openSyncPeer(direction: GitSyncDirection): void {
+    syncPeerDirection = direction
+    syncPeerOpen = true
+  }
+
+  function closeSyncPeer(): void {
+    syncPeerOpen = false
+  }
+
+  /** The chooser is gone the moment a strategy is chosen: the run has its own panel. */
+  function syncPeerStarted(): void {
+    syncPeerOpen = false
   }
 
   async function performPush(remote: { name: string; url: string }): Promise<void> {
@@ -1490,23 +2115,62 @@
   const conflictState = $derived(gitState.conflictState)
 
   /**
+   * Whether an integration is open in this worktree. While it is, nothing else
+   * can move the branch: no sync strategy, and no remote action worth offering.
+   */
+  const integrationOpen = $derived(conflictState !== 'none')
+
+  /**
+   * The temporary `pr-<n>` branch a PR conflict resolution is staged on, while
+   * its session is still open. `preparePrResolve` records the session and the
+   * store drops it once the branch is gone, so this names the branch the finish
+   * step still has to delete.
+   */
+  const prResolveBranch = $derived(
+    gitState.prResolveSession ? `pr-${gitState.prResolveSession.pullNumber}` : null
+  )
+
+  /**
    * A merge is in progress (MERGE_HEAD exists) and every conflicted file has
-   * been resolved and staged. Git is waiting for the merge commit, so the
-   * panel surfaces a dedicated Resolve button instead of leaving the user to
+   * been resolved and staged. Git is waiting for the merge commit, so the panel
+   * surfaces the one next step   Complete merge   instead of leaving the user to
    * figure out that a normal commit finishes the merge.
    */
   const mergePending = $derived(conflictState === 'merge' && conflicted.length === 0)
 
-  /** Resolve-merge modal state: optional title/description, defaults auto-generated. */
-  let resolveMergeOpen = $state(false)
+  /**
+   * Whether the integration still has a step left: the merge commit, or   when
+   * that commit already exists on a temporary PR branch   the push back to the
+   * pull request and the cleanup of that branch. Same next step, same control.
+   * Held back while any conflict is still open: the row owns that state, and a
+   * commit with unmerged paths would only be refused by git.
+   */
+  const prResolvePending = $derived(prResolveBranch !== null && conflicted.length === 0)
+  const mergeAwaitsCompletion = $derived(mergePending || prResolvePending)
+
+  /**
+   * The Changes view's action row already renders this integration's Abort while
+   * it is on screen, so the notice above it never offers the same destructive
+   * button twice. The row keeps it wherever it shows: that is where the
+   * resolution decisions live (Resolve all, the agent, the accept pair).
+   */
+  const conflictRowAborts = $derived(
+    activeTab === 'changes' && selectedCommit === null && conflictsOpen
+  )
+
+  /** Complete-merge modal state: optional title/description, defaults auto-generated. */
+  let completeMergeOpen = $state(false)
   let mergeTitle = $state('')
   let mergeDescription = $state('')
-  const resolveMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
+  const completeMergeBusy = $derived(gitState.isBusy(['commit', 'push']))
 
-  function openResolveMerge(): void {
+  function openCompleteMerge(): void {
+    // Acting from the sync modal closes it first, so the merge's own controls are
+    // never behind an overlay.
+    syncMainOpen = false
     mergeTitle = ''
     mergeDescription = ''
-    resolveMergeOpen = true
+    completeMergeOpen = true
   }
 
   /** The commit message actually used: user text when given, a generated default otherwise. */
@@ -1518,23 +2182,60 @@
     return description ? `${resolvedTitle}\n\n${description}` : resolvedTitle
   }
 
-  async function confirmResolveMerge(): Promise<void> {
-    if (resolveMergeBusy) return
-    await gitState.commit(projectId, mergeCommitMessage())
-    if (gitState.error) return
-    // A recorded PR-conflict session finishes itself: push the resolution back
-    // to the PR head branch, check out the original branch, delete pr-<n>.
-    // A plain local merge is already complete once committed.
-    const finished = await gitState.finishPrResolve(projectId)
-    if (!finished && gitState.prResolveSession) return
-    resolveMergeOpen = false
+  /**
+   * Complete the merge: write the merge commit when it is still pending, then
+   * finish a recorded PR-conflict session   push the resolution back to the PR's
+   * head branch, check out the branch the user came from, and delete the
+   * temporary `pr-<n>` branch. A plain local merge is complete once committed.
+   */
+  async function confirmCompleteMerge(): Promise<void> {
+    if (completeMergeBusy || !mergeAwaitsCompletion) return
+    const temporaryBranch = prResolveBranch
+    if (mergePending) {
+      await gitState.commit(projectId, mergeCommitMessage())
+      if (gitState.error) return
+      if (!temporaryBranch) toast.success('Merge committed')
+    }
+    if (temporaryBranch) {
+      const finished = await gitState.finishPrResolve(projectId)
+      if (!finished) return
+      toast.success(`Resolution pushed to the pull request; ${temporaryBranch} removed`)
+    }
+    completeMergeOpen = false
     mergeTitle = ''
     mergeDescription = ''
     void refreshStatus()
   }
 
+  /**
+   * Accept-all is destructive: the other side of every conflicted file is
+   * discarded, so it asks before it runs, like Abort does.
+   */
+  let acceptConflictsSide = $state<GitConflictSide | null>(null)
+
+  function requestAcceptAllConflicts(side: GitConflictSide): void {
+    acceptConflictsSide = side
+  }
+
+  async function confirmAcceptAllConflicts(): Promise<void> {
+    const side = acceptConflictsSide
+    acceptConflictsSide = null
+    if (!side) return
+    await gitState.acceptConflictSide(projectId, side)
+    if (gitState.error) return
+    void refreshStatus()
+  }
+
   const integrateBusy = $derived(
-    gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
+    gitState.isBusy([
+      'merge',
+      'rebase',
+      'stash',
+      'abortMerge',
+      'abortRebase',
+      'rebase-action',
+      'accept-conflicts'
+    ])
   )
   const atRiskFiles = $derived(changes.length > 0 ? changes.map((change) => change.path) : [])
 
@@ -1563,6 +2264,7 @@
   let abortConfirmOpen = $state(false)
 
   function requestAbortConflict(): void {
+    syncMainOpen = false
     abortConfirmOpen = true
   }
 
@@ -1573,6 +2275,41 @@
     } else if (conflictState === 'rebase') {
       await gitState.abortRebase(projectId)
     }
+  }
+
+  /**
+   * Move a stopped rebase along. A rebase can stop again on the next commit's
+   * conflict, which is a normal state rather than an error, so the refreshed
+   * status is what the panel renders next.
+   */
+  async function runRebaseAction(action: GitRebaseAction): Promise<void> {
+    syncMainOpen = false
+    rebaseActionRunning = action
+    try {
+      await gitState.rebaseAction(projectId, action)
+    } finally {
+      rebaseActionRunning = null
+    }
+    if (gitState.error) return
+    void refreshStatus()
+  }
+
+  /** Which rebase strategy is in flight, so each button spins for its own click. */
+  let rebaseActionRunning = $state<GitRebaseAction | null>(null)
+
+  /**
+   * Hand focus to the integration's forward action when the sync modal swaps the
+   * strategies out for it. The buttons the modal opened with are removed at that
+   * moment   the worktree turned out to be mid-integration   and the one holding
+   * focus goes with them, which would leave focus on the body. The same buttons
+   * render in the panel's notice, so this acts inside an open modal only, and
+   * only on whichever of them the modal's own ⌘+Enter pipeline would pick.
+   */
+  function focusSyncModalAction(node: HTMLElement): void {
+    if (!syncMainOpen) return
+    const dialog = node.closest<HTMLElement>('[role="dialog"]')
+    if (!dialog || findPanelPrimaryAction(dialog) !== node) return
+    node.focus({ preventScroll: true })
   }
 
   /**
@@ -1646,13 +2383,14 @@
     selectedPaths = {}
   }
 
-  const selectedPathList = $derived(Object.keys(selectedPaths))
-
   async function stageSelectedAction(stage: boolean): Promise<void> {
     const paths = selectedPathList
     if (paths.length === 0) return
     await stagePathsAction(paths, stage)
-    if (!gitState.error) clearSelection()
+    if (gitState.error) return
+    clearSelection()
+    // Staging is followed by writing the message, never by the reverse.
+    if (!stage) requestCommitMessageFocus()
   }
 
   async function ignoreSelectedAction(): Promise<void> {
@@ -1713,6 +2451,15 @@
     if (!gitState.error) void refreshStatus()
   }
 
+  /**
+   * Staging ends with the commit message, so the box takes the caret: the next
+   * thing a user does after staging is type. The effect above waits for the pinned
+   * composer to render, so this is a flag rather than a focus call.
+   */
+  function requestCommitMessageFocus(): void {
+    commitSelection = true
+  }
+
   function requestCommitSelected(): void {
     if (selectedPathList.length === 0) return
     void stageSelectedAction(false).then(() => {
@@ -1754,40 +2501,46 @@
     }
   }
 
-  const tabs: Array<{ id: TabId; label: string; icon: typeof GitBranch; count: number | null }> =
-    $derived.by(() => {
-      const list: Array<{
-        id: TabId
-        label: string
-        icon: typeof GitBranch
-        count: number | null
-      }> = [
-        {
-          id: 'changes',
-          label: 'Changes',
-          icon: FileDiff,
-          count: changes.length > 0 ? changes.length : null
-        },
-        { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-        { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
-      ]
-      // Stash is just shelved work   it earns a tab only once something is shelved.
-      if (gitState.stashes.length > 0) {
-        list.push({
-          id: 'stashes',
-          label: 'Stashes',
-          icon: Archive,
-          count: gitState.stashes.length
-        })
-      }
-      // Deployments earn a tab only when the repo actually has deployment
-      // activity (the flag is persisted in the DB and cached in localStorage).
-      if (hasDeployments) {
-        list.push({ id: 'deployments', label: 'Deployments', icon: Rocket, count: null })
-      }
-      return list
-    })
+  const tabs: Array<{
+    id: GitPanelTabId
+    label: string
+    icon: typeof GitBranch
+    count: number | null
+  }> = $derived.by(() => {
+    const list: Array<{
+      id: GitPanelTabId
+      label: string
+      icon: typeof GitBranch
+      count: number | null
+    }> = [
+      {
+        id: 'changes',
+        label: 'Changes',
+        icon: FileDiff,
+        count: changes.length > 0 ? changes.length : null
+      },
+      { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
+      { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
+      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null }
+    ]
+    // Stash is just shelved work   it earns a tab only once something is shelved.
+    if (gitState.stashes.length > 0) {
+      list.push({
+        id: 'stashes',
+        label: 'Stashes',
+        icon: Archive,
+        count: gitState.stashes.length
+      })
+    }
+    // Deployments earn a view only when the repo actually has deployment
+    // activity (the flag is persisted in the DB and cached in localStorage).
+    // While the panel is *on* that view the entry stays, so a cold cache cannot
+    // leave the trigger naming a view the row is no longer showing.
+    if (hasDeployments === true || activeTab === 'deployments') {
+      list.push({ id: 'deployments', label: 'Deploys', icon: Rocket, count: null })
+    }
+    return list
+  })
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
@@ -1803,131 +2556,802 @@
   const workingSections = $derived(
     fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
-    /**
-   * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
-   * Each pane hugs its content so adjacent panes stay attached (no dead space
-   * between them). When several panes are visible at once, each is capped at
-   * 50% of the shared height (taller content scrolls inside the pane). When
-   * only one pane is visible, it may grow to fill the full container instead.
+  /**
+   * Panes: Conflicts (if any) sits above Staged, which sits above the working
+   * tree. Each pane hugs its content and none of them scroll, so the whole tab
+   * shares the panel's single scroll region instead of nesting up to three
+   * scrollbars inside it.
    */
-  const visiblePaneCount = $derived(
-    (conflictSections.length > 0 ? 1 : 0) +
-      (stagedSections.length > 0 ? 1 : 0) +
-      (workingSections.length > 0 ? 1 : 0)
-  )
-  const singlePaneClass = 'min-h-0 flex-1 overflow-y-auto'
-  const sharedPaneClass = 'min-h-0 max-h-[50%] overflow-y-auto'
-  const paneClass = $derived(
-    visiblePaneCount > 1 ? sharedPaneClass : singlePaneClass
-  )
+  /**
+   * Each pane carries a little padding of its own, so the staged and unstaged
+   * cards read as separate containers instead of two halves of one block. The
+   * wrapper's inset is what lines their outer edge up with the rows above.
+   */
+  const paneClass = 'flex flex-col p-1'
+
+  /**
+   * The `dirty` chip, shared by the trigger's badge and the picker's own row
+   * mark so both read identically. It keeps the geometry of the 12px slot it
+   * sits in, which is tighter than the shared `StatusPill`.
+   */
+  const dirtyBadgeClass =
+    'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
+
+  /**
+   * What a state badge says once the trigger renders it as a control. The state
+   * supplies the words and its own tone, nothing else: every state but clean is
+   * work waiting in the Changes view, so every one of them opens it. The hover
+   * halo takes the state's colour at the weight the chip already uses for its
+   * face, so a hover reads as that badge lighting up rather than as the row.
+   */
+  const statusActionCopy: Record<
+    WorktreeActionState,
+    { title: string; ariaLabel: string; hoverClass: string }
+  > = {
+    conflicted: {
+      title: 'Conflicts to resolve. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the conflicts in this working tree',
+      hoverClass: 'hover:bg-danger/20'
+    },
+    dirty: {
+      title: 'Uncommitted changes in this branch. Open the Changes view',
+      ariaLabel: 'Open the Changes view for the uncommitted changes in this branch',
+      hoverClass: 'hover:bg-warning/20'
+    }
+  }
 </script>
 
-{#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
-  {#each sortCommitDirs(node.dirs) as dir (dir.path)}
-    {@const dirCollapsed = commitTreeCollapsedDirs[dir.path] ?? false}
+<!--
+  The trigger's copy of a state badge: a control, not a mark. The state the user
+  is looking at is the work they are about to do, so the badge itself is the
+  shortest way to the Changes view.
+
+  The hit area is padded and pulled back by the same amount, so a 12px glyph is
+  a 20px target without widening the row it sits in. `data-status-action` is the
+  contract with `BranchPicker`, the trigger's owner: a gesture that starts on the
+  badge must not open the branch list, and a click here must close a picker that
+  was already open.
+-->
+{#snippet worktreeStatusAction(state: WorktreeActionState)}
+  {@const copy = statusActionCopy[state]}
+  <span
+    class={[
+      '-m-1 flex shrink-0 cursor-pointer items-center rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+      copy.hoverClass
+    ]}
+    role="button"
+    tabindex="0"
+    data-status-action
+    title={copy.title}
+    aria-label={copy.ariaLabel}
+    onclick={openWorkingChanges}
+    onkeydown={activateWorkingChangesFromKeyboard}
+  >
+    {#if state === 'conflicted'}
+      <TriangleAlert size={12} class="shrink-0 text-danger" aria-hidden="true" />
+    {:else}
+      <span class={dirtyBadgeClass}>dirty</span>
+    {/if}
+  </span>
+{/snippet}
+
+{#snippet branchStatusIcon(interactive: boolean)}
+  {#if interactive && worktreeState !== null && worktreeState !== 'clean'}
+    {@render worktreeStatusAction(worktreeState)}
+  {:else if worktreeState === 'conflicted'}
+    <TriangleAlert
+      size={12}
+      class="shrink-0 text-danger"
+      role="img"
+      aria-label="Conflicts to resolve"
+      title="Conflicts to resolve"
+    />
+  {:else if worktreeState === 'dirty'}
+    <!--
+      A badge rather than a ring: at 12px an outlined circle reads as a bullet,
+      where the amber chip reads as the state it names. The picker's own list
+      marks the dirty branch with the same chip.
+    -->
+    <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
+  {:else}
+    <CircleCheck
+      size={12}
+      class="shrink-0 text-success"
+      role="img"
+      aria-label="Working tree clean"
+      title="Working tree clean"
+    />
+  {/if}
+{/snippet}
+
+{#snippet refreshStatusButton()}
+  <!--
+    Multipurpose on purpose: it refreshes the git status *and* whatever view is
+    in focus, so one control is enough to trust the panel again.
+  -->
+  <button
+    type="button"
+    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label="Refresh the git status and the current view"
+    title="Refresh the git status and the current view"
+    disabled={busy}
+    onclick={() => void refreshPanel()}
+  >
+    <RefreshCw
+      size={12}
+      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments'])
+        ? 'animate-spin'
+        : ''}
+    />
+  </button>
+{/snippet}
+
+<!--
+  The view in focus's own action, drawn before Search in the header row. The
+  icons carry the meaning and the labels appear only while the header is wide
+  enough for them (the container query on `.git-panel-header`), so a narrow
+  sidebar gets the same controls without the words.
+-->
+{#snippet viewActions()}
+  {#if activeTab === 'changes'}
+    {@render changesViewToggle()}
+    {#if selectedCommit && isHeadCommit}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title="Amend the latest commit message"
+        aria-label="Amend the latest commit message"
+        disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
+        onclick={startAmend}
+      >
+        <GitGraph size={12} aria-hidden="true" />
+        <span class="view-action-label">Amend</span>
+      </button>
+    {/if}
+  {:else if activeTab === 'branches'}
     <button
       type="button"
-      class="flex h-7 w-full cursor-pointer items-center gap-1.5 pr-2 text-left transition-colors hover:bg-elevated/50"
-      style={`padding-left: ${8 + depth * 14}px`}
-      onclick={() => toggleCommitDir(dir.path)}
+      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Create a branch from the current one"
+      aria-label="Create a branch from the current one"
+      onclick={() => (creatingBranch = true)}
     >
-      {#if dirCollapsed}
-        <ChevronRight size={12} class="shrink-0 text-dimmed" />
-        <Folder size={13} class="shrink-0 text-dimmed" />
-      {:else}
-        <ChevronDown size={12} class="shrink-0 text-dimmed" />
-        <FolderOpen size={13} class="shrink-0 text-dimmed" />
-      {/if}
-      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{dir.name}</span>
+      <Plus size={12} aria-hidden="true" />
+      <span class="view-action-label">New branch</span>
     </button>
-    {#if !dirCollapsed}
-      {@render commitTreeNode(dir, depth + 1)}
+  {:else if activeTab === 'pulls'}
+    {#if selectedPullRequest}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this pull request in the full screen reader"
+        aria-label="Open this pull request in the full screen reader"
+        onclick={() => openPullRequestFullscreen(selectedPullRequest)}
+      >
+        <Maximize2 size={12} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this pull request on GitHub"
+        aria-label="Open this pull request on GitHub"
+        data-external-url={selectedPullRequest?.url ?? ''}
+        onclick={() => void openInBrowser(selectedPullRequest?.url ?? '')}
+      >
+        <ExternalLink size={12} aria-hidden="true" />
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open the pull request list in the full screen reader"
+        aria-label="Open the pull request list in the full screen reader"
+        onclick={() => openPullRequestFullscreen(null)}
+      >
+        <Maximize2 size={12} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Create a pull request"
+        aria-label="Create a pull request"
+        onclick={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+      >
+        <GitPullRequest size={12} aria-hidden="true" />
+        <span class="view-action-label">New PR</span>
+      </button>
     {/if}
-  {/each}
-  {#each node.files as change (change.path)}
-    <div style={`padding-left: ${8 + depth * 14}px`}>
-      <GitFileRow
-        {change}
-        displayPath={change.path.split('/').pop() ?? change.path}
-        diff={commitDiffs[change.path] ?? null}
-        loadingDiff={loadingCommitDiffFile[change.path] ?? false}
-        error={commitDiffErrors[change.path] ?? null}
-        expanded={commitExpanded[change.path] ?? false}
-        readonly
-        onToggleDiff={() => void toggleCommitDiff(change)}
-        onToggleStage={() => {}}
-      />
+  {:else if activeTab === 'deployments' && deploymentsExternal}
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title={deploymentsExternal.title}
+      aria-label={deploymentsExternal.title}
+      data-external-url={deploymentsExternal.url}
+      onclick={() => void openInBrowser(deploymentsExternal.url)}
+    >
+      <ExternalLink size={12} aria-hidden="true" />
+    </button>
+  {/if}
+{/snippet}
+
+<!--
+  How the changed files are laid out: one control with two tabs, in the same
+  shape the rest of the app uses for a two-state view (`SourcesPanel`), rather
+  than two loose buttons that only happen to sit next to each other. It lives
+  with the view's actions because it describes the view, not the selection.
+-->
+{#snippet changesViewToggle()}
+  <div
+    class="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-elevated p-0.5"
+    role="tablist"
+    aria-label="Changed files layout"
+  >
+    <button
+      type="button"
+      class={[
+        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        changesView === 'list'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'
+      ]}
+      role="tab"
+      aria-selected={changesView === 'list'}
+      title="Show the changed files as a flat list"
+      aria-label="Show the changed files as a flat list"
+      onclick={() => (changesView = 'list')}
+    >
+      <GitCommitHorizontal size={12} aria-hidden="true" />
+      <span class="view-action-label">List</span>
+    </button>
+    <button
+      type="button"
+      class={[
+        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        changesView === 'tree'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'
+      ]}
+      role="tab"
+      aria-selected={changesView === 'tree'}
+      title="Show the changed files as a folder tree"
+      aria-label="Show the changed files as a folder tree"
+      onclick={() => (changesView = 'tree')}
+    >
+      <FolderGit2 size={12} aria-hidden="true" />
+      <span class="view-action-label">Tree</span>
+    </button>
+  </div>
+{/snippet}
+
+<!--
+  Abort whatever integration is open, confirmed first: it discards the merge or
+  rebase and restores the working tree. One snippet for both homes, the notice
+  and the Changes row, which differ only in the height they have to fit and in
+  how much room the label has   the row measures its four controls against a
+  480px panel, so there it says `Abort` and the title names the integration.
+-->
+{#snippet abortIntegrationAction(compact: boolean)}
+  <button
+    type="button"
+    class={[
+      'flex shrink-0 cursor-pointer items-center gap-1.5 border border-danger/40 font-medium text-[0.625rem] text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40',
+      compact ? 'h-6 rounded-xs px-2' : 'h-7 rounded-md px-2.5'
+    ]}
+    disabled={integrateBusy || conflictState === 'none'}
+    title={`Discard the whole ${conflictState === 'merge' ? 'merge' : 'rebase'} and restore the working tree`}
+    onclick={requestAbortConflict}
+  >
+    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+      <Loader2 size={11} class="animate-spin" />
+    {:else}
+      <Trash2 size={11} />
+    {/if}
+    {#if compact}
+      Abort
+    {:else}
+      Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+    {/if}
+  </button>
+{/snippet}
+
+<!--
+  The strategies for whatever integration is open, in one place. A stopped rebase
+  is continued or skipped, a resolved merge is completed, and either can be
+  aborted. The rebase notice and the sync modal both render this, so the two can
+  never offer different ways out of the same state. `withAbort` is false only
+  where something else on screen already offers it.
+-->
+{#snippet integrationActions(withAbort = true)}
+  {#if conflictState === 'rebase'}
+    <!--
+      Both forward actions carry `data-modal-primary`, so the modal's focus and
+      ⌘+Enter pipeline lands on one of them. Continue is disabled while any
+      conflict is still open, and then skip is the only way forward left; abort
+      deliberately carries nothing, because the shortcut must never discard the
+      integration.
+    -->
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      title={conflicted.length > 0
+        ? `Resolve and stage the ${String(conflicted.length)} remaining conflict${conflicted.length === 1 ? '' : 's'} before continuing`
+        : 'Replay the rest of your commits on top of the new base'}
+      disabled={integrateBusy || conflicted.length > 0}
+      onclick={() => void runRebaseAction('continue')}
+    >
+      {#if rebaseActionRunning === 'continue'}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <Play size={11} />
+      {/if}
+      Continue rebase
+    </button>
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+      title="Drop the commit git stopped on and replay the rest"
+      disabled={integrateBusy}
+      onclick={() => void runRebaseAction('skip')}
+    >
+      {#if rebaseActionRunning === 'skip'}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <SkipForward size={11} />
+      {/if}
+      Skip this commit
+    </button>
+  {:else if mergePending}
+    <button
+      type="button"
+      data-modal-primary
+      {@attach focusSyncModalAction}
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      title="Commit the resolved files to complete the merge"
+      disabled={completeMergeBusy}
+      onclick={openCompleteMerge}
+    >
+      {#if completeMergeBusy}
+        <Loader2 size={11} class="animate-spin" />
+      {:else}
+        <GitMerge size={11} />
+      {/if}
+      Complete merge
+    </button>
+  {/if}
+  {#if withAbort}
+    {@render abortIntegrationAction(false)}
+  {/if}
+{/snippet}
+
+<!--
+  What the action row is about, per view: the context each per-view header used
+  to carry, moved down beside Pull and Push, so the sidebar has one place to look
+  for "where am I" and one for "what can I do here".
+-->
+{#snippet viewContext()}
+  {#if activeTab === 'changes' && selectedCommit === null}
+    {#if conflicted.length > 0}
+      {@render abortIntegrationAction(true)}
+      <!--
+        The whole resolution, in the order it happens: open the per-hunk merge
+        editor, or hand the files to an agent, or take one side of every file
+        at once. They live here, beside Abort, because this row is where a
+        conflicted integration is decided   the Conflicts section header used to
+        carry Resolve all on its own, which the tree layout never showed.
+      -->
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+        disabled={integrateBusy}
+        title="Open the merge editor on the conflicted files, starting with the first"
+        onclick={() => routeConflictResolution()}
+      >
+        <GitMerge size={11} />
+        Resolve all
+      </button>
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        disabled={integrateBusy}
+        title="Hand every conflicted file to an agent to resolve"
+        onclick={() => void resolveConflictsWithAgent()}
+      >
+        <Bot size={11} />
+        Resolve with agent
+      </button>
+      <!--
+        One decision with two answers, so one control: which side of every
+        conflicted file to keep. Its sides carry the merge editor's own names and
+        colours   accent incoming, primary current   and the group's label plus
+        each button's title spell out what they do, because the row cannot afford
+        a third word. Both sides are destructive to the other, so both confirm.
+      -->
+      <div
+        class="flex h-6 shrink-0 items-center gap-0.5 rounded-xs border border-border bg-elevated p-0.5"
+        role="group"
+        aria-label="Accept one side of every conflicted file"
+      >
+        <button
+          type="button"
+          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
+          disabled={integrateBusy}
+          title="Accept all incoming: replace every conflicted file with its incoming version"
+          onclick={() => requestAcceptAllConflicts('incoming')}
+        >
+          incoming
+        </button>
+        <button
+          type="button"
+          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
+          disabled={integrateBusy}
+          title="Accept all current: replace every conflicted file with its current version"
+          onclick={() => requestAcceptAllConflicts('current')}
+        >
+          current
+        </button>
+      </div>
+    {:else if unstaged.length + untracked.length > 0}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        disabled={gitState.isBusy('stage')}
+        onclick={() => void stageAll()}
+      >
+        Stage all
+      </button>
+    {:else if staged.length > 0}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 items-center rounded-xs border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+        disabled={gitState.isBusy('unstage')}
+        onclick={() => void unstageAll()}
+      >
+        Unstage all
+      </button>
+    {/if}
+    {#if changes.length > 0 && selectedPathList.length > 0}
+      <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
+        {selectedPathList.length} selected
+      </span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={batchBusy}
+          aria-label="Selected actions"
+          title="Selected actions"
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+          >
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void stageSelectedAction(false)}
+            >
+              <Check size={12} class="text-success" />
+              Stage
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void stageSelectedAction(true)}
+            >
+              <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
+              Unstage
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={requestCommitSelected}
+            >
+              <GitCommit size={12} class="text-dimmed" />
+              Commit…
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestStashFor(selectedPathList)}
+            >
+              <Archive size={12} class="text-dimmed" />
+              Stash…
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => void ignoreSelectedAction()}
+            >
+              <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
+              Add to gitignore
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestDiscard(selectedPathList)}
+            >
+              <Trash2 size={12} />
+              Discard changes
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    {/if}
+  {:else if activeTab === 'changes' && selectedCommit !== null}
+    {@const commit = selectedCommit}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to history"
+      aria-label="Back to history"
+      onclick={() => {
+        clearSelectedCommit()
+        activeTab = 'history'
+      }}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        title="Newer commit"
+        aria-label="Newer commit"
+        disabled={!canGoNewer}
+        onclick={() => navigateCommit(-1)}
+      >
+        <ChevronLeft size={12} />
+      </button>
+      <button
+        type="button"
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        title="Older commit"
+        aria-label="Older commit"
+        disabled={!canGoOlder}
+        onclick={() => navigateCommit(1)}
+      >
+        <ChevronRight size={12} />
+      </button>
     </div>
-  {/each}
+    <div class="min-w-0 grow-2 basis-0">
+      <p class="truncate text-[0.6875rem] font-medium text-foreground" title={commit.message}>
+        {commit.message.split('\n')[0]}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="font-mono">{commit.shortHash}</span>
+        <span>·</span>
+        <span class="truncate">{commit.author}</span>
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(commit.date)}</span>
+      </div>
+    </div>
+    <!--
+      The files of the open commit are selectable, so the row that reports a
+      working-tree selection also reports this one. It talks about the commit
+      instead of the working tree, which is why it lives here rather than beside
+      Stage all.
+    -->
+    {#if selectedPathList.length > 0}
+      <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
+        {selectedPathList.length} selected
+      </span>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={batchBusy}
+          aria-label={`Actions for the ${selectedPathList.length} selected files`}
+          title={`Actions for the ${selectedPathList.length} selected files`}
+        >
+          <ChevronDown size={12} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+          >
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              disabled={batchBusy}
+              onSelect={() => requestRemoveCommitChanges(selectedPathList)}
+            >
+              <FileMinus size={12} class="shrink-0" />
+              Remove from commit…
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    {/if}
+  {:else if activeTab === 'stashes' && selectedStash !== null}
+    {@const stash = selectedStash}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to stash list"
+      aria-label="Back to stash list"
+      onclick={clearSelectedStash}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 grow-2 basis-0">
+      <p class="truncate text-[0.6875rem] font-medium text-foreground" title={stash.message}>
+        {stash.message}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="font-mono">{stash.id}</span>
+        {#if stash.branch}
+          <span>·</span>
+          <span class="truncate">{stash.branch}</span>
+        {/if}
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(stash.date)}</span>
+      </div>
+    </div>
+  {:else if activeTab === 'pulls'}
+    {#if selectedPullRequest && githubIdentity}
+      <PrIdentityRow
+        summary={selectedPullRequest}
+        detail={pullRequestBundle?.detail ?? null}
+        checks={pullRequestBundle?.checks ?? null}
+        onBack={() => (selectedPullRequest = null)}
+        onOpenChecks={() => (prDetailTab = 'checks')}
+      />
+      <!--
+        Which part of the pull request you are reading, immediately ahead of the
+        remote actions. The sidebar cannot hold a list of views of its own, and the
+        row has the room the title row no longer needs.
+      -->
+      <PrViewSwitcher
+        views={prDetailViews}
+        active={prDetailTab}
+        onSelect={(id) => (prDetailTab = id)}
+      />
+    {:else}
+      <PrStateFilter state={prListState} onSelect={selectPrListState} />
+      <PrListOptionsMenu
+        filter={prListFilter}
+        sort={prListSort}
+        onFilterChange={selectPrListFilter}
+        onSortChange={selectPrListSort}
+      />
+    {/if}
+  {:else if activeTab === 'deployments' && selectedDeployment !== null}
+    {@const DeploymentGlyph = stateGlyph(openDeploymentState)}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to deployment activity"
+      aria-label="Back to deployment activity"
+      onclick={() => (selectedDeployment = null)}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 grow-2 basis-0">
+      <p
+        class="truncate text-[0.6875rem] font-medium text-foreground"
+        title={selectedDeployment.environment}
+      >
+        {selectedDeployment.environment}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate font-mono">{selectedDeployment.ref}</span>
+        <span>·</span>
+        <span class="shrink-0 font-mono">{selectedDeployment.sha.slice(0, 7)}</span>
+        <span>·</span>
+        <span class="shrink-0">{relativeTime(Date.parse(selectedDeployment.updatedAt))}</span>
+      </div>
+    </div>
+    <span
+      class="flex shrink-0 items-center gap-1 {stateGlyphClass(openDeploymentState)}"
+      role="img"
+      title="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
+      aria-label="Deployment {stateLabel(openDeploymentState).toLowerCase()}"
+    >
+      <DeploymentGlyph size={13} />
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide">
+        {stateLabel(openDeploymentState)}
+      </span>
+    </span>
+  {:else if activeTab === 'deployments' && selectedRun !== null}
+    {@const RunGlyph = stateGlyph(openRunState)}
+    <button
+      type="button"
+      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Back to deployment activity"
+      aria-label="Back to deployment activity"
+      onclick={() => (selectedRun = null)}
+    >
+      <ArrowLeft size={12} />
+    </button>
+    <div class="min-w-0 grow-2 basis-0">
+      <p
+        class="truncate text-[0.6875rem] font-medium text-foreground"
+        title={selectedRun.displayTitle}
+      >
+        {selectedRun.displayTitle}
+      </p>
+      <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
+        <span class="truncate">{selectedRun.name} #{selectedRun.runNumber}</span>
+        {#if selectedRun.branch}
+          <span>·</span>
+          <span class="truncate font-mono">{selectedRun.branch}</span>
+        {/if}
+        <span>·</span>
+        <span class="shrink-0 font-mono">{selectedRun.headSha.slice(0, 7)}</span>
+      </div>
+    </div>
+    <span
+      class="flex shrink-0 items-center gap-1 {stateGlyphClass(openRunState)}"
+      role="img"
+      title="Run {stateLabel(openRunState).toLowerCase()}"
+      aria-label="Run {stateLabel(openRunState).toLowerCase()}"
+    >
+      <RunGlyph size={13} />
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide">
+        {stateLabel(openRunState)}
+      </span>
+    </span>
+  {/if}
+{/snippet}
+
+<!--
+  One commit menu, two doors: the History rows open it on right click, and the
+  header's info control opens it for the commit being read. It was two lists that
+  had drifted apart for no reason, so it is one snippet now.
+-->
+{#snippet commitActions(commit: GitCommitInfo, isHead: boolean)}
+  <CommitActionsMenu
+    {isHead}
+    resetBusy={gitState.isBusy('reset')}
+    deleteBusy={gitState.isBusy('delete-commit')}
+    onReset={(mode) => requestReset(mode, commit.hash)}
+    onDelete={() => requestDeleteCommit(commit)}
+    onAmend={isHead ? startAmend : undefined}
+    onCopyHash={() => void copyCommitHash(commit)}
+    onCopyMessage={() => void copyCommitMessage(commit)}
+    onShowInfo={() => (commitInfoTarget = commit)}
+  />
 {/snippet}
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
-  {#if findNavState.gitFindOpen}
-    <div data-find-exclude class="absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]">
-      <FindInBar
-        query={commitSearchQuery}
-        matches={commitSearchResults.length}
-        activeIndex={commitSearchActiveIndex}
-        placeholder="Search commit title or hash…"
-        label="Search commits"
-        focusTrigger={findNavState.gitFindFocusTrigger}
-        onQueryChange={searchCommits}
-        onNext={() => moveCommitSearch(1)}
-        onPrev={() => moveCommitSearch(-1)}
-        onSubmit={openActiveCommitSearchResult}
-        onClose={closeCommitSearch}
-      />
-      {#if commitSearchQuery}
-        <div
-          class="mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
-          aria-live="polite"
-        >
-          {#if commitSearchLoading}
-            <div class="flex items-center justify-center gap-2 px-3 py-6 text-xs text-dimmed">
-              <Loader2 size={13} class="animate-spin" aria-hidden="true" />
-              Searching commits…
-            </div>
-          {:else if commitSearchResults.length === 0}
-            <p class="px-3 py-6 text-center text-xs text-dimmed">No matching commits</p>
-          {:else}
-            {#each commitSearchResults as commit, index (commit.hash)}
-              <button
-                type="button"
-                class={[
-                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
-                  index === commitSearchActiveIndex
-                    ? 'bg-primary/10 text-foreground'
-                    : 'text-muted hover:bg-elevated'
-                ]}
-                aria-current={index === commitSearchActiveIndex ? 'true' : undefined}
-                onclick={() => selectCommitSearchResult(commit)}
-                onmouseenter={() => (commitSearchActiveIndex = index)}
-              >
-                <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[0.6875rem] leading-snug">
-                    {commit.message.split('\n')[0]}
-                  </span>
-                  <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                    <span class="font-mono">{commit.shortHash}</span>
-                    <span>·</span>
-                    <span class="truncate">{commit.author}</span>
-                    <span>·</span>
-                    <span class="shrink-0">{relativeTime(commit.date)}</span>
-                  </span>
-                </span>
-              </button>
-            {/each}
-          {/if}
-        </div>
-      {/if}
-    </div>
-  {/if}
+  <GitStatusPanelCommitSearch
+    open={findNavState.gitFindOpen}
+    query={commitSearchQuery}
+    bind:activeIndex={commitSearchActiveIndex}
+    focusTrigger={findNavState.gitFindFocusTrigger}
+    loading={commitSearchLoading}
+    results={commitSearchResults}
+    onQueryChange={searchCommits}
+    onNext={() => moveCommitSearch(1)}
+    onPrev={() => moveCommitSearch(-1)}
+    onSubmit={openActiveCommitSearchResult}
+    onClose={closeCommitSearch}
+    onSelectResult={selectCommitSearchResult}
+  />
 
-  <!-- Header: branch picker + tabs + actions -->
-  <div class="flex shrink-0 flex-col border-b border-border">
-    <!-- Top row: branch + tabs + actions -->
-    <div class="flex h-9 items-center gap-1 px-2">
+  <!--
+    Header: identity, branch, the view you are in and its tools on one line. The
+    view in focus takes a second line the moment it has something to say
+    (`showsActionRow`), and that row is where the remote actions live too.
+  -->
+  <div class="flex shrink-0 flex-col">
+    <div
+      class="git-panel-header flex h-9 items-center gap-1 overflow-x-auto border-b border-border px-2"
+    >
       {#if repoState === 'git'}
         <GitHubAccountMenu
           github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
@@ -1947,6 +3371,8 @@
           onDelete={(name) => void deleteBranchAction(name)}
           onAddOrigin={openAddOrigin}
           onReplaceOrigin={openReplaceOrigin}
+          statusIcon={worktreeState ? branchStatusIcon : undefined}
+          statusBadge={worktreeState === 'dirty' ? branchStatusIcon : undefined}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
@@ -1957,219 +3383,243 @@
         </div>
       {/if}
 
-      <span class="flex-1"></span>
-
-      {#if repoState === 'git' && status}
-        {#if status.ahead > 0 || status.behind > 0}
-          <span class="flex shrink-0 items-center gap-1">
-            {#if status.ahead > 0}
-              <span
-                class="rounded bg-success/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-success"
-              >
-                ↑{status.ahead}
-              </span>
-            {/if}
-            {#if status.behind > 0}
-              <span
-                class="rounded bg-danger/10 px-1 py-0.5 font-mono text-[0.5625rem] tabular-nums text-danger"
-              >
-                ↓{status.behind}
-              </span>
-            {/if}
-          </span>
-        {/if}
-        <span
-          class={[
-            'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide',
-            status.clean ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-          ]}
-        >
-          {status.clean ? 'Clean' : 'Dirty'}
-        </span>
-      {/if}
-      <DiffLayoutToggle title={diffLayoutToggleLabel('vertical')} size={12} />
       {#if repoState === 'git'}
-        <button
-          type="button"
-          class={[
-            'flex h-6 w-6 items-center justify-center rounded transition-colors',
-            findNavState.gitFindOpen
-              ? 'bg-elevated text-foreground'
-              : 'text-dimmed hover:bg-elevated hover:text-foreground'
-          ]}
-          aria-label="Search commits"
-          title="Search commits"
-          aria-pressed={findNavState.gitFindOpen}
-          onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
-        >
-          <Search size={12} aria-hidden="true" />
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-        aria-label="Refresh git status"
-        title="Refresh git status"
-        disabled={busy}
-        onclick={() => void refreshStatus()}
-      >
-        <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
-      </button>
-
-      {#if repoState === 'git'}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-            aria-label="More git actions"
-            title="More git actions"
-          >
-            <MoreHorizontal size={13} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              collisionPadding={8}
-              class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-            >
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-              >
-                <GitPullRequest size={12} class="shrink-0 text-dimmed" />
-                Create pull request…
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={localBranches.length < 2}
-                onSelect={() => (showIntegrateModal = true)}
-              >
-                <GitMerge size={12} class="shrink-0 text-dimmed" />
-                Merge or rebase…
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator class="my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={status?.clean ?? true}
-                onSelect={() => (showStashModal = true)}
-              >
-                <Archive size={12} class="shrink-0 text-dimmed" />
-                Stash changes…
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      {/if}
-    </div>
-
-    {#if repoState === 'git'}
-      <!-- Tab row   never wraps; scrolls horizontally when the tabs overflow -->
-      <div class="flex items-center gap-4 overflow-x-auto px-3">
-        {#each tabs as tab (tab.id)}
-          {@const TabIcon = tab.icon}
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <!--
+          The views are a dropdown, not a strip: six of them never fit one row at
+          every sidebar width, and a strip that scrolls sideways hides views
+          behind a gesture. The trigger is the view in use, with its count.
+        -->
+        <GitViewMenu {tabs} {activeTab} onSelect={selectTab} />
+        <span class="min-w-0 flex-1"></span>
+        <!--
+          The view's own action comes first, ahead of Search: it acts on what you
+          are looking at, while Search, Refresh and the overflow act on the panel.
+          Sync belongs to the same group   it trades commits with another
+          checkout, it is not an action on this branch's own drift   and it is
+          worktree-only, which `showsSync` decides.
+        -->
+        <div class="flex shrink-0 items-center gap-0.5">
+          {@render viewActions()}
+          {#if showsSync}
+            <GitSyncButton
+              busy={gitState.isBusy('sync')}
+              blocked={branchSyncBusy || conflicted.length > 0}
+              onSync={(direction) => void syncMainAction(direction)}
+              onPickPeer={openSyncPeer}
+            />
+          {/if}
           <button
             type="button"
             class={[
-              'flex shrink-0 items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[0.6875rem] font-medium transition-colors',
-              activeTab === tab.id
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-dimmed hover:text-muted'
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
+              findNavState.gitFindOpen
+                ? 'bg-elevated text-foreground'
+                : 'text-dimmed hover:bg-elevated hover:text-foreground'
             ]}
-            onclick={() => {
-              activeTab = tab.id
-              if (tab.id === 'history') void loadHistory()
-            }}
+            aria-label="Search commits"
+            title="Search commits"
+            aria-pressed={findNavState.gitFindOpen}
+            onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
           >
-            <TabIcon size={11} class="shrink-0" />
-            {tab.label}
-            {#if tab.count !== null}
-              <span
-                class={[
-                  'rounded-full px-1.5 text-[0.5625rem] font-semibold tabular-nums leading-[1.15rem]',
-                  activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-elevated text-dimmed'
-                ]}
-              >
-                {tab.count}
-              </span>
-            {/if}
+            <Search size={12} aria-hidden="true" />
           </button>
-        {/each}
+          {@render refreshStatusButton()}
+          {#if activeTab === 'changes' && selectedCommit}
+            <!--
+              While a commit is open the overflow control *is* that commit's menu:
+              the same snippet the History rows open on right click, because the
+              two lists of actions were already identical in everything but the
+              order they happened to be written in.
+            -->
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                aria-label={`Actions for commit ${selectedCommit.shortHash}`}
+                title={`Actions for commit ${selectedCommit.shortHash}`}
+              >
+                <Info size={13} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                  side="bottom"
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                >
+                  {@render commitActions(selectedCommit, isHeadCommit)}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {:else}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                aria-label="Git actions"
+                title="Git actions"
+              >
+                {#if gitState.isBusy('fetch')}
+                  <Loader2 size={12} class="animate-spin" />
+                {:else}
+                  <MoreHorizontal size={13} />
+                {/if}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={4}
+                  collisionPadding={8}
+                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+                >
+                  <!--
+                  Fetch is the one remote action with no control of its own: it
+                  advertises no drift, so it stays here with the working-tree
+                  actions. Pull, Push and the main-worktree sync each own a
+                  header control, so the menu does not repeat them. They land
+                  here instead while conflicts are open, when the row belongs to
+                  the resolution controls, and in a worktree checkout, where a
+                  managed scope keeps publishing out of the row.
+                -->
+                  {#if remoteActionsInMenu}
+                    {#if showsPull}
+                      <DropdownMenu.Item
+                        class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                        disabled={branchSyncBusy}
+                        onSelect={() => void pullAction()}
+                      >
+                        <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                        Pull {commitsBehind}
+                      </DropdownMenu.Item>
+                    {/if}
+                    {#if showsPush}
+                      <DropdownMenu.Item
+                        class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                        disabled={pushBlocked}
+                        onSelect={() => void pushAction()}
+                      >
+                        <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
+                        Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+                      </DropdownMenu.Item>
+                    {/if}
+                  {/if}
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+                  >
+                    <GitPullRequest size={12} class="shrink-0 text-dimmed" />
+                    Create pull request…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                    disabled={localBranches.length < 2}
+                    onSelect={() => (showIntegrateModal = true)}
+                  >
+                    <GitMerge size={12} class="shrink-0 text-dimmed" />
+                    Merge or rebase…
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-40"
+                    disabled={remotes.length === 0 || fetching}
+                    onSelect={() => void gitState.fetch(projectId)}
+                  >
+                    <Download size={12} class="shrink-0 text-dimmed" />
+                    Fetch
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                    disabled={status?.clean ?? true}
+                    onSelect={() => (showStashModal = true)}
+                  >
+                    <Archive size={12} class="shrink-0 text-dimmed" />
+                    Stash changes…
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {/if}
+        </div>
+      {:else}
+        <span class="flex-1"></span>
+        <!-- Off-git states render no tabs, so the refresh control stays on this row. -->
+        {@render refreshStatusButton()}
+      {/if}
+    </div>
+
+    {#if showsActionRow}
+      <!--
+        The row under the header belongs to the view in focus: the commit or
+        stash being read, the pull request's identity, the PR list's filter, the
+        conflict controls, and Pull and Push. Pull and Push are independent   a
+        diverged branch needs both   so each gets a share of the row's width
+        instead of one hiding the other, and they are the only items here that
+        stretch. While conflicts are open they stand aside entirely (see
+        `conflictsOpen`) so the row can hold the controls that end them.
+      -->
+      <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
+        {@render viewContext()}
+        {#if showsRemoteActions}
+          {#if showsPull}
+            <button
+              type="button"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
+              disabled={branchSyncBusy}
+              onclick={() => void pullAction()}
+            >
+              {#if gitState.isBusy('pull')}
+                <Loader2 size={11} class="animate-spin" />
+              {:else}
+                <ArrowDownToLine size={11} />
+              {/if}
+              <span class="min-w-0 truncate">Pull {commitsBehind}</span>
+            </button>
+          {/if}
+          {#if showsPush}
+            <button
+              type="button"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              title={pushTitle}
+              disabled={pushBlocked}
+              onclick={() => void pushAction()}
+            >
+              {#if gitState.isBusy('push')}
+                <Loader2 size={11} class="animate-spin" />
+              {:else}
+                <ArrowUpFromLine size={11} />
+              {/if}
+              <span class="min-w-0 truncate">
+                Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
+              </span>
+            </button>
+          {/if}
+        {/if}
       </div>
     {/if}
   </div>
 
   <!-- Content (scrollable) -->
   <div class="min-h-0 flex-1 overflow-auto" onscroll={handleContentScroll}>
-    {#if repoState === 'loading'}
-      <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-        <Loader2 size={14} class="animate-spin" />
-        Checking repository
-      </div>
-    {:else if repoState === 'git_unavailable'}
-      <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
-          <Unplug size={18} class="text-dimmed" />
-        </div>
-        <p class="text-xs font-medium text-muted">Git is not available</p>
-        <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
-          Install Git for your operating system, then restart CodeInOven.
-        </p>
-        {#if preflightDetail}
-          <p class="mt-2 max-w-[30ch] break-words font-mono text-[0.5625rem] text-dimmed">
-            {preflightDetail}
-          </p>
-        {/if}
-      </div>
-    {:else if repoState === 'not_git'}
-      <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
-          <GitFork size={18} class="text-dimmed" />
-        </div>
-        <p class="text-xs font-medium text-muted">Not a Git repository</p>
-        <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
-          Initialize a repository to track changes and manage pull requests.
-        </p>
-        <button
-          type="button"
-          class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
-          disabled={gitState.isBusy('init')}
-          onclick={() => void initializeRepository()}
-        >
-          {#if gitState.isBusy('init')}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <GitFork size={12} />
-          {/if}
-          Initialize repository
-        </button>
-      </div>
+    {#if repoState === 'loading' || repoState === 'git_unavailable' || repoState === 'not_git'}
+      <GitStatusPanelRepoStates
+        {repoState}
+        {preflightDetail}
+        onInitialize={() => void initializeRepository()}
+      />
     {:else}
-      {#if gitState.githubPermission}
-        <div
-          class="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
-        >
-          <Unplug size={13} class="shrink-0 text-warning" />
-          <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
-            {gitState.githubPermission.message}
-          </p>
-          <button
-            type="button"
-            class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
-            onclick={() => void openInBrowser(gitState.githubPermission?.settingsUrl ?? '')}
-          >
-            Update GitHub access
-          </button>
-        </div>
-      {:else if gitState.error}
-        <div class="mx-2 mt-2">
-          <p
-            class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
-          >
-            {gitState.error}
-          </p>
-        </div>
-      {/if}
+      <GitStatusPanelNotices
+        {scopeUnhealthy}
+        {projectId}
+        {scopeBucketId}
+        {conflictState}
+        {conflicted}
+        {conflictRowAborts}
+        {integrationActions}
+        onRepaired={() => void refreshStatus()}
+      />
 
       {#if identityNeeded}
         <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
@@ -2222,944 +3672,115 @@
       {/if}
 
       {#if activeTab === 'changes'}
-        {#if selectedCommit}
-          {@const commit = selectedCommit}
-          <!-- Commit diff view -->
-          <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
-            <div class="flex items-center gap-1.5">
-              <button
-                type="button"
-                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Back to history"
-                aria-label="Back to history"
-                onclick={() => {
-                  clearSelectedCommit()
-                  activeTab = 'history'
-                }}
-              >
-                <ArrowLeft size={12} />
-              </button>
-              <div class="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                  title="Newer commit"
-                  aria-label="Newer commit"
-                  disabled={!canGoNewer}
-                  onclick={() => navigateCommit(-1)}
-                >
-                  <ChevronLeft size={12} />
-                </button>
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                  title="Older commit"
-                  aria-label="Older commit"
-                  disabled={!canGoOlder}
-                  onclick={() => navigateCommit(1)}
-                >
-                  <ChevronRight size={12} />
-                </button>
-              </div>
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-[0.6875rem] font-medium text-foreground">
-                  {commit.message.split('\n')[0]}
-                </p>
-                <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                  <span class="font-mono">{commit.shortHash}</span>
-                  <span>·</span>
-                  <span>{commit.author}</span>
-                  <span>·</span>
-                  <span>{relativeTime(commit.date)}</span>
-                </div>
-              </div>
-              {#if isHeadCommit}
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                  disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
-                  onclick={startAmend}
-                >
-                  Amend
-                </button>
-              {/if}
-              <div
-                class="flex shrink-0 items-center rounded-md bg-elevated/50 p-0.5"
-                role="group"
-                aria-label="Changed files view"
-              >
-                <button
-                  type="button"
-                  class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                    changesView === 'list'
-                      ? 'bg-surface text-foreground shadow-sm'
-                      : 'text-dimmed hover:text-foreground'
-                  ]}
-                  aria-pressed={changesView === 'list'}
-                  onclick={() => (changesView = 'list')}
-                >
-                  List
-                </button>
-                <button
-                  type="button"
-                  class={[
-                    'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                    changesView === 'tree'
-                      ? 'bg-surface text-foreground shadow-sm'
-                      : 'text-dimmed hover:text-foreground'
-                  ]}
-                  aria-pressed={changesView === 'tree'}
-                  onclick={() => (changesView = 'tree')}
-                >
-                  Tree
-                </button>
-              </div>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger
-                  class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label={`More actions for commit ${commit.shortHash}`}
-                  title={`More actions for commit ${commit.shortHash}`}
-                >
-                  <MoreHorizontal size={13} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                    side="bottom"
-                    align="end"
-                    sideOffset={4}
-                    collisionPadding={8}
-                  >
-                    <CommitActionsMenu
-                      isHead={isHeadCommit}
-                      resetBusy={gitState.isBusy('reset')}
-                      deleteBusy={gitState.isBusy('delete-commit')}
-                      onReset={(mode) => requestReset(mode, commit.hash)}
-                      onDelete={() => requestDeleteCommit(commit)}
-                      onAmend={startAmend}
-                      onCopyHash={() => void copyCommitHash(commit)}
-                      onCopyMessage={() => void copyCommitMessage(commit)}
-                    />
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </div>
-          <div class="p-2">
-            {#if loadingCommitDiff}
-              <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-                <Loader2 size={14} class="animate-spin" />
-                Loading diff
-              </div>
-            {:else if commitDiffChanges.length === 0}
-              <div class="flex flex-col items-center justify-center py-12 text-center">
-                <GitCommit size={22} class="mx-auto mb-2 text-dimmed" />
-                <p class="text-xs font-medium text-muted">No file changes</p>
-                <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
-              </div>
-            {:else}
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                  <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-                    Changed files
-                  </span>
-                  <span class="text-[0.5rem] tabular-nums text-dimmed">
-                    {commitDiffChanges.length}
-                  </span>
-                </div>
-                {#if changesView === 'tree'}
-                  {@render commitTreeNode(commitTree, 0)}
-                {:else}
-                  {#each commitDiffChanges as change (change.path)}
-                    <GitFileRow
-                      {change}
-                      diff={commitDiffs[change.path] ?? null}
-                      loadingDiff={loadingCommitDiffFile[change.path] ?? false}
-                      error={commitDiffErrors[change.path] ?? null}
-                      expanded={commitExpanded[change.path] ?? false}
-                      readonly
-                      onToggleDiff={() => void toggleCommitDiff(change)}
-                      onToggleStage={() => {}}
-                      onRestore={(path, target) =>
-                        void restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}
-                    />
-                  {/each}
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {:else}
-          <div class="flex h-full min-h-0 flex-col">
-            {#if status && changes.length === 0 && status.clean}
-              <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
-                <div
-                  class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10"
-                >
-                  <Check size={18} class="text-success" />
-                </div>
-                <p class="text-xs font-medium text-muted">Working tree is clean</p>
-                <p class="mt-1 max-w-[26ch] text-[0.625rem] leading-relaxed text-dimmed">
-                  No staged, unstaged, or untracked changes.
-                </p>
-              </div>
-            {:else if status}
-              <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
-              <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-                {#if conflicted.length > 0}
-                  <button
-                    type="button"
-                    class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-                    disabled={integrateBusy || conflictState === 'none'}
-                    onclick={requestAbortConflict}
-                  >
-                    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-                      <Loader2 size={11} class="animate-spin" />
-                    {:else}
-                      <Trash2 size={11} />
-                    {/if}
-                    Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-                  </button>
-                  <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-warning"
-                  >
-                    {conflicted.length}
-                    {conflicted.length === 1 ? 'conflict' : 'conflicts'}
-                  </span>
-                {:else if unstaged.length + untracked.length > 0}
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-                    disabled={gitState.isBusy('stage')}
-                    onclick={() => void stageAll()}
-                  >
-                    Stage all
-                  </button>
-                {:else if staged.length > 0}
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-                    disabled={gitState.isBusy('unstage')}
-                    onclick={() => void unstageAll()}
-                  >
-                    Unstage all
-                  </button>
-                {/if}
-                {#if changes.length > 0 && selectedPathList.length > 0}
-                  <span class="shrink-0 text-[0.625rem] font-medium tabular-nums text-foreground">
-                    {selectedPathList.length} selected
-                  </span>
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                      disabled={batchBusy}
-                      aria-label="Selected actions"
-                      title="Selected actions"
-                    >
-                      <ChevronDown size={12} />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                        side="bottom"
-                        align="start"
-                        sideOffset={4}
-                        collisionPadding={8}
-                      >
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void stageSelectedAction(false)}
-                        >
-                          <Check size={12} class="text-success" />
-                          Stage
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void stageSelectedAction(true)}
-                        >
-                          <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span
-                          >
-                          Unstage
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={requestCommitSelected}
-                        >
-                          <GitCommit size={12} class="text-dimmed" />
-                          Commit…
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => requestStashFor(selectedPathList)}
-                        >
-                          <Archive size={12} class="text-dimmed" />
-                          Stash…
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => void ignoreSelectedAction()}
-                        >
-                          <span class="inline-block w-3 text-center text-[0.625rem]">⊘</span>
-                          Add to gitignore
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-                        <DropdownMenu.Item
-                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-                          disabled={batchBusy}
-                          onSelect={() => requestDiscard(selectedPathList)}
-                        >
-                          <Trash2 size={12} />
-                          Discard changes
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
-                {/if}
-                <span class="flex-1"></span>
-                {#if changes.length > 0}
-                  <div
-                    class="flex items-center rounded-md bg-elevated/50 p-0.5"
-                    role="group"
-                    aria-label="Changes view"
-                  >
-                    <button
-                      type="button"
-                      class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                        changesView === 'list'
-                          ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-dimmed hover:text-foreground'
-                      ]}
-                      aria-pressed={changesView === 'list'}
-                      onclick={() => (changesView = 'list')}
-                    >
-                      List
-                    </button>
-                    <button
-                      type="button"
-                      class={[
-                        'flex h-5 items-center gap-1 rounded px-2 text-[0.625rem] font-medium transition-colors',
-                        changesView === 'tree'
-                          ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-dimmed hover:text-foreground'
-                      ]}
-                      aria-pressed={changesView === 'tree'}
-                      onclick={() => (changesView = 'tree')}
-                    >
-                      Tree
-                    </button>
-                  </div>
-                {/if}
-              </div>
-
-              <!-- Staged / working panes   conflicts sit on top; each pane shares the height -->
-              <div class="flex h-full min-h-0 flex-col gap-2 px-2 pb-2">
-                {#if conflictSections.length > 0}
-                  <div class={paneClass}>
-                    {#if changesView === 'tree'}
-                      <GitChangesTree
-                        sections={conflictSections}
-                        {diffs}
-                        {expanded}
-                        {loadingDiff}
-                        {diffErrors}
-                        bind:selectedPaths
-                        onToggleDiff={(change) => void toggleDiff(change)}
-                        onToggleStage={(change) => void toggleStage(change)}
-                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                        onStashPaths={(paths) => requestStashFor(paths)}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                        onDiscardPaths={(paths) => requestDiscard(paths)}
-                        onResolveConflict={(path) => routeConflictResolution(path)}
-                      />
-                    {:else}
-                      <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
-                        {#each conflictSections as section, si (section.title)}
-                          {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          <div class="flex items-center gap-2 bg-warning/10 px-3 py-1.5">
-                            <span
-                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
-                            >
-                              {section.title}
-                            </span>
-                            <span class="text-[0.5rem] tabular-nums text-dimmed">
-                              {section.files.length}
-                            </span>
-                            <span class="flex-1"></span>
-                            <button
-                              type="button"
-                              class="rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/10"
-                              title="Open the conflict resolution panel"
-                              onclick={() => routeConflictResolution(section.files[0]?.path)}
-                            >
-                              Resolve all
-                            </button>
-                          </div>
-                          {#each section.files as change (change.path)}
-                            <GitFileRow
-                              {change}
-                              diff={diffs[fileDiffKey(change)] ?? null}
-                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                              error={diffErrors[fileDiffKey(change)] ?? null}
-                              expanded={expanded[fileDiffKey(change)] ?? false}
-                              onToggleDiff={() => void toggleDiff(change)}
-                              onToggleStage={() => void toggleStage(change)}
-                              onOpenInEditor={(path) => void openInEditor(path)}
-                              onResolveConflict={(path) => routeConflictResolution(path)}
-                            />
-                          {/each}
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-
-                {#if stagedSections.length > 0}
-                  <div class={paneClass}>
-                    {#if changesView === 'tree'}
-                      <GitChangesTree
-                        sections={stagedSections}
-                        {diffs}
-                        {expanded}
-                        {loadingDiff}
-                        {diffErrors}
-                        bind:selectedPaths
-                        onToggleDiff={(change) => void toggleDiff(change)}
-                        onToggleStage={(change) => void toggleStage(change)}
-                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                        onStashPaths={(paths) => requestStashFor(paths)}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                        onDiscardPaths={(paths) => requestDiscard(paths)}
-                      />
-                    {:else}
-                      <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                        {#each stagedSections as section, si (section.title)}
-                          {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          {@const sectionAllSelected =
-                            section.files.length > 0 &&
-                            section.files.every((f) => selectedPaths[f.path])}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                            <span
-                              class="shrink-0"
-                              role="presentation"
-                              onclick={(event: MouseEvent) => {
-                                event.stopPropagation()
-                                event.preventDefault()
-                              }}
-                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                            >
-                              <Switch
-                                checked={sectionAllSelected}
-                                onchange={() => toggleSectionSelection(section.files)}
-                                title={sectionAllSelected
-                                  ? `Deselect all ${section.files.length} files in ${section.title}`
-                                  : `Select all ${section.files.length} files in ${section.title}`}
-                                aria-label={sectionAllSelected
-                                  ? `Deselect all ${section.files.length} files in ${section.title}`
-                                  : `Select all ${section.files.length} files in ${section.title}`}
-                                activeClass="border-primary bg-primary"
-                              />
-                            </span>
-                            <span
-                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
-                            >
-                              {section.title}
-                            </span>
-                            <span class="text-[0.5rem] tabular-nums text-dimmed">
-                              {section.files.length}
-                            </span>
-                          </div>
-                          {#each section.files as change (change.path)}
-                            <GitFileRow
-                              {change}
-                              diff={diffs[fileDiffKey(change)] ?? null}
-                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                              error={diffErrors[fileDiffKey(change)] ?? null}
-                              expanded={expanded[fileDiffKey(change)] ?? false}
-                              selected={Boolean(selectedPaths[change.path])}
-                              selectable
-                              onToggleDiff={() => void toggleDiff(change)}
-                              onToggleStage={() => void toggleStage(change)}
-                              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                              onStash={(path) => requestStashFor([path])}
-                              onOpenInEditor={(path) => void openInEditor(path)}
-                              onIgnore={(path) => void ignorePathsAction([path])}
-                              onDiscard={(path) => requestDiscard([path])}
-                            />
-                          {/each}
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-
-                {#if workingSections.length > 0}
-                  <div class={paneClass}>
-                    {#if changesView === 'tree'}
-                      <GitChangesTree
-                        sections={workingSections}
-                        {diffs}
-                        {expanded}
-                        {loadingDiff}
-                        {diffErrors}
-                        bind:selectedPaths
-                        onToggleDiff={(change) => void toggleDiff(change)}
-                        onToggleStage={(change) => void toggleStage(change)}
-                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                        onStashPaths={(paths) => requestStashFor(paths)}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                        onDiscardPaths={(paths) => requestDiscard(paths)}
-                      />
-                    {:else}
-                      <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                        {#each workingSections as section, si (section.title)}
-                          {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          {@const sectionAllSelected =
-                            section.files.length > 0 &&
-                            section.files.every((f) => selectedPaths[f.path])}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                            <span
-                              class="shrink-0"
-                              role="presentation"
-                              onclick={(event: MouseEvent) => {
-                                event.stopPropagation()
-                                event.preventDefault()
-                              }}
-                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                            >
-                              <Switch
-                                checked={sectionAllSelected}
-                                onchange={() => toggleSectionSelection(section.files)}
-                                title={sectionAllSelected
-                                  ? `Deselect all ${section.files.length} files in ${section.title}`
-                                  : `Select all ${section.files.length} files in ${section.title}`}
-                                aria-label={sectionAllSelected
-                                  ? `Deselect all ${section.files.length} files in ${section.title}`
-                                  : `Select all ${section.files.length} files in ${section.title}`}
-                                activeClass="border-primary bg-primary"
-                              />
-                            </span>
-                            <span
-                              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
-                            >
-                              {section.title}
-                            </span>
-                            <span class="text-[0.5rem] tabular-nums text-dimmed">
-                              {section.files.length}
-                            </span>
-                          </div>
-                          {#each section.files as change (change.path)}
-                            <GitFileRow
-                              {change}
-                              diff={diffs[fileDiffKey(change)] ?? null}
-                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                              error={diffErrors[fileDiffKey(change)] ?? null}
-                              expanded={expanded[fileDiffKey(change)] ?? false}
-                              selected={Boolean(selectedPaths[change.path])}
-                              selectable
-                              onToggleDiff={() => void toggleDiff(change)}
-                              onToggleStage={() => void toggleStage(change)}
-                              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                              onStash={(path) => requestStashFor([path])}
-                              onOpenInEditor={(path) => void openInEditor(path)}
-                              onIgnore={(path) => void ignorePathsAction([path])}
-                              onDiscard={(path) => requestDiscard([path])}
-                            />
-                          {/each}
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        <GitStatusPanelChangesView
+          {selectedCommit}
+          {status}
+          {changes}
+          {conflictSections}
+          {stagedSections}
+          {workingSections}
+          {commitDiffChanges}
+          {commitTree}
+          {commitTreeCollapsedDirs}
+          {changesView}
+          {loadingCommitDiff}
+          {diffs}
+          {expanded}
+          {loadingDiff}
+          {diffErrors}
+          {commitDiffs}
+          {commitExpanded}
+          {loadingCommitDiffFile}
+          {commitDiffErrors}
+          bind:selectedPaths
+          {paneClass}
+          {toggleDiff}
+          {toggleStage}
+          {toggleSelection}
+          {toggleSectionSelection}
+          {stagePathsAction}
+          {requestStashFor}
+          {openInEditor}
+          {ignorePathsAction}
+          {requestDiscard}
+          {routeConflictResolution}
+          {restoreFromSource}
+          {toggleCommitDiff}
+          {toggleCommitDir}
+          {requestRemoveCommitChanges}
+        />
       {:else if activeTab === 'history'}
-        <div class="p-2">
-          {#if loadingHistory}
-            <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-              <Loader2 size={14} class="animate-spin" />
-              Loading history
-            </div>
-          {:else if commitHistory.length === 0}
-            <div class="flex flex-col items-center justify-center py-12 text-center">
-              <History size={22} class="mx-auto mb-2 text-dimmed" />
-              <p class="text-xs font-medium text-muted">No commits yet</p>
-              <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
-            </div>
-          {:else}
-            <div class="space-y-0.5">
-              {#each commitHistory as commit, index (commit.hash)}
-                {@const isCurrentHead = index === 0}
-                {@const isUnpushed = index < unpushedCount}
-                {#if unpushedCount > 0 && index === unpushedCount}
-                  <div class="flex items-center gap-2 px-2 py-1">
-                    <span class="h-px flex-1 bg-border"></span>
-                    <span class="shrink-0 text-[0.5625rem] font-medium text-dimmed">
-                      Pushed to {status?.upstream}
-                    </span>
-                    <span class="h-px flex-1 bg-border"></span>
-                  </div>
-                {/if}
-                <ContextMenu.Root>
-                  <ContextMenu.Trigger
-                    class="block w-full"
-                    aria-label={`Actions for commit ${commit.shortHash}`}
-                  >
-                    <button
-                      type="button"
-                      class={[
-                        'group w-full rounded-lg px-2 py-1.5 text-left transition-colors',
-                        selectedCommit?.hash === commit.hash
-                          ? 'bg-primary/10'
-                          : 'hover:bg-elevated/50'
-                      ]}
-                      onclick={() => void selectCommit(commit)}
-                    >
-                      <div class="flex items-start gap-2">
-                        <div
-                          class={[
-                            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
-                            isUnpushed ? 'bg-warning' : 'bg-primary/40'
-                          ]}
-                          title={isUnpushed
-                            ? `Not pushed to ${status?.upstream ?? 'the remote'} yet`
-                            : undefined}
-                        ></div>
-                        <div class="min-w-0 flex-1">
-                          <p class="truncate text-[0.6875rem] leading-snug text-foreground">
-                            {commit.message.split('\n')[0]}
-                          </p>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                            <span class="font-mono">{commit.shortHash}</span>
-                            <span>·</span>
-                            <span>{commit.author}</span>
-                            <span>·</span>
-                            <span>{relativeTime(commit.date)}</span>
-                            {#if isUnpushed}
-                              <span
-                                class="rounded px-1 py-px text-[0.5rem] font-medium uppercase tracking-wide text-warning"
-                              >
-                                local
-                              </span>
-                            {/if}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  </ContextMenu.Trigger>
-                  <ContextMenu.Portal>
-                    <ContextMenu.Content
-                      class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                      side="bottom"
-                      align="start"
-                      sideOffset={4}
-                      collisionPadding={8}
-                    >
-                      <CommitActionsMenu
-                        isHead={isCurrentHead}
-                        resetBusy={gitState.isBusy('reset')}
-                        deleteBusy={gitState.isBusy('delete-commit')}
-                        onReset={(mode) => requestReset(mode, commit.hash)}
-                        onDelete={() => requestDeleteCommit(commit)}
-                        onAmend={isCurrentHead ? startAmend : undefined}
-                        onCopyHash={() => void copyCommitHash(commit)}
-                        onCopyMessage={() => void copyCommitMessage(commit)}
-                      />
-                    </ContextMenu.Content>
-                  </ContextMenu.Portal>
-                </ContextMenu.Root>
-              {/each}
-              {#if loadingMoreHistory}
-                <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
-                  <Loader2 size={12} class="animate-spin" />
-                  Loading older commits
-                </div>
-              {:else if !historyHasMore}
-                <p class="py-4 text-center text-[0.5625rem] text-dimmed">Start of history</p>
-              {/if}
-            </div>
-          {/if}
-        </div>
+        <GitGraphView
+          commits={commitHistory}
+          loading={loadingHistory}
+          loadingMore={loadingMoreHistory}
+          hasMore={historyHasMore}
+          {unpushedCount}
+          upstream={status?.upstream ?? null}
+          {remoteUpdates}
+          selectedHash={selectedCommit?.hash ?? null}
+          onSelectCommit={(commit) => void selectCommit(commit)}
+        >
+          {#snippet menu({ commit, isHead }: { commit: GitCommitInfo; isHead: boolean })}
+            {@render commitActions(commit, isHead)}
+          {/snippet}
+        </GitGraphView>
       {:else if activeTab === 'branches'}
-        <div class="flex h-full min-h-0 flex-col">
-          <!-- New branch -->
-          <div class="shrink-0 border-b border-border px-3 py-1.5">
-            {#if creatingBranch}
-              <div class="flex items-center gap-1.5">
-                <input
-                  bind:this={newBranchInput}
-                  class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                  placeholder="new-feature"
-                  bind:value={newBranchName}
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'Enter') void submitNewBranch()
-                    if (event.key === 'Escape') {
-                      creatingBranch = false
-                      newBranchName = ''
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                  disabled={!newBranchName.trim() || gitState.isBusy('checkout')}
-                  onclick={() => void submitNewBranch()}
-                >
-                  Create
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-                  onclick={() => {
-                    creatingBranch = false
-                    newBranchName = ''
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            {:else}
-              <button
-                type="button"
-                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-[0.6875rem] font-medium text-muted transition-colors hover:text-foreground"
-                onclick={() => (creatingBranch = true)}
-              >
-                <Plus size={12} class="shrink-0" />
-                New branch
-              </button>
-            {/if}
-          </div>
-
-          <div class="min-h-0 flex-1 overflow-y-auto p-2">
-            {#if gitState.branches.length === 0}
-              <div class="flex flex-col items-center justify-center py-12 text-center">
-                <GitBranch size={22} class="mx-auto mb-2 text-dimmed" />
-                <p class="text-xs font-medium text-muted">No branches</p>
-              </div>
-            {:else}
-              {@const branchSections = [
-                {
-                  key: 'local',
-                  label: 'Local',
-                  branches: [...localBranches].sort((a, b) => {
-                    if (a.current !== b.current) return a.current ? -1 : 1
-                    return a.ref.localeCompare(b.ref)
-                  })
-                },
-                {
-                  key: 'worktrees',
-                  label: 'Worktrees',
-                  branches: [...worktreeBranches].sort((a, b) => a.ref.localeCompare(b.ref))
-                },
-                {
-                  key: 'remote',
-                  label: 'Remote',
-                  branches: [...gitState.branches]
-                    .filter((branch) => branch.kind === 'remote')
-                    .sort((a, b) => a.ref.localeCompare(b.ref))
-                }
-              ].filter((section) => section.branches.length > 0)}
-              <div class="space-y-0.5">
-                {#each branchSections as section (section.key)}
-                  <p
-                    class="px-2 pb-1 pt-2 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-                  >
-                    {section.label}
-                  </p>
-                  {#each section.branches as branch (branch.ref)}
-                    {@const canFetch = Boolean(branch.remote)}
-                    {@const inWorktree = branch.worktreePath !== null}
-                    {@const hasLocalCounterpart =
-                      branch.kind === 'remote' && localBranchNames.has(branch.name)}
-                    <ContextMenu.Root>
-                      <ContextMenu.Trigger
-                        class="block w-full"
-                        aria-label={`Actions for branch ${branch.ref}`}
-                      >
-                        <div
-                          class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
-                        >
-                          <span
-                            class={[
-                              'flex size-5 shrink-0 items-center justify-center rounded-full',
-                              inWorktree
-                                ? 'bg-warning/10 text-warning'
-                                : branchAvatarClass(branch.ref)
-                            ]}
-                          >
-                            {#if inWorktree}
-                              <FolderTree size={11} />
-                            {:else}
-                              <GitBranch size={11} />
-                            {/if}
-                          </span>
-                          <span class="min-w-0 flex-1">
-                            <button
-                              type="button"
-                              class="block w-full cursor-pointer truncate text-left text-[0.6875rem] text-foreground disabled:cursor-default"
-                              disabled={branch.current || hasLocalCounterpart || inWorktree}
-                              title={branch.current
-                                ? undefined
-                                : inWorktree
-                                  ? `Checked out in worktree ${branch.worktreePath ?? ''}   git allows a branch in only one worktree`
-                                  : hasLocalCounterpart
-                                    ? `${branch.ref} already has a local branch`
-                                    : branch.kind === 'local'
-                                      ? `Check out ${branch.name}`
-                                      : `Create local branch ${branch.name} from ${branch.ref}`}
-                              onclick={() => requestCheckout(branch)}
-                            >
-                              {branch.kind === 'local' ? branch.name : branch.ref}
-                            </button>
-                            {#if branch.kind === 'local' && branch.upstream}
-                              <span class="block truncate text-[0.5625rem] text-dimmed">
-                                tracks {branch.upstream}
-                              </span>
-                            {:else if inWorktree}
-                              <span class="block truncate text-[0.5625rem] text-dimmed">
-                                checked out in worktree
-                              </span>
-                            {:else if branch.kind === 'remote'}
-                              <span class="block truncate text-[0.5625rem] text-dimmed">
-                                {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
-                              </span>
-                            {/if}
-                          </span>
-                          {#if inWorktree}
-                            <span
-                              class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
-                            >
-                              worktree
-                            </span>
-                          {/if}
-                          {#if branch.ahead > 0 || branch.behind > 0}
-                            <span
-                              class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums"
-                            >
-                              {#if branch.ahead > 0}
-                                <span class="text-success">+{branch.ahead}</span>
-                              {/if}
-                              {#if branch.behind > 0}
-                                <span class="text-danger">−{branch.behind}</span>
-                              {/if}
-                            </span>
-                          {/if}
-                          <div class="relative h-6 w-16 shrink-0">
-                            <DropdownMenu.Root>
-                              <DropdownMenu.Trigger
-                                class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                                aria-label={`More actions for branch ${branch.ref}`}
-                                title={`More actions for branch ${branch.ref}`}
-                              >
-                                <MoreHorizontal size={13} />
-                              </DropdownMenu.Trigger>
-                              <DropdownMenu.Portal>
-                                <DropdownMenu.Content
-                                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                                  side="bottom"
-                                  align="end"
-                                  sideOffset={4}
-                                  collisionPadding={8}
-                                >
-                                  <BranchActionsMenu
-                                    isCurrent={branch.current}
-                                    canCheckout={!hasLocalCounterpart && !inWorktree}
-                                    canDelete={branch.kind === 'local'}
-                                    canDeleteRemote={branch.kind === 'remote'}
-                                    {canFetch}
-                                    checkoutLabel={branch.kind === 'local'
-                                      ? 'Check out'
-                                      : 'Create local branch'}
-                                    busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                                    remoteBusy={gitState.isBusy('push')}
-                                    onCheckout={() => requestCheckout(branch)}
-                                    onFetch={() => void fetchBranchAction(branch)}
-                                    onDelete={() => requestDeleteBranch(branch.name)}
-                                    onDeleteRemote={() => requestDeleteRemoteBranch(branch)}
-                                  />
-                                </DropdownMenu.Content>
-                              </DropdownMenu.Portal>
-                            </DropdownMenu.Root>
-                            {#if branch.current}
-                              <span
-                                class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[0.5rem] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
-                              >
-                                current
-                              </span>
-                            {/if}
-                          </div>
-                        </div>
-                      </ContextMenu.Trigger>
-                      <ContextMenu.Portal>
-                        <ContextMenu.Content
-                          class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                          side="bottom"
-                          align="start"
-                          sideOffset={4}
-                          collisionPadding={8}
-                        >
-                          <BranchActionsMenu
-                            isCurrent={branch.current}
-                            canCheckout={!hasLocalCounterpart && !inWorktree}
-                            canDelete={branch.kind === 'local'}
-                            canDeleteRemote={branch.kind === 'remote'}
-                            {canFetch}
-                            checkoutLabel={branch.kind === 'local'
-                              ? 'Check out'
-                              : 'Create local branch'}
-                            busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                            remoteBusy={gitState.isBusy('push')}
-                            onCheckout={() => requestCheckout(branch)}
-                            onFetch={() => void fetchBranchAction(branch)}
-                            onDelete={() => requestDeleteBranch(branch.name)}
-                            onDeleteRemote={() => requestDeleteRemoteBranch(branch)}
-                          />
-                        </ContextMenu.Content>
-                      </ContextMenu.Portal>
-                    </ContextMenu.Root>
-                  {/each}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </div>
+        <GitStatusPanelBranchesView
+          branches={gitState.branches}
+          {localBranches}
+          {worktreeBranches}
+          {localBranchNames}
+          bind:creatingBranch
+          bind:newBranchName
+          onCreateBranch={(name) => void createBranchAction(name)}
+          onRequestCheckout={requestCheckout}
+          onFetchBranch={(branch) => void fetchBranchAction(branch)}
+          onRequestDeleteBranch={requestDeleteBranch}
+          onRequestDeleteRemoteBranch={requestDeleteRemoteBranch}
+        />
       {:else if activeTab === 'pulls'}
         <div class="h-full min-h-0">
           {#if selectedPullRequest && githubIdentity}
             <GitPullRequestDetail
               {projectId}
+              {threadId}
               identity={githubIdentity}
               summary={selectedPullRequest}
+              bind:tab={prDetailTab}
               onBack={() => (selectedPullRequest = null)}
-              onAgentReview={(pr) => void startAgentReview(pr)}
-              onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onFullscreen={() => openPullRequestFullscreen(selectedPullRequest)}
+              onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+              onOpenThread={(threadId) => void openAgentThread(threadId)}
               onOpenWorkflowRun={openWorkflowRunFromCheck}
               onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
             />
           {:else}
+            <!--
+              The panel draws the filter and the actions for this list in its own
+              rows, so the list renders rows and paging only (`showControls`).
+            -->
             <GitPullRequestList
               {projectId}
               identity={githubIdentity}
               {githubConnected}
+              state={prListState}
+              filter={prListFilter}
+              sort={prListSort}
+              page={prListPage}
+              showControls={false}
+              selected={prListSelection}
+              onSelectionChange={(next) => (prListSelection = next)}
+              onAction={handlePrListAction}
+              onStateChange={selectPrListState}
+              onFilterChange={selectPrListFilter}
+              onSortChange={selectPrListSort}
+              onPageChange={selectPrListPage}
               onOpen={(pr) => (selectedPullRequest = pr)}
+              onFullscreen={() => openPullRequestFullscreen(null)}
               onSignIn={() => (showGitHubSignIn = true)}
               onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
-              refreshSignal={prListRefresh}
             />
           {/if}
         </div>
@@ -3168,6 +3789,8 @@
           {projectId}
           identity={githubIdentity}
           {githubConnected}
+          bind:selectedDeployment
+          bind:selectedRun
           onSignIn={() => (showGitHubSignIn = true)}
           requestedRunId={requestedWorkflowRunId}
           onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
@@ -3175,1229 +3798,258 @@
           onAgentDiagnoseDeployment={startDeploymentDiagnosis}
         />
       {:else if activeTab === 'stashes'}
-        <div class="p-2">
-          {#if selectedStash}
-            {@const stash = selectedStash}
-            <!-- Stash diff view -->
-            <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Back to stash list"
-                  aria-label="Back to stash list"
-                  onclick={clearSelectedStash}
-                >
-                  <ArrowLeft size={12} />
-                </button>
-                <div class="min-w-0 flex-1">
-                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{stash.message}</p>
-                  <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                    <span class="font-mono">{stash.id}</span>
-                    {#if stash.branch}
-                      <span>·</span>
-                      <span class="truncate">{stash.branch}</span>
-                    {/if}
-                    <span>·</span>
-                    <span>{relativeTime(stash.date)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="p-2">
-              {#if loadingStashDiff}
-                <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-                  <Loader2 size={14} class="animate-spin" />
-                  Loading changes
-                </div>
-              {:else if stashDiffChanges.length === 0}
-                <div class="flex flex-col items-center justify-center py-12 text-center">
-                  <Archive size={22} class="mx-auto mb-2 text-dimmed" />
-                  <p class="text-xs font-medium text-muted">No file changes</p>
-                  <p class="mt-1 text-[0.625rem] text-dimmed">This stash has no changes.</p>
-                </div>
-              {:else}
-                <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                  <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-                      Changed files
-                    </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
-                      {stashDiffChanges.length}
-                    </span>
-                  </div>
-                  {#each stashDiffChanges as change (change.path)}
-                    <GitFileRow
-                      {change}
-                      diff={stashDiffs[change.path] ?? null}
-                      loadingDiff={loadingStashDiffFile[change.path] ?? false}
-                      error={stashDiffErrors[change.path] ?? null}
-                      expanded={stashExpanded[change.path] ?? false}
-                      readonly
-                      onToggleDiff={() => void toggleStashDiff(change)}
-                      onToggleStage={() => {}}
-                      onRestore={(path, target) =>
-                        void restoreFromSource(selectedStash?.id ?? 'HEAD', path, target)}
-                    />
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {:else}
-            <div class="overflow-hidden rounded-lg border border-border bg-surface">
-              {#each gitState.stashes as stash (stash.id)}
-                <div
-                  class="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-elevated/40"
-                >
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 items-center gap-2 rounded text-left transition-colors hover:text-foreground"
-                    title="View changes in stash {stash.id}"
-                    aria-label="View changes in stash {stash.id}"
-                    onclick={() => void selectStash(stash)}
-                  >
-                    <Archive size={12} class="shrink-0 text-dimmed" />
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[0.6875rem] leading-snug text-foreground">
-                        {stash.message}
-                      </span>
-                      <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-                        <span class="font-mono">{stash.id}</span>
-                        {#if stash.branch}
-                          <span>·</span>
-                          <span class="truncate">{stash.branch}</span>
-                        {/if}
-                        <span>·</span>
-                        <span>{relativeTime(stash.date)}</span>
-                      </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={stashOpBusy}
-                    title="Restore stash {stash.id} into the working tree"
-                    onclick={() => void popStash(stash.id)}
-                  >
-                    {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
-                  </button>
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                    disabled={stashOpBusy}
-                    title="Discard stash {stash.id}"
-                    aria-label="Discard stash {stash.id}"
-                    onclick={() => requestStashDrop(stash)}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              {/each}
-            </div>
-            <p class="mt-2 px-1 text-[0.5625rem] leading-relaxed text-dimmed">
-              Click a stash to inspect its changes. Popping restores it to your working tree and
-              removes it from this list.
-            </p>
-          {/if}
-        </div>
+        <GitStatusPanelStashesView
+          {selectedStash}
+          {loadingStashDiff}
+          {stashDiffChanges}
+          {stashDiffs}
+          {loadingStashDiffFile}
+          {stashDiffErrors}
+          {stashExpanded}
+          stashes={gitState.stashes}
+          {stashOpBusy}
+          stashPopBusy={gitState.isBusy('stash-pop')}
+          onSelectStash={(stash) => void selectStash(stash)}
+          onToggleStashDiff={(change) => void toggleStashDiff(change)}
+          onRestore={(path, target) =>
+            void restoreFromSource(selectedStash?.id ?? 'HEAD', path, target)}
+          onPopStash={(id) => void popStash(id)}
+          onRequestStashDrop={requestStashDrop}
+        />
       {/if}
     {/if}
   </div>
 
-  <!-- Pinned composer: only once something is staged (or an amend was started from History) -->
-  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (staged.length > 0 || amendMode)}
-    <div class="shrink-0 border-t border-border bg-surface">
-      {#if amendMode}
-        <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
-          <GitCommit size={11} class="shrink-0 text-warning" />
-          <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
-            Amending the most recent commit   no new commit will be created.
-          </p>
-          <button
-            type="button"
-            class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
-            onclick={() => (amendMode = false)}
-          >
-            Cancel
-          </button>
-        </div>
-      {/if}
-      <div class="px-2 pt-2">
-        <textarea
-          bind:this={commitTextarea}
-          class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
-          bind:value={commitMessage}
-          onkeydown={onCommitMessageKeydown}></textarea>
-      </div>
-      <div class="flex items-center gap-1.5 px-2 py-2">
-        <span class="flex-1"></span>
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={!commitMessage.trim() || commitBusy || (!amendMode && staged.length === 0)}
-          onclick={() => void commitInline()}
-        >
-          {#if commitBusy}
-            <Loader2 size={11} class="animate-spin" />
-          {:else}
-            <GitCommit size={11} />
-          {/if}
-          {amendMode ? 'Amend commit' : `Commit${staged.length > 0 ? ` (${staged.length})` : ''}`}
-        </button>
-      </div>
-    </div>
-  {/if}
-
+  <GitStatusPanelCommitComposer
+    {repoState}
+    {status}
+    {selectedCommit}
+    {activeTab}
+    stagedCount={staged.length}
+    bind:amendMode
+    {mergeAwaitsCompletion}
+    {commitBusy}
+    bind:commitMessage
+    bind:commitSelection
+    onCommitInline={() => void commitInline()}
+    {onCommitMessageKeydown}
+  />
   <!-- Pinned action bar -->
-  {#if pushConfirm}
-    <div class="shrink-0 border-t border-border bg-warning/10 px-3 py-2">
-      <p class="text-[0.625rem] font-medium text-foreground">Push with upstream?</p>
-      <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
-        Set <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span> as upstream.
-      </p>
-      <div class="mt-1.5 flex justify-end gap-1.5">
-        <button
-          type="button"
-          class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
-          onclick={() => (pushConfirm = false)}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          disabled={syncBusy}
-          onclick={() => void confirmPushUpstream()}
-        >
-          Push
-        </button>
-      </div>
-    </div>
+  <GitStatusPanelDialogs
+    {repoState}
+    {status}
+    {primaryRemote}
+    {remoteBranchExists}
+    {pushBlocked}
+    {pullStrategyOpen}
+    {pullStrategyError}
+    {syncMainOpen}
+    {syncDirection}
+    {integrationOpen}
+    {conflictState}
+    {conflicted}
+    {mergeAwaitsCompletion}
+    {mergePending}
+    {prResolveBranch}
+    {completeMergeBusy}
+    {pushRecoverMode}
+    {localBranches}
+    {integrateBusy}
+    {resetOptions}
+    {atRiskFiles}
+    {agentTurnActive}
+    {originModalOpen}
+    {originMode}
+    {originName}
+    {originBusy}
+    bind:pushConfirm
+    bind:pushDiverged
+    bind:completeMergeOpen
+    bind:mergeTitle
+    bind:mergeDescription
+    bind:showGitHubSignIn
+    bind:showStashModal
+    bind:stashPaths
+    bind:stashMessage
+    bind:showIntegrateModal
+    bind:mergeTarget
+    bind:pendingOperation
+    bind:acknowledgeActiveTurn
+    bind:resetConfirm
+    bind:deleteCommitTarget
+    bind:checkoutConfirm
+    bind:deleteBranchConfirm
+    bind:forceDeleteBranchConfirm
+    bind:deleteRemoteBranchConfirm
+    bind:originReplaceConfirm
+    bind:originUrl
+    {integrationActions}
+    {confirmPushUpstream}
+    {recoverPush}
+    {closePullStrategy}
+    {performPull}
+    {closeSyncMain}
+    {performSyncMain}
+    {confirmCompleteMerge}
+    {openCompleteMerge}
+    {loadGitHubAuth}
+    {stashChanges}
+    {requestMergeOrRebase}
+    {confirmPendingOperation}
+    {confirmReset}
+    {confirmDeleteCommit}
+    {confirmCheckoutBranch}
+    {confirmDeleteBranch}
+    {confirmForceDeleteBranch}
+    {confirmDeleteRemoteBranch}
+    {closeOriginModal}
+    {requestSetOrigin}
+    {runSetOrigin}
+  />
+</div>
+
+<!-- Peer chooser: the panel only says which direction the user started from. -->
+{#if syncPeerOpen}
+  <GitSyncPeerDialog
+    {projectId}
+    {scopeBucketId}
+    initialDirection={syncPeerDirection}
+    onClose={closeSyncPeer}
+    onStarted={syncPeerStarted}
+    onSettled={() => void refreshStatus()}
+  />
+{/if}
+
+<GitStatusPanelConfirmDialogs
+  bind:stashDropTarget
+  bind:discardConfirm
+  bind:restoreWorktreeConfirm
+  bind:abortConfirmOpen
+  bind:acceptConflictsSide
+  bind:commitInfoTarget
+  bind:removeCommitChangesConfirm
+  {conflictState}
+  conflictedCount={conflicted.length}
+  {commitInfoOnRemote}
+  {removeCommitOnRemote}
+  {commitInfoUrl}
+  onConfirmStashDrop={() => void confirmStashDrop()}
+  onConfirmDiscard={() => void confirmDiscard()}
+  onConfirmRestoreWorktree={() => void confirmRestoreWorktree()}
+  onConfirmAbortConflict={() => void confirmAbortConflict()}
+  onConfirmAcceptAllConflicts={() => void confirmAcceptAllConflicts()}
+  onConfirmRemoveCommitChanges={() => void confirmRemoveCommitChanges()}
+  onCopyCommitHash={(commit) => void copyCommitHash(commit)}
+  onOpenCommitInBrowser={(url) => void openInBrowser(url)}
+/>
+
+<!--
+  Row-menu surfaces. They are siblings of the panel's own layout for the same
+  reason the full screen reader is: a confirmation has to sit above the sidebar it
+  was opened from rather than inside its clipping column.
+-->
+{#if githubIdentity}
+  {#if prBatch}
+    <PrBatchDialog batch={prBatch} onConfirm={confirmPrBatch} onClose={() => (prBatch = null)} />
   {/if}
 
-  {#if pushDiverged}
-    <Modal open title="Push blocked   branch has diverged" onClose={() => (pushDiverged = false)}>
-      <div class="space-y-2">
-        <p class="text-[0.625rem] leading-relaxed text-muted">
-          The remote branch has commits you don't have locally, so Git will not let you push over
-          them. Integrate the remote changes first, then push again.
-        </p>
-        <p class="rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] text-dimmed">
-          {status?.branch && primaryRemote
-            ? `${primaryRemote.name}/${status.branch}`
-            : 'Remote branch'}
-          {#if (status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0}
-              <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
-            <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
-          {/if}
-        </p>
-        <p class="text-[0.5625rem] leading-relaxed text-dimmed">
-          Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
-          the remote for a straight history. Conflicts pause integration so you can resolve them
-          here before anything is pushed.
-        </p>
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (pushDiverged = false)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={pushRecoverMode !== null}
-            onclick={() => void recoverPush('rebase')}
-          >
-            {#if pushRecoverMode === 'rebase'}
-              <Loader2 size={11} class="animate-spin" />
-            {/if}
-            Rebase &amp; push
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-            disabled={pushRecoverMode !== null}
-            onclick={() => void recoverPush('merge')}
-          >
-            {#if pushRecoverMode === 'merge'}
-              <Loader2 size={11} class="animate-spin" />
-            {/if}
-            Pull &amp; push
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if pullStrategyOpen}
-    <Modal open title="Choose pull strategy" onClose={closePullStrategy}>
-      <div class="space-y-3">
-        <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-          <p class="text-[0.625rem] font-medium text-foreground">
-            Pull into <span class="font-mono">{status?.branch ?? 'current branch'}</span>
-          </p>
-          <p class="mt-0.5 text-[0.5625rem] text-dimmed">
-            {status?.ahead ?? 0} ahead, {status?.behind ?? 0} behind
-            <span class="font-mono">{status?.upstream ?? 'its remote'}</span>
-          </p>
-        </div>
-        {#if pullStrategyError}
-          <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-            <p class="text-[0.625rem] font-semibold text-danger">That pull strategy could not finish</p>
-            <p
-              class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
-            >
-              {pullStrategyError}
-            </p>
-            <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-              Choose another strategy below, or cancel without changing the branch further.
-            </p>
-          </div>
-        {/if}
-        <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
-          <p>
-            <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
-            a merge commit.
-          </p>
-          <p>
-            <span class="font-medium text-foreground">Rebase</span> replays local commits on top of the
-            remote branch.
-          </p>
-          <p>
-            <span class="font-medium text-foreground">Fast-forward only</span> pulls only when no reconciliation
-            is needed.
-          </p>
-        </div>
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('pull')}
-            onclick={closePullStrategy}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('pull')}
-            onclick={() => void performPull('ff-only')}
-          >
-            Fast-forward only
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            disabled={gitState.isBusy('pull')}
-            onclick={() => void performPull('rebase')}
-          >
-            Rebase
-          </button>
-          <button
-            type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-            data-modal-primary
-            disabled={gitState.isBusy('pull')}
-            onclick={() => void performPull('merge')}
-          >
-            Merge
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  <!-- Completing a resolved merge: optional title/description, auto-generated when skipped -->
-  {#if resolveMergeOpen}
-    <Modal
-      open
-      title="Resolve merge"
-      onClose={() => (resolveMergeOpen = false)}
-    >
-      <div class="space-y-2">
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          All conflicts are resolved. Give the merge commit a title and description, or leave them
-          empty to generate one automatically. Resolving also pushes the result back to the pull
-          request, restores your previous branch, and removes the temporary conflict branch.
-        </p>
-        <input
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
-          bind:value={mergeTitle}
-          disabled={resolveMergeBusy}
-        />
-        <textarea
-          class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Description (optional)"
-          bind:value={mergeDescription}
-          disabled={resolveMergeBusy}
-        ></textarea>
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (resolveMergeOpen = false)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-3 text-[0.6875rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
-            data-modal-primary
-            disabled={resolveMergeBusy}
-            onclick={() => void confirmResolveMerge()}
-          >
-            {#if resolveMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge size={11} />{/if}
-            Resolve
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  <!--
-    Fetch/pull/push act on the local working tree, so they only belong to the
-    working-tree tabs. On the pull request tab they sat under a PR's own
-    comment box implying they were part of reviewing it, which they are not.
-  -->
-  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls' && !mergePending}
-    <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title="Fetch refs from the remote without changing the working tree"
-        disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void gitState.fetch(projectId)}
-      >
-        {#if gitState.isBusy('fetch')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <Download size={11} />
-        {/if}
-        Fetch
-      </button>
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title={status.behind > 0
-          ? `Pull ${String(status.behind)} commit(s) from the remote`
-          : 'Pull from the remote'}
-        disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void pullAction()}
-      >
-        {#if gitState.isBusy('pull')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <ArrowDownToLine size={11} />
-        {/if}
-        Pull{status.behind > 0 ? ` ${status.behind}` : ''}
-      </button>
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title={status.ahead > 0
-          ? `Push ${String(status.ahead)} commit(s) to the remote`
-          : 'Push to the remote'}
-        disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
-        onclick={() => void pushAction()}
-      >
-        {#if gitState.isBusy('push')}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <ArrowUpFromLine size={11} />
-        {/if}
-        Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
-      </button>
-    </div>
-  {:else if repoState === 'git' && status && mergePending}
-    <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
-      <button
-        type="button"
-        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
-        title="Commit the resolved files to complete the merge"
-        disabled={resolveMergeBusy}
-        onclick={openResolveMerge}
-      >
-        {#if resolveMergeBusy}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <GitMerge size={11} />
-        {/if}
-        Resolve merge
-      </button>
-    </div>
-  {/if}
-
-  <!-- Modals -->
-  {#if showGitHubSignIn}
-    <GitHubSignInModal
-      onClose={() => (showGitHubSignIn = false)}
-      onConnected={() => {
-        // Reload the full status so the avatar/name land in the branch picker
-        // instead of leaving a stale "Sign in" button behind.
-        void loadGitHubAuth()
-      }}
+  {#if prMetadata}
+    <PrMetadataDialog
+      pr={prMetadata.pr}
+      mode={prMetadata.mode}
+      {projectId}
+      owner={githubIdentity.owner}
+      repo={githubIdentity.repo}
+      onClose={() => (prMetadata = null)}
     />
   {/if}
 
-  {#if showStashModal}
-    <Modal
-      open
-      title={stashPaths ? 'Stash selected changes' : 'Stash changes'}
-      onClose={() => (showStashModal = false)}
-    >
-      <div class="space-y-2">
-        {#if stashPaths}
-          <div class="rounded-lg border border-border bg-elevated/50 px-3 py-2">
-            <p class="text-[0.625rem] font-medium text-foreground">
-              {stashPaths.length}
-              {stashPaths.length === 1 ? 'file' : 'files'} to stash
-            </p>
-            <div class="mt-1 max-h-24 overflow-auto">
-              {#each stashPaths as path (path)}
-                <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
-              {/each}
-            </div>
-          </div>
-        {:else}
-          <p class="text-[0.6875rem] leading-relaxed text-muted">
-            Shelves your staged and unstaged changes so you can switch work. Restore them any time
-            from the Stashes tab.
-          </p>
-        {/if}
-        <input
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Describe this stash (optional)"
-          bind:value={stashMessage}
+  {#if prMerge}
+    <PrMergeConfirmDialog
+      number={prMerge.pr.number}
+      summary={prMerge.pr}
+      method={prMerge.method}
+      fieldSuffix="pr-list"
+      busy={prMergeBusy}
+      bind:open={prMergeOpen}
+      bind:commitTitle={prMergeTitle}
+      bind:commitMessage={prMergeMessage}
+      onConfirm={() => void confirmPrMerge()}
+    />
+  {/if}
+{/if}
+
+<!--
+  Full screen pull request reader. It is a sibling of the panel's own layout so
+  it can cover the whole window, and it is mounted only while a tab is active.
+-->
+{#if fullscreenPullRequestId}
+  <FullscreenPanelDialog
+    tabs={fullscreenPullRequestTabs}
+    activeTabId={fullscreenPullRequestId}
+    newLabel="New pull request"
+    minimizeLabel="Close the full screen reader"
+    onSelect={(id) => (fullscreenPullRequestId = id)}
+    onCloseTab={closeFullscreenPullRequestTab}
+    onNew={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+    onMinimize={() => (fullscreenPullRequestId = null)}
+  >
+    {#snippet icon()}
+      <GitPullRequest size={12} class="shrink-0" aria-hidden="true" />
+    {/snippet}
+    <div class="flex min-h-0 flex-1 flex-col">
+      {#if fullscreenActivePullRequest && githubIdentity}
+        <GitPullRequestDetail
+          {projectId}
+          {threadId}
+          identity={githubIdentity}
+          summary={fullscreenActivePullRequest}
+          variant="fullscreen"
+          onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
+          onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
+          onOpenThread={(threadId) => void openAgentThread(threadId)}
+          onOpenWorkflowRun={openWorkflowRunFromCheck}
+          onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
+          onResolveWithAgent={(pr) => void startConflictResolution(pr)}
         />
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => {
-              showStashModal = false
-              stashPaths = null
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
-            onclick={() => void stashChanges()}
-          >
-            {#if gitState.isBusy('stash')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            {stashPaths ? 'Stash selected' : 'Stash changes'}
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if showIntegrateModal}
-    <Modal open title="Merge or rebase" onClose={() => (showIntegrateModal = false)}>
-      <div class="space-y-2">
-        <label
-          class="block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-          for="integrate-target"
-        >
-          Bring changes into {status?.branch ?? 'HEAD'} from
-        </label>
-        <select
-          id="integrate-target"
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
-          bind:value={mergeTarget}
-        >
-          <option value="" disabled>Select a branch…</option>
-          {#each localBranches as branch (branch.ref)}
-            {#if branch.name !== status?.branch}
-              <option value={branch.name}>{branch.name}</option>
-            {/if}
-          {/each}
-        </select>
-        <p class="text-[0.625rem] leading-relaxed text-dimmed">
-          Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
-          the selected branch for a straight history.
-        </p>
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (showIntegrateModal = false)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="h-8 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
-            disabled={!mergeTarget || integrateBusy}
-            onclick={() => requestMergeOrRebase('rebase')}
-          >
-            Rebase
-          </button>
-          <button
-            type="button"
-            class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={!mergeTarget || integrateBusy}
-            onclick={() => requestMergeOrRebase('merge')}
-          >
-            Merge
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if pendingOperation}
-    {@const operation = pendingOperation}
-    <Modal
-      open
-      title={operation.kind === 'merge' ? 'Merge branch' : 'Rebase onto branch'}
-      onClose={() => (pendingOperation = null)}
-    >
-      <div class="space-y-3">
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          {operation.kind === 'merge'
-            ? `Merge into ${status?.branch ?? 'HEAD'}.`
-            : `Rebase ${status?.branch ?? 'HEAD'} onto the branch.`}
-        </p>
-        {#if atRiskFiles.length > 0}
-          <div>
-            <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-              Affected files
-            </p>
-            <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
-              {#each atRiskFiles as path (path)}
-                <div
-                  class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
-                >
-                  <FileTypeIcon {path} size={12} class="shrink-0" />
-                  <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
-                    >{path}</span
-                  >
-                </div>
-              {/each}
-            </div>
-          </div>
-        {:else}
-          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
-            No local changes   should apply cleanly.
-          </p>
-        {/if}
-        {#if agentTurnActive}
-          <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-            <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
-            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
-              Acknowledge to continue anyway.
-            </p>
-            <div class="mt-1.5 flex items-center justify-between gap-2">
-              <span class="text-[0.625rem] text-muted">I understand the risk</span>
-              <Switch
-                checked={acknowledgeActiveTurn}
-                onchange={(value) => (acknowledgeActiveTurn = value)}
-                aria-label="Acknowledge risk"
-              />
-            </div>
-          </div>
-        {/if}
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (pendingOperation = null)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="flex h-8 items-center rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={integrateBusy || (agentTurnActive && !acknowledgeActiveTurn)}
-            onclick={() => void confirmPendingOperation()}
-          >
-            {#if gitState.isBusy('merge') || gitState.isBusy('rebase')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            {operation.kind === 'merge' ? 'Merge' : 'Rebase'}
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if resetConfirm}
-    {@const pendingReset = resetConfirm}
-    <Modal open title="Reset branch" onClose={() => (resetConfirm = null)}>
-      <div class="space-y-3">
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          Reset <span class="font-mono text-foreground">{status?.branch ?? 'HEAD'}</span> to commit
-          <span class="font-mono text-foreground"> {pendingReset.target.slice(0, 7)}</span>.
-        </p>
-
-        <div>
-          <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Mode</p>
-          <div class="grid grid-cols-3 gap-1.5">
-            {#each resetOptions as option (option.mode)}
-              <button
-                type="button"
-                class={[
-                  'rounded-md border px-2 py-1.5 text-left transition-colors',
-                  pendingReset.mode === option.mode
-                    ? 'border-primary/50 bg-primary/10'
-                    : 'border-border hover:bg-elevated'
-                ]}
-                onclick={() => (resetConfirm = { mode: option.mode, target: pendingReset.target })}
-              >
-                <span
-                  class={[
-                    'block text-[0.625rem] font-semibold',
-                    pendingReset.mode === option.mode ? 'text-primary' : 'text-foreground'
-                  ]}
-                >
-                  {option.label}
-                </span>
-                <span class="block text-[0.5rem] leading-snug text-dimmed">{option.hint}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        {#if pendingReset.mode === 'hard'}
-          <div class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
-            <p class="text-[0.625rem] font-semibold text-danger">Hard reset discards changes</p>
-            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
-              Staged and unstaged changes since this commit will be permanently lost. This cannot be
-              undone.
-            </p>
-          </div>
-        {/if}
-
-        {#if atRiskFiles.length > 0}
-          <div>
-            <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-              Affected files
-            </p>
-            <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
-              {#each atRiskFiles as path (path)}
-                <div
-                  class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
-                >
-                  <FileTypeIcon {path} size={12} class="shrink-0" />
-                  <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
-                    >{path}</span
-                  >
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
-        {#if agentTurnActive}
-          <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-            <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
-            <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
-              Acknowledge to continue anyway.
-            </p>
-            <div class="mt-1.5 flex items-center justify-between gap-2">
-              <span class="text-[0.625rem] text-muted">I understand the risk</span>
-              <Switch
-                checked={acknowledgeActiveTurn}
-                onchange={(value) => (acknowledgeActiveTurn = value)}
-                aria-label="Acknowledge risk"
-              />
-            </div>
-          </div>
-        {/if}
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (resetConfirm = null)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class={[
-              'flex h-8 items-center gap-1.5 rounded-lg px-3 text-[0.6875rem] font-medium text-on-primary transition-colors disabled:opacity-50',
-              pendingReset.mode === 'hard'
-                ? 'bg-danger hover:bg-danger/90'
-                : 'bg-primary hover:bg-primary-hover'
-            ]}
-            disabled={gitState.isBusy('reset') || (agentTurnActive && !acknowledgeActiveTurn)}
-            onclick={() => void confirmReset()}
-          >
-            {#if gitState.isBusy('reset')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            {pendingReset.mode === 'hard' ? 'Reset hard' : 'Reset'}
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if deleteCommitTarget}
-    {@const deleteCommit = deleteCommitTarget}
-    <AlertDialog.Root open onOpenChange={() => (deleteCommitTarget = null)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Delete commit?
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Drop
-            <strong class="font-medium text-foreground">
-              “{deleteCommit.message.split('\n')[0]}”
-            </strong>
-            ({deleteCommit.shortHash}) from history. Commits after it are replayed and get new
-            hashes, so this is safest for commits that have not been pushed yet. This cannot be
-            undone.
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={gitState.isBusy('delete-commit')}
-              onclick={() => void confirmDeleteCommit()}
-            >
-              {#if gitState.isBusy('delete-commit')}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              Delete commit
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-
-  {#if checkoutConfirm}
-    {@const target = checkoutConfirm}
-    <AlertDialog.Root open onOpenChange={() => (checkoutConfirm = null)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-          onOpenAutoFocus={(event) => {
-            event.preventDefault()
-            checkoutConfirmButton?.focus()
-          }}
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            {target.kind === 'local'
-              ? `Check out “${target.name}”?`
-              : `Create local branch “${target.name}”?`}
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            {#if target.kind === 'local'}
-              This switches the working tree to <strong class="font-medium text-foreground"
-                >{target.name}</strong
-              >. Any uncommitted changes come with you if they don't conflict.
-            {:else}
-              This creates and checks out <strong class="font-medium text-foreground"
-                >{target.name}</strong
-              >
-              as a local branch that tracks
-              <strong class="font-medium text-foreground">{target.ref}</strong>.
-            {/if}
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              bind:ref={checkoutConfirmButton}
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              disabled={gitState.isBusy('checkout')}
-              onclick={() => void confirmCheckoutBranch()}
-            >
-              {#if gitState.isBusy('checkout')}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              {target.kind === 'local' ? 'Check out' : 'Create and check out'}
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-
-  {#if deleteBranchConfirm}
-    {@const target = deleteBranchConfirm}
-    <AlertDialog.Root open onOpenChange={() => (deleteBranchConfirm = null)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Delete branch “{target}”?
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Branch <strong class="font-medium text-foreground">{target}</strong> will be permanently deleted.
-            This cannot be undone.
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={gitState.isBusy('checkout')}
-              onclick={() => void confirmDeleteBranch()}
-            >
-              {#if gitState.isBusy('checkout')}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              Delete branch
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-
-  {#if forceDeleteBranchConfirm}
-    {@const target = forceDeleteBranchConfirm}
-    <AlertDialog.Root open onOpenChange={() => (forceDeleteBranchConfirm = null)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Force delete branch “{target}”?
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Branch <strong class="font-medium text-foreground">{target}</strong> is not fully merged.
-            Are you sure you want to delete it? Unmerged commits may become unreachable.
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={gitState.isBusy('checkout')}
-              onclick={() => void confirmForceDeleteBranch()}
-            >
-              {#if gitState.isBusy('checkout')}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              Delete branch
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-
-  {#if deleteRemoteBranchConfirm}
-    {@const target = deleteRemoteBranchConfirm}
-    <AlertDialog.Root open onOpenChange={() => (deleteRemoteBranchConfirm = null)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Delete remote branch “{target.remote}/{target.name}”?
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Branch <strong class="font-medium text-foreground">{target.name}</strong> will be deleted
-            from <strong class="font-medium text-foreground">{target.remote}</strong>. Local branches
-            are not affected, and the deletion cannot be undone from here.
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={gitState.isBusy('push')}
-              onclick={() => void confirmDeleteRemoteBranch()}
-            >
-              {#if gitState.isBusy('push')}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              Delete remote branch
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-
-  <!-- Add / Replace Git Origin -->
-  {#if originModalOpen}
-    <Modal
-      open
-      title={originMode === 'replace' ? 'Replace Git Origin' : 'Add Git Origin'}
-      onClose={closeOriginModal}
-    >
-      <div class="space-y-3">
-        <p class="text-[0.6875rem] leading-relaxed text-muted">
-          {#if originMode === 'replace'}
-            Update the URL of the <span class="font-mono text-foreground">{originName}</span> remote.
-            This is the address the repository fetches from and pushes to.
-          {:else}
-            Add the <span class="font-mono text-foreground">{originName}</span> remote so you can pull
-            from and push to a hosted repository.
-          {/if}
-        </p>
-        <div>
-          <p class="mb-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-            Remote URL
-          </p>
-          <input
-            class="w-full rounded-lg border border-border bg-elevated px-3 py-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-            placeholder="https://github.com/your-name/repo.git"
-            bind:value={originUrl}
-            onkeydown={(e: KeyboardEvent) => {
-              if (e.key === 'Enter' && !originBusy) requestSetOrigin()
-            }}
-          />
-        </div>
-        {#if gitState.error}
-          <p class="text-[0.625rem] leading-relaxed text-danger">{gitState.error}</p>
-        {/if}
-      </div>
-      {#snippet footer()}
-        <div class="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            disabled={originBusy}
-            onclick={closeOriginModal}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-modal-primary
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={originBusy || !originUrl.trim()}
-            onclick={requestSetOrigin}
-          >
-            {#if originBusy}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            {originMode === 'replace' ? 'Replace Origin' : 'Add Origin'}
-          </button>
-        </div>
-      {/snippet}
-    </Modal>
-  {/if}
-
-  {#if originReplaceConfirm}
-    <AlertDialog.Root open onOpenChange={() => (originReplaceConfirm = false)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Content
-          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-danger/30 bg-surface p-5 shadow-xl"
-        >
-          <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Replace {originName}?
-          </AlertDialog.Title>
-          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Changing the <span class="font-mono text-foreground">{originName}</span> remote URL
-            permanently redirects future <strong class="font-medium text-foreground">pull</strong>
-            and <strong class="font-medium text-foreground">push</strong> operations to the new address.
-            Your local history is preserved, but the current remote target is replaced. This cannot be
-            undone automatically   make sure this is the repository you want to use.
-          </AlertDialog.Description>
-          <div class="mt-5 flex justify-end gap-2">
-            <AlertDialog.Cancel
-              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-            >
-              Cancel
-            </AlertDialog.Cancel>
-            <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={originBusy}
-              onclick={() => void runSetOrigin()}
-            >
-              {#if originBusy}
-                <Loader2 size={12} class="animate-spin" />
-              {/if}
-              Replace {originName}
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  {/if}
-</div>
-
-{#if stashDropTarget}
-  {@const dropTarget = stashDropTarget}
-  <AlertDialog.Root open onOpenChange={() => (stashDropTarget = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Discard stash?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Stash
-          <strong class="font-medium text-foreground">
-            “{dropTarget.message}”
-          </strong>
-          ({dropTarget.id}) will be permanently discarded. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={() => void confirmStashDrop()}
-          >
-            Discard
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
+      {:else}
+        <GitPullRequestList
+          {projectId}
+          identity={githubIdentity}
+          {githubConnected}
+          state={prListState}
+          filter={prListFilter}
+          sort={prListSort}
+          page={prListPage}
+          selected={prListSelection}
+          onSelectionChange={(next) => (prListSelection = next)}
+          onAction={handlePrListAction}
+          onStateChange={selectPrListState}
+          onFilterChange={selectPrListFilter}
+          onSortChange={selectPrListSort}
+          onPageChange={selectPrListPage}
+          onOpen={(pr) => openPullRequestFullscreen(pr)}
+          onSignIn={() => (showGitHubSignIn = true)}
+          onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
+        />
+      {/if}
+    </div>
+  </FullscreenPanelDialog>
 {/if}
 
-{#if discardConfirm}
-  <AlertDialog.Root open onOpenChange={() => (discardConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Discard changes?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Changes to
-          {discardConfirm.length}
-          {discardConfirm.length === 1 ? 'file' : 'files'} will be permanently discarded. This cannot
-          be undone.
-        </AlertDialog.Description>
-        {#if discardConfirm.length > 4}
-          <div
-            class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
-          >
-            {#each discardConfirm as path (path)}
-              <p class="truncate font-mono text-[0.5625rem] text-dimmed">{path}</p>
-            {/each}
-          </div>
-        {/if}
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={() => void confirmDiscard()}
-          >
-            Discard changes
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
-{/if}
+<style>
+  /*
+    The header row is a query container so the action labels can retreat before
+    the row runs out of room. The glyphs always say what the control does, and the
+    tooltip names it in full, so dropping the word is a compress, not a loss.
+  */
+  .git-panel-header {
+    container: git-header / inline-size;
+  }
 
-{#if restoreWorktreeConfirm}
-  <AlertDialog.Root open onOpenChange={() => (restoreWorktreeConfirm = null)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Restore {restoreWorktreeConfirm.path}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          The file on disk will be overwritten with its content from this history entry. Any
-          uncommitted local edits to it are lost. This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
-            onclick={() => void confirmRestoreWorktree()}
-          >
-            Restore file
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
-{/if}
-
-{#if abortConfirmOpen}
-  <AlertDialog.Root open onOpenChange={() => (abortConfirmOpen = false)}>
-    <AlertDialog.Portal>
-      <AlertDialog.Content
-        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
-      >
-        <AlertDialog.Title class="text-sm font-semibold text-foreground">
-          Abort {conflictState === 'merge' ? 'merge' : 'rebase'}?
-        </AlertDialog.Title>
-        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          This cancels the in-progress
-          <strong class="font-medium text-foreground">{conflictState}</strong> operation and restores
-          the working tree to how it was before it started. Any partially resolved files will be lost.
-          This cannot be undone.
-        </AlertDialog.Description>
-        <div class="mt-5 flex justify-end gap-2">
-          <AlertDialog.Cancel
-            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
-          >
-            Cancel
-          </AlertDialog.Cancel>
-          <AlertDialog.Action
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            disabled={gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-            onclick={() => void confirmAbortConflict()}
-          >
-            {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-              <Loader2 size={12} class="animate-spin" />
-            {/if}
-            Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-          </AlertDialog.Action>
-        </div>
-      </AlertDialog.Content>
-    </AlertDialog.Portal>
-  </AlertDialog.Root>
-{/if}
+  @container git-header (max-width: 520px) {
+    .view-action-label {
+      display: none;
+    }
+  }
+</style>

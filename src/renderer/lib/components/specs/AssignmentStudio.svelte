@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    ArrowRight,
-    Check,
-    MessageSquare,
-    Network
-  } from '@lucide/svelte'
+  import { ArrowRight, Check, MessageSquare, Network } from '@lucide/svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -17,6 +12,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
@@ -28,7 +24,9 @@
     AssignmentModelSelection,
     AssignmentPlan,
     AssignmentPlanContent,
-    ProviderCatalog
+    ProviderCatalog,
+    ScopeChoice,
+    Thread
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -38,6 +36,8 @@
     threadId: string
     versions?: AssignmentPlan[]
     providers: ProviderCatalog[]
+    /** Needed by the worker scope picker, which resolves scopes per project. */
+    projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
     seniorModel: AssignmentModelSelection
@@ -50,6 +50,9 @@
     agentMessagesOpen?: boolean
     brainstormAvailable?: boolean
     prdAvailable?: boolean
+    /** Whether a specification exists for this thread. Without one the Spec tab
+     *  is not offered at all, so it can never open onto a blank document. */
+    specAvailable?: boolean
     auditAvailable?: boolean
     auditActive?: boolean
     finalComplete?: boolean
@@ -72,6 +75,11 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
+    onTaskScopeChange?: (taskId: string, scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment-wide worker scope, the level above a phase and a task. */
+    onWorkerScopeChange?: (scope: ScopeChoice) => void | Promise<void>
+    /** The Assignment's own scope, i.e. what an `inherit` choice resolves to. */
+    assignmentScopeBucketId?: string
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes one model from the recently-used history; shows the "x" on recent rows. */
     onRemoveRecent?: (modelKey: string) => void
@@ -93,6 +101,11 @@
     onResolveAnnotation?: (annotationId: string) => Promise<AssignmentPlan | null>
     onExplainSelection?: (selection: string, documentContext: string) => void
     onQuickChatSelection?: (selection: string, documentContext: string) => void
+    /** Opens a dispatched task's current worker thread. */
+    onOpenTaskThread?: (threadId: string) => void | Promise<void>
+    /** Resolves a task's thread as it exists right now; undefined when the task
+     *  is unassigned or its worker thread was deleted. */
+    resolveTaskThread?: (threadId: string | undefined) => Thread | undefined
   }
 
   let {
@@ -100,6 +113,7 @@
     threadId,
     versions = [],
     providers,
+    projectId = null,
     harnessId,
     fallbackModel,
     seniorModel,
@@ -112,6 +126,7 @@
     agentMessagesOpen = false,
     brainstormAvailable = false,
     prdAvailable = false,
+    specAvailable = false,
     auditAvailable = false,
     auditActive = false,
     finalComplete = false,
@@ -131,6 +146,9 @@
     onWorkerModelChange,
     onSeniorModelChange,
     onTaskModelChange,
+    onTaskScopeChange,
+    onWorkerScopeChange,
+    assignmentScopeBucketId,
     onToggleFavorite,
     onRemoveRecent,
     onReorderFavorite,
@@ -138,12 +156,14 @@
     onUpdateAnnotation,
     onResolveAnnotation,
     onExplainSelection,
-    onQuickChatSelection
+    onQuickChatSelection,
+    onOpenTaskThread,
+    resolveTaskThread
   }: Props = $props()
 
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let selectedSection = $state('overview')
-  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  /** Narrow layout only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // The effect reconciles a saved assignment version with the local editing buffer.
   // svelte-ignore state_referenced_locally
@@ -464,8 +484,7 @@
     if (!updated) return
     speechController.observeSent(`assignment-annotation-edit-${annotation.id}`, body)
     applyAssignment(updated)
-    overlay.editing =
-      (updated.annotations ?? []).find((item) => item.id === annotation.id) ?? null
+    overlay.editing = (updated.annotations ?? []).find((item) => item.id === annotation.id) ?? null
     overlay.editingBody = overlay.editing?.body ?? ''
     overlay.editMode = false
   }
@@ -478,7 +497,7 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (readOnly || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+    if (readOnly || !keymapState.matches('studio-save', event)) return
     event.preventDefault()
     void saveDraft()
   }
@@ -495,10 +514,7 @@
   })
 </script>
 
-<svelte:window
-  onkeydown={handleWindowKeydown}
-  onresize={() => void refreshAnnotationMarkers()}
-/>
+<svelte:window onkeydown={handleWindowKeydown} onresize={() => void refreshAnnotationMarkers()} />
 
 <StudioShell
   ariaLabel="Assignment studio"
@@ -513,7 +529,7 @@
   {openAnnotationCount}
   annotationsTitle="Anchored comments"
   annotationsEmptyLabel="No open comments in this section."
-  sectionAnnotations={sectionAnnotations}
+  {sectionAnnotations}
   onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
   {error}
   onScrollerMouseUp={captureDocumentSelection}
@@ -523,6 +539,7 @@
       active="assignment"
       {brainstormAvailable}
       {prdAvailable}
+      {specAvailable}
       assignmentAvailable
       {auditAvailable}
       {agentMessagesOpen}
@@ -555,7 +572,7 @@
       {savePending}
       versionMenuTitle="Choose an assignment version"
       versionItemTitle={(version) => `Open assignment version ${version}`}
-      onSelectVersion={onSelectVersion}
+      {onSelectVersion}
       onUndo={undoEdit}
       onRedo={redoEdit}
       onSave={() => void saveDraft()}
@@ -591,7 +608,9 @@
           Assignment checks
         </p>
         <span
-          class="text-[0.625rem] tabular-nums {validation.issues.length ? 'text-danger' : 'text-dimmed'}"
+          class="text-[0.625rem] tabular-nums {validation.issues.length
+            ? 'text-danger'
+            : 'text-dimmed'}"
         >
           {validation.issues.length}
         </span>
@@ -640,35 +659,45 @@
     {/each}
   {/snippet}
 
-      <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
-        <div class="mb-6 flex items-center gap-2">
-          <Network size={18} class="text-primary" />
-          <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
-        </div>
-        <AssignmentReviewContent
-          content={draft}
-          {readOnly}
-          reworkCycle={assignment.auditCycle?.reworkCycle}
-          forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
-          assignmentVersion={assignment.version}
-          {providers}
-          {harnessId}
-          {fallbackModel}
-          {seniorModel}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          {annotations}
-          onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
-          onAnnotateSection={openSectionAnnotation}
-          onChange={updateDraft}
-          {onWorkerModelChange}
-          {onSeniorModelChange}
-          {onTaskModelChange}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-      </div>
+  <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
+    <div class="mb-6 flex items-center gap-2">
+      <Network size={18} class="text-primary" />
+      <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
+    </div>
+    <AssignmentReviewContent
+      content={draft}
+      {projectId}
+      {readOnly}
+      reworkCycle={assignment.auditCycle?.reworkCycle}
+      forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
+      assignmentVersion={assignment.version}
+      {providers}
+      {harnessId}
+      {fallbackModel}
+      {seniorModel}
+      {favoriteModels}
+      {recentModels}
+      {onRemoveRecent}
+      {annotations}
+      onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
+      onAnnotateSection={openSectionAnnotation}
+      onChange={updateDraft}
+      {onWorkerModelChange}
+      {onSeniorModelChange}
+      {onTaskModelChange}
+      {onTaskScopeChange}
+      {onWorkerScopeChange}
+      {assignmentScopeBucketId}
+      workerScopeEditable={!readOnly ||
+        assignment.status === 'approved' ||
+        assignment.status === 'running' ||
+        assignment.status === 'attention'}
+      {onToggleFavorite}
+      {onReorderFavorite}
+      {onOpenTaskThread}
+      {resolveTaskThread}
+    />
+  </div>
 </StudioShell>
 
 {#if pendingAnnotation}

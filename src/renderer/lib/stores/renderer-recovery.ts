@@ -6,6 +6,7 @@ import type {
   PromptReference,
   UserMessagePresentation
 } from '$shared/types'
+import { uuidv7 } from '$shared/id'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -15,6 +16,7 @@ export type SettingsSection =
   | 'general'
   | 'memory'
   | 'audits'
+  | 'design'
   | 'cio-prompts'
   | 'heartbeat'
   | 'harnesses'
@@ -23,7 +25,6 @@ export type SettingsSection =
   | 'computer-use'
   | 'sound'
   | 'keymap'
-  | 'remote'
   | 'cloud-deployments'
   | 'about'
 
@@ -31,12 +32,14 @@ export type MainView =
   | 'projects'
   | 'projects-scope'
   | 'chats'
+  | 'assistant'
   | 'scope'
   | 'threads'
   | 'settings'
   | 'settings-profile'
   | 'settings-memory'
   | 'settings-audits'
+  | 'settings-design'
   | 'settings-cio-prompts'
   | 'settings-heartbeat'
   | 'settings-harnesses'
@@ -45,7 +48,6 @@ export type MainView =
   | 'settings-computer-use'
   | 'settings-sound'
   | 'settings-keymap'
-  | 'settings-remote'
   | 'settings-cloud-deployments'
   | 'settings-about'
 
@@ -85,6 +87,8 @@ export interface QueuedResponseReference extends PromptReference {
  * composer, or deleted.
  */
 export interface QueuedMessageEntry {
+  /** Stable identity for this queued item, independent of its message text. */
+  id: string
   text: string
   attachments: PromptAttachment[]
   promptContext?: string
@@ -96,13 +100,15 @@ export interface QueuedMessageEntry {
   startAfterThreads: StartAfterThreadReference[]
 }
 
+export type QueuedMessageEntryInput = Omit<QueuedMessageEntry, 'id'> & { id?: string }
+
 export interface RendererRecoverySnapshot {
   version: 1
   activeView: MainView
   /** Last content view (Projects/Chats/Threads) — the shell returns here when
    *  leaving Settings or Scope. Persisted so a restart made while on a Settings
    *  page or the Scope view still returns to the previous content view. */
-  lastContentView: 'projects' | 'chats' | 'threads'
+  lastContentView: 'projects' | 'chats' | 'threads' | 'assistant'
   /** Last non-Settings view — the Settings back button returns here. */
   lastViewBeforeSettings: MainView
   selectedProjectId: string | null
@@ -122,6 +128,11 @@ export interface RendererRecoverySnapshot {
   chatFavoriteModels: string[]
   /** Chats-tab recently used models, most recent first. */
   chatRecentModels: string[]
+  /** Assistant-task favorites, kept separate so a model picked for a routine
+   *  task never reshapes the Chats or project model lists. */
+  assistantFavoriteModels: string[]
+  /** Assistant-task recently used models, most recent first. */
+  assistantRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
 }
@@ -136,19 +147,20 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects',
   'projects-scope',
   'chats',
+  'assistant',
   'scope',
   'threads',
   'settings',
   'settings-profile',
   'settings-memory',
   'settings-audits',
+  'settings-design',
   'settings-cio-prompts',
   'settings-heartbeat',
   'settings-harnesses',
   'settings-utilities',
   'settings-sound',
   'settings-keymap',
-  'settings-remote',
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -156,6 +168,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'general',
   'memory',
   'audits',
+  'design',
   'cio-prompts',
   'heartbeat',
   'harnesses',
@@ -164,7 +177,6 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'computer-use',
   'sound',
   'keymap',
-  'remote',
   'cloud-deployments',
   'about'
 ]
@@ -188,6 +200,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     recentModels: [],
     chatFavoriteModels: [],
     chatRecentModels: [],
+    assistantFavoriteModels: [],
+    assistantRecentModels: [],
     auditModelKey: undefined
   }
 }
@@ -302,8 +316,10 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
-function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
-  if (value === 'projects' || value === 'chats' || value === 'threads') return value
+function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' | 'assistant' {
+  if (value === 'projects' || value === 'chats' || value === 'threads' || value === 'assistant') {
+    return value
+  }
   return 'projects'
 }
 
@@ -312,6 +328,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects' ||
     value === 'projects-scope' ||
     value === 'chats' ||
+    value === 'assistant' ||
     value === 'scope' ||
     value === 'threads'
   ) {
@@ -431,6 +448,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
     // object per thread — accept both so a pre-FIFO queue survives the upgrade.
     const rawEntries: unknown[] = Array.isArray(raw) ? raw : isRecord(raw) ? [raw] : []
     const entries: QueuedMessageEntry[] = []
+    const entryIds = new Set<string>()
     for (const item of rawEntries) {
       if (count >= MAX_RECOVERY_DRAFTS) break
       if (!isRecord(item)) continue
@@ -449,7 +467,11 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
       const taskReferences = Array.isArray(item.taskReferences)
         ? item.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
         : []
+      let id = typeof item.id === 'string' && item.id.length > 0 ? item.id : uuidv7()
+      while (entryIds.has(id)) id = uuidv7()
+      entryIds.add(id)
       entries.push({
+        id,
         text,
         attachments,
         promptContext: typeof item.promptContext === 'string' ? item.promptContext : undefined,
@@ -502,6 +524,8 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       recentModels: parseFavoriteModels(parsed.recentModels),
       chatFavoriteModels: parseFavoriteModels(parsed.chatFavoriteModels),
       chatRecentModels: parseFavoriteModels(parsed.chatRecentModels),
+      assistantFavoriteModels: parseFavoriteModels(parsed.assistantFavoriteModels),
+      assistantRecentModels: parseFavoriteModels(parsed.assistantRecentModels),
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey

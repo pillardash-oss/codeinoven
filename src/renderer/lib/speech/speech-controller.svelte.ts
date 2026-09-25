@@ -1,26 +1,22 @@
 import { invoke } from '$lib/ipc.svelte'
-import { posixBasename } from '$shared/paths'
-import { INBOX_PROJECT_ID } from '$shared/types'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
-import { mobileState } from '$lib/remote/mobile-state.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
-import { pauseCurrentHistoryAudio } from './global-audio'
+import {
+  deliverTranscriptHeadless,
+  sendUnsentComposerContentNow,
+  unsentComposerContent,
+  voiceScopeTarget
+} from './voice-send'
 import { logRendererError } from '../system/renderer-logger'
-import { isRemotePwaRuntime } from '$lib/runtime-context'
 import type {
   SpeechDictationSpan,
-  SpeechModelArtifact,
-  SpeechRuntime,
-  SpeechScope,
   SpeechPlaybackState,
-  SpeechPreparedPlayback,
-  SpeechSegment,
-  SpeechSynthesizedSegment
+  SpeechScope
 } from '../../../lib/speech/types'
 import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
 import type {
@@ -28,214 +24,103 @@ import type {
   SpeechEditorSnapshot,
   SpeechEditorTarget
 } from './editor-target'
+import {
+  CAPTURE_STOP_TIMEOUT_MS,
+  CAPTURE_TIMESLICE_MS,
+  PAUSE_UPLOAD_DEPTH,
+  errorMessage,
+  recordingToastMessage,
+  selectedMimeType,
+  type RecordingFailurePhase
+} from './speech-controller-capture'
+import {
+  selectAsrArtifact,
+  transcribeCapture,
+  type SpeechArtifactSelection
+} from './speech-controller-artifacts'
+import { playSpeechCue, prepareSpeechCues } from './speech-controller-cues'
+import { SpeechPlaybackEngine } from './speech-controller-playback.svelte'
+import {
+  nextVoiceSendLevel,
+  selectVoiceSendCandidate,
+  stageForLevel
+} from './speech-controller-voice-send'
+import type {
+  ActiveCapture,
+  RendererSpeechState,
+  VoiceSendIntent,
+  VoiceSendStage,
+  VoiceTranscriptionRecord
+} from './speech-controller-types'
 
-export type RendererSpeechState =
-  | { state: 'idle' }
-  /** Optimistic phase between the user's trigger and the capture pipeline
-   *  answering. Rendered exactly like an active recording so the mic button
-   *  flips instantly; every begin failure settles into `failed`. */
-  | { state: 'starting'; targetId: string }
-  | {
-      state: 'recording'
-      targetId: string
-      attemptId: string
-      startedAt: number
-      elapsedMs: number
-    }
-  | { state: 'stopping'; targetId: string; attemptId: string }
-  | { state: 'failed'; targetId?: string; message: string }
-
-interface ActiveCapture {
-  target: SpeechEditorTarget
-  snapshot: SpeechEditorSnapshot
-  scope: SpeechScope
-  recorder: MediaRecorder | null
-  stream: MediaStream | null
-  native: boolean
-  sessionId: string
-  attemptId: string
-  startedAt: number
-  uploadTail: Promise<void>
-  queuedChunks: number
-  uploadError: Error | null
-}
-
-interface ActivePlayback {
-  prepared: SpeechPreparedPlayback
-  runtime: SpeechRuntime
-  artifact: SpeechModelArtifact
-  voiceId: string
-  audio: HTMLAudioElement | null
-  /**
-   * Blob URL per segment, indexed by segment index. A `null` slot is a block
-   * skipped after a synthesis failure — it keeps later indexes aligned and can
-   * still be synthesized on demand when the user seeks back into it.
-   */
-  retainedUrls: Array<string | null>
-  /** Media duration per retained segment; NaN until metadata loads. */
-  durations: number[]
-  /** Prefetch handle plus the segment index it belongs to. */
-  next: Promise<SpeechSynthesizedSegment> | null
-  nextIndex: number | null
-  /** Bumped whenever the user relocates the playhead; invalidates stale chains. */
-  generation: number
-  index: number
-  /** Back-to-back segment synthesis failures before the session is abandoned. */
-  consecutiveFailures: number
-}
-
-const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'] as const
-// Chunk the stream for bounded IPC and disk writes. There is intentionally no
-// elapsed-time cap on a recording; it ends only when the user stops it or the
-// capture device/storage reports a real failure.
-const CAPTURE_TIMESLICE_MS = 250
-const PAUSE_UPLOAD_DEPTH = 4
-const CAPTURE_STOP_TIMEOUT_MS = 5_000
-// Text-to-speech normally starts playing within seconds. If the pipeline wedges
-// before the first audio sample, settle the UI into a retryable failure instead
-// of spinning forever.
-const PLAYBACK_STALL_WATCHDOG_MS = 60_000
-// After pausing, keep the read-along border and seek controls on screen for a
-// few seconds so users can resume without losing their place. Then fade out.
-const PAUSED_LINGER_MS = 5_000
-
-type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription'
-
-function errorMessage(cause: unknown): string {
-  if (cause instanceof Error && cause.message.trim()) return cause.message
-  if (typeof cause === 'string' && cause.trim()) return cause
-  return 'Unknown recording error.'
-}
-
-function selectedMimeType(): string {
-  if (typeof MediaRecorder === 'undefined') return ''
-  return MIME_TYPES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? ''
-}
-
-function recordingToastMessage(cause: unknown, phase: RecordingFailurePhase): string {
-  const name =
-    typeof DOMException !== 'undefined' && cause instanceof DOMException ? cause.name : ''
-  if (phase === 'prepare') return 'Focus the editor before recording.'
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Microphone access is blocked.'
-  }
-  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-    return 'No microphone was found.'
-  }
-  if (name === 'NotReadableError' || name === 'TrackStartError') {
-    return 'The microphone is unavailable.'
-  }
-  if (phase === 'transcription') return 'Voice recording could not be transcribed.'
-  return 'Voice recording failed.'
-}
+export type { RendererSpeechState, VoiceSendStage } from './speech-controller-types'
 
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
-  playback = $state<SpeechPlaybackState>({ state: 'idle' })
-  get activeSegments(): SpeechSegment[] | null {
-    return this.currentSegments
+
+  /**
+   * Read-aloud state lives in its own engine; every public playback member
+   * below delegates to it so the capture machine here stays independent.
+   */
+  private readonly playbackEngine = new SpeechPlaybackEngine({
+    getSound: () => this.sound,
+    loadSettings: () => this.loadSettings(),
+    stopRecordingIfNeeded: async () => {
+      // TTS and the recorder cannot run together; whoever started last wins.
+      if (this.state.state === 'recording') await this.stop()
+    },
+    claimThreadSlot: (scope) => this.claimThreadSlot(scope)
+  })
+
+  get playback(): SpeechPlaybackState {
+    return this.playbackEngine.playback
   }
+
+  get activeSegments() {
+    return this.playbackEngine.segments
+  }
+
   /** Read-along border visibility: playing, or paused within the linger window. */
   get readingOverlayActive(): boolean {
-    return this.readAlongVisible
+    return this.playbackEngine.readAlong
   }
+
   /** Seek slider visibility mirrors the read-along overlay (same linger timer). */
   get seekControlsActive(): boolean {
-    const state = this.playback.state
-    if (state !== 'playing' && state !== 'paused') return false
-    return this.readAlongVisible
+    return this.playbackEngine.seekControlsActive
   }
+
   /** Index of the line to highlight while the overlay is up; -1 hides it. */
   get visibleSegmentIndex(): number {
-    if (!this.readAlongVisible) return -1
-    const current = this.playback
-    if ('segmentIndex' in current && (current.state === 'playing' || current.state === 'paused'))
-      return current.segmentIndex
-    return -1
+    return this.playbackEngine.visibleSegmentIndex
   }
+
   get elapsedPlaybackSeconds(): number {
-    return this.elapsedSeconds
+    return this.playbackEngine.elapsedPlaybackSeconds
   }
+
   get knownPlaybackDurationSeconds(): number {
-    return this.knownDurationSeconds
+    return this.playbackEngine.knownPlaybackDurationSeconds
   }
+
   /**
    * Fraction (0..1) of the active block already spoken, for word-level
-   * read-along highlighting. Reactive through the `elapsedSeconds` mirror,
-   * which the segment audio's timeupdate events refresh several times a
-   * second — plenty for advancing a whole-word highlight.
+   * read-along highlighting.
    */
   get activeSegmentProgress(): number {
-    const current = this.playback
-    if (!('segmentIndex' in current) || (current.state !== 'playing' && current.state !== 'paused'))
-      return 0
-    const playback = this.activePlayback
-    if (!playback) return 0
-    const index = current.segmentIndex
-    let prefix = 0
-    for (let i = 0; i < index; i += 1) prefix += this.segmentSeconds(playback, i)
-    const span = this.segmentSeconds(playback, index)
-    if (!(span > 0)) return 0
-    const within = this.elapsedSeconds - prefix
-    return Math.min(1, Math.max(0, within / span))
+    return this.playbackEngine.activeSegmentProgress
   }
+
   /** Estimated duration of the entire readable block; the slider's full range. */
   get estimatedTotalDurationSeconds(): number {
-    const playback = this.activePlayback
-    if (!playback) return 0
-    let total = 0
-    for (let i = 0; i < playback.prepared.segments.length; i += 1)
-      total += this.segmentSeconds(playback, i)
-    return total
+    return this.playbackEngine.estimatedTotalDurationSeconds
   }
+
   /** Seconds of audio already generated (filled part of the seek track). */
   get generatedFrontierSeconds(): number {
-    const playback = this.activePlayback
-    if (!playback) return 0
-    let total = 0
-    for (let i = 0; i < playback.retainedUrls.length; i += 1) {
-      if (!playback.retainedUrls[i]) continue
-      total += this.segmentSeconds(playback, i)
-    }
-    return total
+    return this.playbackEngine.generatedFrontierSeconds
   }
 
-  private static readonly FALLBACK_CHARS_PER_SECOND = 12
-
-  /**
-   * Duration of one segment: real media length once known, otherwise a
-   * characters-per-second estimate calibrated against the audio already heard.
-   */
-  private segmentSeconds(playback: ActivePlayback, index: number): number {
-    const duration = playback.durations[index]
-    if (Number.isFinite(duration)) return duration
-    const text = playback.prepared.segments[index]?.text ?? ''
-    let knownChars = 0
-    let knownSeconds = 0
-    for (let i = 0; i < playback.retainedUrls.length; i += 1) {
-      const known = playback.durations[i]
-      if (!Number.isFinite(known)) continue
-      knownChars += playback.prepared.segments[i]?.text.length ?? 0
-      knownSeconds += known
-    }
-    if (knownChars > 0 && knownSeconds > 0) return text.length / (knownChars / knownSeconds)
-    return text.length / SpeechController.FALLBACK_CHARS_PER_SECOND
-  }
-
-  /** Maps a slider position onto (segment, offset) across the whole block. */
-  private locatePlaybackPosition(
-    playback: ActivePlayback,
-    seconds: number
-  ): { index: number; offset: number } {
-    let remaining = seconds
-    const lastIndex = playback.prepared.segments.length - 1
-    for (let i = 0; i <= lastIndex; i += 1) {
-      const span = this.segmentSeconds(playback, i)
-      if (remaining <= span || i === lastIndex) return { index: i, offset: Math.max(0, remaining) }
-      remaining -= span
-    }
-    return { index: -1, offset: 0 }
-  }
   private active: ActiveCapture | null = null
   /** Scope captured when `start()` begins so the capture is attributable to
    *  its thread even before permission resolves (no ActiveCapture yet). */
@@ -245,43 +130,48 @@ class SpeechController {
   private preloadFired = false
   /** In-flight background transcription jobs, keyed by attempt id. */
   private readonly transcriptions = new Map<string, Promise<void>>()
-  /** Target ids with a background transcription job still in flight. */
-  private transcribingTargets = $state<string[]>([])
-  /** Scopes of the in-flight background transcription jobs, keyed by attempt
-   *  id, so consumers can attribute the work to a thread. Entries are removed
-   *  by attempt id — never by object identity, which is unreliable here: Svelte
-   *  5 deep-proxies $state array elements, so a raw scope object never matches
-   *  its proxied copy and an identity filter would keep the entry forever. */
-  private transcribingScopes = $state<{ attemptId: string; scope: SpeechScope }[]>([])
+  /** Level-2 steers still in flight, keyed by attempt id. A transcript that
+   *  lands meanwhile must wait for the box content to leave the composer before
+   *  it reads the mirrored draft, or it delivers the same message twice. */
+  private readonly pendingSteers = new Map<string, Promise<void>>()
+  /**
+   * Detached transcriptions whose transcript has not landed yet, with the
+   * editor and thread they belong to. Rows, mic buttons and the armed-send
+   * shortcut read this to know which dictation is still in flight.
+   *
+   * Entries are removed by attempt id, never by object identity, which is
+   * unreliable here: Svelte 5 deep-proxies $state array elements, so a raw
+   * scope object never matches its proxied copy and an identity filter would
+   * keep the entry forever.
+   */
+  private transcribing = $state<VoiceTranscriptionRecord[]>([])
+  /** Dictations the user armed to deliver themselves (see `armVoiceSend`). */
+  private voiceSends = $state<VoiceSendIntent[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
-  private activePlayback: ActivePlayback | null = null
-  // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
-  // separate from activePlayback because storing the live playback record
-  // (promises, media elements) behind a $state proxy would break the raw-local
-  // identity checks that guard every step of segment playback.
-  private currentSegments = $state<SpeechSegment[] | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   /** Whether `sound` has been loaded from config at least once. Until then a
    *  `start()` still pays one `config:get`; afterwards the mirror below keeps
    *  it fresh without any disk round trip on the recording hot path. */
   private soundReady = false
-  private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
-  private playbackStallMessageId: string | null = null
-  private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
-  /** Where the spoken response lives, for row-level "Speaking" indicators. */
-  private playbackScope = $state<SpeechScope | null>(null)
-  /** Whether the read-along border + seek controls are on screen right now. */
-  private readAlongVisible = $state(false)
-  /** Playhead position in seconds across all retained (played) segments. */
-  private elapsedSeconds = $state(0)
-  /** Sum of known media durations; grows as segment metadata loads. */
-  private knownDurationSeconds = $state(0)
+  /**
+   * Wall-clock time the speech action currently occupying a thread row's single
+   * indicator slot began, and the thread it belongs to. Rows arbitrate that slot
+   * across speech and computer use by "last action wins", and this controller is
+   * the only place that knows when a speech action started. Claimed at each
+   * start point (mic opens, mic closes into transcription, playback begins).
+   * A stale claim is harmless: rows only read it while one of the
+   * `is*Thread` flags is true for that thread.
+   */
+  private slotClaim = $state<{ threadId: string; at: number } | null>(null)
 
   constructor() {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalKeydown, true)
       window.addEventListener('cio:soundChanged', this.handleSoundChanged)
+      // Open the cue output once, at startup, so no audio device is opened at
+      // the moment a recording captures the microphone (see the cue module).
+      prepareSpeechCues()
       void this.loadSettings()
     }
   }
@@ -294,12 +184,31 @@ class SpeechController {
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || event.defaultPrevented) return
-    if (this.state.state !== 'recording') return
-    if (!this.escapeStopsRecording()) return
+    if (event.defaultPrevented) return
+    if (event.key === 'Escape') {
+      if (this.state.state !== 'recording') return
+      if (!this.escapeStopsRecording()) return
+      event.preventDefault()
+      event.stopPropagation()
+      void this.stop()
+      return
+    }
+    if (!this.isVoiceSendShortcut(event)) return
+    // A surface above the thread owns the keyboard (a modal, a sheet, a palette,
+    // or a full-page Settings/Scope view): its own chord meaning must win, the
+    // same way Escape there never reaches the recording behind it.
+    if (isEscapeClaimed(event)) return
+    if (!this.voiceSendCandidate()) return
     event.preventDefault()
     event.stopPropagation()
-    void this.stop()
+    this.armVoiceSend()
+  }
+
+  /** Cmd/Ctrl+Shift+Enter, the send chord, re-aimed at a dictation in flight. */
+  private isVoiceSendShortcut(event: KeyboardEvent): boolean {
+    return (
+      event.key === 'Enter' && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.repeat
+    )
   }
 
   /**
@@ -307,14 +216,14 @@ class SpeechController {
    * is recording. A thread-scoped capture keeps running when the user navigates
    * to another thread, so Escape pressed there must keep its normal meaning
    * (stop that thread's run, close an overlay) instead of killing a recording
-   * happening elsewhere — the user returns to the recording thread to stop it.
+   * happening elsewhere, the user returns to the recording thread to stop it.
    * Recordings without a thread (global overlays like the switcher) stay
    * Escapable from anywhere because their owning surface remains on screen.
    */
   private escapeStopsRecording(): boolean {
     const active = this.active
     if (!active) return false
-    // A surface above the recording owns Escape — a full-page surface (a
+    // A surface above the recording owns Escape, a full-page surface (a
     // Settings page or the Scope view) covering the shell, or an open modal or
     // palette (spotlight). Escape there closes the surface on top and must
     // never kill a recording happening underneath.
@@ -322,7 +231,7 @@ class SpeechController {
     const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
     // Temporary side chats render a synthetic thread that is never the
-    // selected workspace thread — they live in the context sidebar. When a
+    // selected workspace thread, they live in the context sidebar. When a
     // temporary chat is the active sidebar tab, the user "is on" that chat,
     // so Escape must reach its own recording. A recording belonging to any
     // other thread must not be gated by the sidebar tab; it falls through to
@@ -333,7 +242,7 @@ class SpeechController {
         return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
       }
     }
-    const viewed = isRemotePwaRuntime() ? mobileState.selectedThread : workspaceState.selectedThread
+    const viewed = workspaceState.selectedThread
     if (!viewed || viewed.id !== scope.threadId) return false
     if (scope.kind === 'project') return viewed.projectId === scope.projectId
     return true
@@ -347,8 +256,8 @@ class SpeechController {
    * Swaps the active capture's editor target for a live one with the same id.
    * The editor that started a recording can be destroyed by navigation while
    * the capture is still running (the controller outlives the view); when an
-   * equivalent editor mounts again — e.g. the user returned to the thread
-   * before the transcript landed — the transcript must insert into the visible
+   * equivalent editor mounts again, e.g. the user returned to the thread
+   * before the transcript landed, the transcript must insert into the visible
    * editor instead of falling back to the draft store behind its back. Returns
    * true when the reattach happened.
    */
@@ -365,8 +274,8 @@ class SpeechController {
     return null
   }
 
-  /** The scope of whichever editor is dictating across every live phase —
-   *  starting → recording → stopping. Unlike `recordingScope`
+  /** The scope of whichever editor is dictating across every live phase,
+   *  starting to recording to stopping. Unlike `recordingScope`
    *  this stays non-null after the mic closes until the transcript lands or
    *  the capture fails, so consumers that represent in-progress drafting
    *  (thread rows) never flash back mid-pipeline. */
@@ -380,42 +289,189 @@ class SpeechController {
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
+  /**
+   * When the speech action this thread's row slot is showing began (wall
+   * clock), or null when the thread has no speech action in that slot. Callers
+   * compare it against computer-use activity to apply the row's last-action-wins
+   * rule; a live action with no recorded claim reports 0 so it ranks as oldest.
+   */
+  threadIndicatorActionAt(threadId: string): number | null {
+    const active =
+      this.isRecordingThread(threadId) ||
+      this.isTranscribingThread(threadId) ||
+      this.isSpeakingThread(threadId)
+    if (!active) return null
+    return this.slotClaim?.threadId === threadId ? this.slotClaim.at : 0
+  }
+
+  /** Record that a speech action for this scope just started. */
+  private claimThreadSlot(scope: SpeechScope | null | undefined): void {
+    if (!scope || scope.kind === 'global' || !scope.threadId) return
+    this.slotClaim = { threadId: scope.threadId, at: Date.now() }
+  }
+
   isCapturingThread(threadId: string): boolean {
     const scope = this.capturingScope
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
   /** Whether a detached background transcription is still running for this
-   *  editor target — the transcript will land in the field when it settles. */
+   *  editor target, the transcript will land in the field when it settles. */
   isTranscribingTarget(targetId: string): boolean {
-    return this.transcribingTargets.includes(targetId)
+    return this.transcribing.some((entry) => entry.targetId === targetId)
   }
 
-  /** Whether a background transcription is still running inside this thread —
+  /** Whether a background transcription is still running inside this thread,
    *  the mic has closed but the transcript has not landed yet. This spans the
-   *  whole post-recording pipeline: the `stopping` phase (finalize/upload/ASR
-   *  selection happens there, before the detached job is registered) and the
-   *  detached transcription job itself. */
+   *  whole post-recording pipeline, from the moment the recorder is stopped
+   *  (finalize, upload, ASR selection) through the detached transcription job. */
   isTranscribingThread(threadId: string): boolean {
     const matches = (scope: SpeechScope | null): boolean =>
       scope !== null && scope.kind !== 'global' && scope.threadId === threadId
-    if (this.transcribingScopes.some((entry) => matches(entry.scope))) return true
-    // The mic has closed but the capture is still finishing — the transcript
+    if (this.transcribing.some((entry) => matches(entry.scope))) return true
+    // The mic has closed but the capture is still finishing, the transcript
     // job has not been registered yet, so the capture scope is the only signal.
     return this.state.state === 'stopping' && matches(this.capturingScope)
   }
 
+  /**
+   * Whether the dictation in flight for this editor target can send itself when
+   * the transcript lands. False for every editor that is not a message surface
+   * (spec fields, comment boxes), where the transcript can only be pasted.
+   */
+  canAutoSendVoice(targetId: string): boolean {
+    return this.transcribing.some((entry) => entry.targetId === targetId && entry.autoSend)
+  }
+
+  /** Stage of the armed voice send for an editor target, or null when off. */
+  voiceSendStageForTarget(targetId: string): VoiceSendStage | null {
+    const intent = this.armedVoiceSend((entry) => entry.targetId === targetId)
+    return intent ? stageForLevel(intent.level) : null
+  }
+
+  /** Stage of the armed voice send belonging to a thread's row, or null. */
+  voiceSendStageForThread(threadId: string): VoiceSendStage | null {
+    const intent = this.armedVoiceSend(
+      (entry) => entry.scope.kind !== 'global' && entry.scope.threadId === threadId
+    )
+    return intent ? stageForLevel(intent.level) : null
+  }
+
+  /**
+   * An armed intent is only meaningful while its transcription is still in
+   * flight. Reading through the live transcription list keeps an intent that
+   * outlived its delivery invisible instead of leaving an armed icon behind.
+   */
+  private armedVoiceSend(match: (intent: VoiceSendIntent) => boolean): VoiceSendIntent | null {
+    return (
+      this.voiceSends.find(
+        (intent) =>
+          this.transcribing.some((entry) => entry.attemptId === intent.attemptId) && match(intent)
+      ) ?? null
+    )
+  }
+
+  /**
+   * Arm, or escalate, the automatic delivery of the transcription in flight.
+   *
+   * The mic button (double-click) and Cmd/Ctrl+Shift+Enter both land here while
+   * a transcript is still being produced, and every press advances one step of
+   * a ladder that cycles back to where it started:
+   *
+   * 1. the transcript is sent when it lands, together with whatever the
+   *    composer already held, which waits for it instead of being sent alone;
+   * 2. the composer's text is steered into the running turn right now and the
+   *    transcript follows as its own message;
+   * 3. the transcript itself is steered, interrupting the running turn;
+   * 4. the intent is cleared again, so the transcript goes back to being pasted
+   *    into its editor (and written to the clipboard) with nothing sent, and
+   *    the next press arms a fresh send.
+   *
+   * Returns false when nothing is armable: a dictation on a plain editor, or
+   * no dictation at all, so callers can leave the event to its normal meaning.
+   */
+  armVoiceSend(options: { targetId?: string } = {}): boolean {
+    const record = this.voiceSendCandidate(options.targetId)
+    if (!record) return false
+    const existing = this.voiceSends.find((entry) => entry.attemptId === record.attemptId)
+    // The press after "steer the transcript" ends the ladder instead of
+    // escalating it: the intent goes away and the cycle starts over.
+    const cleared = existing?.level === 3
+    const level = nextVoiceSendLevel(existing?.level, unsentComposerContent(record.scope) !== null)
+    this.voiceSends = [
+      // Prune intents whose transcription already settled: only the dictation
+      // in flight may carry an armed state, and a cleared one is dropped so the
+      // transcript keeps only its plain paste behaviour.
+      ...this.voiceSends.filter(
+        (entry) =>
+          entry.attemptId !== record.attemptId &&
+          this.transcribing.some((live) => live.attemptId === entry.attemptId)
+      ),
+      ...(cleared
+        ? []
+        : [
+            {
+              attemptId: record.attemptId,
+              targetId: record.targetId,
+              target: record.target,
+              scope: record.scope,
+              level
+            }
+          ])
+    ]
+    // Arming is a user action on the transcription's thread, so the row's
+    // single indicator slot is claimed now, as any other speech action does:
+    // the armed state is then the most recent claim, which is what the row's
+    // last-action-wins rule compares against computer-use activity.
+    this.claimThreadSlot(record.scope)
+    // Level 2 hands over what the composer holds at this instant: that text is
+    // an instruction for the running turn and must not wait for the transcript.
+    // Clearing is never level 2, so this only fires on a fresh ladder step.
+    if (level === 2) this.trackPendingSteer(record)
+    return true
+  }
+
+  /** Hand the composer content to the running turn, remembering the work so a
+   *  transcript landing meanwhile waits for it instead of racing it. */
+  private trackPendingSteer(record: VoiceTranscriptionRecord): void {
+    // Never rejects: the delivery awaits this promise, and a steer that threw
+    // must not turn into a transcription failure for the transcript behind it.
+    const steering = this.steerPendingComposerContent(record).catch((cause: unknown) => {
+      logRendererError('The queued voice message could not be steered.', cause)
+    })
+    this.pendingSteers.set(record.attemptId, steering)
+    void steering.finally(() => {
+      if (this.pendingSteers.get(record.attemptId) === steering)
+        this.pendingSteers.delete(record.attemptId)
+    })
+  }
+
+  /** The dictation an arming gesture applies to (see the selector module). */
+  private voiceSendCandidate(targetId?: string): VoiceTranscriptionRecord | null {
+    const viewed = workspaceState.selectedThread
+    return selectVoiceSendCandidate(this.transcribing, this.voiceSends, targetId, viewed)
+  }
+
+  /**
+   * Steer what a thread's composer already holds. A mounted composer drives its
+   * own send path so the steer obeys every gate the send button has; otherwise
+   * the mirrored draft is steered headlessly.
+   */
+  private async steerPendingComposerContent(record: VoiceTranscriptionRecord): Promise<void> {
+    const autoSend = record.target.autoSend
+    if (autoSend?.isLive()) {
+      autoSend.submit(true)
+      // A composer that dispatched clears its own buffer. One that refused (an
+      // open slash or mention menu, a locked field) left the text in place, so
+      // steer it headlessly instead of quietly dropping the intent.
+      if (unsentComposerContent(record.scope) === null) return
+    }
+    await sendUnsentComposerContentNow(record.scope)
+  }
+
   /** Scope of the thread whose response is currently being spoken aloud. */
   get speakingScope(): SpeechScope | null {
-    const playbackState = this.playback
-    if (!('messageId' in playbackState)) return null
-    if (
-      playbackState.state !== 'preparing' &&
-      playbackState.state !== 'playing' &&
-      playbackState.state !== 'paused'
-    )
-      return null
-    return this.playbackScope
+    return this.playbackEngine.speakingScope
   }
 
   isSpeakingThread(threadId: string): boolean {
@@ -426,9 +482,7 @@ class SpeechController {
   /** The thread target of a dictation scope, when it dictates into a thread
    *  composer. Global scope and thread-less scopes have no draft surface. */
   private draftTargetFromScope(scope: SpeechScope): { projectId: string; threadId: string } | null {
-    if (scope.kind === 'global' || !scope.threadId) return null
-    const projectId = scope.kind === 'project' ? scope.projectId : INBOX_PROJECT_ID
-    return { projectId, threadId: scope.threadId }
+    return voiceScopeTarget(scope)
   }
 
   /** Flag the thread as drafting in the DB the moment a capture starts, so a
@@ -445,8 +499,8 @@ class SpeechController {
     )
   }
 
-  /** After a capture fully settles — transcript landed in the composer, or the
-   *  pipeline failed/cancelled with nothing inserted — commit the thread's
+  /** After a capture fully settles, transcript landed in the composer, or the
+   *  pipeline failed/cancelled with nothing inserted, commit the thread's
    *  authoritative draft state so the DB flag never outlives the dictation. */
   private settleCaptureDraft(scope: SpeechScope): void {
     const target = this.draftTargetFromScope(scope)
@@ -470,14 +524,10 @@ class SpeechController {
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
     // TTS and the recorder cannot run together; whoever started last wins.
-    const playbackState = this.playback
-    if (
-      'messageId' in playbackState &&
-      ['preparing', 'playing', 'paused'].includes(playbackState.state)
-    ) {
-      await this.cancelPlayback()
-    }
+    if (this.playbackEngine.hasActivePlayback()) await this.cancelPlayback()
     this.captureScope = scope
+    // The mic opening is a new speech action for the thread's row slot.
+    this.claimThreadSlot(scope)
     if (!this.soundReady) await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
@@ -489,9 +539,7 @@ class SpeechController {
     // async pipeline step below has a failure path that settles into `failed`.
     this.state = { state: 'starting', targetId: target.id }
 
-    const nativeStarted = isRemotePwaRuntime()
-      ? null
-      : await invoke('speech:beginNativeCapture', scope).catch(() => null)
+    const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(() => null)
     if (nativeStarted?.ok) {
       const capture: ActiveCapture = {
         target,
@@ -518,7 +566,7 @@ class SpeechController {
       this.startElapsedTimer(capture)
       this.scheduleAsrPreload(capture)
       this.flagCaptureDrafting(capture.scope)
-      this.playCue('started')
+      playSpeechCue(this.sound, 'started')
       return
     }
 
@@ -608,7 +656,7 @@ class SpeechController {
       this.startElapsedTimer(capture)
       this.scheduleAsrPreload(capture)
       this.flagCaptureDrafting(capture.scope)
-      this.playCue('started')
+      playSpeechCue(this.sound, 'started')
     } catch (cause) {
       this.clearElapsedTimer()
       this.clearPreloadTimer()
@@ -649,10 +697,17 @@ class SpeechController {
     this.clearElapsedTimer()
     this.clearPreloadTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
+    // The mic is closed and the transcript is on its way: that transition is a
+    // new speech action for the thread's row slot.
+    this.claimThreadSlot(this.capturingScope)
     // Capture the target's current value and caret when the user stops, not
     // only when recording started. This lets users type and reposition the
     // caret while the mic is active without losing the intended insertion point.
     const insertionSnapshot = active.target.capture() ?? active.snapshot
+    // The transcript is on its way from this instant, not from the moment ASR
+    // answers. Registering the job here is what makes the dictation armable
+    // while the capture is still finalising, instead of only afterwards.
+    this.beginTranscription(active)
 
     try {
       const durationMs = Math.max(0, performance.now() - active.startedAt)
@@ -676,7 +731,7 @@ class SpeechController {
         )
         if (!finished.ok) throw new Error(finished.error.message)
       }
-      this.playCue('stopped')
+      playSpeechCue(this.sound, 'stopped')
       const transcription = this.deliverTranscript(active, insertionSnapshot)
       this.transcriptions.set(active.attemptId, transcription)
       void transcription.finally(() => {
@@ -684,6 +739,9 @@ class SpeechController {
         if (current === transcription) this.transcriptions.delete(active.attemptId)
       })
     } catch (cause) {
+      // No transcript will ever land for this attempt, so its job and any
+      // intent armed for it are over before the failure surfaces.
+      this.endTranscription(active.attemptId)
       const message = errorMessage(cause)
       await (
         active.native
@@ -699,6 +757,29 @@ class SpeechController {
     }
   }
 
+  /** Start tracking a dictation whose transcript has not landed yet. Called the
+   *  moment the recorder is told to stop, so a transcript is armable across the
+   *  whole post-recording pipeline and not only once ASR has answered. */
+  private beginTranscription(active: ActiveCapture): void {
+    this.transcribing = [
+      ...this.transcribing,
+      {
+        attemptId: active.attemptId,
+        targetId: active.target.id,
+        target: active.target,
+        scope: structuredClone(active.scope),
+        autoSend: active.target.autoSend !== undefined
+      }
+    ]
+  }
+
+  /** Stop tracking a dictation and drop any intent armed for it. */
+  private endTranscription(attemptId: string): void {
+    this.transcribing = this.transcribing.filter((entry) => entry.attemptId !== attemptId)
+    this.voiceSends = this.voiceSends.filter((entry) => entry.attemptId !== attemptId)
+    this.pendingSteers.delete(attemptId)
+  }
+
   /**
    * Detached per-attempt transcription job. Runs in the background so the
    * microphone and the shared state machine free up for a new recording while
@@ -709,17 +790,17 @@ class SpeechController {
     insertionSnapshot: SpeechEditorSnapshot
   ): Promise<void> {
     const transcribingScope = structuredClone(active.scope)
-    this.transcribingTargets = [...this.transcribingTargets, active.target.id]
-    this.transcribingScopes = [
-      ...this.transcribingScopes,
-      { attemptId: active.attemptId, scope: transcribingScope }
-    ]
     try {
-      const transcript = await this.transcribeActive(active)
+      const transcript = await transcribeCapture(active, this.sound, () => this.selectAsrArtifact())
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
       let applied: SpeechEditorApplyResult = inserted
-      if (!applied.ok && applied.reason === 'destroyed' && active.target.fallbackApply) {
+      if (!applied.ok && active.target.fallbackApply) {
+        // Every failed insertion still has a home: the target's store-level
+        // fallback appends the transcript to the value it mirrors. That covers a
+        // destroyed editor, a field the user kept typing in while the model was
+        // transcribing, and a box an armed level-2 steer has already emptied,
+        // which is exactly the case an armed transcript has to survive.
         applied = active.target.fallbackApply(insertionSnapshot, transcript)
       }
       if (!applied.ok) {
@@ -742,7 +823,13 @@ class SpeechController {
       }
       const current = this.spans.get(active.target.id) ?? []
       this.spans.set(active.target.id, [...current.slice(-7), span])
-      this.playCue('completed')
+      playSpeechCue(this.sound, 'completed')
+      // Armed dictation: the transcript has landed, so hand it over now. The
+      // composer drives its own send path whenever the transcript reached the
+      // live editor; otherwise the mirrored draft is delivered headlessly,
+      // which is what makes this work from another thread entirely.
+      const intent = this.voiceSends.find((entry) => entry.attemptId === active.attemptId)
+      if (intent) await this.deliverArmedVoiceSend(intent, inserted.ok)
     } catch (cause) {
       await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
         () => undefined
@@ -756,12 +843,38 @@ class SpeechController {
         // Toast failures must never break the detached job.
       }
     } finally {
-      this.transcribingTargets = this.transcribingTargets.filter((id) => id !== active.target.id)
-      this.transcribingScopes = this.transcribingScopes.filter(
-        (entry) => entry.attemptId !== active.attemptId
-      )
+      this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
     }
+  }
+
+  /**
+   * Delivery of an armed dictation once its transcript has landed. `landedLive`
+   * reports whether the transcript was inserted into the mounted editor: only
+   * then may the composer dispatch itself, because its buffer is the only copy
+   * that then holds the transcript.
+   */
+  private async deliverArmedVoiceSend(intent: VoiceSendIntent, landedLive: boolean): Promise<void> {
+    // A level-2 steer may still be handing the box content over. The transcript
+    // must not be read out of the mirrored draft until that text has left it, or
+    // the same message is delivered twice.
+    await this.pendingSteers.get(intent.attemptId)
+    const direct = intent.level >= 3
+    if (landedLive) {
+      const autoSend = intent.target.autoSend
+      if (autoSend?.isLive()) {
+        // The composer's own send path already reports the dictation for
+        // correction learning, so this branch is complete on its own.
+        autoSend.submit(direct)
+        return
+      }
+    }
+    const deliveredText = await deliverTranscriptHeadless(intent.scope, direct)
+    // A headless delivery bypasses the composer, which is where a dictation is
+    // normally reported for correction learning. Report it here instead, so a
+    // voice message sent from another thread teaches the model exactly like one
+    // sent by hand.
+    if (deliveredText !== null) this.observeSent(intent.targetId, deliveredText)
   }
 
   private stopRecorder(recorder: MediaRecorder): Promise<void> {
@@ -823,148 +936,15 @@ class SpeechController {
   }
 
   async togglePlayback(messageId: string, markdown: string, scope?: SpeechScope): Promise<void> {
-    // TTS and the recorder cannot run together; whoever started last wins.
-    if (this.state.state === 'recording') await this.stop()
-    const active = this.activePlayback
-    if (active?.prepared.messageId === messageId && active.audio) {
-      if (active.audio.paused) {
-        await active.audio.play()
-        this.clearPausedLinger()
-        this.readAlongVisible = true
-        this.playback = {
-          state: 'playing',
-          sessionId: active.prepared.sessionId,
-          messageId,
-          segmentIndex: active.index
-        }
-      } else {
-        active.audio.pause()
-        this.armPausedLinger()
-        this.playback = {
-          state: 'paused',
-          sessionId: active.prepared.sessionId,
-          messageId,
-          segmentIndex: active.index
-        }
-      }
-      return
-    }
-    await this.cancelPlayback()
-    pauseCurrentHistoryAudio()
-    await this.loadSettings()
-    this.playback = { state: 'preparing', sessionId: 'pending', messageId }
-    this.armPlaybackStallWatchdog(messageId)
-    try {
-      const selection = await this.selectTtsArtifact()
-      const prepared = await invoke(
-        'speech:preparePlayback',
-        messageId,
-        markdown,
-        this.sound.includeCodeBlocksInSpeech
-      )
-      if (!prepared.ok) throw new Error(prepared.error.message)
-      const playback: ActivePlayback = {
-        prepared: prepared.value,
-        runtime: selection.runtime,
-        artifact: selection.artifact,
-        voiceId: this.sound.ttsVoiceId ?? selection.artifact.voices[0] ?? '0',
-        audio: null,
-        retainedUrls: [],
-        durations: [],
-        next: null,
-        nextIndex: null,
-        generation: 0,
-        index: 0,
-        consecutiveFailures: 0
-      }
-      this.activePlayback = playback
-      this.currentSegments = playback.prepared.segments
-      this.playbackScope = scope ?? null
-      await this.playSegment(playback, 0)
-    } catch (cause) {
-      this.clearPlaybackStallWatchdog()
-      this.resetSeekSurfaces()
-      this.activePlayback?.next?.catch(() => undefined)
-      this.playback = {
-        state: 'failed',
-        messageId,
-        error: { code: 'synthesis-failed', message: errorMessage(cause), retryable: true }
-      }
-    }
-  }
-
-  /**
-   * Bounds the window between clicking speak and the first audible sample. If
-   * something in the pipeline stalls without rejecting (the original infinite
-   * spinner bug), the watchdog settles the UI into the normal retryable failed
-   * state and tears down the pending playback session.
-   */
-  private armPlaybackStallWatchdog(messageId: string): void {
-    this.clearPlaybackStallWatchdog()
-    this.playbackStallMessageId = messageId
-    this.playbackStallWatchdog = setTimeout(() => {
-      const watchdogMessageId = this.playbackStallMessageId
-      this.playbackStallWatchdog = null
-      this.playbackStallMessageId = null
-      if (!watchdogMessageId) return
-      const stillPreparing =
-        this.playback.state === 'preparing' && this.playback.messageId === watchdogMessageId
-      const activeWithoutAudio =
-        this.activePlayback?.prepared.messageId === watchdogMessageId &&
-        this.activePlayback.audio === null
-      if (!stillPreparing && !activeWithoutAudio) return
-      void this.failStalledPlayback(watchdogMessageId)
-    }, PLAYBACK_STALL_WATCHDOG_MS)
-  }
-
-  private clearPlaybackStallWatchdog(): void {
-    if (this.playbackStallWatchdog) clearTimeout(this.playbackStallWatchdog)
-    this.playbackStallWatchdog = null
-    this.playbackStallMessageId = null
-  }
-
-  private async failStalledPlayback(messageId: string): Promise<void> {
-    logRendererError(
-      `TTS playback stalled for message ${messageId} before any audio started; watchdog stopped it.`
-    )
-    const active = this.activePlayback
-    this.activePlayback = null
-    this.currentSegments = null
-    this.playbackScope = null
-    this.clearPlaybackStallWatchdog()
-    this.resetSeekSurfaces()
-    if (active) {
-      active.audio?.pause()
-      active.next?.catch(() => undefined)
-      for (const url of active.retainedUrls) if (url) URL.revokeObjectURL(url)
-      await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
-    }
-    this.playback = {
-      state: 'failed',
-      messageId,
-      error: {
-        code: 'synthesis-failed',
-        message:
-          'Text-to-speech did not start within 60 seconds. Playback was stopped — click speak to retry.',
-        retryable: true
-      }
-    }
+    await this.playbackEngine.togglePlayback(messageId, markdown, scope)
   }
 
   async cancelPlayback(): Promise<void> {
-    const active = this.activePlayback
-    this.activePlayback = null
-    this.currentSegments = null
-    this.playbackScope = null
-    this.clearPlaybackStallWatchdog()
-    this.resetSeekSurfaces()
-    if (active) {
-      active.audio?.pause()
-      active.next?.catch(() => undefined)
-      for (const url of active.retainedUrls) if (url) URL.revokeObjectURL(url)
-      await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
-    }
-    this.playback = { state: 'idle' }
+    await this.playbackEngine.cancelPlayback()
+  }
+
+  async seekPlayback(seconds: number): Promise<void> {
+    await this.playbackEngine.seekPlayback(seconds)
   }
 
   private queueChunk(active: ActiveCapture, blob: Blob): void {
@@ -1035,71 +1015,10 @@ class SpeechController {
     }
   }
 
-  private async selectAsrArtifact(): Promise<{
-    runtime: SpeechRuntime
-    artifact: SpeechModelArtifact
-  }> {
-    const [capabilities, catalog] = await Promise.all([
-      invoke('speech:getCapabilities'),
-      invoke('speech:getCatalog')
-    ])
-    if (!capabilities.ok) throw new Error(capabilities.error.message)
-    if (!catalog.ok) throw new Error(catalog.error.message)
-    const installedAll = capabilities.value.installedArtifacts.filter((a) => a.available)
-    const installedIds = new Set(installedAll.map((a) => a.artifactId))
-    const activeArtifactId = this.sound.asrArtifactId
-    if (activeArtifactId) {
-      const chosenInstalled = installedAll.find((a) => a.artifactId === activeArtifactId)
-      if (chosenInstalled) {
-        const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
-        if (catalogHit) {
-          if (catalogHit.capability === 'asr' && catalogHit.qualification.status !== 'retired')
-            return { runtime: chosenInstalled.runtime, artifact: catalogHit }
-        } else if (chosenInstalled.capability !== 'tts') {
-          // Imported model — synthesize a pseudo-artifact; service will handle directory
-          const pseudo = {
-            id: chosenInstalled.artifactId,
-            familyId: 'whisper',
-            capability: 'asr' as const,
-            runtime: chosenInstalled.runtime,
-            label: chosenInstalled.importPath
-              ? posixBasename(chosenInstalled.importPath)
-              : chosenInstalled.artifactId,
-            description: '',
-            tier: 'balanced' as const,
-            version: 'imported',
-            repositoryRevision: 'imported',
-            platforms: [] as unknown as string[],
-            architectures: [] as unknown as string[],
-            languages: [],
-            voices: [],
-            files: [],
-            byteSize: 0,
-            license: 'user-provided',
-            attribution: '',
-            sourcePageUrl: '',
-            minimumMemoryBytes: 0,
-            qualification: {
-              status: 'qualified' as const,
-              licenseReviewed: true,
-              compatibilityReviewed: true,
-              checksumReviewed: true,
-              benchmark: { status: 'passed' as const }
-            }
-          } as unknown as import('../../../lib/speech/types').SpeechModelArtifact
-          return { runtime: chosenInstalled.runtime, artifact: pseudo }
-        }
-      }
-      this.forgetUnavailableAsrSelection(activeArtifactId)
-    }
-    const artifact = catalog.value.artifacts.find(
-      (candidate) =>
-        candidate.capability === 'asr' &&
-        candidate.qualification.status !== 'retired' &&
-        installedIds.has(candidate.id)
+  private selectAsrArtifact(): Promise<SpeechArtifactSelection> {
+    return selectAsrArtifact(this.sound, (artifactId) =>
+      this.forgetUnavailableAsrSelection(artifactId)
     )
-    if (!artifact) throw new Error(`Install a speech-to-text model in Sound settings.`)
-    return { runtime: artifact.runtime, artifact }
   }
 
   private forgetUnavailableAsrSelection(artifactId: string): void {
@@ -1109,456 +1028,6 @@ class SpeechController {
     void invoke('config:update', { sound: nextSound }).catch((cause: unknown) => {
       logRendererError('Could not clear the unavailable speech-to-text model selection.', cause)
     })
-  }
-
-  /**
-   * Produce the final transcript for a finished capture. Prefers an installed
-   * local ASR model; when voice recording is enabled and no local ASR is
-   * installed, falls back to audio-to-LLM transcription (audio never leaves the
-   * device unless the user has opted in via the default-`false` toggle).
-   */
-  private async transcribeActive(active: ActiveCapture): Promise<string> {
-    if (this.sound.voiceRecordingEnabled) {
-      let selection: { runtime: SpeechRuntime; artifact: SpeechModelArtifact } | null
-      try {
-        selection = await this.selectAsrArtifact()
-      } catch {
-        selection = null
-      }
-      if (selection) {
-        const result = await invoke(
-          'speech:transcribe',
-          active.attemptId,
-          selection.runtime,
-          selection.artifact.id,
-          'auto',
-          this.cleanupMode()
-        )
-        if (!result.ok) throw new Error(result.error.message)
-        return result.value.finalTranscript
-      }
-      const audioLlm = await invoke(
-        'speech:transcribeAudioToLlm',
-        active.attemptId,
-        active.scope,
-        'auto',
-        this.cleanupMode()
-      )
-      if (!audioLlm.ok) throw new Error(audioLlm.error.message)
-      return audioLlm.value.finalTranscript
-    }
-    const selection = await this.selectAsrArtifact()
-    const result = await invoke(
-      'speech:transcribe',
-      active.attemptId,
-      selection.runtime,
-      selection.artifact.id,
-      'auto',
-      this.cleanupMode()
-    )
-    if (!result.ok) throw new Error(result.error.message)
-    return result.value.finalTranscript
-  }
-
-  private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {
-    const flags = this.sound.refinementFlags
-    if (this.sound.remoteCleanupEnabled) {
-      return {
-        kind: 'remote',
-        selection: this.sound.remoteCleanupSelection,
-        ...(this.sound.remoteCleanupModelId ? { modelId: this.sound.remoteCleanupModelId } : {}),
-        ...(flags ? { flags } : {})
-      }
-    }
-    return this.sound.localCleanupEnabled
-      ? {
-          kind: 'local',
-          artifactId: this.sound.cleanupArtifactId,
-          ...(flags ? { flags } : {})
-        }
-      : { kind: 'disabled' }
-  }
-
-  private async selectTtsArtifact(): Promise<{
-    runtime: SpeechRuntime
-    artifact: SpeechModelArtifact
-  }> {
-    const [capabilities, catalog] = await Promise.all([
-      invoke('speech:getCapabilities'),
-      invoke('speech:getCatalog')
-    ])
-    if (!capabilities.ok) throw new Error(capabilities.error.message)
-    if (!catalog.ok) throw new Error(catalog.error.message)
-    const installedAll = capabilities.value.installedArtifacts.filter((item) => item.available)
-    const installed = new Set(installedAll.map((item) => item.artifactId))
-    if (this.sound.ttsArtifactId) {
-      const chosenInstalled = installedAll.find((a) => a.artifactId === this.sound.ttsArtifactId)
-      if (chosenInstalled) {
-        const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
-        if (catalogHit) {
-          if (catalogHit.capability === 'tts' && catalogHit.qualification.status !== 'retired')
-            return { runtime: chosenInstalled.runtime, artifact: catalogHit }
-        } else {
-          const pseudo = {
-            id: chosenInstalled.artifactId,
-            familyId: 'kokoro',
-            capability: 'tts' as const,
-            runtime: chosenInstalled.runtime,
-            label: chosenInstalled.importPath
-              ? posixBasename(chosenInstalled.importPath)
-              : chosenInstalled.artifactId,
-            description: '',
-            tier: 'balanced' as const,
-            version: 'imported',
-            repositoryRevision: 'imported',
-            platforms: [] as unknown as string[],
-            architectures: [] as unknown as string[],
-            languages: [],
-            voices: [],
-            files: [],
-            byteSize: 0,
-            license: 'user-provided',
-            attribution: '',
-            sourcePageUrl: '',
-            minimumMemoryBytes: 0,
-            qualification: {
-              status: 'qualified' as const,
-              licenseReviewed: true,
-              compatibilityReviewed: true,
-              checksumReviewed: true,
-              benchmark: { status: 'passed' as const }
-            }
-          } as unknown as import('../../../lib/speech/types').SpeechModelArtifact
-          return { runtime: chosenInstalled.runtime, artifact: pseudo }
-        }
-      }
-      throw new Error(`The active text-to-speech model is not installed.`)
-    }
-    const artifact = catalog.value.artifacts.find(
-      (item) =>
-        item.capability === 'tts' &&
-        item.qualification.status !== 'retired' &&
-        installed.has(item.id)
-    )
-    if (!artifact) throw new Error(`Install a text-to-speech model.`)
-    return { runtime: artifact.runtime, artifact }
-  }
-
-  private synthesize(playback: ActivePlayback, index: number): Promise<SpeechSynthesizedSegment> {
-    return invoke(
-      'speech:synthesizePlaybackSegment',
-      playback.prepared.sessionId,
-      index,
-      playback.runtime,
-      playback.artifact.id,
-      playback.voiceId
-    ).then((result) => {
-      if (!result.ok) throw new Error(result.error.message)
-      return result.value
-    })
-  }
-
-  private async playSegment(playback: ActivePlayback, index: number): Promise<void> {
-    if (this.activePlayback !== playback) return
-    const generationAtStart = playback.generation
-    await this.obtainSegmentAudio(playback, index)
-    if (
-      this.activePlayback !== playback ||
-      playback.generation !== generationAtStart ||
-      index >= playback.retainedUrls.length
-    )
-      return
-    if (index + 1 < playback.prepared.segments.length && !playback.next) {
-      const prefetchIndex = index + 1
-      const prefetch = this.synthesize(playback, prefetchIndex)
-      // The rejection is consumed by obtainSegmentAudio once this segment is
-      // reached; attach a no-op now so it never surfaces as an unhandled
-      // rejection while the current block is still playing.
-      prefetch.catch(() => undefined)
-      playback.next = prefetch
-      playback.nextIndex = prefetchIndex
-    }
-    pauseCurrentHistoryAudio()
-    await this.startSegmentAudio(playback, index, 0)
-  }
-
-  /**
-   * Makes sure a generated blob exists for `index`, synthesizing on demand and
-   * reusing an in-flight prefetch when it targets the same segment. Safe to
-   * call from both the natural chain and explicit seeks. Skipped blocks keep a
-   * `null` slot so indexes stay aligned and every index stays reachable.
-   */
-  private async obtainSegmentAudio(playback: ActivePlayback, index: number): Promise<void> {
-    if (index < playback.retainedUrls.length && playback.retainedUrls[index]) return
-    let promise: Promise<SpeechSynthesizedSegment>
-    if (playback.next && playback.nextIndex === index) {
-      promise = playback.next
-    } else {
-      // A stale prefetch for another index must not surface as unhandled.
-      playback.next?.catch(() => undefined)
-      promise = this.synthesize(playback, index)
-    }
-    playback.next = null
-    playback.nextIndex = null
-    const synthesized = await promise
-    // Retain even for an abandoned session so cleanup still revokes the blob.
-    const url = URL.createObjectURL(new Blob([synthesized.audio], { type: 'audio/wav' }))
-    while (playback.retainedUrls.length < index) {
-      playback.retainedUrls.push(null)
-      playback.durations.push(Number.NaN)
-    }
-    if (index < playback.retainedUrls.length) {
-      playback.retainedUrls[index] = url
-      playback.durations[index] = Number.NaN
-    } else {
-      playback.retainedUrls.push(url)
-      playback.durations.push(Number.NaN)
-    }
-  }
-
-  /**
-   * Plays (or positions) a segment's retained audio, constructing the element
-   * when this segment is not already loaded. Paused seeks pass autoplay=false
-   * so scrubbing never surprises the user with sudden sound.
-   */
-  private async startSegmentAudio(
-    playback: ActivePlayback,
-    index: number,
-    offsetSeconds: number,
-    autoplay = true
-  ): Promise<void> {
-    if (this.activePlayback !== playback) return
-    const url = playback.retainedUrls[index]
-    if (!url) return
-    playback.index = index
-    let audio = playback.audio
-    if (!audio || audio.dataset.segmentIndex !== String(index)) {
-      audio?.pause()
-      audio = new Audio(url)
-      audio.dataset.segmentIndex = String(index)
-      if (offsetSeconds > 0) audio.dataset.pendingStart = String(offsetSeconds)
-      this.wireSegmentAudio(playback, audio, index)
-      playback.audio = audio
-    } else if (offsetSeconds > 0 && audio.readyState >= 1) {
-      try {
-        audio.currentTime = offsetSeconds
-      } catch {
-        // Ignore; timeupdate reconciles the slider next tick.
-      }
-    }
-    this.syncSeekCounters(playback)
-    if (autoplay) {
-      try {
-        await audio.play()
-      } finally {
-        if (this.activePlayback === playback) {
-          this.clearPausedLinger()
-          this.readAlongVisible = true
-        }
-      }
-      if (this.activePlayback !== playback) return
-      this.clearPlaybackStallWatchdog()
-      playback.consecutiveFailures = 0
-      this.playback = {
-        state: 'playing',
-        sessionId: playback.prepared.sessionId,
-        messageId: playback.prepared.messageId,
-        segmentIndex: index
-      }
-    } else {
-      // Positioned while paused: refresh the linger clock like a fresh pause.
-      this.armPausedLinger()
-    }
-  }
-
-  private wireSegmentAudio(playback: ActivePlayback, audio: HTMLAudioElement, index: number): void {
-    audio.addEventListener(
-      'loadedmetadata',
-      () => {
-        if (this.activePlayback !== playback) return
-        playback.durations[index] = Number.isFinite(audio.duration) ? audio.duration : 0
-        const pendingStart = Number(audio.dataset.pendingStart ?? '')
-        if (pendingStart > 0) {
-          delete audio.dataset.pendingStart
-          try {
-            audio.currentTime = pendingStart
-          } catch {
-            // Ignore; the first timeupdate will still report a sane position.
-          }
-        }
-        this.syncSeekCounters(playback)
-      },
-      { once: true }
-    )
-    audio.addEventListener('timeupdate', () => {
-      if (this.activePlayback !== playback) return
-      this.syncSeekCounters(playback)
-    })
-    audio.addEventListener(
-      'ended',
-      () => {
-        if (this.activePlayback !== playback) return
-        this.continueAfter(playback, index)
-      },
-      { once: true }
-    )
-  }
-
-  /**
-   * Chains into the next block when one finishes. A block whose synthesis
-   * fails (e.g. the engine rejects overlong text) must not kill the whole
-   * session — reading skips it and continues. Three consecutive failures mean
-   * the engine itself is broken, so the session settles into the retryable
-   * failed state instead of silently muting everything.
-   */
-  private continueAfter(playback: ActivePlayback, fromIndex: number): void {
-    if (this.activePlayback !== playback) return
-    const nextIndex = fromIndex + 1
-    if (nextIndex >= playback.prepared.segments.length) {
-      this.completePlayback(playback)
-      return
-    }
-    void this.playSegment(playback, nextIndex).catch((cause: unknown) => {
-      if (this.activePlayback !== playback) return
-      playback.consecutiveFailures += 1
-      if (playback.consecutiveFailures >= 3) {
-        this.clearPlaybackStallWatchdog()
-        this.resetSeekSurfaces()
-        this.playback = {
-          state: 'failed',
-          messageId: playback.prepared.messageId,
-          error: {
-            code: 'synthesis-failed',
-            message: errorMessage(cause),
-            retryable: true
-          }
-        }
-        return
-      }
-      logRendererError(
-        `TTS block ${nextIndex} could not be synthesized; continuing with the next block: ${errorMessage(cause)}`
-      )
-      this.continueAfter(playback, nextIndex)
-    })
-  }
-
-  private completePlayback(playback: ActivePlayback): void {
-    this.clearPlaybackStallWatchdog()
-    this.resetSeekSurfaces()
-    this.playback = { state: 'completed', messageId: playback.prepared.messageId }
-    void this.cancelPlayback()
-  }
-
-  /** Publishes the cross-segment playhead and generated-frontier counters. */
-  private syncSeekCounters(playback: ActivePlayback): void {
-    let prefix = 0
-    for (let i = 0; i < playback.index; i += 1) prefix += this.segmentSeconds(playback, i)
-    const current = playback.audio?.currentTime ?? 0
-    this.elapsedSeconds = prefix + current
-    this.knownDurationSeconds = this.generatedFrontierSeconds
-  }
-
-  /** Hides the read-along border and seek controls at terminal states. */
-  private resetSeekSurfaces(): void {
-    this.clearPausedLinger()
-    this.readAlongVisible = false
-    this.elapsedSeconds = 0
-    this.knownDurationSeconds = 0
-  }
-
-  private armPausedLinger(): void {
-    this.clearPausedLinger()
-    this.pausedLingerTimer = setTimeout(() => {
-      this.pausedLingerTimer = null
-      if (this.playback.state !== 'paused') return
-      this.readAlongVisible = false
-    }, PAUSED_LINGER_MS)
-  }
-
-  private clearPausedLinger(): void {
-    if (this.pausedLingerTimer) clearTimeout(this.pausedLingerTimer)
-    this.pausedLingerTimer = null
-  }
-
-  /**
-   * Moves the playhead anywhere in the whole block. Positions inside the
-   * current segment just move the cursor; other targets (forward or back)
-   * swap in that segment's retained audio, synthesizing it first when it has
-   * never been generated. A stale request (user kept dragging) is discarded.
-   */
-  async seekPlayback(seconds: number): Promise<void> {
-    const playback = this.activePlayback
-    if (!playback || playback.prepared.segments.length === 0) return
-    const pausedAtStart = this.playback.state === 'paused'
-    const { index, offset } = this.locatePlaybackPosition(playback, Math.max(0, seconds))
-    if (index === -1) return
-    if (index === playback.index && playback.audio) {
-      // Cursor move within the loaded segment.
-      try {
-        playback.audio.currentTime = offset
-      } catch {
-        // Metadata pending; the next timeupdate reconciles the slider.
-      }
-      this.syncSeekCounters(playback)
-      if (pausedAtStart) {
-        this.armPausedLinger()
-      } else {
-        this.clearPausedLinger()
-        this.readAlongVisible = true
-      }
-      return
-    }
-    // Cross-segment relocation: any previously chained continuation is stale.
-    playback.generation += 1
-    const token = playback.generation
-    if (playback.audio && !playback.audio.paused && !pausedAtStart) {
-      // Stop sound immediately so scrubbing forward feels instant while the
-      // target segment (if uncached) is being generated.
-      playback.audio.pause()
-    }
-    try {
-      await this.obtainSegmentAudio(playback, index)
-    } catch {
-      return
-    }
-    if (this.activePlayback !== playback || playback.generation !== token) return
-    await this.startSegmentAudio(playback, index, offset, !pausedAtStart)
-  }
-
-  private playCue(kind: 'started' | 'stopped' | 'completed'): void {
-    const enabled =
-      kind === 'started'
-        ? this.sound.cues.listeningStarted
-        : kind === 'stopped'
-          ? this.sound.cues.recordingStopped
-          : this.sound.cues.transcriptReady
-    if (!enabled || this.sound.cues.volume === 0) return
-    const AudioContextConstructor = window.AudioContext
-    if (typeof AudioContextConstructor !== 'function') return
-    try {
-      const context = new AudioContextConstructor()
-      const oscillator = context.createOscillator()
-      const gain = context.createGain()
-      const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
-      oscillator.frequency.setValueAtTime(frequency, context.currentTime)
-      // Loud enough to stay audible over a low system volume: the peak rides
-      // close to full scale (0.5 × user volume) instead of the near-inaudible
-      // 0.06 it used to be, and the slightly longer envelope keeps the blip
-      // from reading as a click at high pitch.
-      gain.gain.setValueAtTime(0.0001, context.currentTime)
-      gain.gain.exponentialRampToValueAtTime(
-        Math.max(0.0001, 0.5 * this.sound.cues.volume),
-        context.currentTime + 0.012
-      )
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12)
-      oscillator.connect(gain)
-      gain.connect(context.destination)
-      oscillator.start()
-      oscillator.stop(context.currentTime + 0.13)
-      oscillator.addEventListener('ended', () => void context.close(), { once: true })
-    } catch (cause) {
-      logRendererError(`Voice recording ${kind} cue failed: ${errorMessage(cause)}`, cause)
-    }
   }
 
   private async loadSettings(): Promise<void> {

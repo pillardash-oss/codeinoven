@@ -1,23 +1,11 @@
-import { constants, realpathSync, statSync } from 'node:fs'
-import {
-  copyFile,
-  link,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  stat
-} from 'node:fs/promises'
-import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { constants } from 'node:fs'
+import { mkdir, link, lstat, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { toPosixPath } from '../../lib/paths'
 import { INBOX_PROJECT_ID } from '../../lib/types'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
-  Project,
   ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
@@ -25,82 +13,59 @@ import type {
   ProjectTextFile,
   PromptProjectReference
 } from '../../lib/types'
+import {
+  MAX_DIRECTORY_ENTRIES,
+  MAX_TEXT_FILE_BYTES,
+  decodeText,
+  isSymlinkedDirectoryInsideRoot,
+  isWithinRoot,
+  revisionOf,
+  scopedKey
+} from './project-files/project-files-paths'
+import { ProjectFilesRootResolver } from './project-files/project-files-roots'
+import type {
+  ProjectFilesAssistantRootLookup,
+  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesProjectLookup,
+  ProjectFilesScopeRootLookup,
+  ProjectFilesThreadWorkspaceRoots
+} from './project-files/project-files-roots'
+import { ProjectFilesTransfer } from './project-files/project-files-transfer'
+import {
+  externalCitationPathExists,
+  resolveCitationPath
+} from './project-files/project-files-citations'
 
-const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024
-const MAX_DIRECTORY_ENTRIES = 10_000
-const MAX_RELATIVE_PATH_LENGTH = 4_096
-
-export interface ProjectFilesProjectLookup {
-  getProject(projectId: string): Promise<Project | null>
-}
-
-/** Resolves a managed scope's filesystem root; unhealthy scopes fail closed. */
-export interface ProjectFilesScopeRootLookup {
-  resolveCompatibilityRoot(projectId: string, scopeBucketId: string): Promise<string | null>
-}
-
-/** Resolves (and creates) one chat thread's `chats-artifacts/<threadId>` root.
- *  Chat file trees mount here: the directory is app-owned per-thread scratch
- *  space, so resolution must not depend on a project record. */
-export interface ProjectFilesChatArtifactRootLookup {
-  resolve(threadId: string): Promise<string>
-}
-
-/** Cache/invalidation key for a (project, scope) root pair. */
-function scopedKey(projectId: string, scopeBucketId?: string): string {
-  return scopeBucketId ? `${projectId}::${scopeBucketId}` : projectId
-}
-
-function isWithinRoot(root: string, target: string): boolean {
-  const pathFromRoot = relative(root, target)
-  return (
-    pathFromRoot === '' ||
-    (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
-  )
-}
-
-/** Whether a symlinked directory's target, fully resolved through both the
- *  link and the root, stays inside the project. Mirrors the file-index
- *  service's guard so links escaping the project or cycling up the tree are
- *  never listed. */
-async function isSymlinkedDirectoryInsideRoot(root: string, linkPath: string): Promise<boolean> {
-  try {
-    const [rootReal, linkReal] = await Promise.all([realpath(root), realpath(linkPath)])
-    return isWithinRoot(rootReal, linkReal)
-  } catch {
-    return false
-  }
-}
-
-function revisionOf(content: Uint8Array): string {
-  return createHash('sha256').update(content).digest('hex')
-}
-
-function decodeText(content: Uint8Array): string {
-  if (content.includes(0)) {
-    throw new Error('Binary files cannot be edited in the sidebar')
-  }
-  try {
-    return new TextDecoder('utf-8', {
-      fatal: true,
-      ignoreBOM: true
-    }).decode(content)
-  } catch {
-    throw new Error('Only valid UTF-8 text files can be edited in the sidebar')
-  }
+export type {
+  ProjectFilesProjectLookup,
+  ProjectFilesScopeRootLookup,
+  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesAssistantRootLookup
 }
 
 export class ProjectFilesService {
   private readonly writeQueues = new Map<string, Promise<void>>()
-  private readonly projectRoots = new Map<string, string>()
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()
+  /** Mount-root authority: resolves and caches (project, scope, thread) roots. */
+  private readonly roots: ProjectFilesRootResolver
+  /** Paste/import/drop operations, serialized through this service's queue. */
+  private readonly transfer: ProjectFilesTransfer
+  private readonly projects: ProjectFilesProjectLookup
 
   constructor(
-    private readonly projects: ProjectFilesProjectLookup,
-    private readonly scopeRoots?: ProjectFilesScopeRootLookup,
-    private readonly chatArtifactRoots?: ProjectFilesChatArtifactRootLookup
-  ) {}
+    projects: ProjectFilesProjectLookup,
+    scopeRoots?: ProjectFilesScopeRootLookup,
+    threadWorkspaces: ProjectFilesThreadWorkspaceRoots = {}
+  ) {
+    this.projects = projects
+    this.roots = new ProjectFilesRootResolver(projects, scopeRoots, threadWorkspaces)
+    this.transfer = new ProjectFilesTransfer({
+      roots: this.roots,
+      runExclusive: (operation) => this.runMutationExclusive(operation),
+      invalidate: (projectId, scopeBucketId) => this.invalidateProject(projectId, scopeBucketId)
+    })
+  }
 
   async listDirectory(
     projectId: string,
@@ -108,8 +73,8 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-    const directory = await this.resolveExistingPath(root, relativeDirectory, true)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    const directory = await this.roots.resolveExistingPath(root, relativeDirectory, true)
     const entries = await readdir(directory, { withFileTypes: true })
     // Symlinked entries are followed so linked files and directories appear in
     // the tree. A symlinked directory is only kept when its target stays inside
@@ -177,13 +142,15 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
     const project = await this.projects.getProject(projectId)
     // Scoped searches index their own root: a worktree checkout must never
     // share (or poison) the project-root index. Chat thread mounts get their
     // own index key for the same reason.
     return this.fileIndex.search(
-      threadId !== undefined ? `${projectId}::thread:${threadId}` : scopedKey(projectId, scopeBucketId),
+      threadId !== undefined
+        ? `${projectId}::thread:${threadId}`
+        : scopedKey(projectId, scopeBucketId),
       root,
       query,
       category,
@@ -212,7 +179,7 @@ export class ProjectFilesService {
    *  (remote, cloud) simply never get an index or watcher. */
   async prewarmProject(projectId: string, threadId?: string): Promise<void> {
     try {
-      const root = await this.projectRoot(projectId, undefined, threadId)
+      const root = await this.roots.projectRoot(projectId, undefined, threadId)
       await this.fileIndex.prewarm(
         threadId !== undefined ? `${projectId}::thread:${threadId}` : projectId,
         root
@@ -238,6 +205,12 @@ export class ProjectFilesService {
    * may be relative (`src/foo.ts`), prefixed with the project CWD (absolute), or
    * `file://` URLs. Anything that does not exist, escapes the root, or is a
    * symbolic link resolves to `null`   such citations must never become links.
+   *
+   * A candidate that runs through a regular file does not exist either, which is
+   * the normal shape of a linked worktree's `.git`: it is a file, so `.git/heads`
+   * has nothing under it. That resolves to `null` like any other missing entry.
+   * It must not reject the call, because the resolver runs over agent-authored
+   * text and one odd candidate would take the whole message's citations with it.
    */
   async resolveCitationPaths(
     projectId: string,
@@ -249,10 +222,10 @@ export class ProjectFilesService {
     if (project.source !== 'local' || !project.path.trim()) {
       return Object.fromEntries(candidates.map((candidate) => [candidate, null]))
     }
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId)
     const results: Record<string, string | null> = {}
     for (const rawCandidate of candidates) {
-      results[rawCandidate] = await this.resolveCitationPath(root, rawCandidate)
+      results[rawCandidate] = await resolveCitationPath(root, rawCandidate)
     }
     return results
   }
@@ -266,78 +239,26 @@ export class ProjectFilesService {
   async resolveExternalCitationPaths(absolutePaths: string[]): Promise<Record<string, boolean>> {
     const results: Record<string, boolean> = {}
     for (const candidate of absolutePaths) {
-      results[candidate] = await this.externalCitationPathExists(candidate)
+      results[candidate] = await externalCitationPathExists(candidate)
     }
     return results
   }
 
-  private async externalCitationPathExists(rawCandidate: string): Promise<boolean> {
-    if (!rawCandidate || rawCandidate.includes('\0')) return false
-    if (!isAbsolute(rawCandidate)) return false
-    try {
-      const metadata = await lstat(rawCandidate)
-      if (metadata.isSymbolicLink()) return false
-      return metadata.isFile() || metadata.isDirectory()
-    } catch (error) {
-      if (this.isMissingPathError(error)) return false
-      throw error
-    }
-  }
-
-  private async resolveCitationPath(root: string, rawCandidate: string): Promise<string | null> {
-    if (rawCandidate.length === 0 || rawCandidate.length > MAX_RELATIVE_PATH_LENGTH) return null
-    if (rawCandidate.includes('\0') || rawCandidate.includes('\\')) return null
-
-    let candidate = rawCandidate
-    if (candidate.startsWith('file://')) {
-      try {
-        candidate = decodeURIComponent(new URL(candidate).pathname)
-      } catch {
-        return null
-      }
-    }
-    while (candidate.startsWith('./')) candidate = candidate.slice(2)
-
-    const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(root, candidate)
-    if (!isWithinRoot(root, absolute)) return null
-
-    const relativePath = toPosixPath(relative(root, absolute))
-    if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) return null
-
-    const segments = relativePath.split('/').filter(Boolean)
-    if (segments.some((segment) => segment === '.' || segment === '..')) return null
-
-    try {
-      let current = root
-      for (const segment of segments) {
-        current = resolve(current, segment)
-        if (!isWithinRoot(root, current)) return null
-        const metadata = await lstat(current)
-        if (metadata.isSymbolicLink()) return null
-      }
-      const metadata = await lstat(current)
-      if (!metadata.isFile() && !metadata.isDirectory()) return null
-      return relativePath
-    } catch (error) {
-      if (this.isMissingPathError(error)) return null
-      throw error
-    }
-  }
-
   /**
    * Resolve untrusted prompt references against their project root and return
-   * canonical display metadata. Existing path resolution rejects traversal,
-   * absolute paths, symlinks, and non-regular filesystem entries.
+   * canonical display metadata. This deliberately keeps strict entry resolution:
+   * traversal, absolute paths, symlinks, and non-regular filesystem entries are
+   * rejected, so a reference can only name an entry the tree itself shows.
    */
   async validatePromptReferences(
     projectId: string,
     references: PromptProjectReference[],
     scopeBucketId?: string
   ): Promise<PromptProjectReference[]> {
-    const root = await this.projectRoot(projectId, scopeBucketId)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId)
     return Promise.all(
       references.map(async (reference) => {
-        const entry = await this.resolveExistingEntry(root, reference.path)
+        const entry = await this.roots.resolveExistingEntry(root, reference.path)
         if (entry.kind !== reference.kind) {
           throw new Error(`Project reference kind does not match the path: ${reference.path}`)
         }
@@ -356,9 +277,88 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectTextFile> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-    const target = await this.resolveExistingPath(root, relativePath, false)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    const target = await this.roots.resolveExistingPath(root, relativePath, false)
     return this.readResolvedText(target, relativePath)
+  }
+
+  /**
+   * Read a text file at an absolute path that main has already authorized
+   * (a file the user opened through the operating system). Scope checks stay at
+   * the IPC boundary; this only enforces the shared text rules: a regular file,
+   * within the 2 MiB editing cap, and decodable UTF-8.
+   */
+  async readAbsoluteText(absolutePath: string): Promise<ProjectTextFile> {
+    const target = await realpath(absolutePath)
+    return this.readResolvedText(target, toPosixPath(target))
+  }
+
+  /**
+   * Write text to an already-authorized absolute path (a file the operating
+   * system handed over, or one the user picked in a dialog). The privileged IPC
+   * boundary resolves the scope before calling this, so the writer itself only
+   * has to guarantee that the bytes land atomically and that a concurrent change
+   * is never overwritten: the same revision check and temp-file swap the project
+   * writer uses, minus the project-root containment (there is no project here).
+   */
+  async writeAbsoluteText(
+    absolutePath: string,
+    content: string,
+    expectedRevision: string
+  ): Promise<ProjectTextFile> {
+    const target = await realpath(absolutePath)
+    return this.runMutationExclusive(() =>
+      this.runWriteExclusive(target, () =>
+        this.writeResolvedText(target, toPosixPath(target), content, expectedRevision)
+      )
+    )
+  }
+
+  /**
+   * The project whose root contains an absolute file path, with the path made
+   * relative to that root. An OS hand-off of a file that already lives inside a
+   * project opens in that project's own editor (file tree, scopes, save flow)
+   * instead of the standalone viewer.
+   *
+   * The deepest matching root wins, so a project nested inside another project
+   * claims its own files. Files outside every project, and paths that are not
+   * regular files, resolve to `null`; the check is existence-based, so a path
+   * that no longer resolves never matches.
+   */
+  async findProjectOwner(
+    absolutePath: string
+  ): Promise<{ projectId: string; relativePath: string } | null> {
+    if (typeof absolutePath !== 'string' || absolutePath.length === 0) return null
+    if (absolutePath.includes('\0')) return null
+    let canonical: string
+    try {
+      canonical = await realpath(absolutePath)
+      // Only regular files are ever routed into a project's editor; a directory
+      // hand-off stays with the project registration path.
+      if (!(await stat(canonical)).isFile()) return null
+    } catch {
+      return null
+    }
+
+    let owner: { projectId: string; root: string } | null = null
+    for (const project of await this.projects.listProjects()) {
+      if (project.id === INBOX_PROJECT_ID) continue
+      if (project.source !== 'local' || !project.path.trim()) continue
+      let root: string
+      try {
+        root = await realpath(resolve(project.path))
+      } catch {
+        // A project whose folder is gone can never own a live file.
+        continue
+      }
+      if (root === canonical || !isWithinRoot(root, canonical)) continue
+      if (!owner || root.length > owner.root.length) owner = { projectId: project.id, root }
+    }
+    if (!owner) return null
+    return {
+      projectId: owner.projectId,
+      relativePath: toPosixPath(relative(owner.root, canonical))
+    }
   }
 
   async createFile(
@@ -369,8 +369,8 @@ export class ProjectFilesService {
     threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-      const target = await this.resolveNewPath(root, relativeDirectory, name)
+      const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+      const target = await this.roots.resolveNewPath(root, relativeDirectory, name)
       const file = await open(
         target.absolutePath,
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -390,8 +390,8 @@ export class ProjectFilesService {
     threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-      const target = await this.resolveNewPath(root, relativeDirectory, name)
+      const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+      const target = await this.roots.resolveNewPath(root, relativeDirectory, name)
       await mkdir(target.absolutePath)
       this.invalidateProject(projectId, scopeBucketId)
       return { name, path: target.relativePath, kind: 'directory' }
@@ -406,9 +406,9 @@ export class ProjectFilesService {
     threadId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-      const source = await this.resolveExistingEntry(root, relativePath)
-      const target = await this.resolveNewPath(root, toPosixPath(dirname(relativePath)), name)
+      const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+      const source = await this.roots.resolveExistingEntry(root, relativePath)
+      const target = await this.roots.resolveNewPath(root, toPosixPath(dirname(relativePath)), name)
       if (source.kind === 'directory') {
         await rename(source.absolutePath, target.absolutePath)
       } else {
@@ -431,8 +431,8 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<string> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-    return (await this.resolveExistingEntry(root, relativePath)).absolutePath
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    return (await this.roots.resolveExistingEntry(root, relativePath)).absolutePath
   }
 
   async pasteEntry(
@@ -446,82 +446,17 @@ export class ProjectFilesService {
     sourceThreadId?: string,
     destinationThreadId?: string
   ): Promise<ProjectFileEntry> {
-    return this.runMutationExclusive(async () => {
-      const sourceRoot = await this.projectRoot(sourceProjectId, sourceScopeBucketId, sourceThreadId)
-      const destinationRoot = await this.projectRoot(
-        destinationProjectId,
-        destinationScopeBucketId,
-        destinationThreadId
-      )
-      const source = await this.resolveExistingEntry(sourceRoot, sourcePath)
-      if (sourceProjectId === destinationProjectId) {
-        const destinationPosix = toPosixPath(destinationDirectory)
-        if (destinationPosix === sourcePath || destinationPosix.startsWith(`${sourcePath}/`)) {
-          throw new Error('A folder cannot be pasted into itself')
-        }
-      }
-      const target = await this.resolveNewPath(
-        destinationRoot,
-        destinationDirectory,
-        basename(sourcePath)
-      )
-      if (source.kind === 'directory') {
-        await this.pasteDirectory(source.absolutePath, target.absolutePath, mode)
-      } else if (mode === 'copy') {
-        const temporaryPath = join(
-          dirname(target.absolutePath),
-          `.${basename(target.absolutePath)}.${process.pid}.${randomUUID()}.tmp`
-        )
-        try {
-          await copyFile(source.absolutePath, temporaryPath, constants.COPYFILE_EXCL)
-          await link(temporaryPath, target.absolutePath)
-        } finally {
-          await rm(temporaryPath, { force: true }).catch(() => undefined)
-        }
-      } else {
-        await link(source.absolutePath, target.absolutePath)
-        try {
-          await rm(source.absolutePath)
-        } catch (error) {
-          await rm(target.absolutePath, { force: true }).catch(() => undefined)
-          throw error
-        }
-      }
-      this.invalidateProject(destinationProjectId, destinationScopeBucketId)
-      if (
-        sourceProjectId !== destinationProjectId ||
-        sourceScopeBucketId !== destinationScopeBucketId
-      ) {
-        this.invalidateProject(sourceProjectId, sourceScopeBucketId)
-      }
-      return { name: basename(sourcePath), path: target.relativePath, kind: source.kind }
-    })
-  }
-
-  /** Copy a directory tree, or move it (rename, falling back to copy + delete across volumes). */
-  private async pasteDirectory(
-    source: string,
-    target: string,
-    mode: ProjectFileTransferMode
-  ): Promise<void> {
-    if (mode === 'copy') {
-      await this.copyDirectory(source, target)
-      return
-    }
-    try {
-      await rename(source, target)
-    } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EXDEV') {
-        throw error
-      }
-      try {
-        await this.copyDirectory(source, target)
-      } catch (copyError) {
-        await rm(target, { recursive: true, force: true }).catch(() => undefined)
-        throw copyError
-      }
-      await rm(source, { recursive: true, force: true })
-    }
+    return await this.transfer.pasteEntry(
+      sourceProjectId,
+      sourcePath,
+      destinationProjectId,
+      destinationDirectory,
+      mode,
+      sourceScopeBucketId,
+      destinationScopeBucketId,
+      sourceThreadId,
+      destinationThreadId
+    )
   }
 
   /**
@@ -537,16 +472,13 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectFileEntry[]> {
-    return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-      const destination = await this.resolveExistingPath(root, destinationDirectory, true)
-      const imported: ProjectFileEntry[] = []
-      for (const sourcePath of sourcePaths) {
-        imported.push(await this.importOne(root, destination, sourcePath))
-      }
-      this.invalidateProject(projectId, scopeBucketId)
-      return imported
-    })
+    return await this.transfer.importPaths(
+      projectId,
+      sourcePaths,
+      destinationDirectory,
+      scopeBucketId,
+      threadId
+    )
   }
 
   /**
@@ -560,200 +492,17 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectFileDropResult[]> {
-    return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-      const destination = await this.resolveExistingPath(root, destinationDirectory, true)
-      const dropped: ProjectFileDropResult[] = []
-      const candidates: string[] = []
-
-      for (const sourcePath of sourcePaths) {
-        if (!isAbsolute(sourcePath)) throw new Error('Dropped paths must be absolute')
-        const metadata = await lstat(sourcePath)
-        if (metadata.isSymbolicLink()) throw new Error('Symbolic links cannot be dropped')
-        const source = await realpath(sourcePath)
-        if (!candidates.includes(source)) candidates.push(source)
-      }
-
-      const sources = candidates.filter(
-        (candidate) =>
-          !candidates.some((other) => other !== candidate && isWithinRoot(other, candidate))
-      )
-
-      for (const source of sources) {
-        if (isWithinRoot(root, source) && source !== root) {
-          const relativePath = toPosixPath(relative(root, source))
-          dropped.push({
-            entry: await this.moveWithinProject(root, relativePath, destinationDirectory),
-            movedFrom: relativePath
-          })
-        } else {
-          dropped.push({ entry: await this.importOne(root, destination, source) })
-        }
-      }
-
-      this.invalidateProject(projectId, scopeBucketId)
-      return dropped
-    })
+    return await this.transfer.dropPaths(
+      projectId,
+      sourcePaths,
+      destinationDirectory,
+      scopeBucketId,
+      threadId
+    )
   }
 
   resolveForDragSync(projectId: string, relativePaths: string[], scopeBucketId?: string): string[] {
-    const root = this.projectRoots.get(scopedKey(projectId, scopeBucketId))
-    if (!root) throw new Error('Project files must be loaded before they can be dragged')
-    const resolved: string[] = []
-    const uniquePaths = [...new Set(relativePaths)].filter(
-      (candidate) =>
-        !relativePaths.some((other) => other !== candidate && candidate.startsWith(`${other}/`))
-    )
-    for (const relativePath of uniquePaths) {
-      const segments = this.validateRelativePath(relativePath, false)
-      let current = root
-      for (const segment of segments) {
-        current = resolve(current, segment)
-        if (!isWithinRoot(root, current))
-          throw new Error('Project file path escapes the project root')
-      }
-      // Symlinks are followed; the realpath containment check below is the
-      // safety gate, so links resolving outside the project still fail.
-      const metadata = statSync(current)
-      if (!metadata.isFile() && !metadata.isDirectory()) {
-        throw new Error('Project path is not a regular file or directory')
-      }
-      const canonical = realpathSync(current)
-      if (!isWithinRoot(root, canonical))
-        throw new Error('Project file path escapes the project root')
-      resolved.push(canonical)
-    }
-    return resolved
-  }
-
-  private async moveWithinProject(
-    root: string,
-    sourcePath: string,
-    destinationDirectory: string
-  ): Promise<ProjectFileEntry> {
-    const source = await this.resolveExistingEntry(root, sourcePath)
-    const sourceDirectory = toPosixPath(dirname(sourcePath))
-    if ((sourceDirectory === '.' ? '' : sourceDirectory) === destinationDirectory) {
-      return { name: basename(sourcePath), path: sourcePath, kind: source.kind }
-    }
-    if (source.kind === 'directory') {
-      const destination = toPosixPath(destinationDirectory)
-      if (destination === sourcePath || destination.startsWith(`${sourcePath}/`)) {
-        throw new Error('A folder cannot be moved into itself')
-      }
-    }
-
-    const target = await this.resolveNewPath(root, destinationDirectory, basename(sourcePath))
-    if (source.kind === 'directory') {
-      await this.pasteDirectory(source.absolutePath, target.absolutePath, 'move')
-    } else {
-      await link(source.absolutePath, target.absolutePath)
-      try {
-        await rm(source.absolutePath)
-      } catch (error) {
-        await rm(target.absolutePath, { force: true }).catch(() => undefined)
-        throw error
-      }
-    }
-    return { name: basename(sourcePath), path: target.relativePath, kind: source.kind }
-  }
-
-  private async importOne(
-    root: string,
-    destination: string,
-    sourcePath: string
-  ): Promise<ProjectFileEntry> {
-    if (!isAbsolute(sourcePath)) {
-      throw new Error('Import source must be an absolute filesystem path')
-    }
-    const rawMetadata = await lstat(sourcePath)
-    if (rawMetadata.isSymbolicLink()) {
-      throw new Error('Symbolic links cannot be imported')
-    }
-    const source = await realpath(sourcePath)
-    const metadata = await lstat(source)
-    if (!metadata.isDirectory() && !metadata.isFile()) {
-      throw new Error('Only files and folders can be imported')
-    }
-    if (metadata.isDirectory() && isWithinRoot(source, destination)) {
-      throw new Error('A folder cannot be imported into itself')
-    }
-
-    const name = basename(source)
-    const target = await this.resolveImportTarget(destination, name, metadata.isDirectory())
-    const relativePath = toPosixPath(relative(root, target))
-    this.validateRelativePath(relativePath, false)
-
-    if (metadata.isDirectory()) {
-      await this.copyDirectory(source, target)
-    } else {
-      await this.copyFileWithTemp(source, target)
-    }
-    return {
-      name: basename(target),
-      path: relativePath,
-      kind: metadata.isDirectory() ? 'directory' : 'file'
-    }
-  }
-
-  private async resolveImportTarget(
-    destination: string,
-    name: string,
-    isDirectory: boolean
-  ): Promise<string> {
-    const extension = isDirectory ? '' : extname(name)
-    const stem = isDirectory ? name : basename(name, extension)
-    let target = resolve(destination, name)
-    let index = 1
-    while (await this.pathExists(target)) {
-      const suffix = ` (${index})`
-      target = resolve(
-        destination,
-        isDirectory ? `${stem}${suffix}` : `${stem}${suffix}${extension}`
-      )
-      index += 1
-    }
-    return target
-  }
-
-  private async pathExists(path: string): Promise<boolean> {
-    try {
-      await lstat(path)
-      return true
-    } catch (error) {
-      if (this.isMissingPathError(error)) return false
-      throw error
-    }
-  }
-
-  private async copyDirectory(source: string, target: string): Promise<void> {
-    await mkdir(target)
-    const entries = await readdir(source, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) {
-        throw new Error('Symbolic links cannot be copied')
-      }
-      const sourceEntry = join(source, entry.name)
-      const targetEntry = join(target, entry.name)
-      if (entry.isDirectory()) {
-        await this.copyDirectory(sourceEntry, targetEntry)
-      } else if (entry.isFile()) {
-        await this.copyFileWithTemp(sourceEntry, targetEntry)
-      }
-    }
-  }
-
-  private async copyFileWithTemp(source: string, target: string): Promise<void> {
-    const temporaryPath = join(
-      dirname(target),
-      `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`
-    )
-    try {
-      await copyFile(source, temporaryPath, constants.COPYFILE_EXCL)
-      await link(temporaryPath, target)
-    } finally {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-    }
+    return this.roots.resolveForDragSync(projectId, relativePaths, scopeBucketId)
   }
 
   async getInfo(
@@ -762,8 +511,13 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<ProjectFileInfo> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-    const entry = await this.resolveExistingEntry(root, relativePath)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    // Metadata intentionally follows symlinks, matching what `listDirectory`
+    // shows and what the read path opens: a linked file or directory is an
+    // entry the user can click, so copy-path/reveal/details must work on it.
+    const entry = await this.roots.resolveExistingEntry(root, relativePath, {
+      followSymlinks: true
+    })
     const metadata = await lstat(entry.absolutePath)
     return {
       name: basename(relativePath),
@@ -783,8 +537,23 @@ export class ProjectFilesService {
     scopeBucketId?: string,
     threadId?: string
   ): Promise<string> {
-    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-    return this.resolveExistingPath(root, relativePath, false)
+    const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    return this.roots.resolveExistingPath(root, relativePath, false)
+  }
+
+  /**
+   * Canonical root of a (project, scope, thread) mount.
+   *
+   * `getInfo` resolves an entry *inside* a mount and rejects an empty path, so
+   * callers that need the mount root itself (the directory preview server)
+   * resolve it here instead of re-deriving scope authority.
+   */
+  async resolveMountRoot(
+    projectId: string,
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string> {
+    return this.roots.projectRoot(projectId, scopeBucketId, threadId)
   }
 
   async writeText(
@@ -798,245 +567,71 @@ export class ProjectFilesService {
     const key = `${projectId}:${scopeBucketId ?? ''}:${threadId ?? ''}:${relativePath}`
     return this.runMutationExclusive(() =>
       this.runWriteExclusive(key, async () => {
-        const root = await this.projectRoot(projectId, scopeBucketId, threadId)
-        const target = await this.resolveExistingPath(root, relativePath, false)
-        const current = await this.readResolvedText(target, relativePath)
-        if (current.revision !== expectedRevision) {
-          throw new Error('This file changed on disk. Reload it before saving your draft.')
-        }
-
-        const nextContent = new TextEncoder().encode(content)
-        if (nextContent.byteLength > MAX_TEXT_FILE_BYTES) {
-          throw new Error('Text files larger than 2 MiB cannot be edited here')
-        }
-        decodeText(nextContent)
-
-        const metadata = await lstat(target)
+        const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+        const target = await this.roots.resolveExistingPath(root, relativePath, false)
         const parent = await realpath(dirname(target))
         if (!isWithinRoot(root, parent)) {
           throw new Error('Project file path escapes the project root')
         }
-
-        const temporaryPath = join(
-          parent,
-          `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`
-        )
-        try {
-          const temporaryFile = await open(
-            temporaryPath,
-            constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-            metadata.mode
-          )
-          try {
-            await temporaryFile.chmod(metadata.mode)
-            await temporaryFile.writeFile(nextContent)
-            await temporaryFile.sync()
-          } finally {
-            await temporaryFile.close()
-          }
-
-          const latest = await this.readResolvedText(target, relativePath)
-          if (latest.revision !== expectedRevision) {
-            throw new Error('This file changed on disk. Reload it before saving your draft.')
-          }
-          await rename(temporaryPath, target)
-        } catch (error) {
-          await rm(temporaryPath, { force: true }).catch(() => undefined)
-          throw error
-        }
-
-        return this.readResolvedText(target, relativePath)
+        return this.writeResolvedText(target, relativePath, content, expectedRevision, parent)
       })
     )
   }
 
-  private async projectRoot(
-    projectId: string,
-    scopeBucketId?: string,
-    threadId?: string
-  ): Promise<string> {
-    // A chat thread's artifact directory is its own mount root: per-thread,
-    // app-owned, created on demand, and independent of any project record.
-    if (threadId !== undefined && projectId === INBOX_PROJECT_ID && this.chatArtifactRoots) {
-      const cacheKey = `${projectId}::thread:${threadId}`
-      const cached = this.projectRoots.get(cacheKey)
-      if (cached) return cached
-      const root = await realpath(await this.chatArtifactRoots.resolve(threadId))
-      const metadata = await lstat(root)
-      if (!metadata.isDirectory()) {
-        throw new Error('Chat artifact root is not a directory')
-      }
-      this.projectRoots.set(cacheKey, root)
-      return root
+  /**
+   * Revision-checked, UTF-8-validated, size-bounded atomic write of one text
+   * file. Shared by the project writer and the standalone (project-less) writer
+   * so a file opened straight from the operating system is saved with exactly the
+   * same guarantees as a project file. `parent` is the already-resolved
+   * directory to place the temp file in; a caller that checked containment
+   * passes it so the check and the write cannot race on a swapped directory.
+   */
+  private async writeResolvedText(
+    target: string,
+    displayPath: string,
+    content: string,
+    expectedRevision: string,
+    parent?: string
+  ): Promise<ProjectTextFile> {
+    const current = await this.readResolvedText(target, displayPath)
+    if (current.revision !== expectedRevision) {
+      throw new Error('This file changed on disk. Reload it before saving your draft.')
     }
 
-    const cacheKey = scopedKey(projectId, scopeBucketId)
-    const cached = this.projectRoots.get(cacheKey)
-    if (cached) return cached
+    const nextContent = new TextEncoder().encode(content)
+    if (nextContent.byteLength > MAX_TEXT_FILE_BYTES) {
+      throw new Error('Text files larger than 2 MiB cannot be edited here')
+    }
+    decodeText(nextContent)
 
-    // A managed scope's worktree is the authoritative root for the call and is
-    // resolved fail-closed: an unhealthy managed scope throws instead of
-    // silently operating on the project directory.
-    if (scopeBucketId) {
-      if (!this.scopeRoots) {
-        throw new Error('Managed scope resolution is unavailable for project files')
-      }
-      const scopedRoot = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
-      if (!scopedRoot) {
-        throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
-      }
-      const root = await realpath(scopedRoot)
-      const metadata = await lstat(root)
-      if (!metadata.isDirectory()) {
-        throw new Error('Project root is not a directory')
-      }
-      this.projectRoots.set(cacheKey, root)
-      return root
-    }
-
-    const project = await this.projects.getProject(projectId)
-    if (!project) throw new Error(`Project not found: ${projectId}`)
-    if (project.source !== 'local') {
-      throw new Error('Sidebar file editing is not available for remote projects')
-    }
-    if (!project.path.trim()) {
-      throw new Error('This project does not have a local filesystem root')
-    }
-    const root = await realpath(resolve(project.path))
-    const metadata = await lstat(root)
-    if (!metadata.isDirectory()) {
-      throw new Error('Project root is not a directory')
-    }
-    this.projectRoots.set(cacheKey, root)
-    return root
-  }
-
-  private validateRelativePath(path: string, allowEmpty: boolean): string[] {
-    if (path.length > MAX_RELATIVE_PATH_LENGTH) {
-      throw new Error('Project file path is too long')
-    }
-    if (path.includes('\0') || path.includes('\\')) {
-      throw new Error('Project file path contains unsupported characters')
-    }
-    if (isAbsolute(path) || /^[a-zA-Z]:/u.test(path)) {
-      throw new Error('Project file path must be relative')
-    }
-    if (!allowEmpty && path.length === 0) {
-      throw new Error('Project file path is required')
-    }
-
-    const segments = path.split('/').filter(Boolean)
-    if (segments.some((segment) => segment === '.' || segment === '..')) {
-      throw new Error('Project file path is not available in the sidebar')
-    }
-    if (segments.join('/') !== path && path !== '') {
-      throw new Error('Project file path must use normalized relative segments')
-    }
-    return segments
-  }
-
-  private validateEntryName(name: string): void {
-    if (
-      name.length === 0 ||
-      name.length > 255 ||
-      name === '.' ||
-      name === '..' ||
-      name.includes('/') ||
-      name.includes('\\') ||
-      name.includes('\0')
-    ) {
-      throw new Error('File name must be one valid path segment')
-    }
-  }
-
-  private async resolveNewPath(
-    root: string,
-    relativeDirectory: string,
-    name: string
-  ): Promise<{ absolutePath: string; relativePath: string }> {
-    this.validateEntryName(name)
-    const normalizedDirectory = relativeDirectory === '.' ? '' : relativeDirectory
-    const directory = await this.resolveExistingPath(root, normalizedDirectory, true)
-    const relativePath = normalizedDirectory ? `${normalizedDirectory}/${name}` : name
-    this.validateRelativePath(relativePath, false)
-    const absolutePath = resolve(directory, name)
-    if (!isWithinRoot(root, absolutePath)) {
-      throw new Error('Project file path escapes the project root')
-    }
+    const metadata = await lstat(target)
+    const directory = parent ?? (await realpath(dirname(target)))
+    const temporaryPath = join(directory, `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`)
     try {
-      await lstat(absolutePath)
+      const temporaryFile = await open(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        metadata.mode
+      )
+      try {
+        await temporaryFile.chmod(metadata.mode)
+        await temporaryFile.writeFile(nextContent)
+        await temporaryFile.sync()
+      } finally {
+        await temporaryFile.close()
+      }
+
+      const latest = await this.readResolvedText(target, displayPath)
+      if (latest.revision !== expectedRevision) {
+        throw new Error('This file changed on disk. Reload it before saving your draft.')
+      }
+      await rename(temporaryPath, target)
     } catch (error) {
-      if (this.isMissingPathError(error)) return { absolutePath, relativePath }
+      await rm(temporaryPath, { force: true }).catch(() => undefined)
       throw error
     }
-    throw new Error(`A file or directory named "${name}" already exists`)
-  }
 
-  private async resolveExistingEntry(
-    root: string,
-    relativePath: string
-  ): Promise<{ absolutePath: string; kind: ProjectFileEntry['kind'] }> {
-    const segments = this.validateRelativePath(relativePath, false)
-    let current = root
-    for (const segment of segments) {
-      current = resolve(current, segment)
-      if (!isWithinRoot(root, current)) {
-        throw new Error('Project file path escapes the project root')
-      }
-      const metadata = await lstat(current)
-      if (metadata.isSymbolicLink()) {
-        throw new Error('Symbolic links are not available in the sidebar')
-      }
-    }
-    const metadata = await lstat(current)
-    const kind = metadata.isDirectory() ? 'directory' : metadata.isFile() ? 'file' : null
-    if (!kind) throw new Error('Project path is not a regular file or directory')
-    const canonical = await realpath(current)
-    if (!isWithinRoot(root, canonical)) {
-      throw new Error('Project file path escapes the project root')
-    }
-    return { absolutePath: canonical, kind }
-  }
-
-  private isMissingPathError(error: unknown): boolean {
-    return (
-      error instanceof Error &&
-      'code' in error &&
-      typeof error.code === 'string' &&
-      error.code === 'ENOENT'
-    )
-  }
-
-  private async resolveExistingPath(
-    root: string,
-    relativePath: string,
-    expectDirectory: boolean
-  ): Promise<string> {
-    const segments = this.validateRelativePath(relativePath, expectDirectory)
-    let current = root
-    for (const segment of segments) {
-      current = resolve(current, segment)
-      if (!isWithinRoot(root, current)) {
-        throw new Error('Project file path escapes the project root')
-      }
-    }
-
-    // Symlinks are followed so linked files and directories listed in the
-    // tree can also be opened. Safety relies on the realpath containment
-    // check below: only links resolving inside the project pass.
-    const metadata = await stat(current)
-    if (expectDirectory ? !metadata.isDirectory() : !metadata.isFile()) {
-      throw new Error(
-        expectDirectory
-          ? 'Project file path is not a directory'
-          : 'Project file path is not a regular file'
-      )
-    }
-    const canonical = await realpath(current)
-    if (!isWithinRoot(root, canonical)) {
-      throw new Error('Project file path escapes the project root')
-    }
-    return canonical
+    return this.readResolvedText(target, displayPath)
   }
 
   private async readResolvedText(target: string, relativePath: string): Promise<ProjectTextFile> {

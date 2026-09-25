@@ -2,498 +2,106 @@ import { createHash } from 'crypto'
 import { join } from 'path'
 import type {
   AppConfig,
-  MemoryCategory,
   DeferredMemoryExtraction,
+  MemoryCategory,
   MemoryConfig,
   MemoryEntry,
-  MemoryExportFile,
   MemoryExportKind,
-  MemoryImportPreview,
   MemoryPriority,
   MemoryProposal,
   MemoryScope,
   MemorySource,
   SpecContextReference
 } from '../../lib/types'
-import { INBOX_PROJECT_ID } from '../../lib/types'
-import { isHarnessScopedModelKey } from '../../lib/model-keys'
+import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
+import {
+  DEFERRED_EXTRACTIONS_FILENAME,
+  MEMORY_CHATS_DIR,
+  MEMORY_DEFERRED_EXTRACTION_LIMITS,
+  MEMORY_DIR,
+  MEMORY_EXTRACTION_LIMITS,
+  MEMORY_FILENAME,
+  MEMORY_LIMITS,
+  MEMORY_PROJECTS_DIR,
+  PROPOSALS_FILENAME,
+  THREADS_DIR
+} from './memory/memory-constants'
+import {
+  capText,
+  detectMemoryCandidates,
+  estimateTokens,
+  isTrivialUserTurn,
+  normalizeText,
+  readMemoryExtractionLimits,
+  type MemoryExtractionDecision,
+  type MemorySkipReason
+} from './memory/memory-extraction'
+import type {
+  AuxiliaryFeature,
+  AuxiliaryUsageEntry,
+  AuxiliaryUsageMeasurement,
+  AuxiliaryUsageTotals
+} from './memory/memory-auxiliary-usage'
+import { parseMemoryMd, serializeMemoryMd } from './memory/memory-markdown'
+import { memoryScopeKey } from '../../lib/memory/memory-scopes'
+import {
+  entryAppliesToContext,
+  entryMatchesContext,
+  groupByCategory,
+  locationForScopes,
+  normalizeEntriesForLocation
+} from './memory/memory-location'
+import {
+  dedupeEntriesById,
+  dedupeKey,
+  entryBelongsToAudience,
+  entryBelongsToExportKind,
+  importDestinationFor
+} from './memory/memory-export'
+import {
+  SECRET_PATTERNS,
+  VALID_CATEGORIES,
+  VALID_PRIORITIES,
+  VALID_SOURCES,
+  enumValue,
+  isRecord,
+  optionalEntityId,
+  normalizeStoredProposal,
+  text,
+  validateMemoryConfig,
+  validateMemoryScopes,
+  validateModelKeys
+} from './memory/memory-validation'
 
-const MEMORY_FILENAME = 'memory.md'
-const PROPOSALS_FILENAME = 'memory-proposals.json'
-const DEFERRED_EXTRACTIONS_FILENAME = 'memory-deferred-extractions.json'
-const ENTRY_MARKER = '<!-- codeinoven-memory-entry -->'
-const MEMORY_DIR = 'memory'
-const MEMORY_PROJECTS_DIR = join(MEMORY_DIR, 'projects')
-const MEMORY_CHATS_DIR = join(MEMORY_DIR, 'chats')
-const THREADS_DIR = 'threads'
-
-export const MEMORY_LIMITS = {
-  maxEntries: 50,
-  maxLabelCharacters: 80,
-  maxEntryCharacters: 4_096,
-  maxAggregateCharacters: 24_576,
-  maxProposals: 20,
-  proposalExpiryMs: 7 * 24 * 60 * 60 * 1000
-} as const
-
-/** Bounds for the deferred-extraction retry queue so it can never grow unbounded. */
-export const MEMORY_DEFERRED_EXTRACTION_LIMITS = {
-  maxEntries: 20,
-  maxAttempts: 5,
-  expiryMs: 7 * 24 * 60 * 60 * 1000
-} as const
-
-/**
- * Bounds for auxiliary (deterministic + cheap-model) memory extraction so a
- * turn can never resend the full user/assistant transcript to a second model
- * session. These satisfy the A-06 acceptance: local caps, deduplication,
- * debounce, and a separately configurable cheap-model token budget.
- */
-export const MEMORY_EXTRACTION_LIMITS = {
-  maxUserCandidateCharacters: 2_000,
-  maxAssistantCandidateCharacters: 8_000,
-  maxCandidates: 3,
-  debounceMs: 60_000,
-  maxExtractionsPerWindow: 3,
-  extractionWindowMs: 10 * 60 * 1000,
-  cheapModelTokenBudget: 4_096
-} as const
-
-/** Standing-preference vocabulary that makes a user turn a durable candidate. */
-const STANDING_PREFERENCE_PATTERN =
-  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you)|golden rule|standing rule|general rule|reusable rule|persistent rule)\b/iu
-
-/** Durability phrases that signal a rule should outlive the current task. */
-const DURABLE_RULE_PATTERN =
-  /\b(?:not a one[ -]?time|not one[ -]?off|not just (?:this|one) time|every time|each time|for every|not a single[ -]?use|ever again|from now|as a rule|one[ -]?time rule)\b/iu
-
-const UNIVERSAL_QUANTIFIER_PATTERN = /\b(?:anything|everything|every|all)\b/iu
-const DEONTIC_MODAL_PATTERN = /\b(?:must(?: be)?|should(?: be)?|have to be|has to be|needs? to be|required to be|ought to)\b/iu
-
-/** Frustration/repetition signals that indicate a previously stated preference was ignored. */
-const FRUSTRATION_PATTERN =
-  /\b(?:again|you keep|you never|you always|you forgot|you ignore|are you (?:a fool|fool|stupid|retarded|dumb|idiot)|wtf|fuck|damn|annoying|frustrat\w*|useless|horrible|terrible|why.*(?:not.*(?:remember|propose|track|save)|waste)|i (?:told|said) you|repeatedly|already told you)\b/iu
-
-const TRIVIAL_CONTINUATION_PATTERN =
-  /^(?:ok|okay|yes|no|yep|nope|sure|fine|got it|understood|thanks|thank you|thank you!|thx|cool|nice|great|perfect|lgtm|please continue|continue|go ahead|go on|proceed)\b/iu
-
-export interface MemoryCandidate {
-  label: string
-  content: string
-  category: MemoryCategory
-  priority: MemoryPriority
-  scope: MemoryScope
+export {
+  MEMORY_DEFERRED_EXTRACTION_LIMITS,
+  MEMORY_EXTRACTION_LIMITS,
+  MEMORY_LIMITS,
+  detectMemoryCandidates,
+  estimateTokens,
+  readMemoryExtractionLimits,
+  validateMemoryConfig
 }
-
-export type MemorySkipReason = 'none' | 'no-candidate' | 'debounced' | 'over-budget'
-
-export interface MemoryExtractionDecision {
-  /** Whether a model-assisted extraction should run for this turn. */
-  run: boolean
-  /** Deterministic candidates extracted without a model call. */
-  candidates: MemoryCandidate[]
-  /** Skip reason when `run` is false. */
-  reason: MemorySkipReason
-  /** User text capped to local limits, safe to send to the cheap model. */
-  userInput: string
-  /** Assistant text capped to local limits and the token budget. */
-  assistantInput: string
-  /** Estimated cheap-model input tokens for this extraction. */
-  inputTokens: number
-}
-
-/** Estimated token count (~4 characters per token) for auxiliary accounting. */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
-
-function capText(text: string, maxCharacters: number): string {
-  if (maxCharacters <= 0) return ''
-  return text.length > maxCharacters ? text.slice(0, maxCharacters) : text
-}
-
-function normalizeText(text: string): string {
-  return text.replace(/\s+/gu, ' ').trim().toLowerCase()
-}
-
-function hasFrustrationSignal(message: string): boolean {
-  return FRUSTRATION_PATTERN.test(message)
-}
-
-function hasUniversalDeonticSignal(message: string): boolean {
-  const sentences = message.split(/(?<=[.!?])\s+/u)
-  for (const sentence of sentences) {
-    if (UNIVERSAL_QUANTIFIER_PATTERN.test(sentence) && DEONTIC_MODAL_PATTERN.test(sentence)) return true
-  }
-  return UNIVERSAL_QUANTIFIER_PATTERN.test(message) && DEONTIC_MODAL_PATTERN.test(message)
-}
-
-function hasDurableSignal(message: string): boolean {
-  return STANDING_PREFERENCE_PATTERN.test(message) || DURABLE_RULE_PATTERN.test(message) || hasUniversalDeonticSignal(message)
-}
-
-function hasRuleLikeContent(message: string): boolean {
-  return hasDurableSignal(message) || DEONTIC_MODAL_PATTERN.test(message) || /\b(?:never|always|must|should|need to|required)\b/iu.test(message)
-}
-
-function isTrivialUserTurn(message: string): boolean {
-  const trimmed = message.trim()
-  if (trimmed.length === 0) return true
-  if (hasFrustrationSignal(trimmed)) return false
-  if (trimmed.length < 15) return true
-  if (trimmed.endsWith('?') && !hasDurableSignal(trimmed) && !hasFrustrationSignal(trimmed)) return true
-  return TRIVIAL_CONTINUATION_PATTERN.test(trimmed)
-}
-
-function categoryForCandidate(message: string, matched: string): MemoryCategory {
-  if (/i am\b|my name\b|i work as\b|i'?m a\b/i.test(matched)) return 'identity'
-  if (/\bnever\b|\bdon'?t\b|\bdo not\b|make sure\b/i.test(matched)) return 'behavioral'
-  if (/\bprefer\b|i like\b|i don'?t (?:like|want)\b/i.test(matched)) return 'preference'
-  if (/\bproject|repository|codebase|stack|tooling\b|download|install|track|progress\b/i.test(message)) return 'project-rule'
-  if (/golden rule|standing rule|must be|should be/i.test(matched)) return 'project-rule'
-  return 'preference'
-}
-
-function priorityForCandidate(matched: string): MemoryPriority {
-  return /\b(?:always|never|from now on|in future|going forward|golden rule|standing rule|every time|not a one[ -]?time)\b/iu.test(matched)
-    ? 'high'
-    : 'medium'
-}
-
-/** Extract the sentences of the user message that carry a standing marker. */
-function extractDurableContent(message: string): string {
-  const sentences = message.split(/(?<=[.!?])\s+/u)
-  const durable = sentences.filter(
-    (sentence) =>
-      STANDING_PREFERENCE_PATTERN.test(sentence) ||
-      DURABLE_RULE_PATTERN.test(sentence) ||
-      hasUniversalDeonticSignal(sentence)
-  )
-  if (durable.length > 0) return durable.join(' ')
-  if (hasDurableSignal(message)) return message
-  // Frustration-driven turns: keep the frustrated sentences that carry rule-like content
-  if (hasFrustrationSignal(message)) {
-    const frustrated = sentences.filter((sentence) => hasRuleLikeContent(sentence))
-    if (frustrated.length > 0) return frustrated.join(' ')
-    return message
-  }
-  return ''
-}
-
-/**
- * Deterministic, model-free memory candidate detection. Returns at most
- * `maxCandidates` candidates; a turn that is a question, acknowledgement,
- * continuation, one-off task instruction, or contains no standing-preference
- * vocabulary yields no candidate (and therefore no auxiliary model call).
- */
-export function detectMemoryCandidates(input: {
-  userMessage: string
-  assistantResponse: string
-  existingEntries: MemoryEntry[]
-  projectId?: string
-  threadId?: string
-}): MemoryCandidate[] {
-  const user = input.userMessage.trim()
-  if (isTrivialUserTurn(user)) return []
-  const durable = hasDurableSignal(user)
-  const frustrated = hasFrustrationSignal(user)
-  if (!durable && !frustrated) return []
-  if (frustrated && !durable && !hasRuleLikeContent(user)) return []
-
-  const content = extractDurableContent(user)
-  if (!content) return []
-  const cappedContent = capText(content, MEMORY_EXTRACTION_LIMITS.maxUserCandidateCharacters)
-  const standingMatch = STANDING_PREFERENCE_PATTERN.exec(cappedContent)
-  const durableMatch = DURABLE_RULE_PATTERN.exec(cappedContent)
-  const matched = standingMatch ? standingMatch[0] : durableMatch ? durableMatch[0] : cappedContent.slice(0, 80)
-  const existing = new Set(
-    input.existingEntries
-      .filter((entry) => entry.enabled)
-      .map((entry) => normalizeText(entry.content))
-  )
-  const scope: MemoryScope = input.projectId === 'inbox' ? 'thread' : 'project'
-  const candidate: MemoryCandidate = {
-    label: capText(cappedContent, MEMORY_LIMITS.maxLabelCharacters),
-    content: cappedContent,
-    category: categoryForCandidate(cappedContent, matched),
-    priority: priorityForCandidate(cappedContent),
-    scope
-  }
-  const normalized = normalizeText(candidate.content)
-  if (existing.has(normalized)) return []
-
-  const candidates: MemoryCandidate[] = [candidate]
-  // Deduplicate within this turn (identical normalized content).
-  return candidates.filter(
-    (item, index) =>
-      candidates.findIndex(
-        (other) => normalizeText(other.content) === normalizeText(item.content)
-      ) === index
-  )
-}
-
-export interface MemoryExtractionLimits {
-  maxUserCandidateCharacters: number
-  maxAssistantCandidateCharacters: number
-  maxCandidates: number
-  debounceMs: number
-  maxExtractionsPerWindow: number
-  extractionWindowMs: number
-  cheapModelTokenBudget: number
-}
-
-/** Read the cheap-model extraction budget, overridable per deployment. */
-export function readMemoryExtractionLimits(): MemoryExtractionLimits {
-  const tokenBudget = readPositiveIntEnv('CODEINOVEN_MEMORY_TOKEN_BUDGET')
-  const debounceMs = readPositiveIntEnv('CODEINOVEN_MEMORY_DEBOUNCE_MS')
-  const maxPerWindow = readPositiveIntEnv('CODEINOVEN_MEMORY_MAX_PER_WINDOW')
-  return {
-    ...MEMORY_EXTRACTION_LIMITS,
-    cheapModelTokenBudget: tokenBudget ?? MEMORY_EXTRACTION_LIMITS.cheapModelTokenBudget,
-    debounceMs: debounceMs ?? MEMORY_EXTRACTION_LIMITS.debounceMs,
-    maxExtractionsPerWindow: maxPerWindow ?? MEMORY_EXTRACTION_LIMITS.maxExtractionsPerWindow
-  }
-}
-
-function readPositiveIntEnv(name: string): number | null {
-  const value = process.env[name]
-  if (!value) return null
-  const parsed = Number.parseInt(value, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-}
-
-export type AuxiliaryFeature = 'memory' | 'title' | 'search_nudge' | 'speech_lesson'
-
-export interface AuxiliaryUsageEntry {
-  feature: AuxiliaryFeature
-  inputChars: number
-  inputTokens: number
-  outputTokens: number
-  estimatedCost: number
-  unavailableCost: boolean
-  timestamp: number
-}
-
-export interface AuxiliaryUsageTotals {
-  calls: number
-  inputChars: number
-  inputTokens: number
-  outputTokens?: number
-  estimatedCost: number
-  unavailableCalls?: number
-}
-
-export interface AuxiliaryUsageMeasurement {
-  outputTokens: number
-  costUsd: number | null
-  costStatus: 'known' | 'estimated' | 'unavailable'
-}
-
-const VALID_CATEGORIES: MemoryCategory[] = [
-  'behavioral',
-  'project-rule',
-  'identity',
-  'preference',
-  'models'
-]
-const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
-const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
-const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
-const MAX_MODEL_KEYS = 50
-const MODEL_KEY_MAX_CHARACTERS = 512
-
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
-const SECRET_PATTERNS = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/iu,
-  /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/iu,
-  /\b(?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*["']?[^\s"']{8,}/iu
-]
-
-/** Parse memory entries from the current marked Markdown format. */
-function parseMemoryMd(content: string): MemoryEntry[] {
-  const entries: MemoryEntry[] = []
-  const blocks = content.split(ENTRY_MARKER).slice(1)
-  for (const [index, block] of blocks.entries()) {
-    const match = block.match(/^\s*##\s+(.+?)\s*$/mu)
-    if (!match) continue
-    const label = match[1].trim()
-    const body = block.replace(/^\s*##\s+(.+?)\s*$/mu, '').trim()
-    if (!label || !body) continue
-
-    const sections = body.split(/\r?\n\s*\r?\n/u)
-    const metadata = new Map<string, string>()
-    for (const line of sections[0].split(/\r?\n/u)) {
-      const separator = line.indexOf(':')
-      if (separator <= 0) continue
-      metadata.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim())
-    }
-    const hasMetadata = ['category', 'priority', 'scope', 'source', 'id'].some((key) =>
-      metadata.has(key)
-    )
-    const cleanBody = hasMetadata ? sections.slice(1).join('\n\n').trim() : body
-    if (!cleanBody) continue
-    const now = Date.now()
-    const fallbackId = `memory-${createHash('sha256')
-      .update(`${label}\0${cleanBody}\0${index}`)
-      .digest('hex')
-      .slice(0, 12)}`
-    const category = metadata.get('category')
-    const priority = metadata.get('priority')
-    const scope = metadata.get('scope')
-    const source = metadata.get('source')
-    const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
-
-    const updatedAt = safeInteger(metadata.get('updatedat'), now)
-    entries.push({
-      id: SAFE_ID.test(metadata.get('id') ?? '') ? metadata.get('id')! : fallbackId,
-      label,
-      content: cleanBody,
-      enabled: metadata.get('enabled') !== 'false',
-      // Entries written before createdAt existed fall back to their updatedAt.
-      createdAt: safeInteger(metadata.get('createdat'), updatedAt),
-      updatedAt,
-      category: VALID_CATEGORIES.includes(category as MemoryCategory)
-        ? (category as MemoryCategory)
-        : 'preference',
-      priority: VALID_PRIORITIES.includes(priority as MemoryPriority)
-        ? (priority as MemoryPriority)
-        : 'medium',
-      scope: VALID_SCOPES.includes(scope as MemoryScope) ? (scope as MemoryScope) : 'global',
-      source: VALID_SOURCES.includes(source as MemorySource) ? (source as MemorySource) : 'manual',
-      frequency: safeInteger(metadata.get('frequency'), 1),
-      lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
-      projectId: metadata.get('projectid') || undefined,
-      threadId: metadata.get('threadid') || undefined,
-      ...(modelKeys.length > 0 ? { modelKeys } : {})
-    })
-  }
-  return entries
-}
-
-/** Serialize memory entries to Markdown format with metadata. */
-function serializeMemoryMd(entries: MemoryEntry[]): string {
-  return entries
-    .map((entry) => {
-      const meta = [
-        `id: ${entry.id}`,
-        `enabled: ${entry.enabled}`,
-        `createdAt: ${entry.createdAt}`,
-        `updatedAt: ${entry.updatedAt}`,
-        `category: ${entry.category}`,
-        `priority: ${entry.priority}`,
-        `scope: ${entry.scope}`,
-        `source: ${entry.source}`,
-        `frequency: ${entry.frequency}`,
-        `lastReinforced: ${entry.lastReinforced}`
-      ]
-      if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
-      if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
-      if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)
-      return `${ENTRY_MARKER}\n## ${entry.label}\n\n${meta.join('\n')}\n\n${entry.content}`
-    })
-    .join('\n\n')
-}
-
-export function validateMemoryConfig(value: unknown): MemoryConfig {
-  if (!isRecord(value) || typeof value.enabled !== 'boolean' || !Array.isArray(value.entries)) {
-    throw new TypeError('Memory config must contain enabled and entries')
-  }
-  if (value.entries.length > MEMORY_LIMITS.maxEntries) {
-    throw new TypeError(`Memory supports at most ${MEMORY_LIMITS.maxEntries} entries`)
-  }
-  const ids = new Set<string>()
-  const entries = value.entries.map((entry, index): MemoryEntry => {
-    if (!isRecord(entry)) throw new TypeError(`Memory entry ${index} must be an object`)
-    const id = text(entry.id, `Memory entry ${index} ID`, 1, 128)
-    if (!SAFE_ID.test(id)) throw new TypeError(`Memory entry ${index} has an unsafe ID`)
-    if (ids.has(id)) throw new TypeError(`Duplicate memory entry ID: ${id}`)
-    ids.add(id)
-    const label = text(
-      entry.label,
-      `Memory entry ${index} label`,
-      1,
-      MEMORY_LIMITS.maxLabelCharacters
-    )
-    const content = text(
-      entry.content,
-      `Memory entry ${index} content`,
-      1,
-      MEMORY_LIMITS.maxEntryCharacters
-    )
-    if (SECRET_PATTERNS.some((pattern) => pattern.test(content))) {
-      throw new TypeError(`Memory entry ${index} appears to contain a credential or private key`)
-    }
-    if (typeof entry.enabled !== 'boolean') {
-      throw new TypeError(`Memory entry ${index} enabled must be a boolean`)
-    }
-    if (
-      typeof entry.updatedAt !== 'number' ||
-      !Number.isSafeInteger(entry.updatedAt) ||
-      entry.updatedAt < 0
-    ) {
-      throw new TypeError(`Memory entry ${index} updatedAt must be a safe timestamp`)
-    }
-    const createdAt =
-      typeof entry.createdAt === 'number' &&
-      Number.isSafeInteger(entry.createdAt) &&
-      entry.createdAt >= 0
-        ? entry.createdAt
-        : entry.updatedAt
-    const category = enumValue(
-      entry.category,
-      VALID_CATEGORIES,
-      'preference',
-      `Memory entry ${index} category`
-    )
-    const priority = enumValue(
-      entry.priority,
-      VALID_PRIORITIES,
-      'medium',
-      `Memory entry ${index} priority`
-    )
-    const scope = enumValue(entry.scope, VALID_SCOPES, 'global', `Memory entry ${index} scope`)
-    const source = enumValue(entry.source, VALID_SOURCES, 'manual', `Memory entry ${index} source`)
-    const modelKeys = validateModelKeys(entry.modelKeys, `Memory entry ${index} model keys`)
-    if (category === 'models' && modelKeys.length === 0) {
-      throw new TypeError(`Memory entry ${index} requires at least one model`)
-    }
-    const frequency = optionalSafeInteger(entry.frequency, 1, `Memory entry ${index} frequency`, 1)
-    const lastReinforced = optionalSafeInteger(
-      entry.lastReinforced,
-      entry.updatedAt,
-      `Memory entry ${index} lastReinforced`,
-      0
-    )
-    const projectId = optionalEntityId(entry.projectId, `Memory entry ${index} project ID`)
-    const threadId = optionalEntityId(entry.threadId, `Memory entry ${index} thread ID`)
-    return {
-      id,
-      label,
-      content,
-      enabled: entry.enabled,
-      createdAt,
-      updatedAt: entry.updatedAt,
-      category,
-      priority,
-      scope,
-      source,
-      frequency,
-      lastReinforced,
-      projectId,
-      threadId,
-      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
-    }
-  })
-  const aggregate = entries.reduce((total, entry) => total + entry.content.length, 0)
-  if (aggregate > MEMORY_LIMITS.maxAggregateCharacters) {
-    throw new TypeError(
-      `Memory content exceeds ${MEMORY_LIMITS.maxAggregateCharacters} aggregate characters`
-    )
-  }
-  const chatEnabled = typeof value.chatEnabled === 'boolean' ? value.chatEnabled : true
-  return { enabled: value.enabled, chatEnabled, entries }
-}
+export {
+  MEMORY_EXPORT_FORMAT,
+  MEMORY_EXPORT_VERSION,
+  parseMemoryExport,
+  serializeMemoryExport,
+  validateMemoryExportKind
+} from './memory/memory-export'
+export type {
+  AuxiliaryFeature,
+  AuxiliaryUsageEntry,
+  AuxiliaryUsageMeasurement,
+  AuxiliaryUsageTotals
+} from './memory/memory-auxiliary-usage'
+export type {
+  MemoryCandidate,
+  MemoryExtractionDecision,
+  MemoryExtractionLimits,
+  MemorySkipReason
+} from './memory/memory-extraction'
 
 /** Formats only explicit enabled preferences and snapshots them for approved specs. */
 export class MemoryService {
@@ -531,7 +139,16 @@ export class MemoryService {
     await this.storage.writeRaw(this.memoryFilePath(projectId, threadId), text)
   }
 
-  async current(projectId?: string, threadId?: string): Promise<MemoryConfig> {
+  /**
+   * Every memory entry an agent turn in this context receives.
+   *
+   * The audience comes from the container (a project thread, a chat, or an
+   * assistant task), and `routineId` narrows assistant turns to their own
+   * routine's memory. Entries are filtered here rather than at format time so a
+   * caller that inspects `entries` (duplicate detection, proposals) sees exactly
+   * what the agent would.
+   */
+  async current(projectId?: string, threadId?: string, routineId?: string): Promise<MemoryConfig> {
     const config = await this.storage.read<AppConfig>('config.json')
     const isChat = projectId === 'inbox'
 
@@ -549,7 +166,9 @@ export class MemoryService {
     return {
       enabled: isChat ? (config?.memory?.chatEnabled ?? true) : (config?.memory?.enabled ?? true),
       chatEnabled: config?.memory?.chatEnabled ?? true,
-      entries
+      entries: dedupeEntriesById(entries).filter((entry) =>
+        entryMatchesContext(entry, projectId, threadId, routineId)
+      )
     }
   }
 
@@ -613,32 +232,41 @@ export class MemoryService {
   /** Save memory entries from form-based editing. */
   async saveEntries(entries: MemoryEntry[], projectId?: string, threadId?: string): Promise<void> {
     const validated = validateMemoryConfig({ enabled: true, entries }).entries
-    for (const entry of validated) assertEntryLocation(entry, projectId, threadId)
-    await this.writeMemoryMd(serializeMemoryMd(validated), projectId, threadId)
+    await this.writeMemoryMd(
+      serializeMemoryMd(normalizeEntriesForLocation(validated, projectId, threadId)),
+      projectId,
+      threadId
+    )
   }
 
   /**
    * Gather every memory entry that belongs to an export scope.
    *
-   * - `projects`: global + projects-scoped root entries, every per-project file
-   *   and every project thread file.
-   * - `chats`: global-scoped root entries, the chat file and every chat thread file.
+   * - `projects`: every entry whose scope set reaches projects (root entries,
+   *   per-project files, project thread files).
+   * - `chats`: entries reaching chats (root entries, the chat file, chat threads).
+   * - `assistant`: entries reaching assistants (root entries, the assistant
+   *   container file with its routine memory, assistant task files).
    * - `both`: everything.
    * - `project`: only the given project's own file and its thread files.
    */
   async exportEntries(kind: MemoryExportKind, projectId?: string): Promise<MemoryEntry[]> {
     const entries: MemoryEntry[] = []
+    const root = await this.getEntries()
     if (kind === 'both') {
-      entries.push(...(await this.getEntries()))
+      entries.push(...root)
       entries.push(...(await this.collectProjectMemory()))
       entries.push(...(await this.collectChatMemory()))
+      entries.push(...(await this.collectAssistantMemory()))
     } else if (kind === 'projects') {
-      entries.push(...(await this.getEntries()))
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'projects')))
       entries.push(...(await this.collectProjectMemory()))
     } else if (kind === 'chats') {
-      const root = await this.getEntries()
-      entries.push(...root.filter((entry) => entry.scope === 'global'))
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'chat')))
       entries.push(...(await this.collectChatMemory()))
+    } else if (kind === 'assistant') {
+      entries.push(...root.filter((entry) => entryBelongsToAudience(entry, 'assistant')))
+      entries.push(...(await this.collectAssistantMemory()))
     } else if (kind === 'project') {
       const safeProjectId = optionalEntityId(projectId, 'Project ID')
       if (!safeProjectId) {
@@ -680,6 +308,22 @@ export class MemoryService {
   }
 
   /**
+   * Assistant memory: the hidden container's own file (which holds both
+   * assistant-wide entries and each routine's entries) plus every task thread.
+   */
+  private async collectAssistantMemory(): Promise<MemoryEntry[]> {
+    const entries: MemoryEntry[] = []
+    entries.push(...(await this.getEntries(ASSISTANT_SPACE_ID)))
+    const threadIds = await this.storage.listDirectories(
+      join(MEMORY_PROJECTS_DIR, ASSISTANT_SPACE_ID, THREADS_DIR)
+    )
+    for (const threadId of threadIds) {
+      entries.push(...(await this.getEntries(ASSISTANT_SPACE_ID, threadId)))
+    }
+    return entries
+  }
+
+  /**
    * Merge imported entries into the appropriate storage files.
    *
    * Entries are routed by their own scope/projectId/threadId, filtered by the
@@ -711,11 +355,11 @@ export class MemoryService {
       }
       const key = `${destination.projectId ?? ''}\0${destination.threadId ?? ''}`
       const group = destinations.get(key) ?? { location: destination, entries: [] }
-      group.entries.push({
-        ...rawEntry,
-        projectId: destination.projectId,
-        threadId: destination.threadId
-      })
+      // Stamp the ids the scope set implies, so an imported entry never carries
+      // a project, thread, or routine id that its scopes do not use.
+      group.entries.push(
+        ...normalizeEntriesForLocation([rawEntry], destination.projectId, destination.threadId)
+      )
       destinations.set(key, group)
     }
 
@@ -752,14 +396,31 @@ export class MemoryService {
     return { added, skipped }
   }
 
-  async formatCurrent(projectId?: string, threadId?: string, modelKey?: string): Promise<string> {
-    return this.format(await this.current(projectId, threadId), projectId, threadId, modelKey)
+  async formatCurrent(
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string,
+    routineId?: string
+  ): Promise<string> {
+    return this.format(
+      await this.current(projectId, threadId, routineId),
+      projectId,
+      threadId,
+      modelKey,
+      routineId
+    )
   }
 
-  format(config: MemoryConfig, projectId?: string, threadId?: string, modelKey?: string): string {
+  format(
+    config: MemoryConfig,
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string,
+    routineId?: string
+  ): string {
     if (!config.enabled) return ''
     const entries = config.entries.filter((entry) =>
-      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey) : false
+      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey, routineId) : false
     )
     if (entries.length === 0) return ''
 
@@ -801,13 +462,15 @@ export class MemoryService {
   async snapshotCurrent(
     projectId?: string,
     threadId?: string,
-    modelKey?: string
+    modelKey?: string,
+    routineId?: string
   ): Promise<SpecContextReference[]> {
-    const config = await this.current(projectId, threadId)
+    const config = await this.current(projectId, threadId, routineId)
     if (!config.enabled) return []
     return config.entries
       .filter(
-        (entry) => entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
+        (entry) =>
+          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey, routineId)
       )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
@@ -836,11 +499,12 @@ export class MemoryService {
     options: {
       category?: MemoryCategory
       priority?: MemoryPriority
-      scope?: MemoryScope
+      scopes?: MemoryScope[]
       source?: MemorySource
       modelKeys?: string[]
       projectId?: string
       threadId?: string
+      routineId?: string
     } = {}
   ): Promise<MemoryEntry> {
     const safeLabel = text(label, 'Memory label', 1, MEMORY_LIMITS.maxLabelCharacters)
@@ -850,13 +514,18 @@ export class MemoryService {
     }
     const category = enumValue(options.category, VALID_CATEGORIES, 'preference', 'Memory category')
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Memory priority')
-    const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Memory scope')
+    const scopes = validateMemoryScopes(options.scopes, {}, 'Memory scopes')
     const source = enumValue(options.source, VALID_SOURCES, 'manual', 'Memory source')
     const modelKeys = validateModelKeys(options.modelKeys, 'Memory model keys')
     if (category === 'models' && modelKeys.length === 0) {
       throw new TypeError('Model memories require at least one model')
     }
-    const location = locationForScope(scope, options.projectId, options.threadId)
+    const location = locationForScopes(
+      scopes,
+      options.projectId,
+      options.threadId,
+      options.routineId
+    )
     const now = Date.now()
     const entry: MemoryEntry = {
       id: `memory-${now}-${createHash('sha256').update(safeLabel).digest('hex').slice(0, 8)}`,
@@ -867,21 +536,18 @@ export class MemoryService {
       updatedAt: now,
       category,
       priority,
-      scope,
+      scopes,
       source,
       frequency: 1,
       lastReinforced: now,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      routineId: location.entryRoutineId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
 
     const entries = await this.getEntries(location.projectId, location.threadId)
-    const duplicate = entries.find(
-      (existing) =>
-        existing.scope === scope &&
-        existing.content.trim().toLowerCase() === safeContent.toLowerCase()
-    )
+    const duplicate = entries.find((existing) => dedupeKey(existing) === dedupeKey(entry))
     if (duplicate) return duplicate
     if (entries.length >= MEMORY_LIMITS.maxEntries) {
       throw new TypeError(`Memory supports at most ${MEMORY_LIMITS.maxEntries} entries`)
@@ -937,13 +603,13 @@ export class MemoryService {
     try {
       const parsed = await this.storage.read<unknown>(this.getProposalsPath(projectId))
       if (!Array.isArray(parsed)) return []
-      return parsed.filter(
-        (p): p is MemoryProposal =>
-          isRecord(p) &&
-          typeof p.id === 'string' &&
-          typeof p.status === 'string' &&
-          ['pending', 'approved', 'rejected'].includes(p.status)
-      )
+      // Proposals are stored as raw JSON, so a file written before scope sets
+      // existed still has the legacy single `scope`. Normalizing here keeps
+      // every consumer (including the renderer over IPC) on the scope-set
+      // contract instead of handing it an undefined `scopes`.
+      return parsed
+        .map((proposal) => normalizeStoredProposal(proposal))
+        .filter((proposal): proposal is MemoryProposal => proposal !== null)
     } catch {
       return []
     }
@@ -960,10 +626,11 @@ export class MemoryService {
     options: {
       category?: MemoryCategory
       priority?: MemoryPriority
-      scope?: MemoryScope
+      scopes?: MemoryScope[]
       modelKeys?: string[]
       projectId?: string
       threadId?: string
+      routineId?: string
     } = {}
   ): Promise<MemoryProposal> {
     const safeLabel = text(label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters)
@@ -978,21 +645,27 @@ export class MemoryService {
       'Proposal category'
     )
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
-    const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Proposal scope')
+    const scopes = validateMemoryScopes(options.scopes, {}, 'Proposal scopes')
     const modelKeys = validateModelKeys(options.modelKeys, 'Proposal model keys')
     if (category === 'models' && modelKeys.length === 0) {
       throw new TypeError('Model proposals require at least one model')
     }
-    const location = locationForScope(scope, options.projectId, options.threadId)
+    const location = locationForScopes(
+      scopes,
+      options.projectId,
+      options.threadId,
+      options.routineId
+    )
     const queueProjectId = location.projectId
     const proposals = await this.readProposals(queueProjectId)
     const activeProposals = proposals.filter(
       (p) => p.status === 'pending' && p.expiresAt > Date.now()
     )
+    const normalizedContent = safeContent.trim().toLowerCase()
     const duplicate = activeProposals.find(
       (proposal) =>
-        proposal.scope === scope &&
-        proposal.content.trim().toLowerCase() === safeContent.toLowerCase()
+        memoryScopeKey(proposal.scopes) === memoryScopeKey(scopes) &&
+        proposal.content.trim().toLowerCase() === normalizedContent
     )
     if (duplicate) return duplicate
     if (activeProposals.length >= MEMORY_LIMITS.maxProposals) {
@@ -1006,9 +679,10 @@ export class MemoryService {
       content: safeContent,
       category,
       priority,
-      scope,
+      scopes,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      routineId: location.entryRoutineId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
       createdAt: now,
       expiresAt: now + MEMORY_LIMITS.proposalExpiryMs,
@@ -1029,11 +703,12 @@ export class MemoryService {
     const entry = await this.addEntry(proposal.label, proposal.content, {
       category: proposal.category,
       priority: proposal.priority,
-      scope: proposal.scope,
+      scopes: proposal.scopes,
       source: 'auto-detected',
       modelKeys: proposal.modelKeys,
       projectId: proposal.projectId,
-      threadId: proposal.threadId
+      threadId: proposal.threadId,
+      routineId: proposal.routineId
     })
     proposal.status = 'approved'
     await this.writeProposals(proposals, projectId)
@@ -1133,6 +808,7 @@ export class MemoryService {
   async deferMemoryExtraction(input: {
     userMessage: string
     assistantResponse: string
+    previousUserMessage?: string
     reason: string
     projectId?: string
     threadId?: string
@@ -1141,12 +817,16 @@ export class MemoryService {
     const now = Date.now()
     const normalized = normalizeText(input.userMessage)
     if (items.some((item) => normalizeText(item.userMessage) === normalized)) return
+    const previousUserMessage = input.previousUserMessage
+      ? capText(input.previousUserMessage, MEMORY_EXTRACTION_LIMITS.maxPreviousUserCharacters)
+      : undefined
     const entry: DeferredMemoryExtraction = {
       id: `deferred-${now}-${createHash('sha256').update(normalized).digest('hex').slice(0, 8)}`,
       ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       userMessage: input.userMessage,
       assistantResponse: input.assistantResponse,
+      ...(previousUserMessage ? { previousUserMessage } : {}),
       reason: capText(input.reason, 200),
       createdAt: now,
       attempts: 0
@@ -1179,7 +859,11 @@ export class MemoryService {
   }
 
   /** Record a failed retry attempt; drops the entry once attempts are exhausted. */
-  async recordDeferredExtractionFailure(id: string, error: string, projectId?: string): Promise<void> {
+  async recordDeferredExtractionFailure(
+    id: string,
+    error: string,
+    projectId?: string
+  ): Promise<void> {
     const items = await this.readDeferred(projectId)
     const entry = items.find((item) => item.id === id)
     if (!entry) return
@@ -1216,6 +900,17 @@ export class MemoryService {
     projectId?: string
     threadId?: string
     now?: number
+    /**
+     * Whether the standing-preference patterns decide that this turn is worth a
+     * model call at all.
+     *
+     * True is the historical behaviour and the default, and it is what keeps the
+     * cheap-model chain off ordinary turns. A caller that holds a model able to
+     * judge durability itself sets it to false, so the pattern list stops being
+     * the thing that decides whether a rule exists; the trivial-turn check, the
+     * debounce, the window and the token budget below all still apply either way.
+     */
+    requireDurableCandidate?: boolean
   }): Promise<MemoryExtractionDecision> {
     const now = input.now ?? Date.now()
     const current = await this.current(input.projectId, input.threadId)
@@ -1252,7 +947,13 @@ export class MemoryService {
       assistantInput: runInputTokens === 0 ? '' : assistantInput,
       inputTokens: runInputTokens
     })
-    if (candidates.length === 0) return skip('no-candidate', 0)
+    if (input.requireDurableCandidate ?? true) {
+      if (candidates.length === 0) return skip('no-candidate', 0)
+    } else if (isTrivialUserTurn(input.candidateUserMessage ?? input.userMessage)) {
+      // Even with the pattern list out of the way, a bare acknowledgement or a
+      // one-word question is not worth sending anywhere.
+      return skip('no-candidate', 0)
+    }
 
     const limits = readMemoryExtractionLimits()
     const contextKey = `${input.projectId ?? ''}:${input.threadId ?? ''}`
@@ -1364,331 +1065,4 @@ export class MemoryService {
     }
     return totals
   }
-}
-
-export const MEMORY_EXPORT_FORMAT = 'codeinoven-memory'
-export const MEMORY_EXPORT_VERSION = 1
-
-export function serializeMemoryExport(input: {
-  kind: MemoryExportKind
-  projectId?: string
-  entries: MemoryEntry[]
-}): string {
-  const file: MemoryExportFile = {
-    format: MEMORY_EXPORT_FORMAT,
-    version: MEMORY_EXPORT_VERSION,
-    exportedAt: Date.now(),
-    kind: input.kind,
-    projectId: input.kind === 'project' ? input.projectId : undefined,
-    entries: input.entries
-  }
-  return JSON.stringify(file, null, 2)
-}
-
-/**
- * Validate an exported memory JSON string and return a preview of what it
- * contains without touching any storage file.
- */
-export function parseMemoryExport(value: unknown): MemoryImportPreview {
-  if (!isRecord(value)) throw new TypeError('The file does not contain a memory export')
-  if (value.format !== MEMORY_EXPORT_FORMAT) {
-    throw new TypeError('The file is not a CodeInOven memory export')
-  }
-  if (value.version !== MEMORY_EXPORT_VERSION) {
-    throw new TypeError('The memory export version is not supported by this app')
-  }
-  if (!Array.isArray(value.entries)) {
-    throw new TypeError('The memory export contains no entries array')
-  }
-  const kind = value.kind
-  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
-    throw new TypeError('The memory export kind is invalid')
-  }
-  const projectId = value.projectId
-  if (typeof projectId !== 'undefined' && typeof projectId !== 'string') {
-    throw new TypeError('The memory export project ID is invalid')
-  }
-  // Entries are validated individually: the per-file limits that
-  // `validateMemoryConfig` enforces across an array do not apply to a whole
-  // export, which may contain entries from many storage files.
-  const entries = value.entries.map((entry, index) => {
-    try {
-      return validateMemoryConfig({ enabled: true, entries: [entry] }).entries[0]
-    } catch (cause) {
-      throw new TypeError(
-        `Memory entry ${index} is invalid: ${cause instanceof Error ? cause.message : 'invalid entry'}`,
-        { cause }
-      )
-    }
-  })
-  return {
-    format: MEMORY_EXPORT_FORMAT,
-    version: MEMORY_EXPORT_VERSION,
-    kind,
-    projectId,
-    entryCount: entries.length,
-    entries
-  }
-}
-
-/** Validate that an export kind and optional project ID form a legal request. */
-export function validateMemoryExportKind(
-  kind: unknown,
-  projectId?: unknown
-): {
-  kind: MemoryExportKind
-  projectId?: string
-} {
-  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
-    throw new TypeError('Memory export scope is invalid')
-  }
-  if (kind === 'project') {
-    const safeProjectId = optionalEntityId(projectId, 'Project ID')
-    if (!safeProjectId) {
-      throw new TypeError('A project export requires a project ID')
-    }
-    return { kind, projectId: safeProjectId }
-  }
-  return { kind }
-}
-
-function groupByCategory(entries: MemoryEntry[]): Record<MemoryPriority, MemoryEntry[]> {
-  const grouped: Record<MemoryPriority, MemoryEntry[]> = {
-    critical: [],
-    high: [],
-    medium: [],
-    low: []
-  }
-  for (const entry of entries) {
-    grouped[entry.priority].push(entry)
-  }
-  return grouped
-}
-
-/** Whether an entry belongs to a given export scope. Global applies to both. */
-function entryBelongsToExportKind(entry: MemoryEntry, kind: MemoryExportKind): boolean {
-  switch (kind) {
-    case 'both':
-      return true
-    case 'projects':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'projects' ||
-        entry.scope === 'project' ||
-        (entry.scope === 'thread' && entry.projectId !== INBOX_PROJECT_ID)
-      )
-    case 'chats':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'chat' ||
-        (entry.scope === 'thread' && entry.projectId === INBOX_PROJECT_ID)
-      )
-    case 'project':
-      return (
-        entry.scope === 'global' ||
-        entry.scope === 'projects' ||
-        entry.scope === 'project' ||
-        entry.scope === 'thread'
-      )
-  }
-}
-
-/** Resolve the storage file an imported entry should be written to. */
-function importDestinationFor(
-  entry: MemoryEntry,
-  options: { kind: MemoryExportKind; projectId?: string }
-): { projectId?: string; threadId?: string } | null {
-  switch (entry.scope) {
-    case 'global':
-    case 'projects':
-      return {}
-    case 'chat':
-      return { projectId: INBOX_PROJECT_ID }
-    case 'project': {
-      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
-      if (!projectId) return null
-      return { projectId }
-    }
-    case 'thread': {
-      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
-      if (!projectId || !entry.threadId) return null
-      return { projectId, threadId: entry.threadId }
-    }
-  }
-}
-
-/** Dedupe identity: scope + normalized content (the user-chosen merge rule). */
-function dedupeKey(entry: MemoryEntry): string {
-  return `${entry.scope}\0${normalizeText(entry.content)}`
-}
-
-function dedupeEntriesById(entries: MemoryEntry[]): MemoryEntry[] {
-  const seen = new Set<string>()
-  const result: MemoryEntry[] = []
-  for (const entry of entries) {
-    if (seen.has(entry.id)) continue
-    seen.add(entry.id)
-    result.push(entry)
-  }
-  return result
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function text(value: unknown, label: string, minimum: number, maximum: number): string {
-  if (
-    typeof value !== 'string' ||
-    value.includes('\0') ||
-    value.trim().length < minimum ||
-    value.length > maximum
-  ) {
-    throw new TypeError(`${label} must contain ${minimum}-${maximum} safe characters`)
-  }
-  return value.trim()
-}
-
-function safeInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined || !/^\d+$/u.test(value)) return fallback
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) ? parsed : fallback
-}
-
-function optionalSafeInteger(
-  value: unknown,
-  fallback: number,
-  label: string,
-  minimum: number
-): number {
-  if (value === undefined) return fallback
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
-    throw new TypeError(`${label} must be a safe integer`)
-  }
-  return value
-}
-
-function enumValue<T extends string>(
-  value: unknown,
-  valid: readonly T[],
-  fallback: T,
-  label: string
-): T {
-  if (value === undefined) return fallback
-  if (typeof value !== 'string' || !valid.includes(value as T)) {
-    throw new TypeError(`${label} is invalid`)
-  }
-  return value as T
-}
-
-function optionalEntityId(value: unknown, label: string): string | undefined {
-  if (value === undefined) return undefined
-  const id = text(value, label, 1, 128)
-  if (!SAFE_ID.test(id)) throw new TypeError(`${label} is unsafe`)
-  return id
-}
-
-interface MemoryLocation {
-  projectId?: string
-  threadId?: string
-  entryProjectId?: string
-  entryThreadId?: string
-}
-
-function locationForScope(
-  scope: MemoryScope,
-  projectId?: string,
-  threadId?: string
-): MemoryLocation {
-  if (scope === 'global' || scope === 'projects') return {}
-  if (scope === 'chat') return { projectId: 'inbox' }
-
-  const safeProjectId = optionalEntityId(projectId, 'Project ID')
-  if (!safeProjectId) {
-    throw new TypeError(`${scope === 'thread' ? 'Thread' : 'Project'} memory requires a project ID`)
-  }
-  if (scope === 'project') {
-    if (safeProjectId === 'inbox')
-      throw new TypeError('Project memory does not accept the chat scope')
-    if (threadId !== undefined) throw new TypeError('Project memory does not accept a thread ID')
-    return { projectId: safeProjectId, entryProjectId: safeProjectId }
-  }
-
-  const safeThreadId = optionalEntityId(threadId, 'Thread ID')
-  if (!safeThreadId) throw new TypeError('Thread memory requires a thread ID')
-  return {
-    projectId: safeProjectId,
-    threadId: safeThreadId,
-    entryProjectId: safeProjectId,
-    entryThreadId: safeThreadId
-  }
-}
-
-function assertEntryLocation(entry: MemoryEntry, projectId?: string, threadId?: string): void {
-  const expected = locationForScope(entry.scope, entry.projectId, entry.threadId)
-  const actualProjectId =
-    projectId === 'inbox' ? 'inbox' : optionalEntityId(projectId, 'Project ID')
-  const actualThreadId = optionalEntityId(threadId, 'Thread ID')
-  if (expected.projectId !== actualProjectId || expected.threadId !== actualThreadId) {
-    throw new TypeError(`Memory entry "${entry.label}" does not belong in this storage scope`)
-  }
-}
-
-function entryAppliesToContext(
-  entry: MemoryEntry,
-  projectId?: string,
-  threadId?: string,
-  modelKey?: string
-): boolean {
-  const scopeMatches = (() => {
-    switch (entry.scope) {
-      case 'global':
-        return true
-      case 'projects':
-        return Boolean(projectId && projectId !== 'inbox')
-      case 'project':
-        return Boolean(entry.projectId && entry.projectId === projectId)
-      case 'thread':
-        return Boolean(
-          entry.projectId &&
-          entry.threadId &&
-          entry.projectId === projectId &&
-          entry.threadId === threadId
-        )
-      case 'chat':
-        return projectId === 'inbox'
-    }
-  })()
-  if (!scopeMatches) return false
-  return entry.category !== 'models' || Boolean(modelKey && entry.modelKeys?.includes(modelKey))
-}
-
-function parseModelKeysMetadata(value: string | undefined): string[] {
-  if (!value) return []
-  try {
-    return validateModelKeys(JSON.parse(value) as unknown, 'Memory model keys')
-  } catch {
-    return []
-  }
-}
-
-function validateModelKeys(value: unknown, label: string): string[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
-  if (value.length > MAX_MODEL_KEYS) {
-    throw new TypeError(`${label} supports at most ${MAX_MODEL_KEYS} models`)
-  }
-  const keys = value.map((candidate, index) => {
-    if (
-      typeof candidate !== 'string' ||
-      candidate.includes('\0') ||
-      candidate.trim().length === 0 ||
-      candidate.length > MODEL_KEY_MAX_CHARACTERS ||
-      !isHarnessScopedModelKey(candidate.trim())
-    ) {
-      throw new TypeError(`${label} item ${index} is invalid`)
-    }
-    return candidate.trim()
-  })
-  return [...new Set(keys)]
 }

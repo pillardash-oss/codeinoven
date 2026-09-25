@@ -78,6 +78,14 @@ During creation the source checkout's current branch, HEAD commit, and
 uncommitted changes are surfaced, together with a warning that dirty changes
 will not be included in the new worktree.
 
+A checkout that is **re-created after its setup already ran** (a repair
+restoring it from the managed branch) no longer contains what the recorded
+results describe. Repair therefore resets every command record to `pending`
+and marks the scope's setup `stale`; the scope then offers **Re-run setup**
+and the run replays the persisted commands from the first one, exactly like a
+creation run. `stale` is a factual statement about the working tree, not a
+failure.
+
 ## 5. Environment files
 
 During creation the service discovers **untracked, regular, root-level** `.env`
@@ -103,9 +111,9 @@ state.
 
 ## 6a. Git panel is worktree-aware
 
-Every Git-panel operation   status, diff, stage, unst-age, commit, branch
+Every Git-panel operation status, diff, stage, unst-age, commit, branch
 list/checkout/create/delete, fetch, pull, push, merge, rebase, stash,
-discard/ignore, reset, amend, log, and PR create/compare   resolves its
+discard/ignore, reset, amend, log, and PR create/compare resolves its
 repository root through the **active scope**. When the panel is attached to a
 managed worktree scope, these operations run against the worktree checkout and
 its `cio/` branch, not the project root:
@@ -118,9 +126,102 @@ its `cio/` branch, not the project root:
   head** and the chosen base (the checkout branch, a named branch, or a remote
   tracked ref). Pushing to the remote publishes the `cio/<slug>` branch as a
   new remote branch (`--set-upstream`), ready to be opened as a PR.
+- **Sync with another end** (`git:syncWith`, `git:syncPeers`) trades committed
+  work between two ends of the same repository, in either direction. "Main" is
+  not a special case carved out of it: it is the peer whose checkout is the
+  project root, so the two flows share one implementation and cannot drift.
+  The ends are offered by scope and by branch:
+  - every checkout (the project root and each non-archived managed worktree
+    scope) can contribute commits _and_ receive them,
+  - every local branch no checkout holds can contribute commits only,
+  - a branch a checkout already holds is offered as that checkout instead, so
+    one end never appears twice under two names,
+  - an unhealthy worktree still appears, marked with the reason it cannot be
+    used, and the checkout the operation runs in appears marked as itself
+    rather than being hidden.
+
+  `git:syncPeers` resolves that list, and `git:syncWith` resolves the chosen
+  `{ kind: 'root' | 'worktree' | 'branch' }` peer, so the name the picker showed
+  is the name every error and toast uses. Both directions fail closed before
+  moving any ref: a peer that is this very checkout, a detached HEAD, an
+  integration already in progress, or a target with uncommitted files all refuse
+  with an actionable message, and a merge in progress in the _other_ checkout is
+  reported as well because its HEAD would be detached too.
+
+  Each direction then verifies what landed: `from` diffs the commit it started
+  from against the commit it produced, and `to` diffs the peer it wrote into the
+  same way. Both report the two findings git cannot raise and nothing else would
+  surface before the checkout is next built or started
+  (`src/main/git/git/git-service-references.ts`). One is an import the
+  integration orphaned, resolved against the new tree with the checkout's own
+  tsconfig aliases, which covers the case a rebase creates and a conflict never
+  does: this side added a file, the other side deleted the module it imports, and
+  the two changes touch different paths so git reports a clean integration. The
+  other is a dependency manifest the integration rewrote, which leaves the
+  checkout's install stale because an integration installs nothing. Both are
+  reported, never errors: the commits did land.
+
+  `from` reads the peer and writes this checkout: it refreshes the peer branch's
+  remote-tracking ref first when the repository has a remote (vaulted token when
+  present, a failed refresh is reported and never fatal), then integrates the
+  remote-tracking ref when it strictly contains the local branch, otherwise the
+  local branch, so commits that exist only in the other checkout are never
+  skipped. The strategy follows the configured pull preference (`merge`,
+  `rebase`, or `ff-only`; `ask` opens the chooser).
+
+  `to` reads this checkout and writes the peer: this branch's commits are folded
+  into the branch the peer has checked out, which is why a branch peer refuses
+  this direction outright (a branch no checkout holds has nowhere to receive
+  commits). Nothing is ever pushed publishing stays an explicit user action and
+  the chooser always confirms first, even when the pull preference is not `ask`,
+  because the write lands in a checkout the panel is not showing. Strategies:
+  - `merge` integrates in the receiving checkout (fast-forward when possible,
+    merge commit otherwise). A merge that would conflict is rolled back and
+    refused with the `from` workflow as the fix, so a one-click action can never
+    strand another checkout mid-merge where the user cannot see it.
+  - `rebase` replays this branch's commits on top of the peer's branch, then
+    fast-forwards the peer onto the rebased branch: conflicts stay in the
+    checkout the panel shows, the peer stays linear and is never rewritten.
+  - `ff-only` moves the peer only when it has not diverged.
+
+  A conflicted `from`, or a conflicted `to` rebase, is left in the working tree
+  for the standard conflict UI instead of being aborted. `incoming` reports how
+  many commits the receiving end did not have, and `peerAhead` how far the moved
+  branch is from its upstream afterwards, so the caller can say exactly what
+  happened and that nothing was published.
+
+  The UI reaches it two ways, and both start from a **managed worktree scope**:
+  a worktree is the only scope with a second checkout to trade with. The Git
+  panel, attached to one, keeps **Sync from main** and **Sync to main** for the
+  common case (named, no chooser) and adds **Sync from branch…** and **Sync to
+  branch…**, which open one shared peer chooser that the scope menu reuses as
+  **Merge from project…** right below **Merge into project…**. The control is not
+  rendered at all for the project root, so `main` never offers to sync with
+  itself; the project root is reached as a peer from the worktree instead.
+
 - Credential and identity operations (`git:get/setCredential`,
   `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
   `.git` config and credential vault anyway.
+
+## 6b. Long worktree runs live in the dock
+
+Creating, adopting, re-running setup for, and deleting a scope all mutate a
+checkout, so none of them is instant. Each one runs as an **app-level job**
+(`src/renderer/lib/stores/scope-jobs.svelte.ts`) rendered by
+`src/renderer/lib/components/scope/ScopeJobDockHost.svelte` at the app root, not
+as a modal the user has to sit through. A job survives navigation, can be
+minimized to a dock chip that still names what it is doing, states its outcome
+in the panel (branch and directory for a created or adopted worktree, the
+removed checkout for a deletion), and can be dismissed once it is finished.
+
+Worktree stages stream from main on `scope:worktree:progress`, so a job a user
+started and a job an agent started through `cio:scope` render identically. A
+removal has no streamed stages main can send: the renderer performs it as an
+ordered sequence of its own steps (settle the scope's threads, remove the
+managed checkout and its branch when the scope has one, drop the scope from the
+board), and the checklist reports those steps instead. A removal job never
+absorbs worktree progress events, so a create or adopt running in the same
+project still shows its own live stages.
 
 ## 7. Health states
 
@@ -139,7 +240,13 @@ Managed scopes expose a typed health result:
 
 Resolution fails closed for every non-`healthy` category. Repair, unlock,
 restore, adopt, or detach actions appear in the UI; unhealthy scopes show
-recovery guidance instead of operating on the project root.
+recovery guidance instead of operating on the project root. Detection is
+passive but live: nothing polls the filesystem, and every surface that has a
+reason to touch a scope (entering the board or the scoped sidebar, switching
+the docked scope, attaching the Git panel, opening the scope's actions menu, or
+any failed operation in it) re-reads that scope's health asynchronously,
+throttled per scope. Every scope-root error message ends with the action that
+resolves it, so a surface that can only render text still says how to fix it.
 
 ### 7a. Repair and adoption
 
@@ -150,7 +257,24 @@ checkouts are restored from their `cio/` branch, relocated checkouts are
 moved back under the config root with `git worktree move`, switched branches
 are re-checked out, and unregistered directories get a best-effort
 `git worktree repair`. The resulting health state is surfaced afterwards;
-repair never silently falls back to the project directory.
+repair never silently falls back to the project directory. A step Git refuses
+(unlocking, moving, re-checking out, relinking, re-creating) fails with the
+recovery the user has to perform, never with a silent no-op.
+
+A restored checkout contains only what the managed branch committed, so repair
+**reconciles** it: the untracked root `.env` files are propagated again
+(section 5), and the recorded setup is marked `stale` so the scope offers
+**Re-run setup** (section 4). Work that was never committed is gone with the
+directory and is never presented as recovered. When the managed branch itself
+no longer exists, the restore cannot be done and the failure says so, naming
+delete-scope as the way to clear the record.
+
+The board and the scoped sidebar also render the cause and the fix for an
+unhealthy scope next to a **Repair worktree** button, and the Git panel
+replaces its generic error with the same banner when the checkout it is
+attached to is the reason its operations fail. Rendered guidance and thrown
+error text come from the same source (`src/lib/scope-worktree-health.ts`), so
+they cannot drift apart.
 
 **Adoption** registers an existing raw Git worktree (for example one created
 manually with `git worktree add`) as a managed scope root. Adoption requires
@@ -173,13 +297,27 @@ stale or mismatched IDs are rejected.
 
 - **Remove worktree (keep scope):** removes the worktree checkout and
   re-points the scope to the project directory. The scope, its threads and the
-  branch are all kept   only the isolated checkout is gone. Refused when the
-  worktree is dirty or unpushed.
-- **Delete scope:** full cleanup for a managed scope   removes the worktree
+  branch are all kept only the isolated checkout is gone. Refused when the
+  worktree is dirty or unpushed unless the dialog's forced second confirmation
+  is enabled, and the confirmed force is passed to Git so a forced detach can
+  never leave the directory behind while the scope claims it is gone. A
+  checkout whose directory was already deleted externally detaches cleanly.
+- **Delete scope:** full cleanup for a managed scope removes the worktree
   checkout, deletes the scope bucket and the `cio/` branch in one confirmed
   action. The dialog also offers to permanently delete the scope's threads
   (otherwise they return to the Default scope). Deleting a project-rooted
   scope just removes the bucket; its threads follow the same choice.
+
+  The confirmation stays a dialog, but the removal itself is a dock job
+  (section 6b), exactly like a create or an adopt: confirming closes the dialog
+  and hands the work to a run the user can background. Every value the run needs
+  (the scope's threads, whether it owns a checkout, the thread disposition) is
+  read before the dialog closes, and the removal mints its own fresh preflight
+  token rather than reusing the dialog's display-only one, so the token can
+  never be stale by the time the checkout is removed. Because it is a job, the
+  dialog closes on the run already in progress instead of queueing a second
+  removal that could only fail.
+
 - **Archive / Restore:** never destructive. Hides or restores the scope on the
   board without touching Git, the worktree, or threads; archiving never
   implies removal.
@@ -187,14 +325,112 @@ stale or mismatched IDs are rejected.
   silently orphaning a registered worktree.
 
 The scope actions menu intentionally exposes only the non-overlapping
-operations (merge, remove-worktree-keep-scope, archive, delete). A leftover
+operations (reveal-in-file-manager, merge-into-project, merge-from-project,
+remove-worktree-keep-scope, archive, delete). It is a portaled popup
+(`bits-ui` `DropdownMenu`, `collisionPadding`), not a panel positioned inside
+the sidebar's own overflow, so it cannot be clipped when a scope sits near an
+edge of the board or the scoped sidebar; while it is open the trigger stays
+visible through its own open state rather than hover. **Reveal in File Manager**
+opens a managed scope's checkout in the OS file manager through the same shared
+helper (`src/renderer/lib/os-file-manager.ts`) and the same re-validating
+`shell:revealPath` contract the file surfaces use. It takes the path from the
+scope's health (the actual path when Git disagrees with the expected one), so a
+relocated checkout still reveals correctly, and a refusal from main is reported
+as a failure instead of passing as a silent no-op. _Merge from project…_ is the
+peer sync described in section
+6a run from this scope's checkout with the project root preselected, so bringing
+the project root's commits into a worktree never requires opening the Git panel
+from a thread in that scope. A leftover
 `Delete branch`-style entry is not needed: removing a worktree while keeping
-its scope is *Remove worktree (keep scope)*, and permanently removing a scope
-is *Delete scope* (which also removes the worktree and branch). Branch-level
+its scope is _Remove worktree (keep scope)_, and permanently removing a scope
+is _Delete scope_ (which also removes the worktree and branch). Branch-level
 maintenance that keeps the worktree lives in the Git panel.
 
 Archiving and restoring a scope never mutate Git, the worktree, environment
 files, setup status, or thread assignments.
+
+## 8a. Agent-created scopes (`cio:scope`)
+
+Agents create and manage worktree scopes through one app-owned utility,
+`cio:scope` (`src/lib/utility-ids.ts`, seeded by
+`src/main/utilities/utility-registry-service.ts`, executed by
+`src/main/workspaces/scope-tool-service.ts`). It is deliberately **not** a tool
+in any harness's tool list: a session that never involves a worktree must not
+carry the schema, and most sessions never want one. It behaves exactly like the
+other app-owned utilities (`cio:cua-driver`, `cio:browser`), so an agent reaches
+it the same way:
+
+1. `cio_util_find` (query `worktree`) returns it as an on-demand utility,
+2. `cio_util_init` activates it and hands back the full contract
+   (`SCOPE_CAPABILITY_DOCS` in `src/lib/scope-tool.ts`), which is the only place
+   that contract enters context,
+3. `cio_util_use` invokes it with `utility_id: "cio:scope"`, `operation: <action>`
+   and `input: <the action's fields>`.
+
+The activation is banked per thread, so later turns can invoke it by id without
+searching again, and `cio_util_docs_lookup` re-lists the contract after
+compaction. Because it is an ordinary registry utility, the Utilities screen
+lists it and its contract is editable there, but its availability is locked:
+the Git panel's review flow tells an agent to activate `cio:scope` by id
+(`src/renderer/lib/components/git/git-status-panel-prompts.ts`), so switching it
+off would break a shipped path. `cio:adb` is the one app-owned entry a user may
+switch off (`canToggleUtilityEnabled` in `src/lib/utility-ids.ts`), because a
+playbook is advice an agent applies with its own shell, not a part of the app's
+wiring.
+
+Agents are told to use it **only** when the user explicitly asks to work in a
+separate worktree, never on their own initiative: that rule is in the turn
+instruction, in the registry description a search returns, and in the activated
+contract.
+
+Running `git worktree add` directly is **not** supported. A raw worktree is
+invisible to the app: it never appears on the scope board, gets no health check,
+no environment propagation, no setup run, and no entry in the sync or
+lifecycle tooling. A worktree made through `cio:scope` is a normal managed
+scope from the moment it exists. On Pi, the bash gate routes
+`git worktree add|remove|move|lock|unlock|prune` through the permission card
+(`src/main/drivers/pi-core-tools-extension.ts`) so a raw worktree can only
+happen while the user is looking at the request; `git worktree list` and
+`repair` stay ungated.
+
+Actions (one `operation` per call; a target scope resolves by id or display name
+and defaults to the calling thread's scope):
+
+- **Reads** `list`, `status`, `conflicts`, `source_info`, `detect_adoptable`.
+- **Writes** `create`, `rename`, `pin`/`unpin`, `archive`/`restore`, `adopt`,
+  `repair`, `retry_setup`, `sync_from_main`, `sync_to_main`.
+- **Destructive** `detach_worktree`, `delete_scope`, `merge_into_project`.
+
+`create` forks from the project checkout's current branch unless `baseBranch`
+names another one; naming, environment propagation and setup commands all follow
+the scope board's worktree defaults, and the calling thread moves into the new
+scope by default (`attachThread: false` keeps it where it is). An agent-run
+create, adopt or retry streams the same `scope:worktree:progress` stages a
+user-run one does and lands as a docked job chip labelled as an agent run.
+
+Confirmed board changes are pushed to the renderer (`scope:boardChanged`), so a
+scope an agent creates, renames, archives, deletes, syncs or merges appears on
+the board without the user having to reopen it.
+
+### Destructive actions an agent asks for
+
+The capability never destroys anything on first ask. A destructive call without
+`confirm: true` changes nothing and returns the state-bound snapshot plus an
+explicit challenge (`Are you sure you want to <action>? [YES] [NO]`).
+
+With `confirm: true` the behaviour depends on the thread's permission level:
+
+- **Full Access** no app dialog. The in-tool challenge above is the only gate,
+  so the model itself must confront the consequences before confirming.
+- **Auto Review** the app shows a confirmation dialog
+  (`scope:agentConfirmation`) listing the scope, the summary, the discrete
+  consequences, the dirty files, and the unpushed commits. The agent's tool call
+  is parked until the user answers, and an unanswered request expires into a
+  denial. Live processes in the scope block the action outright.
+
+`delete_scope` on a scope that still owns threads refuses to run until the call
+names the disposition: `threads: "move-to-default"` keeps the conversations,
+`threads: "delete"` deletes them with the scope.
 
 ## 9. First-release limitations
 
@@ -202,3 +438,75 @@ files, setup status, or thread assignments.
   blocked from managed-worktree creation before any mutation. Use a project-root
   scope for those repositories.
 - Environment **symlink mode** is unavailable on Windows.
+
+## 10. Running dev side by side with a worktree
+
+A managed worktree is a complete checkout of its managed branch, so `bun dev`
+runs inside it while the project root keeps its own instance open. The pieces
+that make that safe are listed here.
+
+### 10.1 Renderer port
+
+The renderer origin carries persisted state (recovery snapshot, thread visits,
+UI preferences in origin-keyed `localStorage`), so the port is pinned instead of
+drifting:
+
+- the project root keeps the stable `5173`;
+- a linked worktree derives its own stable port from its own path (pool
+  `5200` to `5999`), so each worktree keeps the same origin across restarts;
+- `CODEINOVEN_RENDERER_PORT=<port>` overrides the choice.
+
+`strictPort` stays on, so a port that is already taken fails the launch loudly
+instead of silently moving the origin and dropping that persisted state. If two
+worktrees ever derive the same port, or a second independent clone resolves the
+`5173` default, set `CODEINOVEN_RENDERER_PORT` for one of them. Resolution lives
+in `electron.vite.config.ts`.
+
+### 10.2 App data root
+
+Every instance shares CodeInOven's config root by default, which is a supported
+configuration: the instance registry, the atomic `mkdir` cross-process locks,
+and the WAL SQLite connection with `busy_timeout` are all built for several live
+instances. Sharing means shared projects, threads, settings, logs, and window
+state.
+
+To give one instance a data root of its own, pass an absolute path:
+
+```
+CODEINOVEN_CONFIG_ROOT=/abs/path/to/instance-config bun dev
+```
+
+Unpackaged launches (`bun dev`, `electron-vite preview`) and the packaged
+startup smoke harness honor it; a shipped app ignores it, so a stray environment
+variable can never repoint a user's real data root. When the variable is set,
+every launch logs whether it was honored. Managed worktrees are created
+thereunder, so a different root has its own project registry: use it for a
+throwaway instance, not for opening the worktree you want to review.
+
+### 10.3 Chromium profile
+
+Cookies and embedded-browser partitions live in the platform Electron profile,
+which instances share. `--user-data-dir` splits
+it (electron-vite appends `ELECTRON_CLI_ARGS` to the dev Electron command):
+
+```
+ELECTRON_CLI_ARGS='["--user-data-dir=/abs/path/to/instance-profile"]' bun dev
+```
+
+### 10.4 Before the first dev run in a new worktree
+
+The checkout is complete, but gitignored build inputs are not. Run the project's
+setup commands (`bun install`, and `bun run harness:build-pi` when the instance
+should use the bundled Pi rather than a PATH `pi`). The `predev` hook reuses the
+compiled speech workers from the machine-local shared build cache, so it does
+not recompile them when the package sources are unchanged. It compiles only on a
+real miss, and on Apple Silicon that compile needs the Xcode Metal toolchain,
+installed once with `xcodebuild -downloadComponent MetalToolchain`. Untracked
+root `.env` files are copied by creation (section 5).
+
+### 10.5 Concurrent-instance caveats
+
+- Settings, logs, the gateway plugin data directory, and the speech process
+  journal are single files under the config root, so two instances writing them
+  concurrently is last-write-wins. Give an instance its own
+  `CODEINOVEN_CONFIG_ROOT` when that matters.
