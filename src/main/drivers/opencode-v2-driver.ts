@@ -492,22 +492,32 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
    * on its own disposable one; both are invisible to the shared host, whose
    * running map then reports the session as `idle`. The engine's silence
    * watchdog trusts that answer and fails a turn that is demonstrably alive.
+   *
+   * A probe answers a question, it never starts work: a server that is not
+   * already running is never spawned here. `ensureServer` would start a pooled
+   * host for the project path, register it app-wide, and then have that fresh
+   * process report `idle` about a session it has never seen, leaving a task
+   * manager row labelled `Shared server` with no thread for the price. With no
+   * server to ask, the driver's own active-session registration is the answer.
    */
   async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
-    let handle: ServerHandle
-    try {
-      handle = this.sessionServer(sessionId) ?? (await this.ensureServer(projectPath))
-    } catch {
-      return false
-    }
+    const handle = this.sessionServer(sessionId) ?? this.pooledServer(projectPath)
+    if (!handle) return this.activeSessions.has(sessionId)
     try {
       const response = await handle.client.json<{ data?: Record<string, unknown> }>(
         '/api/session/active'
       )
       return recordValue(response?.data)?.[sessionId] !== undefined
     } catch {
-      return false
+      // An unreachable server proves nothing about the turn, so fall back to
+      // what this driver already knows rather than reporting a dead session.
+      return this.activeSessions.has(sessionId)
     }
+  }
+
+  /** The pooled host already serving a project path, without starting one. */
+  private pooledServer(projectPath: string): ServerHandle | null {
+    return this.server ? this.scopedHandle(this.server, projectPath) : null
   }
 
   hasActiveTurn(sessionId: string): boolean {
