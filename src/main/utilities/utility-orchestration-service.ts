@@ -38,11 +38,12 @@ import {
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
-import { VIDEO_CAPABILITY_DOCS, VIDEO_CAPABILITY_SEARCH_QUERY } from '../../lib/video-skill'
-import { designAssignmentsFromConfig } from '../../lib/design-assignments'
+import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
+import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
+import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
 import {
@@ -356,6 +357,8 @@ export class UtilityOrchestrationService {
   private designMediaExecutor: DesignCapabilityExecutor | null = null
   private videoPreviewExecutor: VideoCapabilityExecutor | null = null
   private videoCaptureExecutor: VideoCapabilityExecutor | null = null
+  /** The thread-scoped expert policy, shared with the design delegation executor. */
+  private expertSettings: ExpertSettingsService | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -427,6 +430,17 @@ export class UtilityOrchestrationService {
    */
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register the service that owns what a thread decided about its experts.
+   *
+   * The playbook names the models the user staffed, so a thread whose experts are
+   * muted has to be described by the same policy that refuses `delegate`, or a
+   * session would be offered a delegation it cannot make.
+   */
+  setExpertSettings(settings: ExpertSettingsService | null): void {
+    this.expertSettings = settings
   }
 
   /**
@@ -607,7 +621,7 @@ export class UtilityOrchestrationService {
     if (request.designSession && request.designSession !== 'off') {
       const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
       if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
-        const instructions = await this.designPlaybook()
+        const instructions = await this.designPlaybook(request.threadId)
         always.push({
           binding: design.binding,
           utility: { ...design.utility, kind: 'skill', config: { instructions } }
@@ -616,16 +630,19 @@ export class UtilityOrchestrationService {
     }
     // A video session works the same way: the user opened it, so the edit pass
     // travels with the turn and both operations are callable from the first
-    // token. Its playbook is a constant, so nothing is resolved from settings.
+    // token. Its craft notes are a constant, but the paragraph about the models
+    // the user staffed is resolved from live settings, because the same experts
+    // staff a composition and a design.
     if (request.videoSession && request.videoSession !== 'off') {
       const video = eligible.find(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
       if (video && !always.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)) {
+        const instructions = await this.videoPlaybook(request.threadId)
         always.push({
           binding: video.binding,
           utility: {
             ...video.utility,
             kind: 'skill',
-            config: { instructions: VIDEO_CAPABILITY_DOCS }
+            config: { instructions }
           }
         })
       }
@@ -1403,20 +1420,42 @@ export class UtilityOrchestrationService {
   /**
    * The design capability's playbook, with the external-asset paragraph rebuilt
    * from the current settings policy and the delegation section rebuilt from the
-   * user's current assignments.
+   * experts this thread may use.
    *
    * Resolved rather than seeded because both facts are user settings: the CDN
-   * allowlist decides which hosts will actually load, and the assignments decide
-   * which models a design turn is allowed to delegate to. All paths that hand the
-   * playbook to a model   activation, and the promotion a `@cio-design` session
-   * performs at turn start   come through here, so they cannot disagree.
+   * allowlist decides which hosts will actually load, and the experts decide which
+   * models a design turn is allowed to delegate to, and whether it may at all.
+   * All paths that hand the playbook to a model   activation, the promotion a
+   * `@cio-design` session performs at turn start, and a post-compaction docs
+   * re-dump   come through here, so they cannot disagree.
    */
-  private async designPlaybook(): Promise<string> {
+  private async designPlaybook(threadId: string): Promise<string> {
     const config = await this.storage.getConfig()
     return designCapabilityDocs(
       prototypeCdnPolicyFromConfig(config),
-      designAssignmentsFromConfig(config.design)
+      await this.expertsForThread(threadId)
     )
+  }
+
+  /**
+   * The video capability's playbook. The craft notes are a constant; the experts
+   * paragraph is the thread's, because a composition is staffed by the same
+   * models a design is.
+   */
+  private async videoPlaybook(threadId: string): Promise<string> {
+    return videoCapabilityDocs(await this.expertsForThread(threadId))
+  }
+
+  /**
+   * The experts a thread's session may delegate to.
+   *
+   * The expert settings service owns the decision, so a service graph that has
+   * not wired one reads as "nothing is staffed", which is the honest answer for a
+   * deployment without the design capability rather than a promise the app cannot
+   * keep.
+   */
+  private async expertsForThread(threadId: string): Promise<EffectiveExperts> {
+    return this.expertSettings ? this.expertSettings.effectiveFor(threadId) : NO_EXPERTS
   }
 
   /** Build the capability payload (tools, operations, or instructions) that
@@ -1437,7 +1476,7 @@ export class UtilityOrchestrationService {
       // The operation catalog travels with the playbook, because unlike the scope
       // capability this one is invoked with typed fields.
       return {
-        instructions: await this.designPlaybook(),
+        instructions: await this.designPlaybook(state.request.threadId),
         tools: DESIGN_UTILITY_TOOLS
       }
     }
@@ -1445,7 +1484,10 @@ export class UtilityOrchestrationService {
       // Same shape as the design capability: knowledge plus a typed operation
       // catalog, handed back together so an activation or a post-compaction
       // docs re-dump is one payload.
-      return { instructions: VIDEO_CAPABILITY_DOCS, tools: VIDEO_UTILITY_TOOLS }
+      return {
+        instructions: await this.videoPlaybook(state.request.threadId),
+        tools: VIDEO_UTILITY_TOOLS
+      }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)

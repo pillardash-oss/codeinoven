@@ -373,11 +373,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     browser: () => state.browserService
   })
   designService.registerIpc()
+  // What each thread decided about the experts its design or video session may
+  // delegate to. One service answers it, because the playbook that names the
+  // experts and the `delegate` operation that would run one have to agree: a
+  // thread the user muted must be neither described as staffed nor allowed to
+  // delegate, and two derivations is how those two answers drift apart.
+  const { ExpertSettingsService } = await import('../design/expert-settings-service')
+  const expertSettings = new ExpertSettingsService({
+    database,
+    config: () => storage.getConfig(),
+    sessionKind: (projectId, threadId) =>
+      designService.sessionKinds(projectId, [threadId])[threadId] ?? null
+  })
+  expertSettings.registerIpc()
+  state.chatEngine.setExpertSettings(expertSettings)
   // A tab is recognised from the page it is showing rather than from a record of who
   // opened it, so a design the agent opened itself and a tab the renderer restored
   // after a restart are designs too, and a tab that navigated away stops being one.
-  // The service records what it recognises, which is how the board follows the tab.
-  state.browserService?.setDesignTabRecogniser((projectId, threadId, url) =>
+  // The same recognition arms a composition's playback transport, which is why it
+  // answers with the folder, its kind and, for a composition, its timeline.
+  state.browserService?.setTabMarkRecogniser((projectId, threadId, url) =>
     designService.observeShownFolder(projectId, threadId, url)
   )
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')

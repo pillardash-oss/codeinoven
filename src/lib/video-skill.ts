@@ -1,3 +1,5 @@
+import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
+
 /**
  * The video capability's playbook, and the constants the surfaces that list it
  * need.
@@ -8,10 +10,11 @@
  * The interface is `preview` and `capture` from `src/main/video/`, which is why
  * this text can promise them.
  *
- * Unlike the design playbook, none of this is rebuilt from live settings: there
- * is no CDN allowlist to resolve and no assignment list to render, because a
- * composition is served by the directory preview server, which sets no content
- * security policy and needs no permissions.
+ * Like the design playbook, the paragraph about the models the user staffed is
+ * rebuilt from live settings, because the same experts staff both: a video is
+ * words, pictures, clips and sound, and which model does each is the user's
+ * decision rather than the app's. The rest of the text is a constant, because the
+ * composition's contract is not a setting.
  */
 
 /** Display name shown in a search result, the Utilities UI and the thread bank. */
@@ -39,7 +42,8 @@ export { VIDEO_PROJECT_ROOT as VIDEO_OUTPUT_ROOT } from './video/project'
  * lives, the contract that makes it renderable, how to watch it and check it,
  * and only then the craft notes that decide whether the result is good.
  */
-export const VIDEO_CAPABILITY_DOCS = `# Video studio
+export function videoCapabilityDocs(experts: EffectiveExperts = NO_EXPERTS): string {
+  return `# Video studio
 
 Make a video as a small web project, then watch it in this app while the turn is still running. A title sequence, a product walkthrough, a captioned social cut, an explainer, an animated chart, a montage: anything that is a piece of motion rather than a page.
 
@@ -85,6 +89,13 @@ The app sets two things when it wants one frozen frame: the query parameters \`c
 
 For a viewing, animate: drive \`cioRenderFrame\` from \`requestAnimationFrame\`, looping at \`duration\`, unless \`cio-capture\` is set.
 
+While the app is showing your composition it owns the clock. The preview tab has play, pause, seek, stop, a frame step and a loop toggle, so the user watches a video rather than a page that plays itself, and the playhead is kept across the reload an edit causes. Two consequences for your code:
+
+- Call \`window.cioRenderFrame\` through the global. Never hold the function in a variable and call that: the player replaces the global so the page's own loop cannot fight it for the frame, and a cached copy would draw behind the user's playhead.
+- Keep animating the page yourself, because the same folder is also opened outside this app, where nothing else drives it. Your draws are simply ignored while the app is showing the composition.
+
+Your soundtrack is paused and re-timed with the picture when the user pauses or seeks. It is not re-scored frame by frame, so do not key a beat to a time only you can compute: put the timing in the render function, where the app can reach it.
+
 ## The stage
 
 - Draw on a \`<canvas>\` sized to the manifest, in CSS pixels, and scale the backing store by \`devicePixelRatio\` so text is not soft. Canvas is what makes a frame deterministic and what keeps a capture sharp.
@@ -105,7 +116,9 @@ Invoke this capability with operation \`preview\`:
 - \`entry\`, a file inside that folder, defaults to \`index.html\`.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 
-The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit appears without re-previewing. Preview again only when you move to a different folder.
+The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit appears without re-previewing and without the viewer losing their place in the timeline. Preview again only when you move to a different folder.
+
+The tab is a player. The user can pause it, drag the scrubber, step a frame, stop it back to the start and turn looping off, and the playhead survives the refresh an edit triggers. So a composition is written to be watched at any second rather than only from the beginning: every frame has to be correct on its own, which is the same determinism the capture loop already demands.
 
 Then use operation \`capture\` to look at an exact frame: give it \`time\` in seconds, and it freezes the composition there and hands the picture back to you as an image you can see.
 
@@ -134,6 +147,17 @@ Video is not a stack of slides. Work in this order.
 
 Copy, a script, a storyboard, an SEO pass: those are words, and the user assigns a model to each craft in Settings, Design. The design studio's \`delegate\` operation is the lane that runs the model they chose.
 
+${expertDelegationGuidance(experts, 'video')}
+
 Pictures, clips and sound are files rather than answers, so they come from a generation capability the user installed in Utilities: find it with the search tool the turn instructions name, activate it, call it, and save what it returns as a file beside the composition. Generation links expire, so never reference one from a composition.
 
 When neither an assignment nor a capability exists for work the composition needs, say which work needs one and ask. Never choose a model yourself, never stand in for a generator, and never leave an empty frame where the user asked for a real asset.`
+}
+
+/**
+ * The seeded copy of the playbook, written into the utilities registry so a
+ * reader of that file sees a complete contract. Every activation replaces the
+ * experts paragraph with the live list, so this copy is a default rather than
+ * the text a turn receives.
+ */
+export const VIDEO_CAPABILITY_DOCS = videoCapabilityDocs()

@@ -5,6 +5,7 @@ import {
   resolveDesignAssignment,
   usableDesignAssignments
 } from '../../lib/design-assignments'
+import type { EffectiveExperts } from '../../lib/experts'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import type { AgentModelSelection, DesignAssignmentOutput, DesignConfig } from '../../lib/types'
@@ -64,8 +65,12 @@ export type DesignAssignmentRunner = (
 
 export interface DesignAssignmentExecutorOptions {
   database: Database
-  /** The live design config. Read per call so a re-assignment takes effect at once. */
-  designConfig: () => Promise<DesignConfig | undefined | null>
+  /**
+   * The experts this thread's session may delegate to, and why it may use none.
+   * Read per call, so a re-assignment or a mute applies to the next delegation
+   * rather than the next app run.
+   */
+  experts: (context: { projectId: string; threadId: string }) => Promise<EffectiveExperts>
   run: DesignAssignmentRunner
 }
 
@@ -80,14 +85,18 @@ export function createDesignAssignmentExecutor(
     }
     const requested = requiredString(input['assignment'], 'assignment', MAX_ASSIGNMENT_NAME_LENGTH)
     const prompt = requiredString(input['prompt'], 'prompt', MAX_DELEGATE_PROMPT_LENGTH)
-    const config = await options.designConfig()
+    // The thread's own answer, not the global config: a session the user muted
+    // has no experts at all, so the refusal below says that rather than claiming
+    // the user never staffed anyone.
+    const effective = await options.experts(context)
+    const config: DesignConfig = { assignments: effective.assignments }
     const assignment = resolveDesignAssignment(config, requested)
     if (!assignment) {
       const catalogue = designAssignmentCatalogue(config)
       throw new Error(
         catalogue.length === 0
-          ? `No design work is delegated yet: the user has not assigned a model to any design work. Do the work with your own tools when you can, and when the design needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.`
-          : `There is no design assignment named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
+          ? refusalForNoExpert(effective.availability)
+          : `There is no expert named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
@@ -133,6 +142,20 @@ export function createDesignAssignmentExecutor(
         : `Every model the user assigned for ${designAssignmentOutputWork(output)} failed. ${failures.join('; ')}`
     )
   }
+}
+
+/**
+ * Why nothing was delegated, in the terms of the reason.
+ *
+ * A mute and an empty settings page are different answers, and an agent told the
+ * wrong one does the wrong thing: told nothing is assigned it asks the user to
+ * assign a model, which they already did and then turned off for this thread.
+ */
+function refusalForNoExpert(availability: EffectiveExperts['availability']): string {
+  if (availability === 'muted') {
+    return 'The user turned the experts off for this thread, so nothing is delegated here. Do the work with your own tools when you can, and where it genuinely needs a model, tell the user plainly which work needs one and that they can turn the experts back on for this thread from the design coordinator. Never choose a model yourself.'
+  }
+  return 'No expert is assigned yet: the user has not put a model on any of the work a design or a composition needs. Do the work with your own tools when you can, and when the work needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.'
 }
 
 /** One line on what came back, which differs for copywriting and for the other crafts. */

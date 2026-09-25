@@ -94,6 +94,15 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, requestedDriverId?: string],
     string
   >,
+  /**
+   * Start the thread's harness session before its next prompt needs it, so a
+   * first message does not pay for the spawn while the user waits.
+   *
+   * Best-effort by design: it resolves false when the driver has no transport to
+   * warm or the warm-up failed, and the send that follows starts the session the
+   * normal way either way.
+   */
+  'agent:warmSession': {} as Contract<[projectId: string, threadId: string], boolean>,
   'agent:ensureInitialSpec': {} as Contract<[projectId: string, threadId: string], EngineeringSpec>,
   'agent:getSessionStatus': {} as Contract<
     [projectId: string, threadId: string],

@@ -967,6 +967,28 @@ CREATE TABLE IF NOT EXISTS thread_designs (
 
 CREATE INDEX IF NOT EXISTS idx_thread_designs_project ON thread_designs(project_id);`
 
+/**
+ * What a thread decided about the experts its design or video session may use.
+ *
+ * The card that asks this question is shown once, before the first send of a
+ * session, and the answer has to outlive the window: a restarted app that asked
+ * again would be asking a question the user already answered, and a session that
+ * was muted would quietly delegate again. The row is the thread's answer, and the
+ * foreign key makes it follow the thread's deletion instead of orphaning.
+ *
+ * `signature` is the digest of the expert set the user answered about. It is what
+ * lets the card return when the user staffs different experts, without asking
+ * again every time they send.
+ */
+const THREAD_EXPERTS_SQL = `
+CREATE TABLE IF NOT EXISTS thread_experts (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  choice     TEXT NOT NULL CHECK(choice IN ('all','off')),
+  silent     INTEGER NOT NULL DEFAULT 0,
+  signature  TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -985,5 +1007,6 @@ export const DATABASE_SCHEMA_SQL = [
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
   THREAD_DESIGNS_SQL,
+  THREAD_EXPERTS_SQL,
   ROUTINES_SQL
 ].join('\n')

@@ -1,11 +1,4 @@
-import {
-  DESIGN_ASSIGNMENT_OUTPUTS,
-  designAssignmentOutput,
-  designAssignmentOutputLabel,
-  designAssignmentReference,
-  isUsableDesignAssignment
-} from './design-assignments'
-import type { DesignAssignment } from './types/settings'
+import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
 import {
   DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnOrigins,
@@ -73,39 +66,21 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
 }
 
 /**
- * The delegation paragraph: the assignments the user set up, split by what they
- * produce, or the fact that nothing is delegated yet. Either way the agent is
- * told that picking a model is the user's decision and never its own.
+ * The delegation paragraph.
+ *
+ * Written for a design session by the shared builder, so the video playbook
+ * states the same thing about the same list of models.
  */
-function delegationGuidance(assignments: readonly DesignAssignment[]): string {
-  const usable = assignments.filter((assignment) => isUsableDesignAssignment(assignment))
-  if (usable.length === 0) {
-    return 'No design work is delegated yet: the user has not assigned a model to any design work. The assignments are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
-  }
-  const lines: string[] = ['The user assigned:']
-  for (const output of DESIGN_ASSIGNMENT_OUTPUTS) {
-    const group = usable.filter((assignment) => designAssignmentOutput(assignment) === output)
-    if (group.length === 0) continue
-    const named = group.map(designAssignmentReference).join(', ')
-    lines.push(
-      output === 'text'
-        ? `- ${designAssignmentOutputLabel(output)}, run with \`delegate\`: ${named}.`
-        : `- ${designAssignmentOutputLabel(output)}, produced with a generation capability: ${named}.`
-    )
-  }
-  lines.push(
-    '',
-    "`delegate` answers with text, so it runs the copywriting work. A picture, a clip or a track is a file rather than an answer, so it comes from a generation capability in the app's utilities bank, and the model listed against that craft is the one the user had in mind: prefer a capability that reaches it, say which one you used, and save what it returns with `save-media`, because a generation link expires and the saved file does not. When no capability is installed, name the one that is needed and the model the user already chose. Two assignments that cover the same craft are the user's own alternatives, and `delegate` tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
-  )
-  return lines.join('\n')
+function delegationGuidance(experts: EffectiveExperts): string {
+  return expertDelegationGuidance(experts, 'design')
 }
 
 /**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
  * external-asset paragraph with the live policy and the delegation paragraph
- * with the user's live assignments, so this copy is a default rather than the
- * text a turn receives.
+ * with the user's live experts, so this copy is a default rather than the text a
+ * turn receives.
  */
 export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
   allowExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
@@ -115,12 +90,12 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
 /**
  * The playbook handed back when the capability is activated. Kept as a function
  * because the external-asset paragraph is the live CDN policy and the delegation
- * section is the user's live assignments; a stale copy of either is the drift
- * both resolvers exist to prevent.
+ * section is the user's live experts; a stale copy of either is the drift both
+ * resolvers exist to prevent.
  */
 export function designCapabilityDocs(
   policy: PrototypeCdnPolicy,
-  assignments: readonly DesignAssignment[] = []
+  experts: EffectiveExperts = NO_EXPERTS
 ): string {
   return `# Design studio
 
@@ -157,7 +132,7 @@ Some design work is a craft rather than markup: the copy that sounds like the pr
 - \`assignment\`, the work to delegate, by its handle or by its title.
 - \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
 
-${delegationGuidance(assignments)}
+${delegationGuidance(experts)}
 
 \`delegate\` is the copywriting lane and answers with text only, so it cannot hand back an image, a video or a sound file. Never accept prose as though it were the asset: what comes back is text, not a picture, a clip or a track.
 

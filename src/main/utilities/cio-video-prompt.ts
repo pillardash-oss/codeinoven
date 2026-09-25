@@ -1,4 +1,4 @@
-import { isQuotedMentionPosition } from '../../lib/mention-context'
+import { CIO_VIDEO_TAG, isCioVideoRequest, type VideoSessionMode } from '../../lib/session-tags'
 
 /**
  * The explicit video-session tag.
@@ -17,29 +17,13 @@ import { isQuotedMentionPosition } from '../../lib/mention-context'
  * worked on over many messages rather than produced in one.
  */
 
-/** Stable built-in tag that opens a video session on an explicit turn. */
-export const CIO_VIDEO_TAG = '@cio-video'
-
-const CIO_VIDEO_TAG_PATTERN = /(^|\s)@cio-video(?=\s|$|[.,:;!?])/giu
-
 /**
- * Whether this text opens a video session.
- *
- * A tag inside a quote or a blockquote is a mention of the tag rather than an
- * invocation of it, which keeps documentation about `@cio-video` from starting
- * a session. Shared with the other tags through `isQuotedMentionPosition` so
- * every tag agrees on what counts as quoting.
+ * The tag, its predicate and the turn mode live in the shared layer, because the
+ * renderer asks the same question about the draft the user is about to send.
+ * Re-exported here because this module is where main already looks for them.
  */
-export function isCioVideoRequest(text: string): boolean {
-  for (const match of text.matchAll(CIO_VIDEO_TAG_PATTERN)) {
-    const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)
-    if (!isQuotedMentionPosition(text, mentionStart)) return true
-  }
-  return false
-}
-
-/** Which video contract a turn carries: none, the first one, or a continuation. */
-export type VideoSessionMode = 'off' | 'start' | 'continue'
+export { CIO_VIDEO_TAG, isCioVideoRequest }
+export type { VideoSessionMode }
 
 /**
  * The first turn of a video session.

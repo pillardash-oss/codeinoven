@@ -171,6 +171,8 @@ import {
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
+import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
+import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -1331,6 +1333,13 @@ export class ChatEngine {
   private accountRegistry: HarnessAccountRegistry
 
   private utilityOrchestration: UtilityOrchestrationService
+  /**
+   * What each thread decided about the experts its design or video session may
+   * use. Wired by the service graph after the window exists; until then a
+   * delegation reads the config directly, which is what this app did before a
+   * thread could answer for itself.
+   */
+  private expertSettings: ExpertSettingsService | null = null
 
   private usageRepo: HarnessUsageRepo
 
@@ -1503,7 +1512,7 @@ export class ChatEngine {
     this.utilityOrchestration.setDesignAssignmentExecutor(
       createDesignAssignmentExecutor({
         database,
-        designConfig: async () => (await this.storage.getConfig()).design,
+        experts: (context) => this.expertsForThread(context.threadId),
         run: (request) => this.runDesignAssignment(request)
       })
     )
@@ -1684,6 +1693,32 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
+  /**
+   * Register the thread-scoped expert policy.
+   *
+   * It answers two questions that have to agree: what the playbook tells a
+   * session about the models the user staffed, and whether `delegate` will run
+   * one of them. Both are asked of this service, so a thread the user muted is
+   * neither described as staffed nor allowed to delegate.
+   */
+  setExpertSettings(settings: ExpertSettingsService | null): void {
+    this.expertSettings = settings
+    this.utilityOrchestration.setExpertSettings(settings)
+  }
+
+  /**
+   * The experts a thread's session may delegate to.
+   *
+   * Falls back to the raw config when no policy is wired, which keeps a
+   * service graph that never installed one working exactly as it did before
+   * threads could carry an answer of their own.
+   */
+  private async expertsForThread(threadId: string): Promise<EffectiveExperts> {
+    if (this.expertSettings) return this.expertSettings.effectiveFor(threadId)
+    const config = await this.storage.getConfig()
+    return effectiveExperts(config.design?.assignments, null)
   }
 
   /**
@@ -1908,6 +1943,9 @@ export class ChatEngine {
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>
         this.ensureSession(projectId, threadId, requestedDriverId)
+    )
+    ipcMain.handle('agent:warmSession', (_, projectId: string, threadId: string) =>
+      this.warmThreadSession(projectId, threadId)
     )
     ipcMain.handle(
       'agent:loadMessages',
@@ -4772,6 +4810,43 @@ export class ChatEngine {
     return this.capabilityDiscovery.discoverAll(
       projects.map((project) => ({ id: project.id, path: project.path }))
     )
+  }
+
+  /**
+   * Bring a thread's harness session up before its next turn needs it.
+   *
+   * Spawning the harness is the slow part of a first send, and the app knows one
+   * is coming while the user is still reading whatever is holding it. Warming
+   * here means the prompt that follows finds its process already running, and the
+   * turn itself is unchanged: the driver's own send path takes the same route it
+   * always did, just with the spawn already paid for.
+   *
+   * Best-effort by construction. A driver with no transport to warm, a harness
+   * that is not installed, an unavailable model, a project that moved: every one
+   * of those leaves the thread exactly as it was, and the send starts the session
+   * the normal way. Nothing here may fail a turn, so nothing here throws.
+   */
+  async warmThreadSession(projectId: string, threadId: string): Promise<boolean> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread) return false
+      const driverId = thread.settings?.harnessId || DEFAULT_HARNESS
+      const account = await this.accountRegistry.resolveForProvider(
+        driverId,
+        thread.settings?.providerId,
+        thread.settings?.accountId
+      )
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, account.id)
+      if (!driver.warmSession) return false
+      const sessionId = await this.ensureSession(projectId, threadId, driverId)
+      await driver.warmSession(projectPath, sessionId)
+      return true
+    } catch (error) {
+      Logger.dev('Harness warm-up was skipped:', error)
+      return false
+    }
   }
 
   /** Return the thread's harness session, creating and persisting one if needed. */
