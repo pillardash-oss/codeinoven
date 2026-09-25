@@ -42,9 +42,15 @@
     path: string
     /** Display name (the basename main resolved). */
     name: string
+    /**
+     * Whether this pane owns the Cmd/Ctrl+S save chord. The docked panel turns it
+     * off while collapsed into its dock chip, so a minimized file does not keep
+     * the chord from the surface the user is actually looking at.
+     */
+    saveShortcutEnabled?: boolean
   }
 
-  let { path, name }: Props = $props()
+  let { path, name, saveShortcutEnabled = true }: Props = $props()
 
   type View = 'source' | 'preview'
 
@@ -154,6 +160,7 @@
    *  standalone file has unsaved edits. Shift is excluded, Cmd/Ctrl+Shift+S
    *  belongs to the right-sidebar toggle alone. */
   function handleSaveShortcut(event: KeyboardEvent): void {
+    if (!saveShortcutEnabled) return
     if (!keymapState.matches('files-save', event)) return
     if (!standaloneFiles.isDirty(path)) return
     event.preventDefault()

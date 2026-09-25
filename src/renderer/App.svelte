@@ -1435,12 +1435,27 @@
       <PipOverlay />
     {/await}
   {/if}
-  {#if standaloneFiles.open}
-    <!-- Files opened through the operating system: editable text (saved straight
-         back to the file) and deliberately project-less (no file tree, no tree
-         operations, nothing indexed). -->
+  {#if standaloneFiles.open && standaloneFiles.presentation === 'docked'}
+    <!-- Files opened through the operating system: docked as a floating panel by
+         default so the workspace and its threads stay usable, minimizable to a
+         screen-edge chip. Editable text saved straight back to the file, and
+         deliberately project-less (no file tree, no tree operations, nothing
+         indexed). -->
+    {#await import('$lib/components/files/StandaloneFileDock.svelte') then { default: StandaloneFileDock }}
+      <StandaloneFileDock />
+    {/await}
+  {:else if standaloneFiles.open}
+    <!-- The explicit full screen mode of the same files, one action away from
+         the docked panel. -->
     {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
       <StandaloneFileViewer />
+    {/await}
+  {/if}
+  {#if standaloneFiles.pendingClose}
+    <!-- One unsaved-changes confirmation served to both the docked panel and the
+         fullscreen reader. -->
+    {#await import('$lib/components/files/StandaloneFileCloseDialog.svelte') then { default: StandaloneFileCloseDialog }}
+      <StandaloneFileCloseDialog />
     {/await}
   {/if}
 
