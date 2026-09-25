@@ -178,6 +178,12 @@ the app's clock for Assistant View.
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
   task's `routineId`, so the engine composes the routine how-to and the run
   contract into its system prompt exactly as it does for the task.
+- **A run is named for what it runs.** The run's visible prompt is built by
+  `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
+  its title, but a routine's Getting started thread is its authoring host, not
+  a job: a run of it is named for the routine instead. Naming it "Getting
+  started" made a completed routine's run read (and get answered by the agent)
+  as another getting-started pass.
 - **Paused routines never fire.** `Routine.paused` is checked before the
   schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
   stops every task in it while keeping the tasks, their how-to, and their

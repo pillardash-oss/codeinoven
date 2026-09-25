@@ -17,7 +17,7 @@ import { createThreadWorkspaceRoots } from '../editor/project-files/thread-works
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { assistantRunTitle } from '../../lib/routine-run'
+import { assistantRunTitle, routineRunPrompt } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -216,16 +216,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         title: assistantRunTitle(Date.now())
       })
     },
-    dispatch: (run, task) => {
+    dispatch: (run, task, routine) => {
       const chatEngine = state.chatEngine
       if (!chatEngine) {
         Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
         return
       }
-      const prompt =
-        task.title.trim().length > 0
-          ? `Run this scheduled task now: ${task.title}`
-          : 'Run this scheduled task now.'
+      const prompt = routineRunPrompt(task, routine?.name)
       const runSettings = run.settings ?? task.settings
       if (!runSettings) {
         Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })

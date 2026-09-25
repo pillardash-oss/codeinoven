@@ -61,6 +61,9 @@ interface EngineInternals {
     threadId: string,
     thread: Thread | null | undefined
   ): Promise<string | undefined>
+  routineRunHiddenContext(thread: Thread | null | undefined): string | undefined
+  routineHowToInstruction(thread: Thread | null | undefined): string | undefined
+  createAssistantRunThread(input: { task: Thread; title: string }): Promise<Thread>
 }
 
 function internals(engine: ChatEngine): EngineInternals {
@@ -137,6 +140,31 @@ function answeredQuestion(body: string): AgentMessage {
     completedAt: Date.now()
   }
 }
+
+describe('routine run threads', () => {
+  it('inherit their task routine so the how-to and run contract reach the run', async () => {
+    const howTo = '# Saved how-to\n\nSearch the web and report.'
+    const { engine, thread } = await setup(howTo)
+
+    const run = await internals(engine).createAssistantRunThread({
+      task: thread,
+      title: 'Run · 09:07'
+    })
+
+    // The run keeps the task's routine, which is what carries the how-to and
+    // the run contract into its system prompt.
+    expect(run.routineId).toBe(routine(howTo).id)
+    expect(run.assistantTaskId).toBe(thread.id)
+    expect(internals(engine).routineHowToInstruction(run)).toBe(howTo)
+    const contract = internals(engine).routineRunHiddenContext(run)
+    expect(contract).toContain('Slack latest info')
+    expect(contract).toContain('Its how-to is your instruction set')
+    // A run is never an authoring turn: the interview contract must not apply.
+    expect(
+      await internals(engine).routineAuthoringInstruction(ASSISTANT_SPACE_ID, run.id, run)
+    ).toBeUndefined()
+  })
+})
 
 describe('routineAuthoringInstruction', () => {
   it('carries the contract, the checkpoint, and every resolved answer', async () => {
